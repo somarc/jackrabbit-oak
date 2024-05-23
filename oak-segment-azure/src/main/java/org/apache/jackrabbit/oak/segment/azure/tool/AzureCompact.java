@@ -18,7 +18,7 @@
 package org.apache.jackrabbit.oak.segment.azure.tool;
 
 import static org.apache.jackrabbit.guava.common.base.Preconditions.checkArgument;
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.oak.segment.azure.tool.ToolUtils.createArchiveManager;
 import static org.apache.jackrabbit.oak.segment.azure.tool.ToolUtils.createCloudBlobDirectory;
 import static org.apache.jackrabbit.oak.segment.azure.tool.ToolUtils.newFileStore;
@@ -102,7 +102,7 @@ public class AzureCompact {
          * @return this builder.
          */
         public Builder withPath(String path) {
-            this.path = checkNotNull(path);
+            this.path = requireNonNull(path);
             return this;
         }
 
@@ -114,7 +114,7 @@ public class AzureCompact {
          * @return this builder
          */
         public Builder withTargetPath(String targetPath) {
-            this.targetPath = checkNotNull(targetPath);
+            this.targetPath = requireNonNull(targetPath);
             return this;
         }
 
@@ -201,7 +201,7 @@ public class AzureCompact {
          * @return this builder
          */
         public Builder withPersistentCachePath(String persistentCachePath) {
-            this.persistentCachePath = checkNotNull(persistentCachePath);
+            this.persistentCachePath = requireNonNull(persistentCachePath);
             return this;
         }
 
@@ -213,7 +213,7 @@ public class AzureCompact {
          * @return this builder
          */
         public Builder withPersistentCacheSizeGb(Integer persistentCacheSizeGb) {
-            this.persistentCacheSizeGb = checkNotNull(persistentCacheSizeGb);
+            this.persistentCacheSizeGb = requireNonNull(persistentCacheSizeGb);
             return this;
         }
 
@@ -223,7 +223,7 @@ public class AzureCompact {
          * @return an instance of {@link Runnable}.
          */
         public AzureCompact build() {
-            checkNotNull(path);
+            requireNonNull(path);
             return new AzureCompact(this);
         }
     }

@@ -39,7 +39,7 @@ import org.apache.jackrabbit.guava.common.collect.Iterables;
 import org.apache.jackrabbit.guava.common.collect.Lists;
 import org.apache.jackrabbit.guava.common.collect.Maps;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.oak.plugins.document.Collection.CLUSTER_NODES;
 import static org.apache.jackrabbit.oak.plugins.document.Collection.NODES;
 import static org.apache.jackrabbit.oak.plugins.document.Commit.createUpdateOp;
@@ -71,8 +71,8 @@ class UnsavedModifications {
      */
     @Nullable
     public Revision put(@NotNull Path path, @NotNull Revision revision) {
-        checkNotNull(path);
-        checkNotNull(revision);
+        requireNonNull(path);
+        requireNonNull(revision);
         for (;;) {
             Revision previous = map.get(path);
             if (previous == null) {
@@ -150,10 +150,10 @@ class UnsavedModifications {
         if (map.size() == 0) {
             return stats;
         }
-        checkNotNull(store);
-        checkNotNull(sweepRevision);
-        checkNotNull(snapshot);
-        checkNotNull(lock);
+        requireNonNull(store);
+        requireNonNull(sweepRevision);
+        requireNonNull(snapshot);
+        requireNonNull(lock);
 
         Stopwatch sw = Stopwatch.createStarted();
         // get a copy of the map while holding the lock

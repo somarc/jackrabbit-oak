@@ -30,7 +30,7 @@ import java.util.TreeSet;
 import org.apache.jackrabbit.guava.common.base.Function;
 import org.apache.jackrabbit.guava.common.collect.ImmutableSet;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.collect.Iterables.transform;
 import static org.apache.jackrabbit.guava.common.collect.Sets.newHashSet;
 import static org.apache.jackrabbit.guava.common.collect.Sets.newTreeSet;
@@ -62,7 +62,7 @@ public final class MountInfo implements Mount {
 
     public MountInfo(String name, boolean readOnly, List<String> pathsSupportingFragments,
               List<String> includedPaths) {
-        this.name = checkNotNull(name, "Mount name must not be null");
+        this.name = requireNonNull(name, "Mount name must not be null");
         this.readOnly = readOnly;
         this.pathFragmentName = "oak:mount-" + name;
         this.includedPaths = cleanCopy(includedPaths);

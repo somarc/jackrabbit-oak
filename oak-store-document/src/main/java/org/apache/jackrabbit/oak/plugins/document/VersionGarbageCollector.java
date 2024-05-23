@@ -54,7 +54,7 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.base.StandardSystemProperty.LINE_SEPARATOR;
 import static org.apache.jackrabbit.guava.common.collect.Iterables.all;
 import static org.apache.jackrabbit.guava.common.collect.Iterators.partition;
@@ -187,7 +187,7 @@ public class VersionGarbageCollector {
     }
 
     public void setGCMonitor(@NotNull GCMonitor gcMonitor) {
-        this.gcMonitor = checkNotNull(gcMonitor);
+        this.gcMonitor = requireNonNull(gcMonitor);
     }
 
     public VersionGCOptions getOptions() {
@@ -632,8 +632,8 @@ public class VersionGarbageCollector {
                              @NotNull AtomicBoolean cancel,
                              @NotNull VersionGCOptions options,
                              @NotNull GCMonitor monitor) {
-            this.headRevision = checkNotNull(headRevision);
-            this.cancel = checkNotNull(cancel);
+            this.headRevision = requireNonNull(headRevision);
+            this.cancel = requireNonNull(cancel);
             this.timer = Stopwatch.createUnstarted();
             this.options = options;
             this.monitor = monitor;

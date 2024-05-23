@@ -20,7 +20,7 @@
 package org.apache.jackrabbit.oak.segment.file;
 
 import static org.apache.jackrabbit.guava.common.base.Preconditions.checkArgument;
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.base.Preconditions.checkState;
 import static org.apache.jackrabbit.guava.common.collect.Sets.newHashSet;
 import static java.lang.Boolean.getBoolean;
@@ -159,7 +159,7 @@ public class FileStoreBuilder {
     }
 
     private FileStoreBuilder(@NotNull File directory) {
-        this.directory = checkNotNull(directory);
+        this.directory = requireNonNull(directory);
         this.gcListener.registerGCMonitor(new LoggingGCMonitor(LOG));
         this.persistence = new TarPersistence(directory);
     }
@@ -172,7 +172,7 @@ public class FileStoreBuilder {
      */
     @NotNull
     public FileStoreBuilder withBlobStore(@NotNull BlobStore blobStore) {
-        this.blobStore = checkNotNull(blobStore);
+        this.blobStore = requireNonNull(blobStore);
         return this;
     }
 
@@ -303,7 +303,7 @@ public class FileStoreBuilder {
      */
     @NotNull
     public FileStoreBuilder withGCMonitor(@NotNull GCMonitor gcMonitor) {
-        this.gcListener.registerGCMonitor(checkNotNull(gcMonitor));
+        this.gcListener.registerGCMonitor(requireNonNull(gcMonitor));
         return this;
     }
 
@@ -315,7 +315,7 @@ public class FileStoreBuilder {
      */
     @NotNull
     public FileStoreBuilder withStatisticsProvider(@NotNull StatisticsProvider statisticsProvider) {
-        this.statsProvider = checkNotNull(statisticsProvider);
+        this.statsProvider = requireNonNull(statisticsProvider);
         return this;
     }
 
@@ -327,7 +327,7 @@ public class FileStoreBuilder {
      */
     @NotNull
     public FileStoreBuilder withGCOptions(SegmentGCOptions gcOptions) {
-        this.gcOptions = checkNotNull(gcOptions);
+        this.gcOptions = requireNonNull(gcOptions);
         return this;
     }
 
@@ -339,13 +339,13 @@ public class FileStoreBuilder {
      */
     @NotNull
     public FileStoreBuilder withSnfeListener(@NotNull SegmentNotFoundExceptionListener snfeListener) {
-        this.snfeListener = checkNotNull(snfeListener);
+        this.snfeListener = requireNonNull(snfeListener);
         return this;
     }
 
     @NotNull
     public FileStoreBuilder withIOMonitor(@NotNull IOMonitor ioMonitor) {
-        ioMonitors.add(checkNotNull(ioMonitor));
+        ioMonitors.add(requireNonNull(ioMonitor));
         return this;
     }
 

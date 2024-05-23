@@ -17,7 +17,7 @@
 
 package org.apache.jackrabbit.oak.segment.tool;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.collect.Lists.reverse;
 import static org.apache.jackrabbit.oak.commons.PathUtils.elements;
 import static org.apache.jackrabbit.oak.segment.RecordId.fromString;
@@ -78,7 +78,7 @@ public class Diff {
          * @return this builder.
          */
         public Builder withPath(File path) {
-            this.path = checkNotNull(path);
+            this.path = requireNonNull(path);
             return this;
         }
 
@@ -96,7 +96,7 @@ public class Diff {
          * @return this builder.
          */
         public Builder withInterval(String interval) {
-            this.interval = checkNotNull(interval);
+            this.interval = requireNonNull(interval);
             return this;
         }
 
@@ -123,7 +123,7 @@ public class Diff {
          * @return this builder.
          */
         public Builder withOutput(File file) {
-            this.out = checkNotNull(file);
+            this.out = requireNonNull(file);
             return this;
         }
 
@@ -136,7 +136,7 @@ public class Diff {
          * @return this builder.
          */
         public Builder withFilter(String filter) {
-            this.filter = checkNotNull(filter);
+            this.filter = requireNonNull(filter);
             return this;
         }
 
@@ -161,10 +161,10 @@ public class Diff {
          * @return an instance of {@link Runnable}.
          */
         public Diff build() {
-            checkNotNull(path);
-            checkNotNull(interval);
-            checkNotNull(out);
-            checkNotNull(filter);
+            requireNonNull(path);
+            requireNonNull(interval);
+            requireNonNull(out);
+            requireNonNull(filter);
             return new Diff(this);
         }
 

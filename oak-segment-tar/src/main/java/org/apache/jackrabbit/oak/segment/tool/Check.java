@@ -18,7 +18,7 @@
 package org.apache.jackrabbit.oak.segment.tool;
 
 import static org.apache.jackrabbit.guava.common.base.Preconditions.checkArgument;
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static java.text.DateFormat.getDateTimeInstance;
 import static org.apache.jackrabbit.oak.commons.IOUtils.humanReadableByteCount;
 import static org.apache.jackrabbit.oak.segment.file.FileStoreBuilder.fileStoreBuilder;
@@ -105,7 +105,7 @@ public class Check {
          * @return this builder.
          */
         public Builder withPath(File path) {
-            this.path = checkNotNull(path);
+            this.path = requireNonNull(path);
             return this;
         }
 
@@ -132,7 +132,7 @@ public class Check {
          * @return this builder.
          */
         public Builder withJournal(File journal) {
-            this.journal = checkNotNull(journal);
+            this.journal = requireNonNull(journal);
             return this;
         }
 
@@ -270,7 +270,7 @@ public class Check {
          * @return an instance of {@link Runnable}.
          */
         public Check build() {
-            checkNotNull(path);
+            requireNonNull(path);
             return new Check(this);
         }
 

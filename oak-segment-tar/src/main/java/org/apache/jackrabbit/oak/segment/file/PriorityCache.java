@@ -20,7 +20,7 @@
 package org.apache.jackrabbit.oak.segment.file;
 
 import static org.apache.jackrabbit.guava.common.base.Preconditions.checkArgument;
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static java.lang.Integer.bitCount;
 import static java.lang.Integer.numberOfTrailingZeros;
 import static java.lang.Long.numberOfLeadingZeros;
@@ -90,7 +90,7 @@ public class PriorityCache<K, V> {
      */
     public static <K, V> Supplier<PriorityCache<K, V>> factory(final int size, @NotNull final Weigher<K, V> weigher) {
         checkArgument(bitCount(size) == 1);
-        checkNotNull(weigher);
+        requireNonNull(weigher);
         return () -> new PriorityCache<>(size, weigher);
     }
 
@@ -177,7 +177,7 @@ public class PriorityCache<K, V> {
         this.rehash = rehash;
         entries = new Entry<?,?>[size];
         fill(entries, Entry.NULL);
-        this.weigher = checkNotNull(weigher);
+        this.weigher = requireNonNull(weigher);
 
         numSegments = Math.min(numSegments, size);
         checkArgument((size % numSegments) == 0,

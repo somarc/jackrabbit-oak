@@ -22,8 +22,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 
-import org.apache.jackrabbit.guava.common.base.Preconditions;
+import java.util.Objects;
 import org.apache.jackrabbit.guava.common.collect.Maps;
 import org.apache.jackrabbit.guava.common.io.ByteStreams;
 import org.apache.jackrabbit.oak.commons.StringUtils;
@@ -119,7 +120,7 @@ public class CloudBlobStore extends CachingBlobStore {
      */
     @Override
     protected void storeBlock(byte[] digest, int level, byte[] data) throws IOException {
-        Preconditions.checkNotNull(context);
+        Objects.requireNonNull(context);
 
         String id = StringUtils.convertBytesToHex(digest);
         cache.put(id, data);
@@ -146,7 +147,7 @@ public class CloudBlobStore extends CachingBlobStore {
      */
     @Override
     protected byte[] readBlockFromBackend(BlockId blockId) throws Exception {
-        Preconditions.checkNotNull(context);
+        Objects.requireNonNull(context);
 
         String id = StringUtils.convertBytesToHex(blockId.getDigest());
         byte[] data = cache.get(id);
@@ -183,7 +184,7 @@ public class CloudBlobStore extends CachingBlobStore {
      * 
      */
     public void deleteBucket() {
-        Preconditions.checkNotNull(context);
+        Objects.requireNonNull(context);
 
         if (context.getBlobStore().containerExists(cloudContainer)) {
             context.getBlobStore().deleteContainer(cloudContainer);
@@ -214,7 +215,7 @@ public class CloudBlobStore extends CachingBlobStore {
     @Override
     public Iterator<String> getAllChunkIds(
             long maxLastModifiedTime) throws Exception {
-        Preconditions.checkNotNull(context);
+        Objects.requireNonNull(context);
 
         final org.jclouds.blobstore.BlobStore blobStore = context.getBlobStore();
         return new CloudStoreIterator(blobStore, maxLastModifiedTime);
@@ -222,7 +223,7 @@ public class CloudBlobStore extends CachingBlobStore {
 
     @Override
     public long countDeleteChunks(List<String> chunkIds, long maxLastModifiedTime) throws Exception {
-        Preconditions.checkNotNull(context);
+        Objects.requireNonNull(context);
         long count = 0;
         for (String chunkId : chunkIds) {
             final org.jclouds.blobstore.BlobStore blobStore = context.getBlobStore();

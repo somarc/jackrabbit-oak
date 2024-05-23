@@ -70,7 +70,7 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.collect.Lists.newArrayList;
 import static org.apache.jackrabbit.guava.common.collect.Lists.newArrayListWithCapacity;
 import static org.apache.jackrabbit.guava.common.collect.Maps.newHashMap;
@@ -340,17 +340,17 @@ public class IndexDefinition implements Aggregate.AggregateMapper {
         protected IndexFormatVersion version;
 
         public Builder root(NodeState root) {
-            this.root = checkNotNull(root);
+            this.root = requireNonNull(root);
             return this;
         }
 
         public Builder defn(NodeState defn) {
-            this.defn = checkNotNull(defn);
+            this.defn = requireNonNull(defn);
             return this;
         }
 
         public Builder indexPath(String indexPath) {
-            this.indexPath = checkNotNull(indexPath);
+            this.indexPath = requireNonNull(indexPath);
             return this;
         }
 
@@ -401,10 +401,10 @@ public class IndexDefinition implements Aggregate.AggregateMapper {
     protected IndexDefinition(NodeState root, NodeState defn, IndexFormatVersion version, String uid, String indexPath) {
         try {
             this.root = root;
-            this.version = checkNotNull(version);
+            this.version = requireNonNull(version);
             this.uid = uid;
             this.definition = defn;
-            this.indexPath = checkNotNull(indexPath);
+            this.indexPath = requireNonNull(indexPath);
             this.indexName = indexPath;
             this.indexTags = getOptionalValues(defn, IndexConstants.INDEX_TAGS, Type.STRINGS, String.class);
             this.indexSelectionPolicy

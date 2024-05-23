@@ -19,7 +19,7 @@
 
 package org.apache.jackrabbit.oak.plugins.memory;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.collect.Maps.newHashMap;
 import static org.apache.jackrabbit.oak.plugins.memory.EmptyNodeState.MISSING_NODE;
 
@@ -69,7 +69,7 @@ class MutableNodeState extends AbstractNodeState {
     private boolean replaced;
 
     MutableNodeState(@NotNull NodeState base) {
-        checkNotNull(base);
+        requireNonNull(base);
         this.base = ModifiedNodeState.unwrap(base, properties, nodes);
     }
 
@@ -84,7 +84,7 @@ class MutableNodeState extends AbstractNodeState {
 
     void reset(NodeState newBase) {
         assert base != null;
-        checkNotNull(newBase);
+        requireNonNull(newBase);
         base = ModifiedNodeState.unwrap(newBase, properties, nodes);
     }
 

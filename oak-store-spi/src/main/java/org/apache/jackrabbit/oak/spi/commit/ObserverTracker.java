@@ -19,7 +19,7 @@
 
 package org.apache.jackrabbit.oak.spi.commit;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.base.Preconditions.checkState;
 import static org.apache.jackrabbit.guava.common.collect.Maps.newHashMap;
 import static org.apache.jackrabbit.oak.commons.IOUtils.closeQuietly;
@@ -43,12 +43,12 @@ public class ObserverTracker implements ServiceTrackerCustomizer {
     private ServiceTracker observerTracker;
 
     public ObserverTracker(@NotNull Observable observable) {
-        this.observable = checkNotNull(observable);
+        this.observable = requireNonNull(observable);
     }
 
     public void start(@NotNull BundleContext bundleContext) {
         checkState(this.bundleContext == null);
-        this.bundleContext = checkNotNull(bundleContext);
+        this.bundleContext = requireNonNull(bundleContext);
         observerTracker = new ServiceTracker(bundleContext, Observer.class.getName(), this);
         observerTracker.open();
     }

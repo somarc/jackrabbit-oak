@@ -43,7 +43,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static org.apache.jackrabbit.guava.common.base.Objects.equal;
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.collect.Iterables.filter;
 import static org.apache.jackrabbit.guava.common.collect.Iterables.transform;
 import static org.apache.jackrabbit.guava.common.collect.Lists.partition;
@@ -99,8 +99,8 @@ public class Commit {
            @NotNull Revision revision,
            @Nullable RevisionVector baseRevision,
            @NotNull RevisionVector startRevisions) {
-        this.nodeStore = checkNotNull(nodeStore);
-        this.revision = checkNotNull(revision);
+        this.nodeStore = requireNonNull(nodeStore);
+        this.revision = requireNonNull(revision);
         this.baseRevision = baseRevision;
         this.startRevisions = startRevisions;
     }

@@ -31,7 +31,7 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class LuceneDocumentHolder implements JournalProperty {
     private static final Logger log = LoggerFactory.getLogger(LuceneDocumentHolder.class);
@@ -48,7 +48,7 @@ public class LuceneDocumentHolder implements JournalProperty {
     private boolean schedulingDone;
 
     public LuceneDocumentHolder(@NotNull IndexingQueue documentQueue, int inMemoryDocsLimit) {
-        this.documentQueue = checkNotNull(documentQueue);
+        this.documentQueue = requireNonNull(documentQueue);
         this.inMemoryDocsLimit = inMemoryDocsLimit;
     }
 
@@ -66,7 +66,7 @@ public class LuceneDocumentHolder implements JournalProperty {
     }
 
     public void add(boolean sync, LuceneDoc doc) {
-        doc = checkNotNull(doc);
+        doc = requireNonNull(doc);
         //First try adding to queue in non blocking manner
         if (documentQueue.addIfNotFullWithoutWait(doc)){
             if (sync){

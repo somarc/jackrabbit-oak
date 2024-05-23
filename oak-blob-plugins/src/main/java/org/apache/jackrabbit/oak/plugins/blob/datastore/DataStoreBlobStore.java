@@ -19,7 +19,7 @@
 
 package org.apache.jackrabbit.oak.plugins.blob.datastore;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.collect.Iterators.filter;
 import static org.apache.jackrabbit.guava.common.collect.Iterators.transform;
 import static org.apache.commons.io.IOUtils.closeQuietly;
@@ -332,7 +332,7 @@ public class DataStoreBlobStore
         try {
             long start = System.nanoTime();
 
-            checkNotNull(stream);
+            requireNonNull(stream);
             DataRecord dr = writeStream(stream, options);
             String id = getBlobId(dr);
             updateTracker(id);
@@ -384,7 +384,7 @@ public class DataStoreBlobStore
     @Override
     public long getBlobLength(String encodedBlobId) throws IOException {
         try {
-            checkNotNull(encodedBlobId, "BlobId must be specified");
+            requireNonNull(encodedBlobId, "BlobId must be specified");
             BlobId id = BlobId.of(encodedBlobId);
             if (encodeLengthInId && id.hasLengthInfo()) {
                 return id.length;
@@ -397,7 +397,7 @@ public class DataStoreBlobStore
 
     @Override
     public String getBlobId(@NotNull String reference) {
-        checkNotNull(reference);
+        requireNonNull(reference);
         DataRecord record;
         try {
             record = delegate.getRecordFromReference(reference);
@@ -412,7 +412,7 @@ public class DataStoreBlobStore
 
     @Override
     public String getReference(@NotNull String encodedBlobId) {
-        checkNotNull(encodedBlobId);
+        requireNonNull(encodedBlobId);
         String blobId = extractBlobId(encodedBlobId);
         //Reference are not created for in memory record
         if (InMemoryDataRecord.isInstance(blobId)) {
@@ -911,7 +911,7 @@ public class DataStoreBlobStore
         } else {
             id = delegate.getRecord(new DataIdentifier(blobId));
         }
-        checkNotNull(id, "No DataRecord found for blobId [%s]", blobId);
+        requireNonNull(id, String.format("No DataRecord found for blobId [%s]", blobId));
         return id;
     }
 

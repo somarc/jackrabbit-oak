@@ -17,7 +17,7 @@
 
 package org.apache.jackrabbit.oak.segment.file;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 import org.apache.jackrabbit.guava.common.base.Predicate;
 import org.apache.jackrabbit.oak.segment.compaction.SegmentGCOptions.GCType;
@@ -75,7 +75,7 @@ class Reclaimers {
             @NotNull final GCGeneration referenceGeneration,
             int retainedGenerations) {
 
-        switch (checkNotNull(lastGCType)) {
+        switch (requireNonNull(lastGCType)) {
             case FULL:
                 return newOldFullReclaimer(referenceGeneration, retainedGenerations);
             case TAIL:

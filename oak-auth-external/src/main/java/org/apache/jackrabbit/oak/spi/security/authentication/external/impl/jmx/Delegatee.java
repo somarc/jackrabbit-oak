@@ -56,7 +56,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 final class Delegatee {
 
@@ -361,7 +361,7 @@ final class Delegatee {
                 if (syncedIdentity != null && isMyIDP(syncedIdentity)) {
                     try {
                         // nonNull-ExternalIdRef has already been asserted by 'isMyIDP'
-                        ExternalIdentity extId = idp.getIdentity(checkNotNull(syncedIdentity.getExternalIdRef()));
+                        ExternalIdentity extId = idp.getIdentity(requireNonNull(syncedIdentity.getExternalIdRef()));
                         if (extId == null) {
                             return syncedIdentity.getId();
                         }

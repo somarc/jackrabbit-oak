@@ -16,7 +16,7 @@
  */
 package org.apache.jackrabbit.oak.query;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.guava.common.collect.Maps.newHashMap;
 
 import java.math.BigDecimal;
@@ -127,9 +127,9 @@ public class SQL2Parser {
     public SQL2Parser(NamePathMapper namePathMapper, NodeTypeInfoProvider nodeTypes, QueryEngineSettings settings,
             QueryExecutionStats stats) {
         this.namePathMapper = namePathMapper;
-        this.nodeTypes = checkNotNull(nodeTypes);
-        this.settings = checkNotNull(settings);
-        this.stats = checkNotNull(stats);
+        this.nodeTypes = requireNonNull(nodeTypes);
+        this.settings = requireNonNull(settings);
+        this.stats = requireNonNull(stats);
     }
 
     /**

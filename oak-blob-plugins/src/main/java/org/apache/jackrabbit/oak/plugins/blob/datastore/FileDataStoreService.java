@@ -19,7 +19,7 @@
 
 package org.apache.jackrabbit.oak.plugins.blob.datastore;
 
-import org.apache.jackrabbit.guava.common.base.Preconditions;
+import java.util.Objects;
 import org.apache.felix.scr.annotations.Component;
 import org.apache.felix.scr.annotations.ConfigurationPolicy;
 import org.apache.felix.scr.annotations.Reference;
@@ -63,7 +63,7 @@ public class FileDataStoreService extends AbstractDataStoreService {
         // return CachingFDS when cacheSize > 0
         if (cacheSize > 0) {
             String fsBackendPath = PropertiesUtil.toString(config.get(PATH), null);
-            Preconditions.checkNotNull(fsBackendPath, "Cannot create " +
+            Objects.requireNonNull(fsBackendPath, "Cannot create " +
                     "FileDataStoreService with caching. [{path}] property not configured.");
 
             config.remove(PATH);
