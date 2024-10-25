@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.composite;
 
-import org.apache.jackrabbit.guava.common.collect.ImmutableSet;
 import org.apache.jackrabbit.guava.common.collect.Lists;
 import org.apache.jackrabbit.guava.common.collect.Sets;
 import org.apache.jackrabbit.oak.api.CommitFailedException;
@@ -53,7 +52,7 @@ public class InitialContentMigrator {
 
     private static final String CLUSTER_ID = System.getProperty("oak.composite.seed.clusterId", "1");
 
-    private static final Set<String> DEFAULT_IGNORED_PATHS = ImmutableSet.of("/" + CLUSTER_CONFIG_NODE);
+    private static final Set<String> DEFAULT_IGNORED_PATHS = Set.of("/" + CLUSTER_CONFIG_NODE);
 
     private static final Logger LOG = LoggerFactory.getLogger(InitialContentMigrator.class);
 
@@ -80,7 +79,7 @@ public class InitialContentMigrator {
         this.seedMount = seedMount;
 
         this.includePaths = FilteringNodeState.ALL;
-        this.excludeFragments = ImmutableSet.of(seedMount.getPathFragmentName());
+        this.excludeFragments = Set.of(seedMount.getPathFragmentName());
 
         if (seedMount instanceof MountInfo) {
             this.excludePaths = Sets.union(((MountInfo) seedMount).getIncludedPaths(), DEFAULT_IGNORED_PATHS);

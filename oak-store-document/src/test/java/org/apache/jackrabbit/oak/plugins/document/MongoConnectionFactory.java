@@ -16,9 +16,8 @@
  */
 package org.apache.jackrabbit.oak.plugins.document;
 
+import java.util.ArrayList;
 import java.util.List;
-
-import org.apache.jackrabbit.guava.common.collect.Lists;
 
 import org.apache.jackrabbit.oak.plugins.document.mongo.MongoDockerRule;
 import org.apache.jackrabbit.oak.plugins.document.util.MongoConnection;
@@ -33,7 +32,7 @@ public class MongoConnectionFactory extends ExternalResource {
 
     private final MongoDockerRule mongo = new MongoDockerRule();
 
-    private final List<MongoConnection> connections = Lists.newArrayList();
+    private final List<MongoConnection> connections = new ArrayList<>();
 
     @Override
     public Statement apply(Statement base, Description description) {
@@ -51,6 +50,9 @@ public class MongoConnectionFactory extends ExternalResource {
 
     @Nullable
     public MongoConnection getConnection(String dbName) {
+        if (DocumentStoreFixture.MongoFixture.SKIP_MONGO) {
+            return null;
+        }
         // first try MongoDB running on configured host and port
         MongoConnection c = MongoUtils.getConnection(dbName);
         if (c == null && MongoDockerRule.isDockerAvailable()) {

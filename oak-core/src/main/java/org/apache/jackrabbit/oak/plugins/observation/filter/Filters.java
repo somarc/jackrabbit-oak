@@ -18,10 +18,11 @@
  */
 package org.apache.jackrabbit.oak.plugins.observation.filter;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static org.apache.jackrabbit.oak.plugins.observation.filter.ConstantFilter.EXCLUDE_ALL;
 import static org.apache.jackrabbit.oak.plugins.observation.filter.ConstantFilter.INCLUDE_ALL;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.jackrabbit.guava.common.collect.Lists;
@@ -100,7 +101,7 @@ public final class Filters {
      */
     @NotNull
     public static EventFilter any(@NotNull final EventFilter... filters) {
-        return any(Lists.newArrayList(checkNotNull(filters)));
+        return any(Lists.newArrayList(requireNonNull(filters)));
     }
 
     /**
@@ -111,7 +112,7 @@ public final class Filters {
      */
     @NotNull
     public static EventFilter all(@NotNull final EventFilter... filters) {
-        return all(Lists.newArrayList(checkNotNull(filters)));
+        return all(Lists.newArrayList(requireNonNull(filters)));
     }
 
     /**
@@ -138,7 +139,7 @@ public final class Filters {
      */
     @NotNull
     public static EventFilter any(@NotNull final List<EventFilter> filters) {
-        if (checkNotNull(filters).isEmpty()) {
+        if (requireNonNull(filters).isEmpty()) {
             return EXCLUDE_ALL;
         } else if (filters.size() == 1) {
             return filters.get(0);
@@ -216,7 +217,7 @@ public final class Filters {
 
                 @Override
                 public EventFilter create(String name, NodeState before, NodeState after) {
-                    List<EventFilter> childFilters = Lists.newArrayList();
+                    List<EventFilter> childFilters = new ArrayList<>();
                     for (EventFilter filter : filters) {
                         EventFilter childFilter = filter.create(name, before, after);
                         if (childFilter != null) {
@@ -237,7 +238,7 @@ public final class Filters {
      */
     @NotNull
     public static EventFilter all(@NotNull final List<EventFilter> filters) {
-        if (checkNotNull(filters).isEmpty()) {
+        if (requireNonNull(filters).isEmpty()) {
             return INCLUDE_ALL;
         } else if (filters.size() == 1) {
             return filters.get(0);
@@ -315,7 +316,7 @@ public final class Filters {
 
                 @Override
                 public EventFilter create(String name, NodeState before, NodeState after) {
-                    List<EventFilter> childFilters = Lists.newArrayList();
+                    List<EventFilter> childFilters = new ArrayList<>();
                     for (EventFilter filter : filters) {
                         EventFilter childFilter = filter.create(name, before, after);
                         if (childFilter == null) {

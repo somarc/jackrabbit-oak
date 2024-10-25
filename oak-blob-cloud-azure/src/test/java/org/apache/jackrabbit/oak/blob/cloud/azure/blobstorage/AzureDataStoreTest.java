@@ -30,7 +30,6 @@ import org.apache.jackrabbit.guava.common.base.Strings;
 import org.apache.jackrabbit.guava.common.collect.Iterators;
 import org.apache.jackrabbit.guava.common.collect.Lists;
 import org.apache.jackrabbit.guava.common.collect.Maps;
-import org.apache.jackrabbit.guava.common.collect.Sets;
 import com.microsoft.azure.storage.StorageException;
 
 import org.apache.commons.io.IOUtils;
@@ -61,7 +60,9 @@ import java.security.DigestOutputStream;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -217,8 +218,8 @@ public class AzureDataStoreTest {
 
     @Test
     public void testListBlobs() throws DataStoreException, IOException {
-        final Set<DataIdentifier> identifiers = Sets.newHashSet();
-        final Set<String> testStrings = Sets.newHashSet("test1", "test2", "test3");
+        final Set<DataIdentifier> identifiers = new HashSet<>();
+        final Set<String> testStrings = Set.of("test1", "test2", "test3");
 
         for (String s : testStrings) {
             identifiers.add(ds.addRecord(new ByteArrayInputStream(s.getBytes())).getIdentifier());
@@ -387,7 +388,7 @@ public class AzureDataStoreTest {
     @Test
     public void testBackendGetAllIdentifiers() throws DataStoreException, IOException, NoSuchAlgorithmException {
         for (int expectedRecCount : Lists.newArrayList(1, 2, 5)) {
-            final List<DataIdentifier> ids = Lists.newArrayList();
+            final List<DataIdentifier> ids = new ArrayList<>();
             for (int i=0; i<expectedRecCount; i++) {
                 File testfile = folder.newFile();
                 copyInputStreamToFile(randomStream(i, 10), testfile);
@@ -454,7 +455,7 @@ public class AzureDataStoreTest {
             }
 
             Iterator<DataRecord> iter = backend.getAllRecords();
-            List<DataIdentifier> identifiers = Lists.newArrayList();
+            List<DataIdentifier> identifiers = new ArrayList<>();
             int actualCount = 0;
             while (iter.hasNext()) {
                 DataRecord record = iter.next();

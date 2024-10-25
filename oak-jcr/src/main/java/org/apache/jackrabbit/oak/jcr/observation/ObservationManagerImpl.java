@@ -19,7 +19,7 @@
 package org.apache.jackrabbit.oak.jcr.observation;
 
 import static org.apache.jackrabbit.guava.common.collect.Lists.newArrayList;
-import static org.apache.jackrabbit.guava.common.collect.Sets.newHashSet;
+
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.jackrabbit.oak.commons.PathUtils.concat;
 import static org.apache.jackrabbit.oak.commons.PathUtils.elements;
@@ -27,6 +27,7 @@ import static org.apache.jackrabbit.oak.plugins.observation.filter.GlobbingPathF
 import static org.apache.jackrabbit.oak.plugins.observation.filter.GlobbingPathFilter.STAR_STAR;
 
 import java.security.Principal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -254,7 +255,7 @@ public class ObservationManagerImpl implements JackrabbitObservationManager {
 
         FilterBuilder filterBuilder = new FilterBuilder();
         String depthPattern = isDeep ? STAR + '/' + STAR_STAR : STAR;
-        List<Condition> includeConditions = newArrayList();
+        List<Condition> includeConditions = new ArrayList<>();
         filterBuilder.addPathsForMBean(includePaths);
         for (String path : includePaths) {
             final String deepenedPath;
@@ -336,7 +337,7 @@ public class ObservationManagerImpl implements JackrabbitObservationManager {
         // all subtypes of every registered node type
         HashSet<String> explodedNodeTypes = null;
         if (validatedNodeTypeNames != null) {
-            explodedNodeTypes = newHashSet();
+            explodedNodeTypes = new HashSet<>();
             for (String nt : validatedNodeTypeNames) {
                 explodeSubtypes(nt, explodedNodeTypes);
             }
@@ -381,7 +382,7 @@ public class ObservationManagerImpl implements JackrabbitObservationManager {
     }
 
     private static List<Condition> createExclusions(FilterBuilder filterBuilder, Iterable<String> excludedPaths) {
-        List<Condition> conditions = newArrayList();
+        List<Condition> conditions = new ArrayList<>();
         for (String path : excludedPaths) {
             conditions.add(filterBuilder.not(filterBuilder.path(path + '/' + STAR_STAR)));
         }
@@ -390,7 +391,7 @@ public class ObservationManagerImpl implements JackrabbitObservationManager {
 
     private static Set<String> getOakPaths(NamePathMapper mapper, String[] paths, String type)
             throws RepositoryException {
-        Set<String> oakPaths = newHashSet();
+        Set<String> oakPaths = new HashSet<>();
         for (String path : paths) {
             String oakPath = mapper.getOakPath(path);
             if (oakPath != null) {

@@ -37,6 +37,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -235,7 +236,7 @@ public class ActiveDeletedBlobCollectorTest {
         // So, we'd push "MARKER*" blob ids and purge until some marker blob
         // gets purged. BUT, we'd time-out this activity in 3 seconds
         long until = Clock.SIMPLE.getTime() + TimeUnit.SECONDS.toMillis(3);
-        List<String> markerChunks = Lists.newArrayList();
+        List<String> markerChunks = new ArrayList<>();
         int i = 0;
         while (Clock.SIMPLE.getTime() < until) {
             // Push commit with a marker blob-id and wait for it to be purged
@@ -504,9 +505,9 @@ public class ActiveDeletedBlobCollectorTest {
     }
 
     class ChunkDeletionTrackingBlobStore implements GarbageCollectableBlobStore {
-        Set<String> deletedChunkIds = org.apache.jackrabbit.guava.common.collect.Sets.newLinkedHashSet();
-        Set<String> failWithDSEForChunkIds = org.apache.jackrabbit.guava.common.collect.Sets.newLinkedHashSet();
-        Set<String> failWithExceptionForChunkIds = org.apache.jackrabbit.guava.common.collect.Sets.newLinkedHashSet();
+        Set<String> deletedChunkIds = new LinkedHashSet<>();
+        Set<String> failWithDSEForChunkIds = new LinkedHashSet<>();
+        Set<String> failWithExceptionForChunkIds = new LinkedHashSet<>();
         Runnable callback = null;
         volatile boolean markerChunkDeleted = false;
 

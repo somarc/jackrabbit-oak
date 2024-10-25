@@ -16,7 +16,6 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.jackrabbit.oak.segment;
 
 import static org.apache.commons.io.FileUtils.byteCountToDisplaySize;
@@ -30,6 +29,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -181,7 +181,7 @@ public class SegmentDataStoreBlobGCIT {
         /* Create and delete nodes with blobs stored in DS*/
         int maxDeleted  = 5;
         int numBlobs = count;
-        List<Integer> processed = Lists.newArrayList();
+        List<Integer> processed = new ArrayList<>();
         Random rand = new Random();
         for (int i = 0; i < maxDeleted; i++) {
             int n = rand.nextInt(numBlobs);
@@ -254,8 +254,8 @@ public class SegmentDataStoreBlobGCIT {
     }
 
     private class DataStoreState {
-        Set<String> blobsAdded = Sets.newHashSet();
-        Set<String> blobsPresent = Sets.newHashSet();
+        Set<String> blobsAdded = new HashSet<>();
+        Set<String> blobsPresent = new HashSet<>();
     }
     
     private void delete(String nodeId) throws CommitFailedException {
@@ -450,7 +450,7 @@ public class SegmentDataStoreBlobGCIT {
     private Set<String> iterate() throws Exception {
         Iterator<String> cur = blobStore.getAllChunkIds(0);
 
-        Set<String> existing = Sets.newHashSet();
+        Set<String> existing = new HashSet<>();
         while (cur.hasNext()) {
             existing.add(cur.next());
         }
@@ -478,7 +478,7 @@ public class SegmentDataStoreBlobGCIT {
             this.root = root;
             this.blobStore = blobStore;
             this.maxLastModifiedInterval = maxLastModifiedInterval;
-            this.additionalBlobs = Sets.newHashSet();
+            this.additionalBlobs = new HashSet<>();
         }
 
         @Override

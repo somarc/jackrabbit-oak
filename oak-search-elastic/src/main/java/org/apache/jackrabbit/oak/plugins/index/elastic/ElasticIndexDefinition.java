@@ -100,6 +100,11 @@ public class ElasticIndexDefinition extends IndexDefinition {
     public static final String DYNAMIC_BOOST_FULLTEXT = ":dynamic-boost-ft";
 
     /**
+     * Precomputed random value based on the path of the document
+     */
+    public static final String PATH_RANDOM_VALUE = ":path-random-value";
+
+    /**
      * Dynamic properties are fields that are not explicitly defined in the index mapping and are added on the fly when a document is indexed.
      * Examples: aggregations with relative nodes, regex properties (to be supported), etc.
      */
@@ -140,6 +145,22 @@ public class ElasticIndexDefinition extends IndexDefinition {
         isAnalyzable = type -> Arrays.binarySearch(NOT_ANALYZED_TYPES, type) < 0;
     }
 
+    /**
+     * Mapping version that uses <a href="https://semver.org/">SemVer Specification</a> to allow changes without
+     * breaking existing queries.
+     * Changes breaking compatibility should increment the major version (indicating that a reindex is mandatory).
+     * Changes not breaking compatibility should increment the minor version (old queries still work, but they might not
+     * use the new feature).
+     * Changes that do not affect queries should increment the patch version (eg: bug fixes).
+     * <p>
+     * WARN: Since this information might be needed from external tools that don't have a direct dependency on this module, the
+     * actual version needs to be set in oak-search.
+     */
+    public static final ElasticSemVer MAPPING_VERSION;
+    static {
+        MAPPING_VERSION = ElasticSemVer.fromString(FulltextIndexConstants.INDEX_VERSION_BY_TYPE.get(ElasticIndexDefinition.TYPE_ELASTICSEARCH));
+    }
+
     private final String indexPrefix;
     private final String indexAlias;
     public final int bulkActions;
@@ -165,7 +186,14 @@ public class ElasticIndexDefinition extends IndexDefinition {
     public ElasticIndexDefinition(NodeState root, NodeState defn, String indexPath, String indexPrefix) {
         super(root, defn, determineIndexFormatVersion(defn), determineUniqueId(defn), indexPath);
         this.indexPrefix = indexPrefix;
-        this.indexAlias = ElasticIndexNameHelper.getElasticSafeIndexName(indexPrefix, getIndexPath());
+        // the alias contains the internal mapping major version. In case of a breaking change, an index with the new version can
+        // be created without affecting the existing queries of an instance running with the old version.
+        // This strategy has been introduced from version 1. For compatibility reasons, the alias is not changed for the first version.
+        if (MAPPING_VERSION.getMajor() > 1) {
+            this.indexAlias = ElasticIndexNameHelper.getElasticSafeIndexName(indexPrefix, getIndexPath() + "_v" + MAPPING_VERSION.getMajor());
+        } else {
+            this.indexAlias = ElasticIndexNameHelper.getElasticSafeIndexName(indexPrefix, getIndexPath());
+        }
         this.bulkActions = getOptionalValue(defn, BULK_ACTIONS, BULK_ACTIONS_DEFAULT);
         this.bulkSizeBytes = getOptionalValue(defn, BULK_SIZE_BYTES, BULK_SIZE_BYTES_DEFAULT);
         this.bulkFlushIntervalMs = getOptionalValue(defn, BULK_FLUSH_INTERVAL_MS, BULK_FLUSH_INTERVAL_MS_DEFAULT);

@@ -49,7 +49,7 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkArgument;
+import static org.apache.jackrabbit.oak.commons.conditions.Validate.checkArgument;
 import static org.apache.jackrabbit.JcrConstants.JCR_DATA;
 import static org.apache.jackrabbit.oak.api.Type.BINARIES;
 import static org.apache.jackrabbit.oak.api.Type.BINARY;
@@ -176,7 +176,7 @@ public class OakDirectory extends Directory {
             LOG.debug("Not marking {} under {} for active deletion", name, indexName);
         }
         if (f instanceof ReadOnlyBuilder) {
-            LOG.debug("Preserve read-only node: " + name);
+            LOG.debug("Preserve read-only node: {}", name);
         } else {
             f.remove();
         }
@@ -259,7 +259,7 @@ public class OakDirectory extends Directory {
         if (!readOnly && definition.saveDirListing()) {
             if (!fileNamesAtStart.equals(fileNames)) {
                 if (directoryBuilder instanceof ReadOnlyBuilder) {
-                    LOG.debug("Preserve files of read-only directory: " + fileNames);
+                    LOG.debug("Preserve files of read-only directory: {}", fileNames);
                 } else {
                     directoryBuilder.setProperty(createProperty(PROP_DIR_LISTING, fileNames, STRINGS));
                 }
@@ -306,7 +306,7 @@ public class OakDirectory extends Directory {
         if (file.exists()) {
             // overwrite potentially already existing child
             if (dest.directoryBuilder instanceof ReadOnlyBuilder) {
-                LOG.debug("Preserve read-only child: " + name);
+                LOG.debug("Preserve read-only child: {}", name);
             } else {
                 NodeBuilder destFile = dest.directoryBuilder.setChildNode(name, EMPTY_NODE);
                 for (PropertyState p : file.getProperties()) {

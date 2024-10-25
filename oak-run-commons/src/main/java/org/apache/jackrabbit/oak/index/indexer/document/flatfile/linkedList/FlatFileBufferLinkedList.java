@@ -20,10 +20,12 @@
 package org.apache.jackrabbit.oak.index.indexer.document.flatfile.linkedList;
 
 import org.apache.jackrabbit.guava.common.base.Preconditions;
+import org.apache.jackrabbit.oak.commons.conditions.Validate;
 import org.apache.jackrabbit.oak.index.indexer.document.NodeStateEntry;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Iterator;
+import java.util.Objects;
 
 /**
  * Linked list implementation which supports multiple iterators. The iterator's state
@@ -32,7 +34,7 @@ import java.util.Iterator;
  */
 public class FlatFileBufferLinkedList implements NodeStateEntryList {
 
-    private ListNode head = new ListNode();
+    private final ListNode head = new ListNode();
     private ListNode tail = head;
 
     private int size = 0;
@@ -48,13 +50,12 @@ public class FlatFileBufferLinkedList implements NodeStateEntryList {
     }
 
     public void add(@NotNull NodeStateEntry item) {
-        Preconditions.checkArgument(item != null, "Can't add null to the list");
+        Validate.checkArgument(item != null, "Can't add null to the list");
         long incomingSize = item.estimatedMemUsage();
         long memUsage = estimatedMemoryUsage();
-        Preconditions.checkState(memUsage + incomingSize <= memLimit,
-                String.format(
+        Validate.checkState(memUsage + incomingSize <= memLimit,
                 "Adding item (%s) estimated with %s bytes would increase mem usage beyond upper limit (%s)." +
-                        " Current estimated mem usage is %s bytes", item.getPath(), incomingSize, memLimit, memUsage));
+                        " Current estimated mem usage is %s bytes", item.getPath(), incomingSize, memLimit, memUsage);
         tail.next = new ListNode(item);
         tail = tail.next;
         size++;
@@ -62,7 +63,7 @@ public class FlatFileBufferLinkedList implements NodeStateEntryList {
     }
 
     public NodeStateEntry remove() {
-        Preconditions.checkState(!isEmpty(), "Cannot remove item from empty list");
+        Validate.checkState(!isEmpty(), "Cannot remove item from empty list");
         NodeStateEntry ret = head.next.data;
         head.next.isValid = false;
         head.next = head.next.next;
@@ -113,7 +114,7 @@ public class FlatFileBufferLinkedList implements NodeStateEntryList {
         }
 
         ListNode(@NotNull NodeStateEntry data) {
-            Preconditions.checkNotNull(data);
+            Objects.requireNonNull(data);
             this.data = data;
             this.next = null;
         }
@@ -123,12 +124,12 @@ public class FlatFileBufferLinkedList implements NodeStateEntryList {
         private ListNode current;
 
         static NodeIterator iteratorFor(@NotNull ListNode node) {
-            Preconditions.checkNotNull(node);
+            Objects.requireNonNull(node);
             return new NodeIterator(node);
         }
 
         NodeIterator(@NotNull ListNode start) {
-            Preconditions.checkNotNull(start);
+            Objects.requireNonNull(start);
             this.current = start;
         }
 
@@ -139,9 +140,9 @@ public class FlatFileBufferLinkedList implements NodeStateEntryList {
 
         @Override
         public NodeStateEntry next() {
-            Preconditions.checkState(hasNext(), "No next");
+            Validate.checkState(hasNext(), "No next");
             current = current.next;
-            Preconditions.checkState(current.isValid, "Can't call next from a removed node");
+            Validate.checkState(current.isValid, "Can't call next from a removed node");
             return current.data;
         }
     }

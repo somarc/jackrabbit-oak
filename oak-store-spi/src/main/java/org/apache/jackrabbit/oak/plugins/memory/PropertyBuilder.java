@@ -16,10 +16,10 @@
  */
 package org.apache.jackrabbit.oak.plugins.memory;
 
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkArgument;
-import static org.apache.jackrabbit.guava.common.base.Preconditions.checkState;
+import static org.apache.jackrabbit.oak.commons.conditions.Validate.checkArgument;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 
 import javax.jcr.PropertyType;
@@ -29,6 +29,7 @@ import org.apache.jackrabbit.guava.common.collect.Lists;
 import org.apache.jackrabbit.oak.api.Blob;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
+import org.apache.jackrabbit.oak.commons.conditions.Validate;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -40,7 +41,7 @@ public class PropertyBuilder<T> {
 
     private String name;
     private boolean isArray;
-    private List<T> values = Lists.newArrayList();
+    private List<T> values = new ArrayList<>();
 
     /**
      * Create a new instance for building {@code PropertyState} instances
@@ -158,8 +159,8 @@ public class PropertyBuilder<T> {
     @SuppressWarnings("unchecked")
     @NotNull
     public PropertyState getPropertyState() {
-        checkState(name != null, "Property has no name");
-        checkState(isArray() || values.size() == 1, "Property has multiple values");
+        Validate.checkState(name != null, "Property has no name");
+        Validate.checkState(isArray() || values.size() == 1, "Property has multiple values");
 
         if (values.isEmpty()) {
             return EmptyPropertyState.emptyProperty(name, Type.fromTag(type.tag(), true));
