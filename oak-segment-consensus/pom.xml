@@ -59,6 +59,19 @@
              </excludes>
             </configuration>
         </plugin>
+        <!-- Build executable JAR for GlobalStoreServer -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-jar-plugin</artifactId>
+          <configuration>
+            <archive>
+              <manifest>
+                <mainClass>org.apache.jackrabbit.oak.segment.consensus.server.GlobalStoreServer</mainClass>
+                <addClasspath>true</addClasspath>
+              </manifest>
+            </archive>
+          </configuration>
+        </plugin>
       </plugins>
     </build>
 

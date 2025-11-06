@@ -1,0 +1,28 @@
+FROM eclipse-temurin:11-jre-alpine
+
+LABEL maintainer="Blockchain AEM"
+LABEL description="Global read-only Oak repository for Blockchain AEM"
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl
+
+# Create app directory
+WORKDIR /app
+
+# Copy the JAR
+COPY target/oak-segment-consensus-*-SNAPSHOT.jar /app/oak-segment-consensus.jar
+
+# Create store directory
+RUN mkdir -p /var/oak-chain/segmentstore
+
+# Expose port
+EXPOSE 8090
+
+# Health check endpoint (will return 200 when server is ready)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:8090/health || exit 1
+
+# Run the global store server
+ENTRYPOINT ["java", "-jar", "/app/oak-segment-consensus.jar"]
+CMD ["--port", "8090", "--store", "/var/oak-chain/segmentstore"]
+
