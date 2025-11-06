@@ -76,6 +76,7 @@
     <module>oak-segment-remote</module>
     <module>oak-segment-aws</module>
     <module>oak-segment-azure</module>
+    <module>oak-segment-consensus</module>
     <module>oak-benchmarks</module>
     <module>oak-search-elastic</module>
     <module>oak-benchmarks-lucene</module>
