@@ -45,13 +45,17 @@
             <!-- Import public Oak APIs -->
             <Import-Package>
               org.apache.jackrabbit.oak.segment.spi*;version="[1.0,2)",
-              org.apache.jackrabbit.oak.segment;version="[1.0,2)",
+              org.apache.jackrabbit.oak.segment.remote*;version="[1.0,2)",
+              org.apache.jackrabbit.oak.segment;version="[1.0,2)";resolution:=optional,
               org.apache.jackrabbit.oak.spi.state*;version="[1.0,2)",
               org.apache.jackrabbit.oak.api*;version="[1.0,2)",
               org.apache.jackrabbit.oak.composite*;version="[1.0,2)",
               org.apache.jackrabbit.oak.spi.mount*;version="[1.0,2)",
-              javax.servlet;version="[3.1,5)",
-              javax.servlet.http;version="[3.1,5)",
+              javax.servlet;version="[3.1,5)";resolution:=optional,
+              javax.servlet.http;version="[3.1,5)";resolution:=optional,
+              org.eclipse.jetty.server*;resolution:=optional,
+              !org.apache.jackrabbit.oak.segment.file,
+              !org.apache.jackrabbit.oak.segment.file.*,
               *
             </Import-Package>
             
@@ -75,6 +79,13 @@
       <artifactId>oak-segment-tar</artifactId>
       <version>${project.version}</version>
       <!-- Public APIs are exported, no need for 'provided' scope -->
+    </dependency>
+
+    <!-- Oak Segment Remote - for AbstractRemoteSegmentArchiveReader -->
+    <dependency>
+      <groupId>org.apache.jackrabbit</groupId>
+      <artifactId>oak-segment-remote</artifactId>
+      <version>${project.version}</version>
     </dependency>
 
     <!-- Oak Store SPI -->
