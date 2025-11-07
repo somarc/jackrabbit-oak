@@ -86,6 +86,11 @@
                     <mainClass>org.apache.jackrabbit.oak.segment.consensus.server.GlobalStoreServer</mainClass>
                   </transformer>
                 </transformers>
+                <artifactSet>
+                  <includes>
+                    <include>*:*</include>
+                  </includes>
+                </artifactSet>
                 <filters>
                   <filter>
                     <artifact>*:*</artifact>
@@ -176,13 +181,13 @@
             <artifactId>oak-segment-http</artifactId>
             <version>${project.version}</version>
         </dependency>
-
-        <!-- Servlet API for OSGi servlets -->
+        
+        <!-- Servlet API (compile scope for standalone JAR - needed by Jetty/oak-segment-http) -->
         <dependency>
             <groupId>javax.servlet</groupId>
             <artifactId>javax.servlet-api</artifactId>
             <version>3.1.0</version>
-            <scope>provided</scope>
+            <scope>compile</scope>
         </dependency>
 
         <!-- Logging -->

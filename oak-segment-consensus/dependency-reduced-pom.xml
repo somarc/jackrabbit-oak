@@ -58,6 +58,11 @@
                   <mainClass>org.apache.jackrabbit.oak.segment.consensus.server.GlobalStoreServer</mainClass>
                 </transformer>
               </transformers>
+              <artifactSet>
+                <includes>
+                  <include>*:*</include>
+                </includes>
+              </artifactSet>
               <filters>
                 <filter>
                   <artifact>*:*</artifact>
@@ -115,12 +120,6 @@
       <groupId>org.apache.jackrabbit</groupId>
       <artifactId>oak-store-composite</artifactId>
       <version>1.89-SNAPSHOT</version>
-      <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>javax.servlet</groupId>
-      <artifactId>javax.servlet-api</artifactId>
-      <version>3.1.0</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
