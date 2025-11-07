@@ -119,6 +119,14 @@
       <version>2.10.1</version>
     </dependency>
 
+    <!-- Servlet API (compile scope for standalone JAR) -->
+    <dependency>
+      <groupId>javax.servlet</groupId>
+      <artifactId>javax.servlet-api</artifactId>
+      <version>3.1.0</version>
+      <scope>compile</scope>
+    </dependency>
+
     <!-- Embedded HTTP Server (Jetty) -->
     <dependency>
       <groupId>org.eclipse.jetty</groupId>

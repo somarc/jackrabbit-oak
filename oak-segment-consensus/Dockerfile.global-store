@@ -12,8 +12,9 @@ WORKDIR /app
 # Copy the fat JAR (includes all dependencies)
 COPY target/oak-segment-consensus.jar /app/oak-segment-consensus.jar
 
-# Create store directory
-RUN mkdir -p /var/oak-chain/segmentstore
+# Create store directory with world-readable permissions for POC
+RUN mkdir -p /var/oak-chain/segmentstore && \
+    chmod -R 777 /var/oak-chain
 
 # Expose port
 EXPOSE 8090
