@@ -36,21 +36,22 @@
           <artifactId>maven-bundle-plugin</artifactId>
           <configuration>
             <instructions>
-              <Import-Package>
-                  org.apache.jackrabbit.oak.segment.spi*,
-                  org.apache.jackrabbit.oak.spi.state*,
-                  org.apache.jackrabbit.oak.spi.mount*,
-                  org.apache.jackrabbit.oak.api*,
-                  !org.apache.jackrabbit.oak.segment*,
-                  *
-              </Import-Package>
+              <!-- BACK TO FRAGMENT: Only way to access internal oak-segment-tar APIs -->
+              <!-- BundleActivator will manually register services (DS won't work in fragments) -->
+              <Fragment-Host>org.apache.jackrabbit.oak-segment-tar</Fragment-Host>
+              
+              <!-- Specify our BundleActivator for manual service registration -->
+              <Bundle-Activator>org.apache.jackrabbit.oak.segment.consensus.osgi.ConsensusActivator</Bundle-Activator>
+              
+              <!-- Export our own packages for use by other bundles -->
               <Export-Package>
                 org.apache.jackrabbit.oak.segment.consensus,
                 org.apache.jackrabbit.oak.segment.consensus.protocol,
                 org.apache.jackrabbit.oak.segment.consensus.wallet,
                 org.apache.jackrabbit.oak.segment.consensus.network,
                 org.apache.jackrabbit.oak.segment.consensus.servlets,
-                org.apache.jackrabbit.oak.segment.consensus.osgi
+                org.apache.jackrabbit.oak.segment.consensus.osgi,
+                org.apache.jackrabbit.oak.segment.consensus.mount
               </Export-Package>
             </instructions>
           </configuration>
@@ -58,11 +59,12 @@
          <plugin>
            <groupId>org.apache.rat</groupId>
            <artifactId>apache-rat-plugin</artifactId>
-           <configuration>
-             <excludes>
-               <exclude>Dockerfile.global-store</exclude>
-             </excludes>
-            </configuration>
+          <configuration>
+            <excludes>
+              <exclude>Dockerfile.global-store</exclude>
+              <exclude>dependency-reduced-pom.xml</exclude>
+            </excludes>
+           </configuration>
         </plugin>
         <!-- Build executable uber JAR for GlobalStoreServer -->
         <plugin>
@@ -165,6 +167,13 @@
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-commons</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- HTTP segment store module (compile scope for standalone JAR) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-segment-http</artifactId>
             <version>${project.version}</version>
         </dependency>
 

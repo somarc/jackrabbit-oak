@@ -26,6 +26,7 @@ import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
+import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 
 /**
@@ -51,6 +52,7 @@ public class GlobalStoreServer {
     private volatile boolean running = false;
     private FileStore fileStore;
     private NodeStore nodeStore;
+    private SegmentHttpServer httpServer;
     
     public GlobalStoreServer(int port, String storeDirectory) {
         this.port = port;
@@ -90,6 +92,19 @@ public class GlobalStoreServer {
             throw new IOException("Invalid FileStore version", e);
         }
         
+        // Initialize and start HTTP server to expose segments
+        System.out.println("Starting HTTP server on port " + port + "...");
+        try {
+            httpServer = new SegmentHttpServer(fileStore, port);
+            httpServer.start();
+            System.out.println("✅ HTTP server started");
+            System.out.println("   - GET /segments/{id} - fetch segment");
+            System.out.println("   - HEAD /segments/{id} - check existence");
+            System.out.println("   - GET /health - health check");
+        } catch (Exception e) {
+            throw new IOException("Failed to start HTTP server", e);
+        }
+        
         running = true;
         
         System.out.println();
@@ -97,10 +112,11 @@ public class GlobalStoreServer {
         System.out.println("  Blockchain AEM - Global Store Server");
         System.out.println("===========================================");
         System.out.println();
-        System.out.println("Port:           " + port);
+        System.out.println("Port:           " + port + " (HTTP)");
         System.out.println("Store:          " + storeDirectory);
         System.out.println("Mount Path:     /oak-chain");
         System.out.println("Access:         READ-WRITE (for consensus)");
+        System.out.println("Protocol:       HTTP segment transfer (Cold Standby pattern)");
         System.out.println();
         System.out.println("Server started successfully!");
         System.out.println("Waiting for client connections...");
@@ -123,6 +139,16 @@ public class GlobalStoreServer {
     public void stop() {
         System.out.println("Shutting down global store server...");
         running = false;
+        
+        // Stop HTTP server
+        if (httpServer != null) {
+            try {
+                httpServer.stop();
+                System.out.println("✅ HTTP server stopped");
+            } catch (Exception e) {
+                System.err.println("Error stopping HTTP server: " + e.getMessage());
+            }
+        }
         
         // Close FileStore
         if (fileStore != null) {
