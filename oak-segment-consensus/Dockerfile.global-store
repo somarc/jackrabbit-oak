@@ -1,16 +1,16 @@
-FROM eclipse-temurin:11-jre-alpine
+FROM eclipse-temurin:11-jre
 
 LABEL maintainer="Blockchain AEM"
 LABEL description="Global read-only Oak repository for Blockchain AEM"
 
 # Install curl for healthcheck
-RUN apk add --no-cache curl
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
 WORKDIR /app
 
-# Copy the JAR
-COPY target/oak-segment-consensus-*-SNAPSHOT.jar /app/oak-segment-consensus.jar
+# Copy the fat JAR (includes all dependencies)
+COPY target/oak-segment-consensus.jar /app/oak-segment-consensus.jar
 
 # Create store directory
 RUN mkdir -p /var/oak-chain/segmentstore

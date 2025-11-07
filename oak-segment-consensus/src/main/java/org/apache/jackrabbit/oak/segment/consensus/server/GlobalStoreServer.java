@@ -22,6 +22,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
+import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
+import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
+import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
+import org.apache.jackrabbit.oak.spi.state.NodeStore;
+
 /**
  * Standalone server for the global Blockchain AEM repository.
  * <p>
@@ -43,6 +49,8 @@ public class GlobalStoreServer {
     private final int port;
     private final String storeDirectory;
     private volatile boolean running = false;
+    private FileStore fileStore;
+    private NodeStore nodeStore;
     
     public GlobalStoreServer(int port, String storeDirectory) {
         this.port = port;
@@ -60,15 +68,31 @@ public class GlobalStoreServer {
             System.out.println("Created store directory: " + storePath);
         }
         
-        // Initialize Oak segment store
-        // In a full implementation, this would:
-        // 1. Create a FileStore instance
-        // 2. Create a SegmentNodeStore
-        // 3. Start an HTTP server (using Oak's standby sync protocol or custom REST API)
-        // 4. Listen for segment sync requests
+        // Initialize Oak FileStore
+        System.out.println("Initializing Oak FileStore...");
+        try {
+            File storeDir = new File(storeDirectory);
+            
+            // Build FileStore with read-write mode (so we can initialize /oak-chain structure)
+            fileStore = FileStoreBuilder.fileStoreBuilder(storeDir)
+                .withMaxFileSize(256)  // 256 MB per TAR file
+                .withMemoryMapping(false)  // Disable for Docker
+                .build();
+            
+            // Build SegmentNodeStore
+            nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
+            
+            System.out.println("✅ Oak FileStore initialized");
+            System.out.println("   - Store version: " + fileStore.getHead().getRecordId());
+            System.out.println("   - Segments: " + storeDir.getAbsolutePath());
+            
+        } catch (InvalidFileStoreVersionException e) {
+            throw new IOException("Invalid FileStore version", e);
+        }
         
         running = true;
         
+        System.out.println();
         System.out.println("===========================================");
         System.out.println("  Blockchain AEM - Global Store Server");
         System.out.println("===========================================");
@@ -76,7 +100,7 @@ public class GlobalStoreServer {
         System.out.println("Port:           " + port);
         System.out.println("Store:          " + storeDirectory);
         System.out.println("Mount Path:     /oak-chain");
-        System.out.println("Access:         READ-ONLY");
+        System.out.println("Access:         READ-WRITE (for consensus)");
         System.out.println();
         System.out.println("Server started successfully!");
         System.out.println("Waiting for client connections...");
@@ -99,6 +123,30 @@ public class GlobalStoreServer {
     public void stop() {
         System.out.println("Shutting down global store server...");
         running = false;
+        
+        // Close FileStore
+        if (fileStore != null) {
+            try {
+                fileStore.close();
+                System.out.println("✅ FileStore closed");
+            } catch (Exception e) {
+                System.err.println("Error closing FileStore: " + e.getMessage());
+            }
+        }
+    }
+    
+    /**
+     * Get the NodeStore (for testing/debugging).
+     */
+    public NodeStore getNodeStore() {
+        return nodeStore;
+    }
+    
+    /**
+     * Get the FileStore (for testing/debugging).
+     */
+    public FileStore getFileStore() {
+        return fileStore;
     }
     
     /**
