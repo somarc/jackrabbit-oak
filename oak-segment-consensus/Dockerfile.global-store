@@ -10,11 +10,15 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 # Copy the fat JAR (includes all dependencies)
-COPY target/oak-segment-consensus.jar /app/oak-segment-consensus.jar
+COPY oak-segment-consensus/target/oak-segment-consensus.jar /app/oak-segment-consensus.jar
 
-# Create store directory with world-readable permissions for POC
+# Create store directory and set ownership to UID 999 (matches Sling user)
 RUN mkdir -p /var/oak-chain/segmentstore && \
-    chmod -R 777 /var/oak-chain
+    chown -R 999:999 /var/oak-chain && \
+    chown -R 999:999 /app
+
+# Switch to UID 999 to match Sling's user
+USER 999
 
 # Expose port
 EXPOSE 8090
@@ -25,5 +29,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Run the global store server
 ENTRYPOINT ["java", "-jar", "/app/oak-segment-consensus.jar"]
-CMD ["--port", "8090", "--store", "/var/oak-chain/segmentstore"]
+CMD ["--port", "8090", "--store", "/var/oak-chain/segmentstore-composite-mount-oak-chain"]
 

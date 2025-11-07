@@ -249,7 +249,7 @@ public class GlobalStoreServer {
      */
     public static void main(String[] args) {
         int port = 8090;
-        String storeDir = "/tmp/oak-chain-global";
+        String storeDir = "/var/oak-chain/segmentstore-composite-mount-oak-chain";
         
         // Parse arguments
         for (int i = 0; i < args.length; i++) {
@@ -288,7 +288,7 @@ public class GlobalStoreServer {
         System.out.println();
         System.out.println("Options:");
         System.out.println("  --port <port>        Server port (default: 8090)");
-        System.out.println("  --store <directory>  Segment store directory (default: /tmp/oak-chain-global)");
+        System.out.println("  --store <directory>  Segment store directory (default: /var/oak-chain/segmentstore-composite-mount-oak-chain)");
         System.out.println("  --help, -h           Show this help message");
         System.out.println();
         System.out.println("Example:");
