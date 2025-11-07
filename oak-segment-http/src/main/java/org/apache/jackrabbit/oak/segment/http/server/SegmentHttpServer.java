@@ -29,8 +29,10 @@ import org.slf4j.LoggerFactory;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.UUID;
 
 /**
  * HTTP server that exposes Oak segments over HTTP.
@@ -203,27 +205,30 @@ public class SegmentHttpServer {
         }
         
         /**
-         * Parses a segment ID from its string representation.
+         * Parses a segment ID from its string representation (UUID format).
          * 
-         * <p>TODO: Implement proper SegmentId parsing. This requires access to
-         * the SegmentStore's SegmentIdFactory.</p>
+         * <p>Uses the FileStore's SegmentIdProvider to create a proper SegmentId.
+         * This is the pattern used by Oak's Cold Standby.</p>
          */
         private SegmentId parseSegmentId(String segmentIdStr) {
-            // TODO: Implement proper segment ID parsing
-            // For now, this is a placeholder
-            throw new UnsupportedOperationException("SegmentId parsing not yet implemented");
+            UUID uuid = UUID.fromString(segmentIdStr);
+            long msb = uuid.getMostSignificantBits();
+            long lsb = uuid.getLeastSignificantBits();
+            return fileStore.getSegmentIdProvider().newSegmentId(msb, lsb);
         }
         
         /**
          * Serializes a segment to bytes for HTTP transmission.
          * 
-         * <p>TODO: Implement proper segment serialization. This may involve
-         * accessing the segment's underlying byte buffer.</p>
+         * <p>Uses Segment's public writeTo() method, same as Cold Standby.
+         * The segment writes its complete binary representation including
+         * header, data, and all metadata needed for reconstruction.</p>
          */
-        private byte[] serializeSegment(Segment segment) {
-            // TODO: Implement proper segment serialization
-            // For now, this is a placeholder
-            throw new UnsupportedOperationException("Segment serialization not yet implemented");
+        private byte[] serializeSegment(Segment segment) throws IOException {
+            try (ByteArrayOutputStream stream = new ByteArrayOutputStream()) {
+                segment.writeTo(stream);
+                return stream.toByteArray();
+            }
         }
     }
 }

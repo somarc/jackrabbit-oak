@@ -19,14 +19,16 @@ package org.apache.jackrabbit.oak.segment.http;
 import org.apache.http.HttpEntity;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpHead;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
+import org.apache.jackrabbit.oak.commons.Buffer;
 import org.apache.jackrabbit.oak.segment.Segment;
 import org.apache.jackrabbit.oak.segment.SegmentId;
+import org.apache.jackrabbit.oak.segment.SegmentIdProvider;
 import org.apache.jackrabbit.oak.segment.SegmentNotFoundException;
 import org.apache.jackrabbit.oak.segment.SegmentStore;
-import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,6 +67,7 @@ public class HttpSegmentStore implements SegmentStore {
     
     private final String baseUrl;
     private final CloseableHttpClient httpClient;
+    private final SegmentIdProvider segmentIdProvider;
     
     /**
      * Local LRU cache of segments fetched from remote store.
@@ -77,10 +80,12 @@ public class HttpSegmentStore implements SegmentStore {
      * Creates a new HTTP segment store.
      * 
      * @param baseUrl Base URL of the GlobalStoreServer (e.g., "http://global-store:8090")
+     * @param segmentIdProvider Provider for creating SegmentId instances (needed for parsing)
      */
-    public HttpSegmentStore(String baseUrl) {
+    public HttpSegmentStore(String baseUrl, SegmentIdProvider segmentIdProvider) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.httpClient = HttpClients.createDefault();
+        this.segmentIdProvider = segmentIdProvider;
         this.cacheLock = new ReentrantReadWriteLock();
         
         // Simple LRU cache using LinkedHashMap (no Guava - security)
@@ -115,8 +120,7 @@ public class HttpSegmentStore implements SegmentStore {
         
         // Check remote via HEAD request
         String url = baseUrl + "/segments/" + segmentIdStr;
-        HttpGet request = new HttpGet(url);
-        request.setMethod("HEAD");
+        HttpHead request = new HttpHead(url);
         
         try (CloseableHttpResponse response = httpClient.execute(request)) {
             int statusCode = response.getStatusLine().getStatusCode();
@@ -132,8 +136,6 @@ public class HttpSegmentStore implements SegmentStore {
             return false;
         }
     }
-    
-    @NotNull
     @Override
     public Segment readSegment(SegmentId segmentId) {
         String segmentIdStr = segmentId.toString();
@@ -205,14 +207,21 @@ public class HttpSegmentStore implements SegmentStore {
     /**
      * Parses segment bytes into a Segment object.
      * 
-     * <p>This uses the Segment class's public constructor or factory method.
-     * We need to create the segment tracker context.</p>
+     * <p>Uses the Segment's public constructor that accepts a SegmentIdProvider
+     * and Buffer. This is the standard way to reconstruct segments from bytes,
+     * used throughout Oak including Cold Standby client.</p>
+     * 
+     * @param segmentId The ID of the segment being parsed
+     * @param bytes The raw segment bytes fetched from remote
+     * @return Reconstructed Segment object
      */
     private Segment parseSegment(SegmentId segmentId, byte[] bytes) {
-        // TODO: Implement proper Segment parsing
-        // For now, this is a placeholder
-        // We need to create a SegmentReader context
-        throw new UnsupportedOperationException("Segment parsing not yet implemented - need SegmentReader context");
+        // Wrap bytes in Oak's Buffer
+        Buffer buffer = Buffer.wrap(bytes);
+        
+        // Create Segment using public constructor
+        // This reconstructs the segment with all its metadata
+        return new Segment(segmentIdProvider, segmentId, buffer);
     }
     
     /**
