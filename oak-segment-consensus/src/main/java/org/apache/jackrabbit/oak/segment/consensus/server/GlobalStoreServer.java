@@ -88,6 +88,9 @@ public class GlobalStoreServer {
             System.out.println("   - Store version: " + fileStore.getHead().getRecordId());
             System.out.println("   - Segments: " + storeDir.getAbsolutePath());
             
+            // Create genesis content if it doesn't exist
+            initializeGenesisContent();
+            
         } catch (InvalidFileStoreVersionException e) {
             throw new IOException("Invalid FileStore version", e);
         }
@@ -130,6 +133,72 @@ public class GlobalStoreServer {
                 Thread.currentThread().interrupt();
                 break;
             }
+        }
+    }
+    
+    /**
+     * Initialize genesis content if it doesn't already exist.
+     * Creates a simple "DO IT LIVE!" node at /oak-chain/content/genesis
+     * following the BYOD model (no binary data, just node structure).
+     */
+    private void initializeGenesisContent() {
+        try {
+            org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
+            
+            // Check if genesis content already exists
+            org.apache.jackrabbit.oak.spi.state.NodeState oakChain = root.getChildNode("oak-chain");
+            if (oakChain.exists()) {
+                org.apache.jackrabbit.oak.spi.state.NodeState content = oakChain.getChildNode("content");
+                if (content.exists() && content.getChildNode("genesis").exists()) {
+                    System.out.println("   ℹ️  Genesis content already exists, skipping initialization");
+                    return;
+                }
+            }
+            
+            // Create genesis content
+            System.out.println("   🔥 Creating DO IT LIVE! genesis content...");
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = root.builder();
+            
+            // Create /oak-chain/content path
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder oakChainBuilder = rootBuilder.child("oak-chain");
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder contentBuilder = oakChainBuilder.child("content");
+            
+            // Create genesis node
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesis = contentBuilder.child("genesis");
+            genesis.setProperty("jcr:primaryType", "nt:unstructured");
+            genesis.setProperty("message", "DO IT LIVE!");
+            genesis.setProperty("description", "Blockchain AEM - Genesis block of the global TarMK chain");
+            genesis.setProperty("timestamp", System.currentTimeMillis());
+            genesis.setProperty("author", "Blockchain AEM POC");
+            genesis.setProperty("version", "1.0.0");
+            
+            // Add BYOD model reference (binary stored externally)
+            genesis.setProperty("imageUri", "https://participant-cdn.example.com/assets/do-it-live.jpeg");
+            genesis.setProperty("imageMimeType", "image/jpeg");
+            genesis.setProperty("imageSize", 297L);
+            genesis.setProperty("binaryDataNote", "Binaries stored in participant-owned datastore, not in global chain");
+            
+            // Add metadata child node
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder metadata = genesis.child("metadata");
+            metadata.setProperty("jcr:primaryType", "nt:unstructured");
+            metadata.setProperty("poc", true);
+            metadata.setProperty("consensusProtocol", "HTTP Segment Transfer");
+            metadata.setProperty("mountPath", "/oak-chain");
+            metadata.setProperty("accessMode", "READ-ONLY (for participants)");
+            
+            // Commit the changes
+            nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
+                           org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY);
+            
+            System.out.println("   ✅ Genesis content created: /oak-chain/content/genesis");
+            System.out.println("      message: \"DO IT LIVE!\"");
+            System.out.println("      author: Blockchain AEM POC");
+            System.out.println("      timestamp: " + System.currentTimeMillis());
+            
+        } catch (Exception e) {
+            System.err.println("   ⚠️  Failed to create genesis content: " + e.getMessage());
+            // Non-fatal - server can still run without genesis content
         }
     }
     
