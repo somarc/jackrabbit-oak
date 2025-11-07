@@ -111,6 +111,12 @@ public class SegmentHttpServer {
             
             baseRequest.setHandled(true);
             
+            // Browser UI endpoint
+            if (("/".equals(path) || "/index.html".equals(path)) && "GET".equals(method)) {
+                handleBrowserUI(response);
+                return;
+            }
+            
             // Health check endpoint
             if ("/health".equals(path) && "GET".equals(method)) {
                 handleHealthCheck(response);
@@ -133,6 +139,32 @@ public class SegmentHttpServer {
             
             // Unknown endpoint
             response.sendError(HttpServletResponse.SC_NOT_FOUND);
+        }
+        
+        /**
+         * Serves the Blockchain AEM Browser UI.
+         */
+        private void handleBrowserUI(HttpServletResponse response) throws IOException {
+            try (java.io.InputStream is = getClass().getClassLoader().getResourceAsStream("blockchain-browser.html")) {
+                if (is == null) {
+                    response.sendError(HttpServletResponse.SC_NOT_FOUND, "Browser UI not found");
+                    return;
+                }
+                
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.setContentType("text/html; charset=UTF-8");
+                
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = is.read(buffer)) != -1) {
+                    response.getOutputStream().write(buffer, 0, bytesRead);
+                }
+                
+                LOG.info("Served Blockchain AEM Browser UI");
+            } catch (Exception e) {
+                LOG.error("Error serving browser UI", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            }
         }
         
         /**
