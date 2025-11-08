@@ -98,7 +98,7 @@ public class GlobalStoreServer {
         // Initialize and start HTTP server to expose segments
         System.out.println("Starting HTTP server on port " + port + "...");
         try {
-            httpServer = new SegmentHttpServer(storeDir, port, fileStore);
+            httpServer = new SegmentHttpServer(storeDir, port, fileStore, nodeStore);
             httpServer.start();
             System.out.println("✅ HTTP server started");
             System.out.println("   - GET /journal.log - journal file");
