@@ -46,11 +46,20 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
     private final long length;
 
     public HttpSegmentArchiveReader(String baseUrl, String archiveName, IOMonitor ioMonitor) throws IOException {
-        super(ioMonitor);
+        super(ioMonitor); // MUST be first in Java
+        log.info("✨ ENTERING HttpSegmentArchiveReader constructor");
+        log.info("✨ baseUrl: {}, archiveName: {}", baseUrl, archiveName);
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        log.info("✨ Normalized baseUrl: {}", this.baseUrl);
         this.archiveName = archiveName;
+        log.info("✨ Set archiveName");
+        log.info("✨ Creating HTTP client...");
         this.httpClient = HttpClients.createDefault();
+        log.info("✨ HTTP client created");
+        log.info("✨ Calling computeArchiveIndexAndLength()...");
         this.length = computeArchiveIndexAndLength();
+        log.info("✨ Archive length: {}", this.length);
+        log.info("✨ HttpSegmentArchiveReader constructor COMPLETE");
     }
 
     @Override
@@ -65,12 +74,16 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
 
     @Override
     protected long computeArchiveIndexAndLength() throws IOException {
+        log.info("💥 ENTERING computeArchiveIndexAndLength()");
+        log.info("💥 Archive name: {}", archiveName);
         // POC SIMPLIFICATION: Server uses simple /segments/{uuid} API
         // We don't have a real archive index endpoint yet
         // For now, we'll discover segments on-demand
-        log.info("HttpSegmentArchiveReader initialized (archive: {})", archiveName);
-        log.info("POC mode: Segments will be discovered on-demand via /segments/{{uuid}} endpoint");
-        return 0; // Unknown length until we start reading
+        log.info("💥 POC mode: Segments will be discovered on-demand via /segments/{{uuid}} endpoint");
+        long length = 0; // Unknown length until we start reading
+        log.info("💥 Returning length: {}", length);
+        log.info("💥 computeArchiveIndexAndLength() COMPLETE");
+        return length;
     }
 
     @Override

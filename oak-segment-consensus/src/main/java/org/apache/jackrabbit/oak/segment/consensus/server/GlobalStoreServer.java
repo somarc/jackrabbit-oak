@@ -72,8 +72,8 @@ public class GlobalStoreServer {
         
         // Initialize Oak FileStore
         System.out.println("Initializing Oak FileStore...");
+        File storeDir = new File(storeDirectory);
         try {
-            File storeDir = new File(storeDirectory);
             
             // Build FileStore with read-write mode (so we can initialize /oak-chain structure)
             fileStore = FileStoreBuilder.fileStoreBuilder(storeDir)
@@ -98,9 +98,12 @@ public class GlobalStoreServer {
         // Initialize and start HTTP server to expose segments
         System.out.println("Starting HTTP server on port " + port + "...");
         try {
-            httpServer = new SegmentHttpServer(fileStore, port);
+            httpServer = new SegmentHttpServer(storeDir, port, fileStore);
             httpServer.start();
             System.out.println("✅ HTTP server started");
+            System.out.println("   - GET /journal.log - journal file");
+            System.out.println("   - GET /manifest - manifest file");
+            System.out.println("   - GET /gc.log - garbage collection log");
             System.out.println("   - GET /segments/{id} - fetch segment");
             System.out.println("   - HEAD /segments/{id} - check existence");
             System.out.println("   - GET /health - health check");

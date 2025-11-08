@@ -21,6 +21,7 @@ import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.jackrabbit.oak.commons.Buffer;
 import org.apache.jackrabbit.oak.segment.spi.monitor.IOMonitor;
 import org.apache.jackrabbit.oak.segment.spi.persistence.SegmentArchiveManager;
 import org.apache.jackrabbit.oak.segment.spi.persistence.SegmentArchiveReader;
@@ -59,33 +60,45 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
      * @param ioMonitor IO monitor for tracking read operations
      */
     public HttpSegmentArchiveManager(String baseUrl, IOMonitor ioMonitor) {
+        log.info("⭐ ENTERING HttpSegmentArchiveManager constructor");
+        log.info("⭐ baseUrl param: {}", baseUrl);
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        log.info("⭐ Normalized baseUrl: {}", this.baseUrl);
         this.ioMonitor = ioMonitor;
+        log.info("⭐ Set ioMonitor");
+        log.info("⭐ Creating HTTP client...");
         this.httpClient = HttpClients.createDefault();
-        log.info("Initialized HttpSegmentArchiveManager for: {}", this.baseUrl);
+        log.info("⭐ HTTP client created");
+        log.info("⭐ HttpSegmentArchiveManager constructor COMPLETE");
     }
 
     @Override
     public List<String> listArchives() throws IOException {
+        log.info("💫 ENTERING listArchives()");
         // POC SIMPLIFICATION: No archive listing endpoint yet
         // For now, assume a single archive named "data.tar" (standard Oak naming)
-        log.debug("POC mode: Returning hardcoded archive list");
+        log.info("💫 POC mode: Returning hardcoded archive list");
         List<String> archives = new ArrayList<>();
         archives.add("data00000a.tar"); // Common Oak segment archive name
+        log.info("💫 Returning {} archives", archives.size());
         return archives;
     }
 
     @Override
     public SegmentArchiveReader open(String archiveName) throws IOException {
-        log.debug("Opening archive: {}", archiveName);
+        log.info("🌟 ENTERING open() for archive: {}", archiveName);
         
         // Check if archive exists by querying the server
+        log.info("🌟 Checking if archive exists...");
         if (!exists(archiveName)) {
-            log.debug("Archive does not exist: {}", archiveName);
+            log.info("🌟 Archive does not exist: {}", archiveName);
             return null;
         }
 
-        return new HttpSegmentArchiveReader(baseUrl, archiveName, ioMonitor);
+        log.info("🌟 Creating HttpSegmentArchiveReader...");
+        HttpSegmentArchiveReader reader = new HttpSegmentArchiveReader(baseUrl, archiveName, ioMonitor);
+        log.info("🌟 HttpSegmentArchiveReader created successfully");
+        return reader;
     }
 
     @Override
@@ -105,9 +118,10 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
 
     @Override
     public SegmentArchiveWriter create(String archiveName) throws IOException {
-        throw new UnsupportedOperationException(
-            "HttpSegmentArchiveManager is read-only for POC. Write operations not supported."
-        );
+        // Return a no-op writer for read-only HTTP mount
+        // Oak initialization requires this even for read-only stores
+        log.debug("Creating no-op writer for read-only HTTP mount: {}", archiveName);
+        return new NoOpSegmentArchiveWriter(archiveName);
     }
 
     @Override
@@ -147,6 +161,84 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
     public boolean isReadOnly(String archiveName) {
         // HTTP store is always read-only for POC
         return true;
+    }
+    
+    /**
+     * No-op segment archive writer for read-only HTTP mounts.
+     * All write operations are silently ignored.
+     */
+    private static class NoOpSegmentArchiveWriter implements SegmentArchiveWriter {
+        private final String name;
+        
+        NoOpSegmentArchiveWriter(String name) {
+            this.name = name;
+        }
+        
+        @Override
+        public String getName() {
+            return name;
+        }
+        
+        @Override
+        public void writeSegment(long msb, long lsb, byte[] data, int offset, int size, int generation, int fullGeneration, boolean isCompacted) throws IOException {
+            // No-op - silently ignore writes for read-only mount
+        }
+        
+        @Override
+        public Buffer readSegment(long msb, long lsb) throws IOException {
+            // No-op writer can't read - return null
+            return null;
+        }
+        
+        @Override
+        public void writeGraph(byte[] data) throws IOException {
+            // No-op - silently ignore writes for read-only mount
+        }
+        
+        @Override
+        public void writeBinaryReferences(byte[] data) throws IOException {
+            // No-op - silently ignore writes for read-only mount
+        }
+        
+        @Override
+        public long getLength() {
+            return 0;
+        }
+        
+        @Override
+        public int getEntryCount() {
+            return 0;
+        }
+        
+        @Override
+        public int getMaxEntryCount() {
+            return 0;
+        }
+        
+        @Override
+        public void close() throws IOException {
+            // No-op
+        }
+        
+        @Override
+        public void flush() throws IOException {
+            // No-op
+        }
+        
+        @Override
+        public boolean isCreated() {
+            return false;
+        }
+        
+        @Override
+        public boolean isRemote() {
+            return true; // HTTP mount is always remote
+        }
+        
+        @Override
+        public boolean containsSegment(long msb, long lsb) {
+            return false; // No-op writer doesn't actually contain any segments
+        }
     }
 }
 

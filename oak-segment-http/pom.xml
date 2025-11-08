@@ -42,20 +42,17 @@
             <!-- Regular bundle - NO Fragment-Host! -->
             <!-- We use ONLY public Oak APIs, so no internal access needed -->
             
-            <!-- Import public Oak APIs -->
+            <!-- Import only PUBLIC Oak SPI packages (no internal implementation) -->
             <Import-Package>
-              org.apache.jackrabbit.oak.segment.spi*;version="[1.0,2)",
-              org.apache.jackrabbit.oak.segment.remote*;version="[1.0,2)",
-              org.apache.jackrabbit.oak.segment;version="[1.0,2)";resolution:=optional,
-              org.apache.jackrabbit.oak.spi.state*;version="[1.0,2)",
-              org.apache.jackrabbit.oak.api*;version="[1.0,2)",
-              org.apache.jackrabbit.oak.composite*;version="[1.0,2)",
-              org.apache.jackrabbit.oak.spi.mount*;version="[1.0,2)",
+              org.apache.jackrabbit.oak.segment.spi,
+              org.apache.jackrabbit.oak.segment.spi.monitor,
+              org.apache.jackrabbit.oak.segment.spi.persistence,
+              org.apache.jackrabbit.oak.segment.remote,
               javax.servlet;version="[3.1,5)";resolution:=optional,
               javax.servlet.http;version="[3.1,5)";resolution:=optional,
-              org.eclipse.jetty.server*;resolution:=optional,
-              !org.apache.jackrabbit.oak.segment.file,
-              !org.apache.jackrabbit.oak.segment.file.*,
+              org.osgi.service.component.annotations;resolution:=optional,
+              org.osgi.service.metatype.annotations;resolution:=optional,
+              org.slf4j,
               *
             </Import-Package>
             
@@ -78,7 +75,7 @@
       <groupId>org.apache.jackrabbit</groupId>
       <artifactId>oak-segment-tar</artifactId>
       <version>${project.version}</version>
-      <!-- Public APIs are exported, no need for 'provided' scope -->
+      <scope>provided</scope>
     </dependency>
 
     <!-- Oak Segment Remote - for AbstractRemoteSegmentArchiveReader -->
@@ -86,6 +83,7 @@
       <groupId>org.apache.jackrabbit</groupId>
       <artifactId>oak-segment-remote</artifactId>
       <version>${project.version}</version>
+      <scope>provided</scope>
     </dependency>
 
     <!-- Oak Store SPI -->
@@ -93,6 +91,7 @@
       <groupId>org.apache.jackrabbit</groupId>
       <artifactId>oak-store-spi</artifactId>
       <version>${project.version}</version>
+      <scope>provided</scope>
     </dependency>
 
     <!-- Oak API -->
@@ -100,6 +99,15 @@
       <groupId>org.apache.jackrabbit</groupId>
       <artifactId>oak-api</artifactId>
       <version>${project.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- OSGi Framework for BundleContext and ServiceRegistration -->
+    <dependency>
+      <groupId>org.osgi</groupId>
+      <artifactId>osgi.core</artifactId>
+      <version>6.0.0</version>
+      <scope>provided</scope>
     </dependency>
 
     <!-- Oak Composite Store -->
@@ -107,6 +115,7 @@
       <groupId>org.apache.jackrabbit</groupId>
       <artifactId>oak-store-composite</artifactId>
       <version>${project.version}</version>
+      <scope>provided</scope>
     </dependency>
 
     <!-- Oak Commons -->

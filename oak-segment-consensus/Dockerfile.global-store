@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 # Copy the fat JAR (includes all dependencies)
-COPY oak-segment-consensus/target/oak-segment-consensus.jar /app/oak-segment-consensus.jar
+COPY target/oak-segment-consensus.jar /app/oak-segment-consensus.jar
 
 # Create store directory and set ownership to UID 999 (matches Sling user)
 RUN mkdir -p /var/oak-chain/segmentstore && \
