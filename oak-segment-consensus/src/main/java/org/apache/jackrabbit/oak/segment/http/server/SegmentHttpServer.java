@@ -149,21 +149,21 @@ public class SegmentHttpServer {
                 
                 // Journal file
                 if ("/journal.log".equals(path)) {
-                    handleFile(response, "journal.log", "text/plain");
+                    handleFile(request, response, "journal.log", "text/plain");
                     baseRequest.setHandled(true);
                     return;
                 }
                 
                 // Manifest file
                 if ("/manifest".equals(path)) {
-                    handleFile(response, "manifest", "text/plain");
+                    handleFile(request, response, "manifest", "text/plain");
                     baseRequest.setHandled(true);
                     return;
                 }
                 
                 // GC log
                 if ("/gc.log".equals(path)) {
-                    handleFile(response, "gc.log", "text/plain");
+                    handleFile(request, response, "gc.log", "text/plain");
                     baseRequest.setHandled(true);
                     return;
                 }
@@ -174,7 +174,7 @@ public class SegmentHttpServer {
                     if ("HEAD".equals(method)) {
                         handleSegmentHead(response, segmentId);
                     } else if ("GET".equals(method)) {
-                        handleSegmentGet(response, segmentId);
+                        handleSegmentGet(request, response, segmentId);
                     } else {
                         response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
                     }
@@ -385,7 +385,11 @@ public class SegmentHttpServer {
         /**
          * Handle serving a file from the segment store directory.
          */
-        private void handleFile(HttpServletResponse response, String filename, String contentType) throws IOException {
+        private void handleFile(HttpServletRequest request, HttpServletResponse response, String filename, String contentType) throws IOException {
+            // Log requesting peer info
+            String remoteAddr = request.getRemoteAddr();
+            int remotePort = request.getRemotePort();
+            
             Path filePath = storeDirectory.resolve(filename);
             
             if (!Files.exists(filePath)) {
@@ -394,9 +398,11 @@ public class SegmentHttpServer {
                 return;
             }
             
+            long fileSize = Files.size(filePath);
+            
             response.setStatus(HttpServletResponse.SC_OK);
             response.setContentType(contentType);
-            response.setContentLengthLong(Files.size(filePath));
+            response.setContentLengthLong(fileSize);
             
             try (InputStream in = Files.newInputStream(filePath);
                  OutputStream out = response.getOutputStream()) {
@@ -407,7 +413,7 @@ public class SegmentHttpServer {
                 }
             }
             
-            log.debug("Served file: {} ({} bytes)", filename, Files.size(filePath));
+            log.info("📄 File GET: {} FROM {}:{} ({} bytes)", filename, remoteAddr, remotePort, fileSize);
         }
         
         /**
@@ -648,8 +654,14 @@ public class SegmentHttpServer {
         /**
          * Handle GET request for a segment (fetch segment data).
          */
-        private void handleSegmentGet(HttpServletResponse response, String segmentId) throws IOException {
-            log.info("Reading segment from TAR: {}", segmentId);
+        private void handleSegmentGet(HttpServletRequest request, HttpServletResponse response, String segmentId) throws IOException {
+            // Log requesting peer info
+            String remoteAddr = request.getRemoteAddr();
+            int remotePort = request.getRemotePort();
+            String userAgent = request.getHeader("User-Agent");
+            
+            log.info("📦 Segment GET: {} FROM {}:{} [UA: {}]", 
+                     segmentId, remoteAddr, remotePort, userAgent != null ? userAgent : "unknown");
             
             // Convert UUID string to msb/lsb
             java.util.UUID uuid;
