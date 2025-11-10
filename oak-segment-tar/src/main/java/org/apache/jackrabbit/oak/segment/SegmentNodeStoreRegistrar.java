@@ -44,6 +44,7 @@ import org.apache.jackrabbit.oak.segment.compaction.SegmentRevisionGC;
 import org.apache.jackrabbit.oak.segment.compaction.SegmentRevisionGCMBean;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
+import org.apache.jackrabbit.oak.segment.file.ReadOnlyFileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreGCMonitor;
 import org.apache.jackrabbit.oak.segment.file.FileStoreStatsMBean;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
@@ -266,6 +267,14 @@ class SegmentNodeStoreRegistrar {
             builder.withEagerSegmentCaching(true);
         }
 
+        // Determine if this is a read-only composite mount
+        boolean isReadOnlyCompositeMount = cfg.getRole() != null && cfg.getRole().startsWith("composite-mount-");
+        
+        if (isReadOnlyCompositeMount) {
+            // Create a read-only store for composite mounts
+            return registerReadOnlySegmentStore(builder);
+        }
+        
         FileStore store;
         try {
             store = builder.build();
@@ -495,6 +504,61 @@ class SegmentNodeStoreRegistrar {
             props.put("oak.nodestore.description", new String[] {"nodeStoreType=segment"});
             registerCloseable(register(NodeStore.class, segmentNodeStore, props));
         }
+
+        return segmentNodeStore;
+    }
+
+    private SegmentNodeStore registerReadOnlySegmentStore(FileStoreBuilder builder) throws IOException {
+        cfg.getLogger().info("Creating ReadOnlyFileStore for composite mount: {}", cfg.getRole());
+        
+        ReadOnlyFileStore store;
+        try {
+            store = builder.buildReadOnly();
+        } catch (InvalidFileStoreVersionException e) {
+            cfg.getLogger().error("The storage format is not compatible with this version of Oak Segment Tar", e);
+            return null;
+        }
+        registerCloseable(store);
+
+        // Expose stats about the segment cache (read-only stores have caches too)
+        CacheStatsMBean segmentCacheStats = store.getSegmentCacheStats();
+        registerCloseable(registerMBean(
+            CacheStatsMBean.class,
+            segmentCacheStats,
+            CacheStats.TYPE,
+            segmentCacheStats.getName()
+        ));
+
+        CacheStatsMBean stringCacheStats = store.getStringCacheStats();
+        registerCloseable(registerMBean(
+            CacheStatsMBean.class,
+            stringCacheStats,
+            CacheStats.TYPE,
+            stringCacheStats.getName()
+        ));
+
+        CacheStatsMBean templateCacheStats = store.getTemplateCacheStats();
+        registerCloseable(registerMBean(
+            CacheStatsMBean.class,
+            templateCacheStats,
+            CacheStats.TYPE,
+            templateCacheStats.getName()
+        ));
+
+        // Build the SegmentNodeStore
+        SegmentNodeStore.SegmentNodeStoreBuilder segmentNodeStoreBuilder = 
+            SegmentNodeStoreBuilders.builder(store).withStatisticsProvider(cfg.getStatisticsProvider());
+        segmentNodeStoreBuilder.dispatchChanges(cfg.dispatchChanges());
+
+        SegmentNodeStore segmentNodeStore = segmentNodeStoreBuilder.build();
+
+        // Register a factory service to expose the FileStore
+        registerCloseable(register(
+            SegmentStoreProvider.class,
+            new DefaultSegmentStoreProvider(store)
+        ));
+
+        cfg.getLogger().info("Secondary SegmentNodeStore initialized, role={}", cfg.getRole());
 
         return segmentNodeStore;
     }

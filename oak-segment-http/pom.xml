@@ -44,6 +44,9 @@
             
             <!-- Import only PUBLIC Oak SPI packages (no internal implementation) -->
             <Import-Package>
+              !org.apache.jackrabbit.oak.segment,
+              !org.apache.jackrabbit.oak.segment.file,
+              !org.apache.jackrabbit.oak.segment.http,
               org.apache.jackrabbit.oak.segment.spi,
               org.apache.jackrabbit.oak.segment.spi.monitor,
               org.apache.jackrabbit.oak.segment.spi.persistence,
