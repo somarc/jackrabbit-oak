@@ -22,7 +22,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
+import org.apache.jackrabbit.oak.segment.SegmentNodeStore;
 import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
+import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
@@ -53,6 +55,7 @@ public class GlobalStoreServer {
     private FileStore fileStore;
     private NodeStore nodeStore;
     private SegmentHttpServer httpServer;
+    private EpochListener epochListener;
     
     public GlobalStoreServer(int port, String storeDirectory) {
         this.port = port;
@@ -109,6 +112,21 @@ public class GlobalStoreServer {
             System.out.println("   - GET /health - health check");
         } catch (Exception e) {
             throw new IOException("Failed to start HTTP server", e);
+        }
+        
+        // Initialize Ethereum → AEM bridge
+        String beaconApiUrl = System.getProperty("ethereum.beacon.api.url", "https://beaconcha.in");
+        String enableBridge = System.getProperty("ethereum.bridge.enabled", "true");
+        
+        if ("true".equalsIgnoreCase(enableBridge)) {
+            System.out.println();
+            System.out.println("Initializing Ethereum → AEM bridge...");
+            epochListener = new EpochListener(beaconApiUrl, (SegmentNodeStore) nodeStore);
+            epochListener.start();
+            System.out.println("✅ Ethereum epoch listener started");
+        } else {
+            System.out.println();
+            System.out.println("ℹ️  Ethereum bridge disabled (ethereum.bridge.enabled=false)");
         }
         
         running = true;
@@ -211,6 +229,16 @@ public class GlobalStoreServer {
     public void stop() {
         System.out.println("Shutting down global store server...");
         running = false;
+        
+        // Stop Ethereum epoch listener
+        if (epochListener != null) {
+            try {
+                epochListener.stop();
+                System.out.println("✅ Epoch listener stopped");
+            } catch (Exception e) {
+                System.err.println("Error stopping epoch listener: " + e.getMessage());
+            }
+        }
         
         // Stop HTTP server
         if (httpServer != null) {
