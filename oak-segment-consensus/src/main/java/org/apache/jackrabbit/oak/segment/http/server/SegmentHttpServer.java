@@ -620,20 +620,6 @@ public class SegmentHttpServer {
             html.append("      html += '</div>';\n");
             html.append("    }\n");
             html.append("    \n");
-            html.append("    // System Health Card\n");
-            html.append("    if (data.system) {\n");
-            html.append("      const uptimeSec = Math.floor(data.system.uptimeMs / 1000);\n");
-            html.append("      const uptimeMin = Math.floor(uptimeSec / 60);\n");
-            html.append("      const uptimeHour = Math.floor(uptimeMin / 60);\n");
-            html.append("      const uptimeStr = uptimeHour > 0 ? uptimeHour + 'h ' + (uptimeMin % 60) + 'm' : uptimeMin + 'm';\n");
-            html.append("      html += '<div class=\"card\">';\n");
-            html.append("      html += '<h2>💚 System Health</h2>';\n");
-            html.append("      html += '<div class=\"stat\">' + uptimeStr + '</div>';\n");
-            html.append("      html += '<div class=\"label\">Uptime</div>';\n");
-            html.append("      html += '<div style=\"margin-top: 10px; font-size: 0.9em; opacity: 0.8;\">💾 Memory: ' + data.system.memoryUsedMb + '/' + data.system.memoryMaxMb + ' MB</div>';\n");
-            html.append("      html += '</div>';\n");
-            html.append("    }\n");
-            html.append("    \n");
             html.append("    // Validator Identity Card\n");
             html.append("    if (data.validator) {\n");
             html.append("      html += '<div class=\"card\">';\n");
@@ -1304,20 +1290,6 @@ public class SegmentHttpServer {
             
             StringBuilder json = new StringBuilder();
             json.append("{\n");
-            
-            // System metrics
-            Runtime runtime = Runtime.getRuntime();
-            long totalMemory = runtime.totalMemory();
-            long freeMemory = runtime.freeMemory();
-            long usedMemory = totalMemory - freeMemory;
-            long maxMemory = runtime.maxMemory();
-            
-            json.append("  \"system\": {\n");
-            json.append("    \"uptimeMs\": ").append(consensusEngine != null ? consensusEngine.getUptimeMs() : 0).append(",\n");
-            json.append("    \"memoryUsedMb\": ").append(usedMemory / (1024 * 1024)).append(",\n");
-            json.append("    \"memoryTotalMb\": ").append(totalMemory / (1024 * 1024)).append(",\n");
-            json.append("    \"memoryMaxMb\": ").append(maxMemory / (1024 * 1024)).append("\n");
-            json.append("  },\n");
             
             // Consensus metrics
             if (consensusEngine != null) {
