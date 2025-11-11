@@ -41,11 +41,12 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
     private static final Logger log = LoggerFactory.getLogger(HttpSegmentArchiveReader.class);
 
     private final CloseableHttpClient httpClient;
+    private final HttpClientPool httpClientPool;
     private final String baseUrl;
     private final String archiveName;
     private final long length;
 
-    public HttpSegmentArchiveReader(String baseUrl, String archiveName, IOMonitor ioMonitor) throws IOException {
+    public HttpSegmentArchiveReader(String baseUrl, String archiveName, IOMonitor ioMonitor, HttpClientPool httpClientPool) throws IOException {
         super(ioMonitor); // MUST be first in Java
         log.info("✨ ENTERING HttpSegmentArchiveReader constructor");
         log.info("✨ baseUrl: {}, archiveName: {}", baseUrl, archiveName);
@@ -53,9 +54,9 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
         log.info("✨ Normalized baseUrl: {}", this.baseUrl);
         this.archiveName = archiveName;
         log.info("✨ Set archiveName");
-        log.info("✨ Creating HTTP client...");
-        this.httpClient = HttpClients.createDefault();
-        log.info("✨ HTTP client created");
+        this.httpClientPool = httpClientPool;
+        this.httpClient = httpClientPool.getHttpClient();
+        log.info("✨ Using shared HTTP client pool ({})", httpClientPool.getPoolStats());
         log.info("✨ Calling computeArchiveIndexAndLength()...");
         this.length = computeArchiveIndexAndLength();
         log.info("✨ Archive length: {}", this.length);
@@ -179,11 +180,9 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
     @Override
     public void close() {
         super.close();
-        try {
-            httpClient.close();
-        } catch (IOException e) {
-            log.warn("Error closing HTTP client: {}", e.getMessage());
-        }
+        // Don't close httpClient - it's a shared pool managed by HttpClientPool
+        // The pool will be closed when HttpPersistence is shut down
+        log.debug("Closed HttpSegmentArchiveReader (pool remains active)");
     }
 }
 

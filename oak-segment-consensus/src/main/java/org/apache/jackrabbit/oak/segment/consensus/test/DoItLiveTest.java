@@ -23,6 +23,7 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.http.HttpSegmentArchiveManager;
+import org.apache.jackrabbit.oak.segment.http.HttpClientPool;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -159,13 +160,17 @@ public class DoItLiveTest {
     private void readSegmentsViaHttp() throws Exception {
         System.out.println("   🌐 Connecting to HTTP Segment Server: " + HTTP_BASE_URL);
         
+        // Create HTTP client pool for connection reuse
+        HttpClientPool httpClientPool = new HttpClientPool();
+        
         // Create HTTP segment archive manager
         HttpSegmentArchiveManager httpManager = new HttpSegmentArchiveManager(
             HTTP_BASE_URL,
-            null // IOMonitor - use default
+            null, // IOMonitor - use default
+            httpClientPool
         );
         
-        System.out.println("   ✅ Created HttpSegmentArchiveManager");
+        System.out.println("   ✅ Created HttpSegmentArchiveManager with connection pooling");
         
         // List available archives
         System.out.println("   📚 Listing segment archives...");

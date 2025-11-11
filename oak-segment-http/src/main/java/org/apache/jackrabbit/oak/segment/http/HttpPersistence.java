@@ -51,6 +51,7 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
     
     private final String baseUrl;
     private final WriteAccessController writeAccessController;
+    private final HttpClientPool httpClientPool;
     
     /**
      * Create a new HTTP persistence layer.
@@ -60,8 +61,10 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
     public HttpPersistence(String baseUrl) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.writeAccessController = new WriteAccessController();
+        this.httpClientPool = new HttpClientPool();
         // WriteAccessController is read-only by default for remote stores
         log.info("Initialized HttpPersistence for: {}", this.baseUrl);
+        log.info("HTTP Client Pool: {}", httpClientPool.getPoolStats());
     }
     
     @Override
@@ -73,7 +76,7 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
         log.info("🟠 Parameters: mmap={}, offHeapAccess={}", mmap, offHeapAccess);
         log.info("🟠 Creating HttpSegmentArchiveManager with baseUrl: {}", baseUrl);
         try {
-            HttpSegmentArchiveManager manager = new HttpSegmentArchiveManager(baseUrl, ioMonitor);
+            HttpSegmentArchiveManager manager = new HttpSegmentArchiveManager(baseUrl, ioMonitor, httpClientPool);
             log.info("🟠 HttpSegmentArchiveManager created successfully");
             return manager;
         } catch (Exception e) {
@@ -98,7 +101,7 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
         log.info("🔵 ENTERING getJournalFile()");
         log.info("🔵 Creating HttpJournalFile with baseUrl: {}", baseUrl);
         try {
-            HttpJournalFile journalFile = new HttpJournalFile(baseUrl, writeAccessController);
+            HttpJournalFile journalFile = new HttpJournalFile(baseUrl, writeAccessController, httpClientPool);
             log.info("🔵 HttpJournalFile created successfully");
             return journalFile;
         } catch (Exception e) {
@@ -112,7 +115,7 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
         log.info("🟡 ENTERING getGCJournalFile()");
         log.info("🟡 Creating HttpGCJournalFile with baseUrl: {}", baseUrl);
         try {
-            HttpGCJournalFile gcFile = new HttpGCJournalFile(baseUrl);
+            HttpGCJournalFile gcFile = new HttpGCJournalFile(baseUrl, httpClientPool);
             log.info("🟡 HttpGCJournalFile created successfully");
             return gcFile;
         } catch (Exception e) {
@@ -126,7 +129,7 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
         log.info("⚪ ENTERING getManifestFile()");
         log.info("⚪ Creating HttpManifestFile with baseUrl: {}", baseUrl);
         try {
-            HttpManifestFile manifestFile = new HttpManifestFile(baseUrl);
+            HttpManifestFile manifestFile = new HttpManifestFile(baseUrl, httpClientPool);
             log.info("⚪ HttpManifestFile created successfully");
             return manifestFile;
         } catch (Exception e) {

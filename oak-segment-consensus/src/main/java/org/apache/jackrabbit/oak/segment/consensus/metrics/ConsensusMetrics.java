@@ -348,6 +348,57 @@ public class ConsensusMetrics {
         httpRequestLatency.labels(method, endpoint).observe(latencySeconds);
     }
     
+    // ====================================================================================
+    // HTTP Connection Pool Metrics
+    // ====================================================================================
+    
+    /**
+     * Number of connections currently leased from the HTTP client pool.
+     */
+    public static final Gauge httpPoolConnectionsLeased = Gauge.build()
+            .name("oak_http_pool_connections_leased")
+            .help("Number of connections currently leased from the HTTP client pool.")
+            .register();
+
+    /**
+     * Number of connection requests waiting for a connection from the pool.
+     */
+    public static final Gauge httpPoolConnectionsPending = Gauge.build()
+            .name("oak_http_pool_connections_pending")
+            .help("Number of connection requests waiting for a connection from the pool.")
+            .register();
+
+    /**
+     * Number of idle connections available in the pool.
+     */
+    public static final Gauge httpPoolConnectionsAvailable = Gauge.build()
+            .name("oak_http_pool_connections_available")
+            .help("Number of idle connections available in the pool.")
+            .register();
+
+    /**
+     * Maximum number of connections allowed in the pool.
+     */
+    public static final Gauge httpPoolConnectionsMax = Gauge.build()
+            .name("oak_http_pool_connections_max")
+            .help("Maximum number of connections allowed in the pool.")
+            .register();
+    
+    /**
+     * Update HTTP connection pool metrics.
+     * 
+     * @param leased Number of leased connections
+     * @param pending Number of pending connection requests
+     * @param available Number of available connections
+     * @param max Maximum pool size
+     */
+    public static void updateHttpPoolMetrics(int leased, int pending, int available, int max) {
+        httpPoolConnectionsLeased.set(leased);
+        httpPoolConnectionsPending.set(pending);
+        httpPoolConnectionsAvailable.set(available);
+        httpPoolConnectionsMax.set(max);
+    }
+    
     /**
      * Private constructor - this is a utility class with only static methods.
      */

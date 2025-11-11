@@ -34,11 +34,13 @@ import java.util.Properties;
 public class HttpManifestFile implements ManifestFile {
     
     private final String baseUrl;
+    private final HttpClientPool httpClientPool;
     private final CloseableHttpClient httpClient;
     
-    public HttpManifestFile(String baseUrl) {
+    public HttpManifestFile(String baseUrl, HttpClientPool httpClientPool) {
         this.baseUrl = baseUrl;
-        this.httpClient = HttpClients.createDefault();
+        this.httpClientPool = httpClientPool;
+        this.httpClient = httpClientPool.getHttpClient();
     }
     
     @Override

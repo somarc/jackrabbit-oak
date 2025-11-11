@@ -43,18 +43,19 @@ public class HttpJournalFile implements JournalFile {
     
     private final String baseUrl;
     private final WriteAccessController writeAccessController;
+    private final HttpClientPool httpClientPool;
     private final CloseableHttpClient httpClient;
     
-    public HttpJournalFile(String baseUrl, WriteAccessController writeAccessController) {
+    public HttpJournalFile(String baseUrl, WriteAccessController writeAccessController, HttpClientPool httpClientPool) {
         log.info("🟢 ENTERING HttpJournalFile constructor");
         log.info("🟢 baseUrl: {}", baseUrl);
         this.baseUrl = baseUrl;
         log.info("🟢 Set baseUrl");
         this.writeAccessController = writeAccessController;
         log.info("🟢 Set writeAccessController");
-        log.info("🟢 Creating HTTP client...");
-        this.httpClient = HttpClients.createDefault();
-        log.info("🟢 HTTP client created successfully");
+        this.httpClientPool = httpClientPool;
+        this.httpClient = httpClientPool.getHttpClient();
+        log.info("🟢 Using shared HTTP client pool ({})", httpClientPool.getPoolStats());
         log.info("🟢 HttpJournalFile constructor COMPLETE");
     }
     

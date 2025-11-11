@@ -35,11 +35,13 @@ import java.util.List;
 public class HttpGCJournalFile implements GCJournalFile {
     
     private final String baseUrl;
+    private final HttpClientPool httpClientPool;
     private final CloseableHttpClient httpClient;
     
-    public HttpGCJournalFile(String baseUrl) {
+    public HttpGCJournalFile(String baseUrl, HttpClientPool httpClientPool) {
         this.baseUrl = baseUrl;
-        this.httpClient = HttpClients.createDefault();
+        this.httpClientPool = httpClientPool;
+        this.httpClient = httpClientPool.getHttpClient();
     }
     
     @Override

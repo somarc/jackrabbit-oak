@@ -51,6 +51,7 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
 
     private final String baseUrl;
     private final IOMonitor ioMonitor;
+    private final HttpClientPool httpClientPool;
     private final CloseableHttpClient httpClient;
 
     /**
@@ -58,17 +59,18 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
      * 
      * @param baseUrl Base URL of the GlobalStoreServer (e.g., "http://oak-global-store:8090")
      * @param ioMonitor IO monitor for tracking read operations
+     * @param httpClientPool Shared HTTP client pool for connection reuse
      */
-    public HttpSegmentArchiveManager(String baseUrl, IOMonitor ioMonitor) {
+    public HttpSegmentArchiveManager(String baseUrl, IOMonitor ioMonitor, HttpClientPool httpClientPool) {
         log.info("⭐ ENTERING HttpSegmentArchiveManager constructor");
         log.info("⭐ baseUrl param: {}", baseUrl);
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         log.info("⭐ Normalized baseUrl: {}", this.baseUrl);
         this.ioMonitor = ioMonitor;
         log.info("⭐ Set ioMonitor");
-        log.info("⭐ Creating HTTP client...");
-        this.httpClient = HttpClients.createDefault();
-        log.info("⭐ HTTP client created");
+        this.httpClientPool = httpClientPool;
+        this.httpClient = httpClientPool.getHttpClient();
+        log.info("⭐ Using shared HTTP client pool ({})", httpClientPool.getPoolStats());
         log.info("⭐ HttpSegmentArchiveManager constructor COMPLETE");
     }
 
@@ -96,7 +98,7 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
         }
 
         log.info("🌟 Creating HttpSegmentArchiveReader...");
-        HttpSegmentArchiveReader reader = new HttpSegmentArchiveReader(baseUrl, archiveName, ioMonitor);
+        HttpSegmentArchiveReader reader = new HttpSegmentArchiveReader(baseUrl, archiveName, ioMonitor, httpClientPool);
         log.info("🌟 HttpSegmentArchiveReader created successfully");
         return reader;
     }
@@ -105,7 +107,7 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
     public SegmentArchiveReader forceOpen(String archiveName) throws IOException {
         log.debug("Force opening archive: {}", archiveName);
         // For HTTP-based store, forceOpen is the same as open
-        return new HttpSegmentArchiveReader(baseUrl, archiveName, ioMonitor);
+        return new HttpSegmentArchiveReader(baseUrl, archiveName, ioMonitor, httpClientPool);
     }
 
     @Override

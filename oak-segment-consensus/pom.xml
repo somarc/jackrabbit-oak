@@ -182,6 +182,20 @@
             <version>${project.version}</version>
         </dependency>
         
+        <!-- Oak Segment Standby (for Cold Standby bootstrap) -->
+        <!-- Note: This is included in oak-segment-tar, but we need Netty explicitly -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>4.1.94.Final</version>
+        </dependency>
+        <!-- Commons Lang3 (required by Standby) -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.17.0</version>
+        </dependency>
+        
         <!-- Servlet API (compile scope for standalone JAR - needed by Jetty/oak-segment-http) -->
         <dependency>
             <groupId>javax.servlet</groupId>

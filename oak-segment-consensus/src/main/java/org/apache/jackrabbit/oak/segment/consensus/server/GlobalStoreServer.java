@@ -25,6 +25,8 @@ import java.nio.file.Paths;
 import org.apache.jackrabbit.oak.segment.SegmentNodeStore;
 import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
 import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
+import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
 import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
@@ -61,6 +63,7 @@ public class GlobalStoreServer {
     private NodeStore nodeStore;
     private SegmentHttpServer httpServer;
     private EpochListener epochListener;
+    private ValidatorBootstrap bootstrap;
     
     public GlobalStoreServer(int port, String storeDirectory) {
         this.port = port;
@@ -77,6 +80,9 @@ public class GlobalStoreServer {
             Files.createDirectories(storePath);
             System.out.println("Created store directory: " + storePath);
         }
+        
+        // Bootstrap mode (needs to be accessible throughout method)
+        BootstrapMode detectedMode = BootstrapMode.PRIMARY;  // Default
         
         // Initialize Oak FileStore
         System.out.println("Initializing Oak FileStore...");
@@ -96,8 +102,67 @@ public class GlobalStoreServer {
             System.out.println("   - Store version: " + fileStore.getHead().getRecordId());
             System.out.println("   - Segments: " + storeDir.getAbsolutePath());
             
-            // Create genesis content if it doesn't exist
-            initializeGenesisContent();
+            // ===========================================================================
+            // BOOTSTRAP: Check if we need to sync from existing validator
+            // ===========================================================================
+            String peersConfig = System.getProperty("consensus.peers", "");
+            String bootstrapMode = System.getProperty("bootstrap.mode", "auto");  // auto, genesis, standby, primary
+            String bootstrapPrimaryHost = System.getProperty("bootstrap.primary.host", "");
+            int bootstrapPrimaryPort = Integer.parseInt(System.getProperty("bootstrap.primary.port", "8001"));
+            int standbyPort = port + 1;  // Standby port = HTTP port + 1
+            
+            bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
+            List<String> peers = parsePeerUrls(peersConfig);
+            
+            // Detect mode if AUTO
+            if ("auto".equalsIgnoreCase(bootstrapMode)) {
+                detectedMode = ValidatorBootstrap.detectMode(fileStore, peers);
+                System.out.println("🔍 AUTO MODE → " + detectedMode);
+            } else {
+                detectedMode = BootstrapMode.valueOf(bootstrapMode.toUpperCase());
+                System.out.println("📌 EXPLICIT MODE → " + detectedMode);
+            }
+            
+            if (detectedMode == BootstrapMode.STANDBY) {
+                // STANDBY MODE: Bootstrap from existing validator
+                
+                // Determine which peer to bootstrap from
+                String primaryHost = bootstrapPrimaryHost;
+                int primaryPort = bootstrapPrimaryPort;
+                
+                if (primaryHost.isEmpty() && !peers.isEmpty()) {
+                    // Use first peer as primary
+                    String firstPeer = peers.get(0);
+                    // Parse URL (e.g., "http://validator-1:8090")
+                    primaryHost = firstPeer.replace("http://", "").replace("https://", "").split(":")[0];
+                    primaryPort = standbyPort;  // Assume same standby port offset
+                    System.out.println("🔍 Using first peer as primary: " + primaryHost + ":" + primaryPort);
+                }
+                
+                if (primaryHost.isEmpty()) {
+                    throw new IOException("STANDBY mode requires bootstrap.primary.host or consensus.peers");
+                }
+                
+                // Bootstrap from primary (this will block until initial sync, then schedule periodic sync)
+                bootstrap.bootstrapFromPrimary(primaryHost, primaryPort, () -> {
+                    System.out.println("🎖️  PROMOTED TO PRIMARY - starting consensus...");
+                    try {
+                        startConsensusPrimary();
+                    } catch (Exception e) {
+                        System.err.println("❌ Failed to start consensus after promotion: " + e.getMessage());
+                        e.printStackTrace();
+                    }
+                });
+                
+            } else if (detectedMode == BootstrapMode.GENESIS) {
+                // GENESIS MODE: Create deterministic genesis state
+                System.out.println("🌍 GENESIS MODE: Creating network genesis state");
+                initializeGenesisContent();
+                
+            } else {
+                // PRIMARY MODE: Already has data, just init genesis if needed
+                initializeGenesisContent();
+            }
             
         } catch (InvalidFileStoreVersionException e) {
             throw new IOException("Invalid FileStore version", e);
@@ -270,6 +335,18 @@ public class GlobalStoreServer {
             System.out.println("ℹ️  Consensus disabled (single-validator mode)");
         }
         
+        // Start StandbyServerSync for PRIMARY mode (serve other standbys)
+        if (detectedMode == BootstrapMode.PRIMARY || detectedMode == BootstrapMode.GENESIS) {
+            if (bootstrap != null) {
+                try {
+                    bootstrap.startStandbyServer();
+                } catch (Exception e) {
+                    System.err.println("⚠️  Failed to start StandbyServerSync: " + e.getMessage());
+                    // Non-fatal, continue without standby server
+                }
+            }
+        }
+        
         // TODO: Smart Contract Event Listener (future implementation)
         // This is where we'll listen to OakNetwork.sol contract events:
         //   - WriteProposed(address indexed wallet, bytes32 indexed writeId, uint256 payment)
@@ -377,11 +454,92 @@ public class GlobalStoreServer {
     }
     
     /**
+     * Start consensus engine after being promoted from STANDBY to PRIMARY.
+     * This is called by the bootstrap promotion callback.
+     */
+    private void startConsensusPrimary() throws IOException {
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        System.out.println("🎯 PRIMARY MODE: Joining consensus network");
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        String consensusEnabled = System.getProperty("consensus.enabled", "false");
+        String consensusMode = System.getProperty("consensus.mode", "leader");
+        String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
+        String peersConfig = System.getProperty("consensus.peers", "");
+        
+        if (!"true".equalsIgnoreCase(consensusEnabled) || peersConfig.isEmpty()) {
+            System.out.println("⚠️  Consensus disabled or no peers - running as standalone");
+            return;
+        }
+        
+        List<String> peerUrls = parsePeerUrls(peersConfig);
+        
+        if ("leader".equalsIgnoreCase(consensusMode)) {
+            int leaderTermSeconds = Integer.parseInt(
+                System.getProperty("consensus.leader.term.seconds", "300")
+            );
+            
+            org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine leaderEngine = 
+                new org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine(
+                    fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds
+                );
+            
+            httpServer.setLeaderConsensusEngine(leaderEngine);
+            leaderEngine.startRotationMonitor();
+            
+            System.out.println("✅ Leader Consensus engine initialized");
+            System.out.println("   - Role: " + leaderEngine.getCurrentRole());
+            System.out.println("   - Leader: " + leaderEngine.getCurrentLeader());
+            
+            // Register with peers
+            String validatorId = System.getProperty("consensus.validator.id", "validator-promoted");
+            httpServer.registerWithPeers(validatorId, peerUrls);
+            
+        } else if ("dag".equalsIgnoreCase(consensusMode)) {
+            org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine dagEngine = 
+                new org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine(
+                    fileStore, nodeStore, selfUrl, peerUrls
+                );
+            
+            httpServer.setDagConsensusEngine(dagEngine);
+            dagEngine.startAutoMerge();
+            
+            System.out.println("✅ DAG Consensus engine initialized");
+            
+            String validatorId = System.getProperty("consensus.validator.id", "validator-promoted");
+            httpServer.registerWithPeers(validatorId, peerUrls);
+        }
+        
+        // Start StandbyServerSync (now a primary, serve other standbys)
+        if (bootstrap != null) {
+            try {
+                bootstrap.startStandbyServer();
+            } catch (Exception e) {
+                System.err.println("⚠️  Failed to start StandbyServerSync: " + e.getMessage());
+            }
+        }
+        
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        System.out.println("🚀 Validator is now PRIMARY and participating in consensus!");
+        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    }
+    
+    /**
      * Stop the server.
      */
     public void stop() {
         System.out.println("Shutting down global store server...");
         running = false;
+        
+        // Stop bootstrap (StandbyClientSync + StandbyServerSync)
+        if (bootstrap != null) {
+            try {
+                bootstrap.shutdown();
+                System.out.println("✅ Bootstrap services stopped");
+            } catch (Exception e) {
+                System.err.println("Error stopping bootstrap: " + e.getMessage());
+            }
+        }
         
         // Stop Ethereum epoch listener
         if (epochListener != null) {
