@@ -65,7 +65,8 @@ public class SegmentHttpServer {
     private final Path storeDirectory;
     private FileStore fileStore;  // Oak FileStore for reading segments
     private NodeStore nodeStore;  // Oak NodeStore for content browsing
-    private ConsensusEngine consensusEngine;  // Consensus coordination
+    private ConsensusEngine consensusEngine;  // Linear blockchain consensus
+    private org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine dagConsensusEngine;  // Distributed DAG consensus
     
     // Track connected peers (Sling Author instances mounting this store)
     private final java.util.Set<String> connectedPeers = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -114,12 +115,21 @@ public class SegmentHttpServer {
     }
     
     /**
-     * Set the consensus engine for coordinating writes.
+     * Set the consensus engine for coordinating writes (linear blockchain mode).
      * Must be called before start() if consensus is needed.
      */
     public void setConsensusEngine(ConsensusEngine engine) {
         this.consensusEngine = engine;
-        log.info("Consensus engine configured");
+        log.info("Linear Blockchain consensus engine configured");
+    }
+    
+    /**
+     * Set the DAG consensus engine (distributed DAG mode).
+     * Must be called before start() if DAG consensus is needed.
+     */
+    public void setDagConsensusEngine(org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine engine) {
+        this.dagConsensusEngine = engine;
+        log.info("🌳 DAG consensus engine configured");
     }
     
     /**
@@ -1256,10 +1266,13 @@ public class SegmentHttpServer {
          *   - contentType: Type of content (default: "page")
          */
         private void handleTestWrite(HttpServletRequest request, HttpServletResponse response) throws IOException {
-            if (consensusEngine == null) {
+            // Check if any consensus engine is configured
+            if (consensusEngine == null && dagConsensusEngine == null) {
                 response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Consensus engine not configured");
                 return;
             }
+            
+            boolean usingDagMode = (dagConsensusEngine != null);
             
             try {
                 // Read wallet-based write parameters
@@ -1359,18 +1372,32 @@ public class SegmentHttpServer {
                 // TODO: Add actual segments to proposal
                 // For Phase 1, we'll rely on validators fetching via HTTP
                 
-                log.info("📤 Proposing write to consensus network...");
+                log.info("📤 Processing write via {} mode...", usingDagMode ? "DAG" : "Blockchain");
                 log.info("   Storage path: /oak-chain/content/{}/{}", wallet.toLowerCase(), contentId);
                 
-                // Propose to network
-                boolean consensusReached = consensusEngine.proposeWrite(proposal);
+                boolean success = false;
+                String consensusMode = "";
+                
+                if (usingDagMode) {
+                    // DAG MODE: Write succeeds immediately, broadcast HEAD update
+                    log.info("🌳 DAG MODE: Write succeeds locally (no immediate consensus needed)");
+                    dagConsensusEngine.proposeWrite(newHead, "Wallet write: " + contentType + " - " + message);
+                    success = true;
+                    consensusMode = "dag-local";
+                    log.info("✅ Local write complete, HEAD update broadcasted to peers");
+                } else {
+                    // BLOCKCHAIN MODE: Requires consensus before committing
+                    log.info("⛓️  BLOCKCHAIN MODE: Proposing to consensus network...");
+                    success = consensusEngine.proposeWrite(proposal);
+                    consensusMode = success ? "blockchain-consensus" : "blockchain-rejected";
+                }
                 
                 // Return result
                 response.setContentType("application/json");
                 response.setStatus(HttpServletResponse.SC_OK);
                 
                 String result = "{" +
-                    "\"success\":" + consensusReached + "," +
+                    "\"success\":" + success + "," +
                     "\"proposalId\":\"" + proposal.getProposalId() + "\"," +
                     "\"wallet\":\"" + wallet + "\"," +
                     "\"contentId\":\"" + contentId + "\"," +
@@ -1379,14 +1406,19 @@ public class SegmentHttpServer {
                     "\"newHead\":\"" + newHead + "\"," +
                     "\"message\":\"" + message + "\"," +
                     "\"contentType\":\"" + contentType + "\"," +
-                    "\"consensusReached\":" + consensusReached +
+                    "\"consensusMode\":\"" + consensusMode + "\"," +
+                    "\"mode\":\"" + (usingDagMode ? "dag" : "blockchain") + "\"" +
                     "}";
                 
                 response.getWriter().write(result);
                 
-                if (consensusReached) {
+                if (success) {
                     log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    log.info("✅ CONSENSUS REACHED! Write committed across all validators");
+                    if (usingDagMode) {
+                        log.info("✅ DAG WRITE COMPLETE! Local HEAD updated, peers notified");
+                    } else {
+                        log.info("✅ CONSENSUS REACHED! Write committed across all validators");
+                    }
                     log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     
                     // Track write metadata for dashboard
