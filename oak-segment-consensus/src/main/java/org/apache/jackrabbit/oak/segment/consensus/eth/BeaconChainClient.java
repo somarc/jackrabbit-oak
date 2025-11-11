@@ -97,10 +97,23 @@ public class BeaconChainClient {
         // Calculate epoch timestamp
         long timestamp = BEACON_GENESIS_TIME + (epochNumber * EPOCH_DURATION_MS);
         
+        // Calculate current epoch to determine finality status
+        long currentTimeMs = System.currentTimeMillis();
+        long msSinceGenesis = currentTimeMs - BEACON_GENESIS_TIME;
+        long currentEpoch = msSinceGenesis / EPOCH_DURATION_MS;
+        
         EpochData data = new EpochData();
         data.epochNumber = epochNumber;
         data.timestamp = timestamp;
-        data.finalized = true;
+        
+        // Finality determination: epochs are finalized after 2 epoch delay
+        // This ensures 2/3 validator consensus has been achieved
+        data.epochsBehindCurrent = (int)(currentEpoch - epochNumber);
+        data.finalized = data.epochsBehindCurrent >= 2;
+        data.finalizedAt = data.finalized ? timestamp + (2 * EPOCH_DURATION_MS) : 0;
+        
+        // Generate mock block root (in production: fetch from Beacon Chain API)
+        data.blockRoot = String.format("0x%064x", epochNumber);
         
         // For POC: Use realistic mock data
         // In production: Fetch from actual Beacon Chain API

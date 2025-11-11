@@ -56,8 +56,17 @@ public class EpochData {
     /** Number of voluntary validator exits */
     public int voluntaryExits;
     
-    /** Whether this epoch has been finalized */
+    /** Whether this epoch has been finalized (irreversible) */
     public boolean finalized;
+    
+    /** Timestamp when this epoch was finalized (0 if not finalized) */
+    public long finalizedAt;
+    
+    /** Number of epochs behind current (0 = current, 2 = finalized) */
+    public int epochsBehindCurrent;
+    
+    /** Block root hash (for verification) */
+    public String blockRoot;
     
     @Override
     public String toString() {

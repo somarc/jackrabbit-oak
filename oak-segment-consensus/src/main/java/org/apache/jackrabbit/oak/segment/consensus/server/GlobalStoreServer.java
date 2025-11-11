@@ -24,12 +24,17 @@ import java.nio.file.Paths;
 
 import org.apache.jackrabbit.oak.segment.SegmentNodeStore;
 import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
+import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Standalone server for the global Blockchain AEM repository.
@@ -110,24 +115,47 @@ public class GlobalStoreServer {
             System.out.println("   - GET /segments/{id} - fetch segment");
             System.out.println("   - HEAD /segments/{id} - check existence");
             System.out.println("   - GET /health - health check");
+            System.out.println("   - POST /v1/propose - submit write proposal");
+            System.out.println("   - POST /v1/vote - submit vote");
         } catch (Exception e) {
             throw new IOException("Failed to start HTTP server", e);
         }
         
-        // Initialize Ethereum → AEM bridge
-        String beaconApiUrl = System.getProperty("ethereum.beacon.api.url", "https://beaconcha.in");
-        String enableBridge = System.getProperty("ethereum.bridge.enabled", "true");
+        // Initialize Consensus Engine (Multi-Validator)
+        String consensusEnabled = System.getProperty("consensus.enabled", "false");
+        String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
+        String peersConfig = System.getProperty("consensus.peers", "");
         
-        if ("true".equalsIgnoreCase(enableBridge)) {
+        if ("true".equalsIgnoreCase(consensusEnabled) && !peersConfig.isEmpty()) {
             System.out.println();
-            System.out.println("Initializing Ethereum → AEM bridge...");
-            epochListener = new EpochListener(beaconApiUrl, (SegmentNodeStore) nodeStore);
-            epochListener.start();
-            System.out.println("✅ Ethereum epoch listener started");
+            System.out.println("Initializing Consensus Engine...");
+            
+            List<String> peerUrls = parsePeerUrls(peersConfig);
+            ConsensusEngine consensusEngine = new ConsensusEngine(fileStore, selfUrl, peerUrls);
+            
+            // Wire consensus engine to HTTP server
+            httpServer.setConsensusEngine(consensusEngine);
+            
+            System.out.println("✅ Consensus engine initialized");
+            System.out.println("   - Consensus: Proof-of-Authority");
+            System.out.println("   - Threshold: 2/3+ majority");
+            System.out.println("   - Total validators: " + (1 + peerUrls.size()));
         } else {
             System.out.println();
-            System.out.println("ℹ️  Ethereum bridge disabled (ethereum.bridge.enabled=false)");
+            System.out.println("ℹ️  Consensus disabled (single-validator mode)");
         }
+        
+        // TODO: Smart Contract Event Listener (future implementation)
+        // This is where we'll listen to OakNetwork.sol contract events:
+        //   - WriteProposed(address indexed wallet, bytes32 indexed writeId, uint256 payment)
+        //   - WriteFinalized(bytes32 indexed writeId, bool approved)
+        // 
+        // For now, we use the /v1/test-write API with mock wallet signatures.
+        System.out.println();
+        System.out.println("📝 Smart Contract Listener: NOT IMPLEMENTED");
+        System.out.println("   Future: Listen to OakNetwork.sol events");
+        System.out.println("   Current: Use /v1/test-write API for testing");
+        System.out.println("   Write Pattern: Wallet-based storage at /oak-chain/content/<address>/");
         
         running = true;
         
@@ -273,6 +301,24 @@ public class GlobalStoreServer {
      */
     public FileStore getFileStore() {
         return fileStore;
+    }
+    
+    /**
+     * Parse peer URLs from comma-separated string.
+     * Format: "http://validator1:8090,http://validator2:8090,http://validator3:8090"
+     */
+    private List<String> parsePeerUrls(String peersConfig) {
+        List<String> peers = new ArrayList<>();
+        if (peersConfig != null && !peersConfig.trim().isEmpty()) {
+            String[] urls = peersConfig.split(",");
+            for (String url : urls) {
+                String trimmed = url.trim();
+                if (!trimmed.isEmpty()) {
+                    peers.add(trimmed);
+                }
+            }
+        }
+        return peers;
     }
     
     /**

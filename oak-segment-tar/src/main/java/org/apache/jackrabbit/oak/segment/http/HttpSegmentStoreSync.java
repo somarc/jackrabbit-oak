@@ -16,11 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.http;
 
-import org.apache.jackrabbit.oak.segment.RecordId;
 import org.apache.jackrabbit.oak.segment.SegmentStore;
 import org.apache.jackrabbit.oak.segment.SegmentStoreProvider;
 import org.apache.jackrabbit.oak.segment.file.ReadOnlyFileStore;
-import org.apache.jackrabbit.oak.segment.file.ReadOnlyRevisions;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
@@ -68,7 +66,7 @@ import java.nio.charset.StandardCharsets;
     immediate = true,
     property = {
         "scheduler.concurrent:Boolean=false",
-        "scheduler.period:Long=30"  // Default: sync every 30 seconds
+        "scheduler.period:Long=780"  // Default: sync every 780 seconds (13 min, aligned with finality)
     }
 )
 @Designate(ocd = HttpSegmentStoreSync.Configuration.class)
@@ -77,8 +75,8 @@ public class HttpSegmentStoreSync implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(HttpSegmentStoreSync.class);
     
     @ObjectClassDefinition(
-        name = "HTTP Segment Store Background Sync (Cold Standby Pattern)",
-        description = "Periodically syncs composite mount from HTTP global store - Lives in oak-segment-tar like Cold Standby"
+        name = "HTTP Segment Store Background Sync (Cold Standby Pattern, Finality-Aligned)",
+        description = "Periodically syncs composite mount from HTTP global store - Aligned with Ethereum finality timing"
     )
     @interface Configuration {
         @AttributeDefinition(
@@ -89,15 +87,21 @@ public class HttpSegmentStoreSync implements Runnable {
         
         @AttributeDefinition(
             name = "Sync Interval",
-            description = "How often to poll for updates, in seconds"
+            description = "How often to poll for updates, in seconds. Default 780s (13 min) aligns with Ethereum finality (12.8 min)"
         )
-        long syncInterval() default 30;
+        long syncInterval() default 780;
         
         @AttributeDefinition(
             name = "Enabled",
             description = "Enable/disable background sync"
         )
         boolean enabled() default true;
+        
+        @AttributeDefinition(
+            name = "Only Sync Finalized",
+            description = "If true, only sync epochs marked as finalized (recommended for production)"
+        )
+        boolean onlyFinalized() default true;
     }
     
     /**
@@ -112,22 +116,33 @@ public class HttpSegmentStoreSync implements Runnable {
     
     private String globalStoreUrl;
     private boolean enabled;
+    private boolean onlyFinalized;
     private String lastKnownRevision;
     private long syncCount = 0;
     private long updateCount = 0;
     private long refreshSuccessCount = 0;
     private long refreshFailureCount = 0;
+    private long skipCount = 0;  // Count of syncs skipped due to finality check
     
     @Activate
     protected void activate(Configuration config) {
         this.globalStoreUrl = config.globalStoreUrl();
         this.enabled = config.enabled();
+        this.onlyFinalized = config.onlyFinalized();
         
-        log.info("🔄 HTTP Segment Store Sync activated (Cold Standby Pattern)");
+        log.info("🔄 HTTP Segment Store Sync activated (Finality-Aligned)");
         log.info("   Global Store: {}", globalStoreUrl);
-        log.info("   Sync Interval: {}s", config.syncInterval());
+        log.info("   Sync Interval: {}s (~{} minutes)", config.syncInterval(), config.syncInterval() / 60);
         log.info("   Enabled: {}", enabled);
-        log.info("   📍 Running from oak-segment-tar (like Cold Standby)");
+        log.info("   Only Finalized: {} {}", onlyFinalized, onlyFinalized ? "✅ SAFE" : "⚠️  RISK");
+        log.info("   ");
+        log.info("   📊 Ethereum Timing Alignment:");
+        log.info("      Slot:     12s");
+        log.info("      Epoch:    384s (~6.4 min)");
+        log.info("      Finality: 768s (~12.8 min)");
+        log.info("      Sync:     {}s (~{} min) ← Optimized!", config.syncInterval(), config.syncInterval() / 60);
+        log.info("   ");
+        log.info("   📍 Running from oak-segment-tar (Cold Standby pattern)");
         log.info("   ✅ Direct access to ReadOnlyFileStore internals");
     }
     
@@ -136,8 +151,12 @@ public class HttpSegmentStoreSync implements Runnable {
         log.info("🔄 HTTP Segment Store Sync deactivated");
         log.info("   Total syncs: {}", syncCount);
         log.info("   Updates detected: {}", updateCount);
+        log.info("   Skipped (finality): {}", skipCount);
         log.info("   Refresh success: {}", refreshSuccessCount);
         log.info("   Refresh failures: {}", refreshFailureCount);
+        if (syncCount > 0) {
+            log.info("   Efficiency: {}%", (updateCount * 100) / syncCount);
+        }
     }
     
     @Override

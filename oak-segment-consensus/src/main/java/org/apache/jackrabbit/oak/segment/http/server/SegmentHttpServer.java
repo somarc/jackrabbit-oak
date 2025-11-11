@@ -20,6 +20,9 @@ import org.apache.jackrabbit.oak.segment.Segment;
 import org.apache.jackrabbit.oak.segment.SegmentId;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
+import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.Vote;
+import org.apache.jackrabbit.oak.segment.consensus.WriteProposal;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.eclipse.jetty.server.Request;
@@ -36,6 +39,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * HTTP server for serving Oak segment store files over HTTP.
@@ -61,6 +65,32 @@ public class SegmentHttpServer {
     private final Path storeDirectory;
     private FileStore fileStore;  // Oak FileStore for reading segments
     private NodeStore nodeStore;  // Oak NodeStore for content browsing
+    private ConsensusEngine consensusEngine;  // Consensus coordination
+    
+    // Track connected peers (Sling Author instances mounting this store)
+    private final java.util.Set<String> connectedPeers = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    
+    // Track recent writes with metadata (recordId -> WriteMetadata)
+    private final java.util.Map<String, WriteMetadata> recentWriteMetadata = new java.util.concurrent.ConcurrentHashMap<>();
+    
+    /**
+     * Metadata about a write for dashboard display
+     */
+    private static class WriteMetadata {
+        String recordId;
+        String source;      // "consensus", "epoch-sync", or "local"
+        String validator;   // URL of validator that wrote this
+        long timestamp;
+        String message;     // Optional message (for test writes)
+        
+        WriteMetadata(String recordId, String source, String validator, long timestamp, String message) {
+            this.recordId = recordId;
+            this.source = source;
+            this.validator = validator;
+            this.timestamp = timestamp;
+            this.message = message;
+        }
+    }
     
     /**
      * Create a new HTTP server for serving segment store files.
@@ -81,6 +111,15 @@ public class SegmentHttpServer {
         log.info("Initialized SegmentHttpServer");
         log.info("   - Port: {}", port);
         log.info("   - Store: {}", this.storeDirectory);
+    }
+    
+    /**
+     * Set the consensus engine for coordinating writes.
+     * Must be called before start() if consensus is needed.
+     */
+    public void setConsensusEngine(ConsensusEngine engine) {
+        this.consensusEngine = engine;
+        log.info("Consensus engine configured");
     }
     
     /**
@@ -197,9 +236,44 @@ public class SegmentHttpServer {
                     return;
                 }
                 
+                // Explorer API - TAR files
+                if ("/api/segments/tars".equals(path)) {
+                    handleTarFiles(response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
                 // Explorer UI
                 if ("/explorer".equals(path)) {
                     handleExplorerUI(response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // Consensus API - Propose write
+                if ("/v1/propose".equals(path) && "POST".equals(method)) {
+                    handleWriteProposal(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // Consensus API - Vote
+                if ("/v1/vote".equals(path) && "POST".equals(method)) {
+                    handleVote(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // Consensus API - List peers
+                if ("/v1/peers".equals(path) && "GET".equals(method)) {
+                    handleListPeers(response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // TEST ENDPOINT - Simulate a write with consensus
+                if ("/v1/test-write".equals(path) && "POST".equals(method)) {
+                    handleTestWrite(request, response);
                     baseRequest.setHandled(true);
                     return;
                 }
@@ -300,10 +374,19 @@ public class SegmentHttpServer {
             html.append("<div class='label'>").append(segmentCount).append(" Segments</div>\n");
             html.append("</div>\n");
             
-            // Connected Peers Card (simulated for POC)
+            // Validator Network Card (from ConsensusEngine)
+            int validatorCount = consensusEngine != null ? (1 + consensusEngine.getPeerCount()) : 1;
+            html.append("<div class='card'>\n");
+            html.append("<h2>🗳️  Validator Network</h2>\n");
+            html.append("<div class='stat'>").append(validatorCount).append("</div>\n");
+            html.append("<div class='label'>Consensus Nodes (PoA)</div>\n");
+            html.append("</div>\n");
+            
+            // Connected Peers Card (dynamic - tracks actual Sling mounts)
+            int peerCount = connectedPeers.size();
             html.append("<div class='card'>\n");
             html.append("<h2>🌐 Connected Peers</h2>\n");
-            html.append("<div class='stat'>1</div>\n");
+            html.append("<div class='stat'>").append(peerCount).append("</div>\n");
             html.append("<div class='label'>Sling Author Instances</div>\n");
             html.append("</div>\n");
             
@@ -316,7 +399,51 @@ public class SegmentHttpServer {
                 html.append("<div class='journal-entry'>No recent writes</div>\n");
             } else {
                 for (String entry : recentWrites) {
-                    html.append("<div class='journal-entry'>").append(escapeHtml(entry)).append("</div>\n");
+                    // Extract recordId (first part before colon)
+                    String recordIdShort = entry.split(":")[0];
+                    if (recordIdShort.length() > 20) {
+                        recordIdShort = recordIdShort.substring(0, 20);
+                    }
+                    
+                    // Check if we have metadata for this write
+                    WriteMetadata meta = recentWriteMetadata.get(recordIdShort);
+                    
+                    if (meta != null) {
+                        // Enhanced display with validator info
+                        String badge = "";
+                        String badgeColor = "";
+                        if ("consensus".equals(meta.source)) {
+                            badge = "CONSENSUS";
+                            badgeColor = "#10b981"; // green
+                        } else if ("epoch-sync".equals(meta.source)) {
+                            badge = "EPOCH";
+                            badgeColor = "#3b82f6"; // blue
+                        }
+                        
+                        // Extract validator name (e.g., "validator-1" from "http://validator-1:8090")
+                        String validatorName = meta.validator;
+                        if (validatorName.contains("validator-")) {
+                            validatorName = validatorName.substring(validatorName.indexOf("validator-"));
+                            validatorName = validatorName.split(":")[0];
+                        }
+                        
+                        html.append("<div class='journal-entry' style='border-left: 4px solid " + badgeColor + ";'>");
+                        html.append("<div style='display: flex; justify-content: space-between; align-items: center;'>");
+                        html.append("<code style='flex: 1;'>").append(escapeHtml(entry)).append("</code>");
+                        html.append("<div style='display: flex; gap: 8px; margin-left: 12px;'>");
+                        html.append("<span style='background: " + badgeColor + "; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;'>");
+                        html.append(badge).append("</span>");
+                        html.append("<span style='background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 4px; font-size: 0.75em;'>");
+                        html.append("🗳️ ").append(validatorName).append("</span>");
+                        html.append("</div></div>");
+                        if (meta.message != null && !meta.message.isEmpty()) {
+                            html.append("<div style='margin-top: 4px; font-size: 0.85em; opacity: 0.8;'>💬 ").append(escapeHtml(meta.message)).append("</div>");
+                        }
+                        html.append("</div>\n");
+                    } else {
+                        // Plain display (no metadata)
+                        html.append("<div class='journal-entry'>").append(escapeHtml(entry)).append("</div>\n");
+                    }
                 }
             }
             html.append("</div>\n");
@@ -337,12 +464,13 @@ public class SegmentHttpServer {
             html.append("<h2>🔌 API Endpoints</h2>\n");
             html.append("<div class='endpoints'>\n");
             html.append("<div class='endpoint'><code>GET /explorer</code> - Blockchain content explorer UI</div>\n");
-            html.append("<div class='endpoint'><code>GET /api/explore?path={path}</code> - Browse node tree (JSON)</div>\n");
-            html.append("<div class='endpoint'><code>GET /api/segments/recent</code> - Recent segment writes (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /api/explore?path={path}</code> - Browse node tree with properties (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /api/segments/tars</code> - TAR files and storage blocks (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /api/segments/recent</code> - Recent segment writes from journal (JSON)</div>\n");
             html.append("<div class='endpoint'><code>GET /health</code> - Health check</div>\n");
             html.append("<div class='endpoint'><code>GET /journal.log</code> - Journal file</div>\n");
             html.append("<div class='endpoint'><code>GET /manifest</code> - Manifest file</div>\n");
-            html.append("<div class='endpoint'><code>GET /segments/{id}</code> - Fetch segment</div>\n");
+            html.append("<div class='endpoint'><code>GET /segments/{id}</code> - Fetch segment by ID</div>\n");
             html.append("</div>\n");
             html.append("</div>\n");
             
@@ -498,11 +626,42 @@ public class SegmentHttpServer {
             html.append("    props.appendChild(div);\n");
             html.append("  });\n");
             html.append("}\n\n");
+            html.append("async function loadTarFiles() {\n");
+            html.append("  const response = await fetch('/api/segments/tars');\n");
+            html.append("  const tars = await response.json();\n");
+            html.append("  const container = document.getElementById('tar-files');\n");
+            html.append("  container.innerHTML = '';\n");
+            html.append("  if (tars.length === 0) {\n");
+            html.append("    container.innerHTML = '<div style=\"color: #94a3b8; padding: 10px;\">No TAR files found</div>';\n");
+            html.append("    return;\n");
+            html.append("  }\n");
+            html.append("  tars.forEach(tar => {\n");
+            html.append("    const div = document.createElement('div');\n");
+            html.append("    div.className = 'segment-entry';\n");
+            html.append("    div.style.borderLeft = '3px solid #06b6d4';\n");
+            html.append("    const segmentLabel = tar.estimatedCount ? tar.segmentCount + ' (est.)' : tar.segmentCount;\n");
+            html.append("    div.innerHTML = '<div style=\"display: flex; justify-content: space-between; align-items: center;\">' +\n");
+            html.append("      '<div>' +\n");
+            html.append("        '<div class=\"segment-id\" style=\"margin-bottom: 5px;\">💾 ' + tar.name + '</div>' +\n");
+            html.append("        '<div class=\"timestamp\">Size: ' + tar.sizeFormatted + ' • Segments: ' + segmentLabel + '</div>' +\n");
+            html.append("      '</div>' +\n");
+            html.append("      '<div style=\"text-align: right; font-size: 0.85em; color: #94a3b8;\">' +\n");
+            html.append("        '<div>Created: ' + new Date(tar.created).toLocaleString() + '</div>' +\n");
+            html.append("        '<div>Modified: ' + new Date(tar.modified).toLocaleString() + '</div>' +\n");
+            html.append("      '</div>' +\n");
+            html.append("    '</div>';\n");
+            html.append("    container.appendChild(div);\n");
+            html.append("  });\n");
+            html.append("}\n\n");
             html.append("async function loadRecentSegments() {\n");
             html.append("  const response = await fetch('/api/segments/recent');\n");
             html.append("  const segments = await response.json();\n");
             html.append("  const container = document.getElementById('recent-segments');\n");
             html.append("  container.innerHTML = '';\n");
+            html.append("  if (segments.length === 0) {\n");
+            html.append("    container.innerHTML = '<div style=\"color: #94a3b8; padding: 10px;\">No recent segments</div>';\n");
+            html.append("    return;\n");
+            html.append("  }\n");
             html.append("  segments.forEach(seg => {\n");
             html.append("    const div = document.createElement('div');\n");
             html.append("    div.className = 'segment-entry';\n");
@@ -511,7 +670,7 @@ public class SegmentHttpServer {
             html.append("    container.appendChild(div);\n");
             html.append("  });\n");
             html.append("}\n\n");
-            html.append("window.onload = () => { loadNode('/'); loadRecentSegments(); setInterval(loadRecentSegments, 5000); };\n");
+            html.append("window.onload = () => { loadNode('/'); loadTarFiles(); loadRecentSegments(); setInterval(loadRecentSegments, 5000); };\n");
             html.append("</script>\n");
             html.append("</head>\n<body>\n");
             html.append("<div class='header'>\n");
@@ -529,7 +688,11 @@ public class SegmentHttpServer {
             html.append("<div id='properties'></div>\n");
             html.append("</div></div>\n");
             html.append("<div class='panel'>\n");
-            html.append("<h2>📦 Recent Segments</h2>\n");
+            html.append("<h2>💾 TAR Files (Segment Storage Blocks)</h2>\n");
+            html.append("<div id='tar-files'></div>\n");
+            html.append("</div>\n");
+            html.append("<div class='panel'>\n");
+            html.append("<h2>📦 Recent Segments (Journal)</h2>\n");
             html.append("<div id='recent-segments'></div>\n");
             html.append("</div>\n");
             html.append("</div>\n</body>\n</html>");
@@ -576,9 +739,50 @@ public class SegmentHttpServer {
                 }
                 json.append("],");
                 json.append("\"properties\":{");
-                // For POC: just show property count
-                // Full property iteration requires more complex Oak API handling
-                json.append("\"_propertyCount\":").append(node.getPropertyCount());
+                
+                // Iterate through actual properties
+                boolean firstProp = true;
+                for (org.apache.jackrabbit.oak.api.PropertyState prop : node.getProperties()) {
+                    if (!firstProp) json.append(",");
+                    firstProp = false;
+                    
+                    String propName = prop.getName();
+                    json.append("\"").append(escapeJson(propName)).append("\":");
+                    
+                    // Handle different property types
+                    if (prop.isArray()) {
+                        json.append("[");
+                        boolean firstVal = true;
+                        for (int i = 0; i < prop.count(); i++) {
+                            if (!firstVal) json.append(",");
+                            firstVal = false;
+                            json.append("\"").append(escapeJson(String.valueOf(prop.getValue(org.apache.jackrabbit.oak.api.Type.STRING, i)))).append("\"");
+                        }
+                        json.append("]");
+                    } else {
+                        // Single value - handle different types
+                        try {
+                            String value;
+                            if (prop.getType() == org.apache.jackrabbit.oak.api.Type.BINARY) {
+                                value = "[Binary: " + prop.size() + " bytes]";
+                            } else if (prop.getType() == org.apache.jackrabbit.oak.api.Type.BOOLEAN) {
+                                value = String.valueOf(prop.getValue(org.apache.jackrabbit.oak.api.Type.BOOLEAN));
+                            } else if (prop.getType() == org.apache.jackrabbit.oak.api.Type.LONG) {
+                                value = String.valueOf(prop.getValue(org.apache.jackrabbit.oak.api.Type.LONG));
+                            } else if (prop.getType() == org.apache.jackrabbit.oak.api.Type.DOUBLE) {
+                                value = String.valueOf(prop.getValue(org.apache.jackrabbit.oak.api.Type.DOUBLE));
+                            } else if (prop.getType() == org.apache.jackrabbit.oak.api.Type.DATE) {
+                                value = String.valueOf(prop.getValue(org.apache.jackrabbit.oak.api.Type.DATE));
+                            } else {
+                                value = prop.getValue(org.apache.jackrabbit.oak.api.Type.STRING);
+                            }
+                            json.append("\"").append(escapeJson(value)).append("\"");
+                        } catch (Exception e) {
+                            json.append("\"[Error: ").append(escapeJson(e.getMessage())).append("]\"");
+                        }
+                    }
+                }
+                
                 json.append("}}");
                 
                 response.setStatus(HttpServletResponse.SC_OK);
@@ -625,6 +829,70 @@ public class SegmentHttpServer {
         }
         
         /**
+         * Handle API request for TAR files and their segments.
+         */
+        private void handleTarFiles(HttpServletResponse response) throws IOException {
+            response.setContentType("application/json");
+            
+            try {
+                java.util.List<String> tarEntries = new java.util.ArrayList<>();
+                
+                // Count total segments in journal
+                int totalSegments = 0;
+                Path journalPath = storeDirectory.resolve("journal.log");
+                if (java.nio.file.Files.exists(journalPath)) {
+                    java.util.List<String> journalLines = java.nio.file.Files.readAllLines(journalPath);
+                    totalSegments = journalLines.size();
+                }
+                
+                // List all .tar files and calculate total size
+                java.util.List<Path> tarFiles = new java.util.ArrayList<>();
+                long totalSize = 0;
+                try (java.util.stream.Stream<Path> paths = java.nio.file.Files.list(storeDirectory)) {
+                    tarFiles = paths
+                        .filter(p -> p.toString().endsWith(".tar"))
+                        .sorted(java.util.Comparator.comparing(Path::toString))
+                        .collect(java.util.stream.Collectors.toList());
+                    for (Path tarFile : tarFiles) {
+                        totalSize += java.nio.file.Files.size(tarFile);
+                    }
+                }
+                
+                // Build JSON entries
+                for (Path tarFile : tarFiles) {
+                    String fileName = tarFile.getFileName().toString();
+                    long fileSize = java.nio.file.Files.size(tarFile);
+                    java.nio.file.attribute.BasicFileAttributes attrs = 
+                        java.nio.file.Files.readAttributes(tarFile, java.nio.file.attribute.BasicFileAttributes.class);
+                    
+                    // Estimate segment count based on proportional file size
+                    int estimatedSegments = totalSize > 0 ? (int)((fileSize * totalSegments) / totalSize) : 0;
+                    
+                    StringBuilder entry = new StringBuilder();
+                    entry.append("{");
+                    entry.append("\"name\":\"").append(escapeJson(fileName)).append("\",");
+                    entry.append("\"size\":").append(fileSize).append(",");
+                    entry.append("\"sizeFormatted\":\"").append(formatBytes(fileSize)).append("\",");
+                    entry.append("\"segmentCount\":").append(estimatedSegments).append(",");
+                    entry.append("\"estimatedCount\":true,");
+                    entry.append("\"created\":\"").append(attrs.creationTime().toString()).append("\",");
+                    entry.append("\"modified\":\"").append(attrs.lastModifiedTime().toString()).append("\"");
+                    entry.append("}");
+                    
+                    tarEntries.add(entry.toString());
+                }
+                
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write("[" + String.join(",", tarEntries) + "]");
+                
+            } catch (Exception e) {
+                log.error("Error reading TAR files", e);
+                response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                response.getWriter().write("[]");
+            }
+        }
+        
+        /**
          * Escape JSON string.
          */
         private String escapeJson(String text) {
@@ -662,6 +930,11 @@ public class SegmentHttpServer {
             
             log.info("📦 Segment GET: {} FROM {}:{} [UA: {}]", 
                      segmentId, remoteAddr, remotePort, userAgent != null ? userAgent : "unknown");
+            
+            // Track connected peer (Sling Author mounting this store)
+            if (!"localhost".equals(remoteAddr) && !"127.0.0.1".equals(remoteAddr)) {
+                connectedPeers.add(remoteAddr + ":" + remotePort);
+            }
             
             // Convert UUID string to msb/lsb
             java.util.UUID uuid;
@@ -770,6 +1043,327 @@ public class SegmentHttpServer {
             }
             
             return null;
+        }
+        
+        /**
+         * Handle POST /v1/propose - Receive write proposal from peer
+         */
+        private void handleWriteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            if (consensusEngine == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Consensus engine not configured");
+                return;
+            }
+            
+            // Read JSON body
+            String json = request.getReader().lines().collect(Collectors.joining());
+            
+            try {
+                // Parse proposal (simple JSON parsing for Phase 1)
+                WriteProposal proposal = parseProposal(json);
+                
+                // Process proposal and vote
+                Vote vote = consensusEngine.handleProposal(proposal);
+                
+                // Return vote immediately
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write(voteToJson(vote));
+                
+            } catch (Exception e) {
+                log.error("Error processing proposal", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle POST /v1/vote - Receive vote from peer
+         */
+        private void handleVote(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            if (consensusEngine == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Consensus engine not configured");
+                return;
+            }
+            
+            // Read JSON body
+            String json = request.getReader().lines().collect(Collectors.joining());
+            
+            try {
+                // Parse vote
+                Vote vote = parseVote(json);
+                
+                // Process vote
+                consensusEngine.handleVote(vote);
+                
+                // Return OK
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write("{\"status\":\"accepted\"}");
+                
+            } catch (Exception e) {
+                log.error("Error processing vote", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle GET /v1/peers - List known peers
+         */
+        private void handleListPeers(HttpServletResponse response) throws IOException {
+            response.setContentType("application/json");
+            response.setStatus(HttpServletResponse.SC_OK);
+            
+            // Return empty list for now (will be populated when consensus engine is set)
+            response.getWriter().write("{\"peers\":[]}");
+        }
+        
+        /**
+         * Handle POST /v1/test-write - Write endpoint with wallet-based storage
+         * 
+         * Parameters:
+         *   - wallet: Ethereum address (e.g., 0x1234...)
+         *   - signature: Message signature (mock for now, real Web3j verification later)
+         *   - message: Content to write
+         *   - contentType: Type of content (default: "page")
+         */
+        private void handleTestWrite(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            if (consensusEngine == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Consensus engine not configured");
+                return;
+            }
+            
+            try {
+                // Read wallet-based write parameters
+                String wallet = request.getParameter("wallet");
+                String signature = request.getParameter("signature");
+                String message = request.getParameter("message");
+                String contentType = request.getParameter("contentType");
+                
+                // Default values
+                if (wallet == null || wallet.isEmpty()) {
+                    wallet = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"; // Mock default wallet
+                }
+                if (message == null || message.isEmpty()) {
+                    message = "Test content at " + System.currentTimeMillis();
+                }
+                if (contentType == null || contentType.isEmpty()) {
+                    contentType = "page";
+                }
+                if (signature == null || signature.isEmpty()) {
+                    signature = "0xMOCK" + System.currentTimeMillis(); // Mock signature
+                }
+                
+                // Validate Ethereum address format (basic check)
+                if (!wallet.startsWith("0x") || wallet.length() < 10) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid Ethereum address format");
+                    return;
+                }
+                
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                log.info("🔐 WALLET-BASED WRITE INITIATED");
+                log.info("   Wallet: {}", wallet);
+                log.info("   Content Type: {}", contentType);
+                log.info("   Message: {}", message);
+                log.info("   Signature: {}...{}", signature.substring(0, Math.min(10, signature.length())), 
+                         signature.length() > 10 ? signature.substring(signature.length() - 4) : "");
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                
+                // TODO: Real signature verification with Web3j
+                // For now, we accept all signatures starting with "0x"
+                log.info("✅ Signature verification: MOCK (accepted)");
+                
+                // Get current HEAD
+                String previousHead = fileStore.getHead().getRecordId().toString();
+                log.info("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
+                
+                // Make a write to the repository at /oak-chain/content/<wallet>/
+                org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = nodeStore.getRoot().builder();
+                
+                // Create wallet-specific path: /oak-chain/content/<wallet>/
+                org.apache.jackrabbit.oak.spi.state.NodeBuilder walletPath = rootBuilder.child("oak-chain")
+                    .child("content")
+                    .child(wallet.toLowerCase()); // Wallet addresses are case-insensitive
+                
+                // Create content node under wallet path
+                String contentId = contentType + "-" + System.currentTimeMillis();
+                org.apache.jackrabbit.oak.spi.state.NodeBuilder contentNode = walletPath.child(contentId);
+                
+                // Set properties
+                contentNode.setProperty("jcr:primaryType", "nt:unstructured");
+                contentNode.setProperty("contentType", contentType);
+                contentNode.setProperty("message", message);
+                contentNode.setProperty("timestamp", System.currentTimeMillis());
+                contentNode.setProperty("wallet", wallet);
+                contentNode.setProperty("signature", signature);
+                contentNode.setProperty("source", "consensus-write");
+                
+                // Commit the change (this creates new segments!)
+                org.apache.jackrabbit.oak.spi.commit.CommitInfo commitInfo = 
+                    new org.apache.jackrabbit.oak.spi.commit.CommitInfo(
+                        "consensus-test", 
+                        null, 
+                        java.util.Collections.singletonMap("test", "true")
+                    );
+                
+                nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, commitInfo);
+                
+                // CRITICAL: Flush FileStore to ensure all segments are persisted to disk
+                // BEFORE broadcasting proposal to peers!
+                fileStore.flush();
+                log.info("✅ FileStore flushed - segments persisted to disk");
+                
+                // Get new HEAD
+                String newHead = fileStore.getHead().getRecordId().toString();
+                log.info("📍 New HEAD: {}", newHead.substring(0, Math.min(20, newHead.length())));
+                
+                // Create write proposal with wallet metadata
+                WriteProposal proposal = new WriteProposal(
+                    "http://localhost:8090", // Will be overridden by consensus engine with self URL
+                    previousHead,
+                    newHead
+                );
+                proposal.setAuthor(wallet); // Wallet address as author
+                proposal.setCommitMessage("Wallet write: " + contentType + " - " + message);
+                proposal.setMockPaymentVerified(true); // TODO: Verify payment from smart contract
+                proposal.setMockSignature(signature);
+                
+                // TODO: Add actual segments to proposal
+                // For Phase 1, we'll rely on validators fetching via HTTP
+                
+                log.info("📤 Proposing write to consensus network...");
+                log.info("   Storage path: /oak-chain/content/{}/{}", wallet.toLowerCase(), contentId);
+                
+                // Propose to network
+                boolean consensusReached = consensusEngine.proposeWrite(proposal);
+                
+                // Return result
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                
+                String result = "{" +
+                    "\"success\":" + consensusReached + "," +
+                    "\"proposalId\":\"" + proposal.getProposalId() + "\"," +
+                    "\"wallet\":\"" + wallet + "\"," +
+                    "\"contentId\":\"" + contentId + "\"," +
+                    "\"storagePath\":\"/oak-chain/content/" + wallet.toLowerCase() + "/" + contentId + "\"," +
+                    "\"previousHead\":\"" + previousHead + "\"," +
+                    "\"newHead\":\"" + newHead + "\"," +
+                    "\"message\":\"" + message + "\"," +
+                    "\"contentType\":\"" + contentType + "\"," +
+                    "\"consensusReached\":" + consensusReached +
+                    "}";
+                
+                response.getWriter().write(result);
+                
+                if (consensusReached) {
+                    log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    log.info("✅ CONSENSUS REACHED! Write committed across all validators");
+                    log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    
+                    // Track write metadata for dashboard
+                    String recordIdShort = newHead.length() > 20 ? newHead.substring(0, 20) : newHead;
+                    recentWriteMetadata.put(recordIdShort, new WriteMetadata(
+                        newHead,
+                        "consensus",
+                        proposal.getProposerUrl(),
+                        System.currentTimeMillis(),
+                        message
+                    ));
+                } else {
+                    log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    log.warn("❌ CONSENSUS FAILED! Write not replicated");
+                    log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                }
+                
+            } catch (Exception e) {
+                log.error("❌ Test write failed", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Test write failed: " + e.getMessage());
+            }
+        }
+        
+        // Simple JSON parsing for Phase 1
+        
+        private WriteProposal parseProposal(String json) {
+            WriteProposal proposal = new WriteProposal();
+            
+            // Extract fields (simple string parsing for Phase 1)
+            proposal.setProposalId(extractJsonField(json, "proposalId"));
+            proposal.setProposerUrl(extractJsonField(json, "proposerUrl"));
+            proposal.setPreviousHead(extractJsonField(json, "previousHead"));
+            proposal.setNewHead(extractJsonField(json, "newHead"));
+            proposal.setAuthor(extractJsonField(json, "author"));
+            
+            String timestamp = extractJsonField(json, "timestamp");
+            if (timestamp != null) {
+                proposal.setTimestamp(Long.parseLong(timestamp));
+            }
+            
+            String mockPayment = extractJsonField(json, "mockPaymentVerified");
+            proposal.setMockPaymentVerified(mockPayment == null || "true".equals(mockPayment));
+            
+            // TODO: Parse segments array
+            
+            return proposal;
+        }
+        
+        private Vote parseVote(String json) {
+            Vote vote = new Vote();
+            
+            vote.setProposalId(extractJsonField(json, "proposalId"));
+            vote.setValidatorUrl(extractJsonField(json, "validatorUrl"));
+            
+            String voteType = extractJsonField(json, "voteType");
+            vote.setVoteType("ACCEPT".equals(voteType) ? Vote.VoteType.ACCEPT : Vote.VoteType.REJECT);
+            
+            vote.setReason(extractJsonField(json, "reason"));
+            
+            String timestamp = extractJsonField(json, "timestamp");
+            if (timestamp != null) {
+                vote.setTimestamp(Long.parseLong(timestamp));
+            }
+            
+            return vote;
+        }
+        
+        private String extractJsonField(String json, String field) {
+            int start = json.indexOf("\"" + field + "\"");
+            if (start == -1) return null;
+            
+            start = json.indexOf(":", start) + 1;
+            
+            // Skip whitespace
+            while (start < json.length() && Character.isWhitespace(json.charAt(start))) {
+                start++;
+            }
+            
+            // Check if value is quoted (string) or unquoted (number/boolean/null)
+            if (json.charAt(start) == '"') {
+                // Quoted string
+                start++; // Skip opening quote
+                int end = json.indexOf("\"", start);
+                if (end == -1) return null;
+                return json.substring(start, end);
+            } else {
+                // Unquoted value (number, boolean, or null) - read until comma, }, or ]
+                int end = start;
+                while (end < json.length()) {
+                    char c = json.charAt(end);
+                    if (c == ',' || c == '}' || c == ']' || Character.isWhitespace(c)) {
+                        break;
+                    }
+                    end++;
+                }
+                return json.substring(start, end).trim();
+            }
+        }
+        
+        private String voteToJson(Vote v) {
+            return "{" +
+                "\"proposalId\":\"" + v.getProposalId() + "\"," +
+                "\"validatorUrl\":\"" + v.getValidatorUrl() + "\"," +
+                "\"voteType\":\"" + v.getVoteType() + "\"," +
+                "\"reason\":\"" + (v.getReason() != null ? v.getReason() : "") + "\"," +
+                "\"timestamp\":" + v.getTimestamp() +
+                "}";
         }
     }
 }
