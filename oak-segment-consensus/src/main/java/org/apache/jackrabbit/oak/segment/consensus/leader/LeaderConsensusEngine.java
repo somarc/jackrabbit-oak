@@ -42,6 +42,7 @@ public class LeaderConsensusEngine {
     private final String selfUrl;
     private final LeaderElection election;
     private final SegmentReplicator replicator;
+    private final LeaderHealthMonitor healthMonitor;
     
     private volatile ValidatorRole currentRole;
     private volatile int currentEpoch;
@@ -62,6 +63,7 @@ public class LeaderConsensusEngine {
         this.selfUrl = selfUrl;
         this.election = new LeaderElection(selfUrl, peerUrls, leaderTermSeconds);
         this.replicator = new SegmentReplicator(fileStore);
+        this.healthMonitor = new LeaderHealthMonitor(selfUrl);
         
         // Determine initial role
         this.currentEpoch = election.getCurrentEpoch();
@@ -69,11 +71,12 @@ public class LeaderConsensusEngine {
         this.currentRole = election.getRole();
         
         log.info("🎖️  Leader-Based Consensus Engine initialized");
-        log.info("   Mode: Leader/Follower");
+        log.info("   Mode: Leader/Follower with Failure Detection");
         log.info("   Epoch: {}", currentEpoch);
         log.info("   Current leader: {}", currentLeader);
         log.info("   My role: {}", currentRole);
         log.info("   Rotation: every {} seconds", leaderTermSeconds);
+        log.info("   Heartbeat: 10s interval, 30s failure threshold");
     }
     
     /**
@@ -81,6 +84,16 @@ public class LeaderConsensusEngine {
      * Checks every 10 seconds if epoch has changed (leader should rotate).
      */
     public void startRotationMonitor() {
+        // Start health monitoring based on initial role
+        if (currentRole == ValidatorRole.LEADER) {
+            List<String> followers = election.getPeerValidators();
+            healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch);
+            log.info("💓 Started heartbeat broadcast to {} followers", followers.size());
+        } else {
+            healthMonitor.startMonitoring();
+            log.info("❤️  Started monitoring leader health");
+        }
+        
         rotationMonitor = new Thread(() -> {
             log.info("🔄 Leader rotation monitor started");
             
@@ -153,8 +166,13 @@ public class LeaderConsensusEngine {
         log.info("   Accepting writes for epoch {}", currentEpoch);
         log.info("   Term ends: {}", new java.util.Date(election.getEpochEndTime()));
         
-        // As new leader, we continue from our current HEAD
-        // No special action needed - just start accepting writes
+        // Stop monitoring followers (we don't monitor ourselves)
+        healthMonitor.stopMonitoring();
+        
+        // Start broadcasting heartbeats to followers
+        List<String> followers = election.getPeerValidators();
+        healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch);
+        log.info("💓 Started heartbeat broadcast to {} followers", followers.size());
     }
     
     /**
@@ -164,6 +182,13 @@ public class LeaderConsensusEngine {
         log.info("📥 TRANSITIONING TO FOLLOWER");
         log.info("   Current leader: {}", currentLeader);
         log.info("   Will replicate from leader");
+        
+        // Stop broadcasting heartbeats (only leaders broadcast)
+        healthMonitor.stopMonitoring();
+        
+        // Start monitoring leader's heartbeats
+        healthMonitor.startMonitoring();
+        log.info("❤️  Started monitoring leader health");
         
         // Pull latest state from new leader
         pullLatestStateFromLeader();
@@ -332,6 +357,10 @@ public class LeaderConsensusEngine {
     
     public LeaderElection getElection() {
         return election;
+    }
+    
+    public LeaderHealthMonitor getHealthMonitor() {
+        return healthMonitor;
     }
 }
 

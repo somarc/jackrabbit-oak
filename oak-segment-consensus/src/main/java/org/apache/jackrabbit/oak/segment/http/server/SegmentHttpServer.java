@@ -448,6 +448,13 @@ public class SegmentHttpServer {
                     return;
                 }
                 
+                // HEARTBEAT ENDPOINT - Follower receives heartbeat from leader
+                if ("/v1/heartbeat".equals(path) && "POST".equals(method)) {
+                    handleHeartbeat(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
                 // Not found
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 baseRequest.setHandled(true);
@@ -1769,66 +1776,99 @@ public class SegmentHttpServer {
                     String currentLeader = leaderConsensusEngine.getCurrentLeader();
                     log.info("📡 FOLLOWER: Proxying write request to leader: {}", currentLeader);
                     
-                    try {
-                        // Build the full URL with query parameters
-                        StringBuilder leaderUrl = new StringBuilder(currentLeader);
-                        leaderUrl.append("/v1/test-write");
-                        String queryString = request.getQueryString();
-                        if (queryString != null && !queryString.isEmpty()) {
-                            leaderUrl.append("?").append(queryString);
-                        }
-                        
-                        // Forward request to leader
-                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) 
-                            new java.net.URL(leaderUrl.toString()).openConnection();
-                        conn.setRequestMethod("POST");
-                        conn.setConnectTimeout(5000);
-                        conn.setReadTimeout(10000);
-                        
-                        // Forward headers
-                        String clientId = request.getHeader("X-Client-Id");
-                        if (clientId != null) {
-                            conn.setRequestProperty("X-Client-Id", clientId);
-                        }
-                        conn.setRequestProperty("X-Proxied-By", selfUrl);
-                        
-                        // Get response from leader
-                        int leaderStatus = conn.getResponseCode();
-                        
-                        // Read leader's response
-                        java.io.InputStream inputStream = leaderStatus >= 400 
-                            ? conn.getErrorStream() 
-                            : conn.getInputStream();
-                        
-                        if (inputStream != null) {
-                            java.io.BufferedReader reader = new java.io.BufferedReader(
-                                new java.io.InputStreamReader(inputStream)
-                            );
-                            StringBuilder leaderResponse = new StringBuilder();
-                            String line;
-                            while ((line = reader.readLine()) != null) {
-                                leaderResponse.append(line);
+                    // SMART PROXY FAILOVER: Try current leader, then next validator
+                    String proxyTarget = currentLeader;
+                    Exception firstFailure = null;
+                    
+                    for (int attempt = 0; attempt < 2; attempt++) {
+                        try {
+                            // Build the full URL with query parameters
+                            StringBuilder targetUrl = new StringBuilder(proxyTarget);
+                            targetUrl.append("/v1/test-write");
+                            String queryString = request.getQueryString();
+                            if (queryString != null && !queryString.isEmpty()) {
+                                targetUrl.append("?").append(queryString);
                             }
-                            reader.close();
                             
-                            // Forward leader's response to client
-                            response.setStatus(leaderStatus);
-                            response.setContentType("application/json");
-                            response.setHeader("X-Proxied-From", currentLeader);
-                            response.getWriter().write(leaderResponse.toString());
+                            log.info("   Attempt {}: Trying {}", attempt + 1, proxyTarget);
                             
-                            log.info("✅ Proxied write to leader - Status: {}", leaderStatus);
+                            // Forward request to target
+                            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) 
+                                new java.net.URL(targetUrl.toString()).openConnection();
+                            conn.setRequestMethod("POST");
+                            conn.setConnectTimeout(3000); // Shorter timeout for faster failover
+                            conn.setReadTimeout(5000);
+                            
+                            // Forward headers
+                            String clientId = request.getHeader("X-Client-Id");
+                            if (clientId != null) {
+                                conn.setRequestProperty("X-Client-Id", clientId);
+                            }
+                            conn.setRequestProperty("X-Proxied-By", selfUrl);
+                            
+                            // Get response from target
+                            int targetStatus = conn.getResponseCode();
+                            
+                            // Read target's response
+                            java.io.InputStream inputStream = targetStatus >= 400 
+                                ? conn.getErrorStream() 
+                                : conn.getInputStream();
+                            
+                            if (inputStream != null) {
+                                java.io.BufferedReader reader = new java.io.BufferedReader(
+                                    new java.io.InputStreamReader(inputStream)
+                                );
+                                StringBuilder targetResponse = new StringBuilder();
+                                String line;
+                                while ((line = reader.readLine()) != null) {
+                                    targetResponse.append(line);
+                                }
+                                reader.close();
+                                
+                                // Forward target's response to client
+                                response.setStatus(targetStatus);
+                                response.setContentType("application/json");
+                                response.setHeader("X-Proxied-From", proxyTarget);
+                                response.setHeader("X-Failover-Attempt", String.valueOf(attempt + 1));
+                                response.getWriter().write(targetResponse.toString());
+                                
+                                log.info("✅ Proxied write to {} - Status: {}", proxyTarget, targetStatus);
+                                return; // SUCCESS!
+                            }
+                            
+                        } catch (Exception e) {
+                            if (attempt == 0) {
+                                // First attempt failed
+                                firstFailure = e;
+                                log.warn("⚠️  Primary leader unreachable: {} - {}", currentLeader, e.getMessage());
+                                
+                                // Check if leader appears dead via health monitoring
+                                if (leaderConsensusEngine.getHealthMonitor().isLeaderDead()) {
+                                    log.warn("💀 Health monitor confirms leader is dead");
+                                }
+                                
+                                // Try next validator in rotation
+                                proxyTarget = getNextValidatorInRotation();
+                                log.warn("🔄 Attempting failover to next validator: {}", proxyTarget);
+                                
+                            } else {
+                                // Second attempt also failed - give up
+                                log.error("❌ Both proxy attempts failed");
+                                log.error("   Primary: {} - {}", currentLeader, firstFailure.getMessage());
+                                log.error("   Failover: {} - {}", proxyTarget, e.getMessage());
+                                
+                                response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                                response.setContentType("application/json");
+                                response.getWriter().write(String.format(
+                                    "{\"error\":\"All validators unreachable\",\"attempted\":[\"%s\",\"%s\"],\"message\":\"Consensus network unavailable\"}",
+                                    currentLeader, proxyTarget
+                                ));
+                                return;
+                            }
                         }
-                        
-                    } catch (Exception e) {
-                        log.error("❌ Failed to proxy request to leader", e);
-                        response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                        response.setContentType("application/json");
-                        response.getWriter().write(String.format(
-                            "{\"error\":\"Proxy failed\",\"currentLeader\":\"%s\",\"message\":\"Failed to contact leader: %s\"}",
-                            currentLeader, e.getMessage()
-                        ));
                     }
+                    
+                    // Shouldn't reach here, but just in case
                     return;
                 }
                 log.debug("✅ Leader check passed - I am the leader");
@@ -2397,6 +2437,59 @@ public class SegmentHttpServer {
             }
         }
         
+        /**
+         * Handle heartbeat from leader.
+         * Followers receive these periodically to confirm leader is alive.
+         */
+        private void handleHeartbeat(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            if (leaderConsensusEngine == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Leader consensus not configured");
+                return;
+            }
+            
+            // Only followers should receive heartbeats
+            if (leaderConsensusEngine.isLeader()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "I am the leader, not a follower");
+                return;
+            }
+            
+            try {
+                // Read JSON body
+                StringBuilder json = new StringBuilder();
+                java.io.BufferedReader reader = request.getReader();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+                
+                String body = json.toString();
+                
+                // Parse heartbeat
+                String leaderUrl = extractJsonField(body, "leaderUrl");
+                
+                // Verify this is from the legitimate leader
+                if (!leaderUrl.equals(leaderConsensusEngine.getCurrentLeader())) {
+                    log.debug("🚫 Heartbeat from non-leader: {} (expected: {})", 
+                        leaderUrl, leaderConsensusEngine.getCurrentLeader());
+                    response.sendError(HttpServletResponse.SC_FORBIDDEN, "Not current leader");
+                    return;
+                }
+                
+                // Record the heartbeat
+                leaderConsensusEngine.getHealthMonitor().recordHeartbeat();
+                
+                // Return success
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write("{\"success\":true}");
+                
+            } catch (Exception e) {
+                log.error("❌ Failed to process heartbeat", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                    "Failed to process heartbeat: " + e.getMessage());
+            }
+        }
+        
         // Simple JSON parsing for Phase 1
         
         private WriteProposal parseProposal(String json) {
@@ -2439,6 +2532,37 @@ public class SegmentHttpServer {
             }
             
             return vote;
+        }
+        
+        /**
+         * Get the next validator in the rotation order for failover.
+         * This is used when the current leader appears unreachable.
+         * 
+         * @return URL of the next validator that might be leader
+         */
+        private String getNextValidatorInRotation() {
+            if (leaderConsensusEngine == null) {
+                return selfUrl; // Fallback
+            }
+            
+            // Get all validators in deterministic order
+            java.util.List<String> allValidators = new java.util.ArrayList<>();
+            allValidators.add(selfUrl);
+            allValidators.addAll(leaderConsensusEngine.getElection().getPeerValidators());
+            java.util.Collections.sort(allValidators);
+            
+            // Find current leader in the list
+            String currentLeader = leaderConsensusEngine.getCurrentLeader();
+            int leaderIndex = allValidators.indexOf(currentLeader);
+            
+            if (leaderIndex == -1) {
+                // Leader not found, return first validator
+                return allValidators.get(0);
+            }
+            
+            // Return next validator in rotation (wrap around if needed)
+            int nextIndex = (leaderIndex + 1) % allValidators.size();
+            return allValidators.get(nextIndex);
         }
         
         private String extractJsonField(String json, String field) {
