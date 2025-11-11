@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.jackrabbit.oak.segment.sync;
+package org.apache.jackrabbit.oak.segment.http;
 
 import org.apache.jackrabbit.oak.segment.SegmentStore;
 import org.apache.jackrabbit.oak.segment.SegmentStoreProvider;
@@ -66,7 +66,7 @@ import java.nio.charset.StandardCharsets;
     immediate = true,
     property = {
         "scheduler.concurrent:Boolean=false",
-        "scheduler.period:Long=60"  // Default: sync every 60 seconds (1 min, aligned with DAG auto-merge)
+        "scheduler.period:Long=780"  // Default: sync every 780 seconds (13 min, aligned with finality)
     }
 )
 @Designate(ocd = HttpSegmentStoreSync.Configuration.class)
@@ -75,8 +75,8 @@ public class HttpSegmentStoreSync implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(HttpSegmentStoreSync.class);
     
     @ObjectClassDefinition(
-        name = "HTTP Segment Store Background Sync (Cold Standby Pattern, DAG Consensus)",
-        description = "Periodically syncs composite mount from HTTP global store - Aligned with DAG auto-merge interval"
+        name = "HTTP Segment Store Background Sync (Cold Standby Pattern, Finality-Aligned)",
+        description = "Periodically syncs composite mount from HTTP global store - Aligned with Ethereum finality timing"
     )
     @interface Configuration {
         @AttributeDefinition(
@@ -87,9 +87,9 @@ public class HttpSegmentStoreSync implements Runnable {
         
         @AttributeDefinition(
             name = "Sync Interval",
-            description = "How often to poll for updates, in seconds. Default 60s (1 min) aligns with DAG auto-merge (30s) for responsive updates"
+            description = "How often to poll for updates, in seconds. Default 780s (13 min) aligns with Ethereum finality (12.8 min)"
         )
-        long syncInterval() default 60;
+        long syncInterval() default 780;
         
         @AttributeDefinition(
             name = "Enabled",
@@ -99,9 +99,9 @@ public class HttpSegmentStoreSync implements Runnable {
         
         @AttributeDefinition(
             name = "Only Sync Finalized",
-            description = "If true, only sync epochs marked as finalized (deprecated, kept for compatibility)"
+            description = "If true, only sync epochs marked as finalized (recommended for production)"
         )
-        boolean onlyFinalized() default false;
+        boolean onlyFinalized() default true;
     }
     
     /**
@@ -130,20 +130,17 @@ public class HttpSegmentStoreSync implements Runnable {
         this.enabled = config.enabled();
         this.onlyFinalized = config.onlyFinalized();
         
-        log.info("🔄 HTTP Segment Store Sync activated (DAG Consensus Mode)");
+        log.info("🔄 HTTP Segment Store Sync activated (Finality-Aligned)");
         log.info("   Global Store: {}", globalStoreUrl);
-        log.info("   Sync Interval: {}s (~{} seconds)", config.syncInterval(), config.syncInterval());
+        log.info("   Sync Interval: {}s (~{} minutes)", config.syncInterval(), config.syncInterval() / 60);
         log.info("   Enabled: {}", enabled);
+        log.info("   Only Finalized: {} {}", onlyFinalized, onlyFinalized ? "✅ SAFE" : "⚠️  RISK");
         log.info("   ");
-        log.info("   📊 DAG Consensus Timing Alignment:");
-        log.info("      Auto-Merge:  30s (validators detect divergence)");
-        log.info("      Replication: <5s (full segment sync during merge)");
-        log.info("      Sync Poll:   {}s ← Catches updates quickly!", config.syncInterval());
-        log.info("   ");
-        log.info("   🎯 Expected Latency:");
-        log.info("      Write → Validator consensus: ~30-60s");
-        log.info("      Validator → Sling mount:    ~{}s", config.syncInterval());
-        log.info("      Total end-to-end:           ~{}s", 30 + config.syncInterval());
+        log.info("   📊 Ethereum Timing Alignment:");
+        log.info("      Slot:     12s");
+        log.info("      Epoch:    384s (~6.4 min)");
+        log.info("      Finality: 768s (~12.8 min)");
+        log.info("      Sync:     {}s (~{} min) ← Optimized!", config.syncInterval(), config.syncInterval() / 60);
         log.info("   ");
         log.info("   📍 Running from oak-segment-tar (Cold Standby pattern)");
         log.info("   ✅ Direct access to ReadOnlyFileStore internals");
