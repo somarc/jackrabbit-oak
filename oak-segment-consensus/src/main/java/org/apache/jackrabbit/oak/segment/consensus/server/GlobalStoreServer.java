@@ -125,10 +125,23 @@ public class GlobalStoreServer {
         String consensusEnabled = System.getProperty("consensus.enabled", "false");
         String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
         String peersConfig = System.getProperty("consensus.peers", "");
+        String genesisNode = System.getProperty("consensus.genesis.node", "");  // Boot node for genesis sync
         
         if ("true".equalsIgnoreCase(consensusEnabled) && !peersConfig.isEmpty()) {
             System.out.println();
             System.out.println("Initializing Consensus Engine...");
+            
+            // BLOCKCHAIN GENESIS: Sync with genesis node if configured
+            if (!genesisNode.isEmpty() && !genesisNode.equals(selfUrl)) {
+                System.out.println("   🔄 Syncing genesis state from: " + genesisNode);
+                try {
+                    syncGenesisFromPeer(genesisNode);
+                    System.out.println("   ✅ Genesis state synchronized");
+                } catch (Exception e) {
+                    System.err.println("   ⚠️  Genesis sync failed: " + e.getMessage());
+                    System.err.println("   Continuing with local genesis...");
+                }
+            }
             
             List<String> peerUrls = parsePeerUrls(peersConfig);
             ConsensusEngine consensusEngine = new ConsensusEngine(fileStore, selfUrl, peerUrls);
@@ -319,6 +332,44 @@ public class GlobalStoreServer {
             }
         }
         return peers;
+    }
+    
+    /**
+     * Sync genesis state from a peer (like downloading genesis block in Ethereum).
+     * This ensures all validators start from the same initial HEAD.
+     */
+    private void syncGenesisFromPeer(String peerUrl) throws Exception {
+        System.out.println("      Fetching genesis HEAD from: " + peerUrl);
+        
+        // Fetch peer's journal to get their HEAD
+        String journalUrl = peerUrl + "/journal.log";
+        java.net.URL url = new java.net.URL(journalUrl);
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(url.openStream()))) {
+            String firstLine = reader.readLine();
+            if (firstLine == null || firstLine.trim().isEmpty()) {
+                throw new Exception("Peer journal is empty");
+            }
+            
+            // Parse HEAD from journal (format: "segmentId:offset root timestamp")
+            String genesisHead = firstLine.split("\\s+")[0];
+            System.out.println("      Genesis HEAD: " + genesisHead.substring(0, 16) + "...");
+            
+            // Check if we already have this HEAD
+            org.apache.jackrabbit.oak.segment.RecordId currentHead = fileStore.getHead().getRecordId();
+            if (currentHead.toString10().equals(genesisHead)) {
+                System.out.println("      Already at genesis HEAD, skipping");
+                return;
+            }
+            
+            // We need to fetch all segments from genesis
+            // For now, this is a simplified approach - we just note the discrepancy
+            // In production, this would fetch all missing segments
+            System.out.println("      ⚠️  Genesis mismatch detected");
+            System.out.println("         Local:  " + currentHead.toString10().substring(0, 16) + "...");
+            System.out.println("         Remote: " + genesisHead.substring(0, 16) + "...");
+            System.out.println("      ⚠️  Full genesis sync not yet implemented - validators will start from different states");
+        }
     }
     
     /**

@@ -37,6 +37,9 @@ public class WriteProposal {
     private long timestamp;
     private String commitMessage;
     
+    // Blockchain-inspired consensus fields
+    private long height;  // Like Ethereum block number - ensures linear chain ordering
+    
     // Mock fields (for Phase 1 - no smart contract yet)
     private String mockSignature;
     private boolean mockPaymentVerified = true;
@@ -140,6 +143,14 @@ public class WriteProposal {
         this.mockPaymentVerified = mockPaymentVerified;
     }
     
+    public long getHeight() {
+        return height;
+    }
+    
+    public void setHeight(long height) {
+        this.height = height;
+    }
+    
     /**
      * Information about a segment to be replicated
      */
@@ -193,8 +204,9 @@ public class WriteProposal {
     
     @Override
     public String toString() {
-        return String.format("WriteProposal{id=%s, proposer=%s, segments=%d, %s → %s}",
+        return String.format("WriteProposal{id=%s, height=%d, proposer=%s, segments=%d, %s → %s}",
             proposalId,
+            height,
             proposerUrl,
             segments.size(),
             previousHead != null ? previousHead.substring(0, 8) : "null",

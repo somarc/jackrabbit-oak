@@ -38,6 +38,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Consensus engine for coordinating writes across multiple validators.
@@ -59,6 +60,10 @@ public class ConsensusEngine {
     private final List<String> peerUrls;
     
     private final Map<String, ProposalState> activeProposals = new ConcurrentHashMap<>();
+    
+    // Blockchain-inspired consensus state
+    private final AtomicLong chainHeight = new AtomicLong(0);  // Like Ethereum block number
+    private final Object chainLock = new Object();  // Protects height + HEAD updates
     
     // Metrics tracking
     private final long startTime = System.currentTimeMillis();
@@ -145,9 +150,14 @@ public class ConsensusEngine {
         long startTime = System.currentTimeMillis();
         totalProposals++;
         
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("📤 PROPOSING WRITE: {}", proposal);
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // BLOCKCHAIN CONSENSUS: Acquire lock and set height atomically
+        synchronized (chainLock) {
+            long nextHeight = chainHeight.get() + 1;
+            proposal.setHeight(nextHeight);
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("📤 PROPOSING WRITE AT HEIGHT {}: {}", nextHeight, proposal);
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        }
         
         // Set correct proposer URL (override whatever was passed in)
         proposal.setProposerUrl(selfUrl);
@@ -180,15 +190,20 @@ public class ConsensusEngine {
         
         if (consensusReached) {
             successfulProposals++;
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("🎉 CONSENSUS REACHED!");
-            log.info("   Votes: {}/{} ACCEPT ({}/{})",
-                state.getAcceptCount(),
-                state.getTotalValidators(),
-                state.getAcceptCount(),
-                state.getTotalValidators());
-            log.info("   Consensus time: {}ms", consensusTime);
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            
+            // BLOCKCHAIN CONSENSUS: Increment chain height after successful write
+            synchronized (chainLock) {
+                long newHeight = chainHeight.incrementAndGet();
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                log.info("🎉 CONSENSUS REACHED! Chain height: {} → {}", newHeight - 1, newHeight);
+                log.info("   Votes: {}/{} ACCEPT ({}/{})",
+                    state.getAcceptCount(),
+                    state.getTotalValidators(),
+                    state.getAcceptCount(),
+                    state.getTotalValidators());
+                log.info("   Consensus time: {}ms", consensusTime);
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            }
         } else {
             failedProposals++;
             log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -214,6 +229,30 @@ public class ConsensusEngine {
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
         try {
+            // BLOCKCHAIN CONSENSUS: Validate height and chain continuity
+            // Like Ethereum: only accept blocks at height N+1 that reference block at height N
+            synchronized (chainLock) {
+                long currentHeight = chainHeight.get();
+                long expectedHeight = currentHeight + 1;
+                
+                if (proposal.getHeight() != expectedHeight) {
+                    log.warn("❌ REJECTED: Invalid height. Expected {}, got {}", expectedHeight, proposal.getHeight());
+                    return createRejectVote(proposal, "Invalid height: expected " + expectedHeight + ", got " + proposal.getHeight());
+                }
+                
+                org.apache.jackrabbit.oak.segment.RecordId currentHead = fileStore.getHead().getRecordId();
+                String currentHeadStr = currentHead.toString10();
+                
+                if (!currentHeadStr.equals(proposal.getPreviousHead())) {
+                    log.warn("❌ REJECTED: previousHead mismatch. Current: {}, proposal: {}",
+                        currentHeadStr.substring(0, 8), proposal.getPreviousHead().substring(0, 8));
+                    return createRejectVote(proposal, "Chain fork detected - previousHead does not match current HEAD");
+                }
+                
+                log.info("✅ Height validation passed: {}", expectedHeight);
+                log.info("✅ Chain continuity verified: {}", currentHeadStr.substring(0, 8));
+            }
+            
             // 1. Mock payment verification (always true for Phase 1)
             if (!proposal.isMockPaymentVerified()) {
                 log.warn("❌ Mock payment not verified");
@@ -269,6 +308,13 @@ public class ConsensusEngine {
                 log.info("✅ Journal updated & flushed: {} → {}", 
                     localCurrentHead.toString().substring(0, 8),
                     proposal.getNewHead().substring(0, 8));
+                
+                // BLOCKCHAIN CONSENSUS: Increment chain height after accepting write
+                // Must happen atomically with journal update
+                synchronized (chainLock) {
+                    long newHeight = chainHeight.incrementAndGet();
+                    log.info("✅ Chain height advanced: {} → {}", newHeight - 1, newHeight);
+                }
             } catch (Exception e) {
                 log.error("❌ Failed to update journal: {}", e.getMessage(), e);
                 return createRejectVote(proposal, "Journal update failed: " + e.getMessage());
