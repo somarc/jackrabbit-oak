@@ -391,12 +391,20 @@ public class SegmentHttpServer {
             html.append("<div class='label'>").append(segmentCount).append(" Segments</div>\n");
             html.append("</div>\n");
             
-            // Validator Network Card (from ConsensusEngine)
-            int validatorCount = consensusEngine != null ? (1 + consensusEngine.getPeerCount()) : 1;
+            // Validator Network Card (works for both blockchain and DAG mode)
+            int validatorCount = 1; // Self
+            String consensusType = "Single";
+            if (consensusEngine != null) {
+                validatorCount = 1 + consensusEngine.getPeerCount();
+                consensusType = "Blockchain PoA";
+            } else if (dagConsensusEngine != null) {
+                validatorCount = 1 + dagConsensusEngine.getKnownHeads().size() - 1; // Self + peers
+                consensusType = "Distributed DAG";
+            }
             html.append("<div class='card'>\n");
             html.append("<h2>🗳️  Validator Network</h2>\n");
             html.append("<div class='stat'>").append(validatorCount).append("</div>\n");
-            html.append("<div class='label'>Consensus Nodes (PoA)</div>\n");
+            html.append("<div class='label'>").append(consensusType).append("</div>\n");
             html.append("</div>\n");
             
             // Connected Peers Card (dynamic - tracks actual Sling mounts)
@@ -467,6 +475,86 @@ public class SegmentHttpServer {
                 }
             }
             html.append("</div>\n");
+            
+            // DAG Visualization (only in DAG mode)
+            if (dagConsensusEngine != null) {
+                html.append("<div class='card'>\n");
+                html.append("<h2>🌳 Distributed DAG State</h2>\n");
+                html.append("<div style='background: rgba(0,0,0,0.2); padding: 20px; border-radius: 8px; margin-top: 15px;'>\n");
+                
+                // Get DAG state
+                java.util.Map<String, org.apache.jackrabbit.oak.segment.consensus.dag.DagHead> knownHeads = 
+                    dagConsensusEngine.getKnownHeads();
+                org.apache.jackrabbit.oak.segment.consensus.dag.DagHead myHead = dagConsensusEngine.getMyHead();
+                
+                // Show current state
+                html.append("<div style='margin-bottom: 20px;'>\n");
+                html.append("<div style='font-size: 0.9em; opacity: 0.7; margin-bottom: 10px;'>Current Network State:</div>\n");
+                html.append("<div style='font-family: monospace; font-size: 0.9em;'>\n");
+                
+                for (java.util.Map.Entry<String, org.apache.jackrabbit.oak.segment.consensus.dag.DagHead> entry : knownHeads.entrySet()) {
+                    org.apache.jackrabbit.oak.segment.consensus.dag.DagHead head = entry.getValue();
+                    String validatorUrl = entry.getKey();
+                    boolean isSelf = validatorUrl.equals(myHead.getValidatorUrl());
+                    
+                    String shortRecordId = head.getRecordId() != null && head.getRecordId().length() > 12 
+                        ? head.getRecordId().substring(0, 12) + "..." 
+                        : head.getRecordId();
+                    
+                    String style = isSelf 
+                        ? "background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 10px 15px; margin: 5px 0; border-radius: 6px;" 
+                        : "background: rgba(255,255,255,0.05); padding: 10px 15px; margin: 5px 0; border-radius: 6px; border-left: 3px solid #667eea;";
+                    
+                    html.append("<div style='").append(style).append("'>\n");
+                    html.append("<div style='display: flex; justify-content: space-between; align-items: center;'>\n");
+                    
+                    // Validator name
+                    String validatorName = validatorUrl.contains("validator") 
+                        ? validatorUrl.substring(validatorUrl.indexOf("validator")) 
+                        : "validator";
+                    if (validatorName.contains(":")) {
+                        validatorName = validatorName.split(":")[0];
+                    }
+                    
+                    html.append("<div>\n");
+                    html.append("<span style='font-weight: 600;'>").append(isSelf ? "👑 " : "🗳️  ").append(validatorName);
+                    if (isSelf) html.append(" (ME)");
+                    html.append("</span>\n");
+                    html.append("<div style='font-size: 0.85em; opacity: 0.8; margin-top: 4px;'>HEAD: <code>").append(shortRecordId).append("</code></div>\n");
+                    html.append("</div>\n");
+                    
+                    // Depth badge
+                    html.append("<div style='text-align: right;'>\n");
+                    html.append("<div style='background: rgba(0,0,0,0.3); padding: 4px 12px; border-radius: 12px; font-size: 0.85em;'>\n");
+                    html.append("Depth: <span style='font-weight: 600;'>").append(head.getDepth()).append("</span>\n");
+                    html.append("</div>\n");
+                    
+                    // Show if merge HEAD
+                    if (head.isMerge()) {
+                        html.append("<div style='margin-top: 4px; font-size: 0.75em; color: #fbbf24;'>🔀 MERGE</div>\n");
+                    }
+                    html.append("</div>\n");
+                    
+                    html.append("</div>\n");
+                    html.append("</div>\n");
+                }
+                
+                html.append("</div>\n");
+                html.append("</div>\n");
+                
+                // DAG Status Summary
+                html.append("<div style='margin-top: 15px; padding: 15px; background: rgba(16, 185, 129, 0.1); border-radius: 8px; border-left: 4px solid #10b981;'>\n");
+                html.append("<div style='font-size: 0.9em;'>\n");
+                html.append("<div>✅ <strong>DAG Mode Active</strong></div>\n");
+                html.append("<div style='margin-top: 8px; opacity: 0.8;'>• ").append(knownHeads.size()).append(" active HEADs in network</div>\n");
+                html.append("<div style='opacity: 0.8;'>• Parallel non-conflicting writes proceed independently</div>\n");
+                html.append("<div style='opacity: 0.8;'>• Periodic merges consolidate divergent branches</div>\n");
+                html.append("</div>\n");
+                html.append("</div>\n");
+                
+                html.append("</div>\n");
+                html.append("</div>\n");
+            }
             
             // Explorer Link
             html.append("<div class='card' style='text-align: center; padding: 40px;'>\n");

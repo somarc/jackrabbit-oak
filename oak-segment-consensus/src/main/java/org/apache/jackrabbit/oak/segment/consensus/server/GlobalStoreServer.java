@@ -150,11 +150,15 @@ public class GlobalStoreServer {
                 // Wire DAG engine to HTTP server
                 httpServer.setDagConsensusEngine(dagEngine);
                 
+                // Start automatic merge monitor
+                dagEngine.startAutoMerge();
+                
                 System.out.println("✅ DAG Consensus engine initialized");
                 System.out.println("   - Model: Git-like distributed DAG");
                 System.out.println("   - Total validators: " + (1 + peerUrls.size()));
                 System.out.println("   - Each validator maintains own HEAD");
                 System.out.println("   - Merges require 2/3+ vote");
+                System.out.println("   - Auto-merge: Monitors every 30s for divergence");
                 
             } else {
                 // LINEAR BLOCKCHAIN CONSENSUS (traditional)

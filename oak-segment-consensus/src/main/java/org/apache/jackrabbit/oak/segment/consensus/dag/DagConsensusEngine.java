@@ -257,6 +257,90 @@ public class DagConsensusEngine {
     }
     
     /**
+     * Start automatic merge proposals based on divergence threshold.
+     * Runs in background thread, checking every 30 seconds.
+     */
+    public void startAutoMerge() {
+        Thread autoMergeThread = new Thread(() -> {
+            log.info("🔄 Auto-merge monitor started (checks every 30s)");
+            
+            while (true) {
+                try {
+                    Thread.sleep(30000); // Check every 30 seconds
+                    
+                    int uniqueHeadCount = knownHeads.size();
+                    
+                    if (shouldProposeMerge()) {
+                        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        log.info("🔀 AUTO-MERGE TRIGGERED");
+                        log.info("   Detected {} divergent HEADs", uniqueHeadCount);
+                        log.info("   Threshold: 2 HEADs (exceeded)");
+                        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        
+                        // Collect all HEADs for merge
+                        List<String> headsToMerge = knownHeads.values().stream()
+                            .map(DagHead::getRecordId)
+                            .collect(Collectors.toList());
+                        
+                        // Create merge proposal with economic incentives
+                        MergeProposal mergeProposal = new MergeProposal(selfUrl, headsToMerge, null);
+                        mergeProposal.setProposerWallet("0x" + selfUrl.hashCode()); // Mock wallet from URL hash
+                        
+                        // Calculate complexity based on number of HEADs
+                        int complexity = headsToMerge.size() <= 2 ? 0 : (headsToMerge.size() <= 5 ? 1 : 2);
+                        mergeProposal.setComplexity(complexity);
+                        
+                        // Adjust fees based on complexity
+                        double baseFee = 0.001;
+                        double baseReward = 0.0005;
+                        mergeProposal.setMergeFee(baseFee * (1 + complexity));
+                        mergeProposal.setValidatorReward(baseReward * (1 + complexity * 0.5));
+                        
+                        int validatorCount = peerUrls.size() + 1;
+                        double totalCost = mergeProposal.calculateTotalCost(validatorCount);
+                        
+                        // For now, log the merge proposal
+                        // In production, this would:
+                        // 1. Create actual merged segment in Oak
+                        // 2. Broadcast merge proposal to peers for voting
+                        // 3. If 2/3+ vote yes, apply merge
+                        
+                        log.info("📋 Merge Proposal Details:");
+                        for (int i = 0; i < headsToMerge.size(); i++) {
+                            String head = headsToMerge.get(i);
+                            log.info("   {}. {}", (i + 1), head.substring(0, Math.min(20, head.length())) + "...");
+                        }
+                        log.info("");
+                        log.info("💰 Economic Details:");
+                        log.info("   Merge Fee: {} ETH", String.format("%.4f", mergeProposal.getMergeFee()));
+                        log.info("   Validator Reward: {} ETH per validator", String.format("%.4f", mergeProposal.getValidatorReward()));
+                        log.info("   Total Cost: {} ETH", String.format("%.4f", totalCost));
+                        log.info("   Complexity: {} ({})", complexity, complexity == 0 ? "SIMPLE" : (complexity == 1 ? "MODERATE" : "COMPLEX"));
+                        log.info("   Proposer: {}", mergeProposal.getProposerWallet());
+                        log.info("");
+                        
+                        // Simulate merge (in production, would call Oak merge API)
+                        log.info("✅ Merge proposal logged (production: would trigger consensus vote)");
+                        log.info("   Future: Smart contract would escrow {} ETH", String.format("%.4f", totalCost));
+                        
+                    } else {
+                        log.debug("✓ DAG health check: {} HEADs (threshold: 2, no merge needed)", uniqueHeadCount);
+                    }
+                    
+                } catch (InterruptedException e) {
+                    log.info("Auto-merge monitor interrupted");
+                    break;
+                } catch (Exception e) {
+                    log.error("Error in auto-merge monitor", e);
+                }
+            }
+        }, "dag-auto-merge");
+        
+        autoMergeThread.setDaemon(true);
+        autoMergeThread.start();
+    }
+    
+    /**
      * Get current DAG state summary.
      */
     public String getDagStatus() {

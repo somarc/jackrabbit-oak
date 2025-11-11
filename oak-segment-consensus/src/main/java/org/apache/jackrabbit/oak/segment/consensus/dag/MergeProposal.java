@@ -41,6 +41,13 @@ public class MergeProposal {
     private String mockSignature;
     private boolean mockPaymentVerified = true;
     
+    // Economic incentives (smart contract integration ready)
+    private double mergeFee = 0.001;              // ETH fee for proposing merge (covers coordination cost)
+    private double validatorReward = 0.0005;      // ETH reward per validator who votes on merge
+    private String proposerWallet;                // Wallet address of merge proposer
+    private int complexity = 0;                   // Merge complexity (0=simple, 1=moderate, 2=complex)
+    private boolean feePaid = false;              // Whether proposer paid the merge fee
+    
     public MergeProposal() {
         this.proposalId = UUID.randomUUID().toString();
         this.sourceHeads = new ArrayList<>();
@@ -148,19 +155,72 @@ public class MergeProposal {
         this.mockPaymentVerified = mockPaymentVerified;
     }
     
+    // Economic incentive getters/setters
+    
+    public double getMergeFee() {
+        return mergeFee;
+    }
+    
+    public void setMergeFee(double mergeFee) {
+        this.mergeFee = mergeFee;
+    }
+    
+    public double getValidatorReward() {
+        return validatorReward;
+    }
+    
+    public void setValidatorReward(double validatorReward) {
+        this.validatorReward = validatorReward;
+    }
+    
+    public String getProposerWallet() {
+        return proposerWallet;
+    }
+    
+    public void setProposerWallet(String proposerWallet) {
+        this.proposerWallet = proposerWallet;
+    }
+    
+    public int getComplexity() {
+        return complexity;
+    }
+    
+    public void setComplexity(int complexity) {
+        this.complexity = complexity;
+    }
+    
+    public boolean isFeePaid() {
+        return feePaid;
+    }
+    
+    public void setFeePaid(boolean feePaid) {
+        this.feePaid = feePaid;
+    }
+    
+    /**
+     * Calculate total cost for this merge proposal.
+     * Cost = merge fee + (validator rewards * number of validators)
+     */
+    public double calculateTotalCost(int validatorCount) {
+        return mergeFee + (validatorReward * validatorCount);
+    }
+    
     @Override
     public String toString() {
         String mergeResult = mergeResultHead != null && mergeResultHead.length() > 8 
             ? mergeResultHead.substring(0, 8) 
             : mergeResultHead;
             
-        return String.format("MergeProposal{id=%s, proposer=%s, sources=%d HEADs, result=%s, strategy=%s, conflicts=%s}",
+        return String.format("MergeProposal{id=%s, proposer=%s, sources=%d HEADs, result=%s, strategy=%s, conflicts=%s, fee=%.4f ETH, reward=%.4f ETH, complexity=%d}",
             proposalId,
             proposerUrl,
             sourceHeads.size(),
             mergeResult,
             mergeStrategy,
-            hasConflicts ? "YES" : "NO"
+            hasConflicts ? "YES" : "NO",
+            mergeFee,
+            validatorReward,
+            complexity
         );
     }
 }
