@@ -23,6 +23,7 @@ import java.util.List;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.util.SegmentReplicator;
+import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -166,6 +167,10 @@ public class LeaderConsensusEngine {
         log.info("   Accepting writes for epoch {}", currentEpoch);
         log.info("   Term ends: {}", new java.util.Date(election.getEpochEndTime()));
         
+        // Record leader election in metrics
+        ConsensusMetrics.recordLeaderElection();
+        ConsensusMetrics.updateLeaderStatus(true, currentEpoch);
+        
         // Stop monitoring followers (we don't monitor ourselves)
         healthMonitor.stopMonitoring();
         
@@ -182,6 +187,9 @@ public class LeaderConsensusEngine {
         log.info("📥 TRANSITIONING TO FOLLOWER");
         log.info("   Current leader: {}", currentLeader);
         log.info("   Will replicate from leader");
+        
+        // Update metrics to reflect follower status
+        ConsensusMetrics.updateLeaderStatus(false, currentEpoch);
         
         // Stop broadcasting heartbeats (only leaders broadcast)
         healthMonitor.stopMonitoring();
@@ -307,6 +315,9 @@ public class LeaderConsensusEngine {
         
         for (String peerUrl : peers) {
             new Thread(() -> {
+                long startTime = System.nanoTime();
+                String targetValidator = peerUrl.replaceAll("https?://", "").split(":")[0];
+                
                 try {
                     URL url = new URL(peerUrl + "/v1/follower/head-update");
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -324,14 +335,24 @@ public class LeaderConsensusEngine {
                     conn.getOutputStream().write(payload.getBytes("UTF-8"));
                     
                     int responseCode = conn.getResponseCode();
+                    double latencySeconds = (System.nanoTime() - startTime) / 1_000_000_000.0;
+                    
                     if (responseCode == 200) {
                         log.debug("   ✅ HEAD broadcast to {}", peerUrl);
+                        ConsensusMetrics.recordReplication(targetValidator, "success", latencySeconds);
                     } else {
                         log.warn("   ⚠️  HEAD broadcast to {}: HTTP {}", peerUrl, responseCode);
+                        ConsensusMetrics.recordReplication(targetValidator, "failure", latencySeconds);
                     }
                     
-                } catch (Exception e) {
+                } catch (java.net.SocketTimeoutException e) {
+                    double latencySeconds = (System.nanoTime() - startTime) / 1_000_000_000.0;
                     log.warn("   ❌ Failed to broadcast to {}: {}", peerUrl, e.getMessage());
+                    ConsensusMetrics.recordReplication(targetValidator, "timeout", latencySeconds);
+                } catch (Exception e) {
+                    double latencySeconds = (System.nanoTime() - startTime) / 1_000_000_000.0;
+                    log.warn("   ❌ Failed to broadcast to {}: {}", peerUrl, e.getMessage());
+                    ConsensusMetrics.recordReplication(targetValidator, "failure", latencySeconds);
                 }
             }, "head-broadcast-" + peerUrl.hashCode()).start();
         }
@@ -361,6 +382,23 @@ public class LeaderConsensusEngine {
     
     public LeaderHealthMonitor getHealthMonitor() {
         return healthMonitor;
+    }
+    
+    /**
+     * Get the number of reachable validators (for metrics).
+     * Returns the number of peer validators we can communicate with.
+     */
+    public int getReachableValidatorCount() {
+        List<String> peers = election.getPeerValidators();
+        return peers != null ? peers.size() : 0;
+    }
+    
+    /**
+     * Get the time of the last heartbeat (for metrics).
+     * Returns the last time we received or sent a heartbeat.
+     */
+    public long getLastHeartbeatTime() {
+        return healthMonitor.getLastHeartbeatTime();
     }
 }
 

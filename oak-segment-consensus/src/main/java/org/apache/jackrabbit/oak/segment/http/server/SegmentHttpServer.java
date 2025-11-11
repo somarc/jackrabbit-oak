@@ -23,6 +23,7 @@ import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
 import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.Vote;
 import org.apache.jackrabbit.oak.segment.consensus.WriteProposal;
+import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.eclipse.jetty.server.Request;
@@ -30,6 +31,10 @@ import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.handler.AbstractHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import io.prometheus.client.CollectorRegistry;
+import io.prometheus.client.exporter.common.TextFormat;
+import io.prometheus.client.hotspot.DefaultExports;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
@@ -155,9 +160,13 @@ public class SegmentHttpServer {
         this.server = new Server(port);
         this.server.setHandler(new SegmentStoreHandler());
         
+        // Initialize Prometheus metrics (JVM metrics: memory, GC, threads, etc.)
+        DefaultExports.initialize();
+        
         log.info("Initialized SegmentHttpServer");
         log.info("   - Port: {}", port);
         log.info("   - Store: {}", this.storeDirectory);
+        log.info("   - Prometheus metrics enabled at /metrics");
     }
     
     /**
@@ -314,9 +323,16 @@ public class SegmentHttpServer {
                     return;
                 }
                 
-                // Health check
+                // Health check (simple)
                 if ("/health".equals(path)) {
                     handleHealth(response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // Deep health check (comprehensive validation)
+                if ("/health/deep".equals(path)) {
+                    handleDeepHealth(response);
                     baseRequest.setHandled(true);
                     return;
                 }
@@ -406,9 +422,16 @@ public class SegmentHttpServer {
                     return;
                 }
                 
-                // Metrics API - Consensus and replication metrics
+                // Metrics API - Consensus and replication metrics (JSON format)
                 if ("/api/metrics".equals(path) && "GET".equals(method)) {
                     handleMetrics(response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // Prometheus Metrics Endpoint - Prometheus format for scraping
+                if ("/metrics".equals(path) && "GET".equals(method)) {
+                    handlePrometheusMetrics(response);
                     baseRequest.setHandled(true);
                     return;
                 }
@@ -1107,6 +1130,131 @@ public class SegmentHttpServer {
         }
         
         /**
+         * Handle comprehensive health check - validates all system components.
+         */
+        private void handleDeepHealth(HttpServletResponse response) throws IOException {
+            response.setContentType("application/json");
+            
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            
+            boolean allHealthy = true;
+            
+            // 1. Check FileStore health
+            json.append("  \"fileStore\": {\n");
+            try {
+                if (fileStore != null) {
+                    String headId = fileStore.getHead().getRecordId().toString10();
+                    json.append("    \"status\": \"UP\",\n");
+                    json.append("    \"head\": \"").append(headId.substring(0, Math.min(16, headId.length()))).append("...\"\n");
+                } else {
+                    json.append("    \"status\": \"DOWN\",\n");
+                    json.append("    \"error\": \"FileStore not initialized\"\n");
+                    allHealthy = false;
+                }
+            } catch (Exception e) {
+                json.append("    \"status\": \"DOWN\",\n");
+                json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+                allHealthy = false;
+            }
+            json.append("  },\n");
+            
+            // 2. Check NodeStore health
+            json.append("  \"nodeStore\": {\n");
+            try {
+                if (nodeStore != null) {
+                    org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
+                    json.append("    \"status\": \"UP\",\n");
+                    json.append("    \"rootExists\": ").append(root != null).append("\n");
+                } else {
+                    json.append("    \"status\": \"DOWN\",\n");
+                    json.append("    \"error\": \"NodeStore not initialized\"\n");
+                    allHealthy = false;
+                }
+            } catch (Exception e) {
+                json.append("    \"status\": \"DOWN\",\n");
+                json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+                allHealthy = false;
+            }
+            json.append("  },\n");
+            
+            // 3. Check disk space
+            json.append("  \"diskSpace\": {\n");
+            try {
+                java.nio.file.FileStore fs = Files.getFileStore(storeDirectory);
+                long totalSpace = fs.getTotalSpace();
+                long usableSpace = fs.getUsableSpace();
+                double usagePercent = ((totalSpace - usableSpace) * 100.0) / totalSpace;
+                
+                boolean diskHealthy = usagePercent < 90.0;  // Alert if > 90% full
+                json.append("    \"status\": \"").append(diskHealthy ? "UP" : "WARN").append("\",\n");
+                json.append("    \"totalGb\": ").append(String.format("%.2f", totalSpace / (1024.0 * 1024.0 * 1024.0))).append(",\n");
+                json.append("    \"usableGb\": ").append(String.format("%.2f", usableSpace / (1024.0 * 1024.0 * 1024.0))).append(",\n");
+                json.append("    \"usagePercent\": ").append(String.format("%.1f", usagePercent)).append("\n");
+                
+                if (!diskHealthy) {
+                    allHealthy = false;
+                }
+            } catch (Exception e) {
+                json.append("    \"status\": \"DOWN\",\n");
+                json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+                allHealthy = false;
+            }
+            json.append("  },\n");
+            
+            // 4. Check consensus engine (if configured)
+            if (leaderConsensusEngine != null) {
+                json.append("  \"consensus\": {\n");
+                try {
+                    json.append("    \"status\": \"UP\",\n");
+                    json.append("    \"mode\": \"leader\",\n");
+                    json.append("    \"role\": \"").append(leaderConsensusEngine.getCurrentRole()).append("\",\n");
+                    json.append("    \"isLeader\": ").append(leaderConsensusEngine.isLeader()).append(",\n");
+                    json.append("    \"epoch\": ").append(leaderConsensusEngine.getCurrentEpoch()).append(",\n");
+                    json.append("    \"reachableValidators\": ").append(leaderConsensusEngine.getReachableValidatorCount()).append("\n");
+                } catch (Exception e) {
+                    json.append("    \"status\": \"DOWN\",\n");
+                    json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+                    allHealthy = false;
+                }
+                json.append("  },\n");
+            } else if (dagConsensusEngine != null) {
+                json.append("  \"consensus\": {\n");
+                json.append("    \"status\": \"UP\",\n");
+                json.append("    \"mode\": \"dag\",\n");
+                json.append("    \"chainHeight\": ").append(dagConsensusEngine.getChainHeight()).append(",\n");
+                json.append("    \"pendingTransactions\": ").append(dagConsensusEngine.getPendingTransactionCount()).append("\n");
+                json.append("  },\n");
+            } else if (consensusEngine != null) {
+                json.append("  \"consensus\": {\n");
+                json.append("    \"status\": \"UP\",\n");
+                json.append("    \"mode\": \"blockchain\",\n");
+                json.append("    \"totalProposals\": ").append(consensusEngine.getTotalProposals()).append(",\n");
+                json.append("    \"successfulProposals\": ").append(consensusEngine.getSuccessfulProposals()).append("\n");
+                json.append("  },\n");
+            }
+            
+            // 5. Check connected clients
+            json.append("  \"clients\": {\n");
+            json.append("    \"status\": \"UP\",\n");
+            json.append("    \"registeredClients\": ").append(registeredClients.size()).append(",\n");
+            json.append("    \"registeredValidators\": ").append(registeredValidators.size()).append("\n");
+            json.append("  },\n");
+            
+            // 6. Overall health
+            json.append("  \"overall\": {\n");
+            json.append("    \"status\": \"").append(allHealthy ? "UP" : "DEGRADED").append("\",\n");
+            json.append("    \"timestamp\": \"").append(new java.util.Date()).append("\"\n");
+            json.append("  }\n");
+            
+            json.append("}\n");
+            
+            // Return 200 if healthy, 503 if degraded
+            response.setStatus(allHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            response.getWriter().write(json.toString());
+        }
+        
+        /**
          * Handle serving a file from the segment store directory.
          */
         private void handleFile(HttpServletRequest request, HttpServletResponse response, String filename, String contentType) throws IOException {
@@ -1752,6 +1900,76 @@ public class SegmentHttpServer {
             json.append("}\n");
             
             response.getWriter().write(json.toString());
+        }
+        
+        /**
+         * Handle GET /metrics - Prometheus metrics endpoint.
+         * 
+         * Returns metrics in Prometheus text format for scraping by Prometheus server.
+         * Includes:
+         * - JVM metrics (memory, GC, threads) from DefaultExports
+         * - Custom Oak consensus metrics from ConsensusMetrics
+         */
+        private void handlePrometheusMetrics(HttpServletResponse response) throws IOException {
+            response.setContentType(TextFormat.CONTENT_TYPE_004);
+            response.setStatus(HttpServletResponse.SC_OK);
+            
+            // Update dynamic metrics before exporting
+            updateDynamicMetrics();
+            
+            // Export all registered metrics in Prometheus format
+            try (Writer writer = response.getWriter()) {
+                TextFormat.write004(writer, CollectorRegistry.defaultRegistry.metricFamilySamples());
+            }
+        }
+        
+        /**
+         * Update dynamic Prometheus metrics from consensus engine state.
+         * Called before each metrics scrape to reflect current state.
+         */
+        private void updateDynamicMetrics() {
+            // Update DAG chain height
+            if (dagConsensusEngine != null) {
+                ConsensusMetrics.dagChainHeight.set(dagConsensusEngine.getChainHeight());
+                ConsensusMetrics.dagPendingTransactions.set(dagConsensusEngine.getPendingTransactionCount());
+            }
+            
+            // Update leader status
+            if (leaderConsensusEngine != null) {
+                ConsensusMetrics.updateLeaderStatus(
+                    leaderConsensusEngine.isLeader(),
+                    leaderConsensusEngine.getCurrentEpoch()
+                );
+                ConsensusMetrics.validatorsReachable.set(leaderConsensusEngine.getReachableValidatorCount());
+                ConsensusMetrics.timeSinceLastHeartbeat.set(
+                    (System.currentTimeMillis() - leaderConsensusEngine.getLastHeartbeatTime()) / 1000.0
+                );
+            }
+            
+            // Update storage metrics
+            try {
+                long segmentCount = Files.list(storeDirectory.resolve("data"))
+                    .filter(p -> p.toString().endsWith(".tar"))
+                    .count();
+                ConsensusMetrics.segmentsStoredTotal.set(segmentCount);
+                
+                long diskUsage = Files.walk(storeDirectory)
+                    .filter(Files::isRegularFile)
+                    .mapToLong(p -> {
+                        try {
+                            return Files.size(p);
+                        } catch (IOException e) {
+                            return 0;
+                        }
+                    })
+                    .sum();
+                ConsensusMetrics.segmentsDiskUsageBytes.set(diskUsage);
+            } catch (IOException e) {
+                log.warn("Failed to update storage metrics", e);
+            }
+            
+            // Update active connections (approximation via registered clients)
+            ConsensusMetrics.activeConnections.set(registeredClients.size() + registeredValidators.size());
         }
         
         /**

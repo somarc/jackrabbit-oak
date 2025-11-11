@@ -106,6 +106,14 @@ public class LeaderHealthMonitor {
     }
     
     /**
+     * Get the timestamp of the last heartbeat (for metrics).
+     * @return The last heartbeat time in milliseconds since epoch
+     */
+    public long getLastHeartbeatTime() {
+        return lastHeartbeatTime;
+    }
+    
+    /**
      * Start monitoring thread (for followers).
      * This thread periodically checks if the leader is still alive.
      */

@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.Segment;
 import org.apache.jackrabbit.oak.segment.SegmentId;
 import org.apache.jackrabbit.oak.segment.SegmentNodeState;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -191,9 +192,14 @@ public class ConsensusEngine {
         if (consensusReached) {
             successfulProposals++;
             
+            // Record Prometheus metrics for successful consensus
+            ConsensusMetrics.recordConsensusOperation("committed", consensusTime / 1000.0);
+            
             // BLOCKCHAIN CONSENSUS: Increment chain height after successful write
             synchronized (chainLock) {
                 long newHeight = chainHeight.incrementAndGet();
+                // Note: dagChainHeight metric is for DAG mode only, not blockchain mode
+                // Blockchain height could be exposed as a separate metric in the future
                 log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 log.info("🎉 CONSENSUS REACHED! Chain height: {} → {}", newHeight - 1, newHeight);
                 log.info("   Votes: {}/{} ACCEPT ({}/{})",
@@ -206,6 +212,8 @@ public class ConsensusEngine {
             }
         } else {
             failedProposals++;
+            // Record Prometheus metrics for failed consensus
+            ConsensusMetrics.recordConsensusOperation("timeout", consensusTime / 1000.0);
             log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             log.warn("❌ CONSENSUS FAILED (timeout)");
             log.warn("   Votes: {}/{} ACCEPT", state.getAcceptCount(), state.getTotalValidators());

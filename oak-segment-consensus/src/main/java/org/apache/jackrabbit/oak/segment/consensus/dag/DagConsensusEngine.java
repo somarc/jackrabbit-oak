@@ -929,5 +929,27 @@ public class DagConsensusEngine {
     public List<String> getPeerUrls() {
         return peerUrls;
     }
+    
+    /**
+     * Get the current chain height (depth) for metrics.
+     * In DAG mode, this returns the depth of our current HEAD.
+     */
+    public long getChainHeight() {
+        return myHead != null ? myHead.getDepth() : 0;
+    }
+    
+    /**
+     * Get pending transaction count for metrics.
+     * In DAG mode, "pending" means divergent HEADs that need merging.
+     * Returns the number of unique HEADs minus 1 (all converged = 0 pending).
+     */
+    public int getPendingTransactionCount() {
+        java.util.Set<String> uniqueRecordIds = knownHeads.values().stream()
+            .map(DagHead::getRecordId)
+            .collect(java.util.stream.Collectors.toSet());
+        
+        // If all validators at same HEAD, no pending merges
+        return Math.max(0, uniqueRecordIds.size() - 1);
+    }
 }
 
