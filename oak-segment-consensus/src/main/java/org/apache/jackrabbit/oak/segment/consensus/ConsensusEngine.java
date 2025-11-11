@@ -252,69 +252,148 @@ public class ConsensusEngine {
      * 
      * This is the CRITICAL segment replication logic. It:
      * 1. Parses the HEAD RecordId to find the root segment
-     * 2. Fetches that segment from the peer
-     * 3. Recursively fetches all referenced segments
+     * 2. Recursively fetches that segment and all referenced segments (DFS)
+     * 3. Uses topological ordering (like Oak's Cold Standby)
      * 
-     * For Phase 1, we use a simplified approach:
-     * - We fetch the HEAD segment and a reasonable set of recent segments
-     * - Oak's HTTP persistence will lazy-load any others on-demand
+     * This ensures we have the complete segment graph needed to read the HEAD.
      * 
      * @param peerUrl Base URL of peer validator
      * @param headRecordId HEAD RecordId string (format: "uuid:recordNum")
      * @return Number of segments fetched
      */
     private int fetchMissingSegmentsForHead(String peerUrl, String headRecordId) throws IOException {
-        int fetchCount = 0;
-        
         try {
             // Parse the segment UUID from the RecordId
             // Format: "550e8400-e29b-41d4-a716-446655440000:15" or "550e8400-e29b-41d4-a716-446655440000.0000000f"
             String segmentUuid = headRecordId.split("[:\\.]")[0];
             
-            log.debug("HEAD segment UUID: {}", segmentUuid);
+            log.debug("Starting recursive segment fetch for HEAD: {}", segmentUuid);
             
-            // Check if we already have this segment
-            org.apache.jackrabbit.oak.segment.SegmentId sid;
-            try {
-                java.util.UUID uuid = java.util.UUID.fromString(segmentUuid);
-                sid = fileStore.getSegmentIdProvider().newSegmentId(
-                    uuid.getMostSignificantBits(),
-                    uuid.getLeastSignificantBits()
-                );
-            } catch (IllegalArgumentException e) {
-                log.error("Invalid segment UUID format: {}", segmentUuid);
-                throw new IOException("Invalid HEAD RecordId format: " + headRecordId);
+            java.util.UUID uuid = java.util.UUID.fromString(segmentUuid);
+            
+            // Track visited segments to avoid cycles
+            java.util.Set<java.util.UUID> visited = new java.util.HashSet<>();
+            java.util.List<java.util.UUID> fetchOrder = new java.util.ArrayList<>();
+            
+            // DFS traversal to build topological fetch order
+            deriveTopologicalFetchOrder(peerUrl, uuid, visited, fetchOrder);
+            
+            log.info("   Total segments to fetch: {}", fetchOrder.size());
+            
+            // Fetch all segments in topological order
+            for (java.util.UUID segId : fetchOrder) {
+                fetchSegmentFromPeer(peerUrl, segId.toString());
             }
             
-            if (!fileStore.containsSegment(sid)) {
-                // Fetch the HEAD segment
-                fetchSegmentFromPeer(peerUrl, segmentUuid);
-                fetchCount++;
-                log.info("   Fetched HEAD segment: {}", segmentUuid);
-            } else {
-                log.debug("HEAD segment {} already exists locally", segmentUuid);
-            }
-            
-            // For Phase 1: We rely on Oak's lazy loading for referenced segments.
-            // When the HEAD is accessed, Oak will automatically fetch missing segments
-            // via the HTTP persistence layer.
-            //
-            // For Phase 2: We'll implement proper recursive segment traversal here.
+            return fetchOrder.size();
             
         } catch (Exception e) {
             log.error("Failed to fetch segments for HEAD {}: {}", headRecordId, e.getMessage(), e);
             throw new IOException("Segment fetch failed", e);
         }
-        
-        return fetchCount;
     }
     
     /**
-     * Fetch a single segment from a peer via HTTP.
+     * Derive topological fetch order using DFS.
+     * 
+     * This is based on Oak's Cold Standby implementation (StandbyClientSyncExecution).
+     * We traverse the segment graph depth-first, ensuring referenced segments are
+     * fetched before the segments that reference them.
+     * 
+     * @param peerUrl Peer validator URL
+     * @param segmentId Segment UUID to process
+     * @param visited Set of already-visited segments
+     * @param fetchOrder List to accumulate segments in fetch order
+     * @throws IOException if fetch fails
+     */
+    private void deriveTopologicalFetchOrder(
+            String peerUrl, 
+            java.util.UUID segmentId, 
+            java.util.Set<java.util.UUID> visited,
+            java.util.List<java.util.UUID> fetchOrder) throws IOException {
+        
+        // Skip if already visited or already local
+        if (visited.contains(segmentId)) {
+            return;
+        }
+        
+        org.apache.jackrabbit.oak.segment.SegmentId sid = 
+            fileStore.getSegmentIdProvider().newSegmentId(
+                segmentId.getMostSignificantBits(),
+                segmentId.getLeastSignificantBits()
+            );
+        
+        if (fileStore.containsSegment(sid)) {
+            log.debug("Segment {} already exists locally, skipping", segmentId);
+            return;
+        }
+        
+        visited.add(segmentId);
+        log.debug("Visiting segment {}", segmentId);
+        
+        // For data segments, we need to fetch referenced segments first
+        if (org.apache.jackrabbit.oak.segment.SegmentId.isDataSegmentId(segmentId.getLeastSignificantBits())) {
+            // Fetch segment temporarily to read its references
+            byte[] segmentData = fetchSegmentBytes(peerUrl, segmentId.toString());
+            
+            // Parse segment to get referenced segment IDs
+            org.apache.jackrabbit.oak.commons.Buffer buffer = 
+                org.apache.jackrabbit.oak.commons.Buffer.wrap(segmentData);
+            
+            org.apache.jackrabbit.oak.segment.data.SegmentData data = 
+                org.apache.jackrabbit.oak.segment.data.SegmentData.newSegmentData(buffer);
+            
+            int refCount = data.getSegmentReferencesCount();
+            log.debug("Segment {} has {} references", segmentId, refCount);
+            
+            // Recursively fetch all referenced segments first (DFS)
+            for (int i = 0; i < refCount; i++) {
+                long refMsb = data.getSegmentReferenceMsb(i);
+                long refLsb = data.getSegmentReferenceLsb(i);
+                java.util.UUID refId = new java.util.UUID(refMsb, refLsb);
+                
+                log.debug("  Reference: {} -> {}", segmentId, refId);
+                deriveTopologicalFetchOrder(peerUrl, refId, visited, fetchOrder);
+            }
+        }
+        
+        // Add this segment to fetch order (after its references)
+        fetchOrder.add(segmentId);
+    }
+    
+    /**
+     * Fetch segment bytes from peer (without writing to TAR yet).
+     * Used for parsing segment references during DFS traversal.
+     */
+    private byte[] fetchSegmentBytes(String peerUrl, String segmentUuid) throws IOException {
+        String url = peerUrl + "/segments/" + segmentUuid;
+        
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(5000);
+        conn.setReadTimeout(10000);
+        
+        int responseCode = conn.getResponseCode();
+        if (responseCode != 200) {
+            throw new IOException("Failed to fetch segment " + segmentUuid + " from " + peerUrl + ": HTTP " + responseCode);
+        }
+        
+        byte[] data = conn.getInputStream().readAllBytes();
+        conn.disconnect();
+        
+        return data;
+    }
+    
+    /**
+     * Fetch a single segment from a peer via HTTP and write it to our TAR files.
+     * 
+     * This is the CRITICAL piece - we fetch the segment bytes and then call
+     * FileStore.writeSegment() to persist them to TAR files, just like Oak
+     * does when writing local segments.
      * 
      * @param peerUrl Base URL of peer
      * @param segmentUuid UUID of segment (without record number)
-     * @throws IOException if fetch fails
+     * @throws IOException if fetch or write fails
      */
     private void fetchSegmentFromPeer(String peerUrl, String segmentUuid) throws IOException {
         String url = peerUrl + "/segments/" + segmentUuid;
@@ -331,15 +410,31 @@ public class ConsensusEngine {
             throw new IOException("Failed to fetch segment " + segmentUuid + " from " + peerUrl + ": HTTP " + responseCode);
         }
         
-        // Read segment bytes
+        // Read segment bytes from peer
         byte[] segmentData = conn.getInputStream().readAllBytes();
-        log.debug("Fetched segment {} ({} bytes)", segmentUuid, segmentData.length);
-        
-        // NOTE: For Phase 1, we're just caching the segment in memory/HTTP layer.
-        // Oak's FileStore will lazy-load it when needed.
-        // For Phase 2, we'll write it explicitly to the TAR files.
+        log.info("📥 Fetched segment {} from {} ({} bytes)", segmentUuid, peerUrl, segmentData.length);
         
         conn.disconnect();
+        
+        // CRITICAL: Write the segment to our TAR files!
+        // This is the same path Oak uses when writing local segments.
+        try {
+            java.util.UUID uuid = java.util.UUID.fromString(segmentUuid);
+            org.apache.jackrabbit.oak.segment.SegmentId segmentId = 
+                fileStore.getSegmentIdProvider().newSegmentId(
+                    uuid.getMostSignificantBits(),
+                    uuid.getLeastSignificantBits()
+                );
+            
+            // Write to FileStore - this persists to TAR files AND updates the cache
+            fileStore.writeSegment(segmentId, segmentData, 0, segmentData.length);
+            
+            log.info("💾 Segment {} written to TAR files", segmentUuid);
+            
+        } catch (Exception e) {
+            log.error("Failed to write segment {} to TAR: {}", segmentUuid, e.getMessage(), e);
+            throw new IOException("Failed to write segment to TAR", e);
+        }
     }
     
     /**
