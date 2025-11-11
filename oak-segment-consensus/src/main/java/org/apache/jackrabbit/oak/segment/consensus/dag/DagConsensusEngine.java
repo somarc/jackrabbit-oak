@@ -311,9 +311,55 @@ public class DagConsensusEngine {
         try {
             log.info("🔀 Creating merge commit in Oak repository...");
             
+            // PHASE 1: FETCH ALL PARENT SEGMENTS (Full Replication)
+            log.info("📦 Replicating segments from parent HEADs...");
+            int totalSegmentsFetched = 0;
+            
+            for (int i = 0; i < proposal.getSourceHeads().size(); i++) {
+                String parentHeadStr = proposal.getSourceHeads().get(i);
+                
+                // Skip if this is our own HEAD (we already have our segments)
+                if (parentHeadStr.equals(fileStore.getHead().getRecordId().toString10())) {
+                    log.info("   Parent {} is local HEAD, skipping fetch", i);
+                    continue;
+                }
+                
+                // Find which validator owns this HEAD
+                String ownerUrl = null;
+                for (Map.Entry<String, DagHead> entry : knownHeads.entrySet()) {
+                    if (entry.getValue().getRecordId().equals(parentHeadStr)) {
+                        ownerUrl = entry.getKey();
+                        break;
+                    }
+                }
+                
+                if (ownerUrl == null || ownerUrl.equals(selfUrl)) {
+                    log.warn("   Parent {} owner unknown or self, skipping", i);
+                    continue;
+                }
+                
+                log.info("   Fetching parent {} from {}", i, ownerUrl);
+                log.info("   HEAD: {}...", parentHeadStr.substring(0, 16));
+                
+                try {
+                    int segmentCount = fetchMissingSegmentsForHead(parentHeadStr, ownerUrl);
+                    totalSegmentsFetched += segmentCount;
+                    log.info("   ✅ Fetched {} segments from {}", segmentCount, ownerUrl);
+                } catch (Exception e) {
+                    log.error("   ❌ Failed to fetch segments from {}: {}", ownerUrl, e.getMessage());
+                    // Continue with merge anyway - partial replication is better than none
+                }
+            }
+            
+            log.info("📊 Total segments replicated: {}", totalSegmentsFetched);
+            log.info("");
+            
             // Get current HEAD before merge
             org.apache.jackrabbit.oak.segment.RecordId oldHead = fileStore.getHead().getRecordId();
             String oldHeadStr = oldHead.toString10();
+            
+            // PHASE 2: CREATE MERGE COMMIT
+            log.info("📝 Creating merge metadata...");
             
             // Create a simple merge marker in the repository
             // In production, this would be a proper 3-way merge of content
@@ -340,9 +386,7 @@ public class DagConsensusEngine {
             }
             
             // Apply the merge (creates new segments)
-            org.apache.jackrabbit.oak.spi.state.NodeState mergedState = rootBuilder.getNodeState();
-            org.apache.jackrabbit.oak.segment.SegmentNodeBuilder segmentBuilder = 
-                (org.apache.jackrabbit.oak.segment.SegmentNodeBuilder) rootBuilder;
+            rootBuilder.getNodeState();  // Force segment creation
             
             // Flush to create new segments and get new HEAD
             fileStore.flush();
@@ -511,6 +555,188 @@ public class DagConsensusEngine {
         }
         
         return status.toString();
+    }
+    
+    // ========================================================================
+    // SEGMENT REPLICATION (Full Replication for DAG Merges)
+    // ========================================================================
+    
+    /**
+     * Fetch all missing segments required to reach a target HEAD.
+     * This is recursive - fetches the HEAD segment and all referenced segments.
+     * 
+     * @param targetHeadStr The RecordId string of the target HEAD
+     * @param peerUrl The URL of the peer validator to fetch from
+     * @return Number of segments fetched
+     * @throws Exception if fetching fails
+     */
+    private int fetchMissingSegmentsForHead(String targetHeadStr, String peerUrl) throws Exception {
+        log.info("      🔄 Recursively fetching segments for HEAD: {}...", targetHeadStr.substring(0, 12));
+        
+        // Parse RecordId to get segment UUID
+        // Oak RecordIds can be either "uuid:offset" or "uuid.offsetHex" depending on toString vs toString10
+        // We need just the UUID part
+        String rootSegmentId;
+        if (targetHeadStr.contains(":")) {
+            // Format: "uuid:offset"
+            rootSegmentId = targetHeadStr.split(":")[0];
+        } else if (targetHeadStr.contains(".")) {
+            // Format: "uuid.offsetHex" (from toString10)
+            rootSegmentId = targetHeadStr.split("\\.")[0];
+        } else {
+            // Assume it's just a UUID
+            rootSegmentId = targetHeadStr;
+        }
+        
+        // Use a set to track visited segments (avoid duplicates)
+        java.util.Set<String> visited = new java.util.HashSet<>();
+        java.util.List<String> fetchOrder = new java.util.ArrayList<>();
+        
+        // DFS traversal to find all referenced segments
+        fetchSegmentRecursive(rootSegmentId, peerUrl, visited, fetchOrder);
+        
+        log.info("      📊 Segment graph traversal complete: {} segments", fetchOrder.size());
+        
+        // Now fetch and write segments in order (leaves first, root last)
+        int successCount = 0;
+        for (String segmentId : fetchOrder) {
+            try {
+                byte[] segmentData = fetchSegmentBytes(segmentId, peerUrl);
+                
+                // Validate segment data before writing
+                org.apache.jackrabbit.oak.commons.Buffer buffer = 
+                    org.apache.jackrabbit.oak.commons.Buffer.wrap(segmentData);
+                
+                // Use Oak's SegmentData to parse and validate
+                org.apache.jackrabbit.oak.segment.data.SegmentData.newSegmentData(buffer);
+                
+                // Write to our FileStore
+                java.util.UUID uuid = java.util.UUID.fromString(segmentId);
+                org.apache.jackrabbit.oak.segment.SegmentId oakSegmentId = 
+                    fileStore.getSegmentIdProvider().newSegmentId(
+                        uuid.getMostSignificantBits(),
+                        uuid.getLeastSignificantBits()
+                    );
+                fileStore.writeSegment(oakSegmentId, segmentData, 0, segmentData.length);
+                
+                successCount++;
+                
+            } catch (Exception e) {
+                log.warn("      ⚠️  Failed to fetch segment {}: {}", 
+                    segmentId.substring(0, 8), e.getMessage());
+            }
+        }
+        
+        log.info("      ✅ Successfully replicated {}/{} segments", successCount, fetchOrder.size());
+        
+        // Flush to ensure all segments are persisted
+        fileStore.flush();
+        
+        return successCount;
+    }
+    
+    /**
+     * Recursively traverse the segment graph via DFS.
+     */
+    private void fetchSegmentRecursive(String segmentId, String peerUrl, 
+            java.util.Set<String> visited, java.util.List<String> fetchOrder) throws Exception {
+        
+        if (visited.contains(segmentId)) {
+            return; // Already processed
+        }
+        
+        visited.add(segmentId);
+        
+        // Check if we already have this segment locally
+        try {
+            java.util.UUID uuid = java.util.UUID.fromString(segmentId);
+            org.apache.jackrabbit.oak.segment.SegmentId oakSegmentId = 
+                fileStore.getSegmentIdProvider().newSegmentId(
+                    uuid.getMostSignificantBits(),
+                    uuid.getLeastSignificantBits()
+                );
+            if (fileStore.containsSegment(oakSegmentId)) {
+                log.debug("      ⏭️  Segment {} already exists locally", segmentId.substring(0, 8));
+                return; // Already have it
+            }
+        } catch (Exception e) {
+            // Continue - we'll try to fetch it
+        }
+        
+        // Fetch the segment data to parse its references
+        byte[] segmentData = fetchSegmentBytes(segmentId, peerUrl);
+        
+        if (segmentData != null && segmentData.length > 0) {
+            try {
+                // Parse to find referenced segments
+                org.apache.jackrabbit.oak.commons.Buffer buffer = 
+                    org.apache.jackrabbit.oak.commons.Buffer.wrap(segmentData);
+                
+                org.apache.jackrabbit.oak.segment.data.SegmentData parsed = 
+                    org.apache.jackrabbit.oak.segment.data.SegmentData.newSegmentData(buffer);
+                
+                // Get count of referenced segments
+                int refCount = parsed.getSegmentReferencesCount();
+                
+                // Recursively fetch referenced segments first (DFS - leaves before parents)
+                for (int i = 0; i < refCount; i++) {
+                    long refMsb = parsed.getSegmentReferenceMsb(i);
+                    long refLsb = parsed.getSegmentReferenceLsb(i);
+                    java.util.UUID refUuid = new java.util.UUID(refMsb, refLsb);
+                    fetchSegmentRecursive(refUuid.toString(), peerUrl, visited, fetchOrder);
+                }
+                
+            } catch (Exception e) {
+                log.warn("      ⚠️  Failed to parse segment {}: {}", 
+                    segmentId.substring(0, 8), e.getMessage());
+            }
+        }
+        
+        // Add this segment to fetch order AFTER its dependencies
+        fetchOrder.add(segmentId);
+    }
+    
+    /**
+     * Fetch raw segment bytes from a peer validator.
+     * 
+     * @param segmentId The segment UUID (just the UUID part, without any suffix)
+     * @param peerUrl The base URL of the peer validator
+     * @return The segment bytes
+     * @throws Exception if fetching fails
+     */
+    private byte[] fetchSegmentBytes(String segmentId, String peerUrl) throws Exception {
+        // Segment endpoint expects just the UUID, not the full RecordId
+        // So if we have "906af191-cb44-48a9-a59e-1f515d257025.00000018", 
+        // we need to extract just "906af191-cb44-48a9-a59e-1f515d257025"
+        String uuidPart = segmentId;
+        if (segmentId.contains(".")) {
+            uuidPart = segmentId.split("\\.")[0];
+        }
+        
+        String segmentUrl = peerUrl + "/segments/" + uuidPart;
+        
+        java.net.URL url = new java.net.URL(segmentUrl);
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(5000);
+        conn.setReadTimeout(10000);
+        
+        int responseCode = conn.getResponseCode();
+        if (responseCode != 200) {
+            throw new Exception("HTTP " + responseCode + " from " + segmentUrl);
+        }
+        
+        // Read segment data
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        try (java.io.InputStream is = conn.getInputStream()) {
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = is.read(buffer)) != -1) {
+                baos.write(buffer, 0, bytesRead);
+            }
+        }
+        
+        return baos.toByteArray();
     }
     
     // Getters
