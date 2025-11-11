@@ -748,5 +748,9 @@ public class DagConsensusEngine {
     public Map<String, DagHead> getKnownHeads() {
         return knownHeads;
     }
+    
+    public List<String> getPeerUrls() {
+        return peerUrls;
+    }
 }
 

@@ -344,6 +344,8 @@ public class SegmentHttpServer {
             html.append("<meta charset='UTF-8'>\n");
             html.append("<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n");
             html.append("<title>🔗 Oak Segment Consensus - Global Store</title>\n");
+            html.append("<script src='https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js'></script>\n");
+            html.append("<script>mermaid.initialize({ startOnLoad: true, theme: 'dark' });</script>\n");
             html.append("<style>\n");
             html.append("* { margin: 0; padding: 0; box-sizing: border-box; }\n");
             html.append("body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; ");
@@ -367,6 +369,21 @@ public class SegmentHttpServer {
             html.append(".endpoints { display: grid; gap: 10px; margin-top: 15px; }\n");
             html.append(".endpoint { background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; font-size: 0.9em; }\n");
             html.append(".endpoint code { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 3px; }\n");
+            html.append(".tooltip { position: relative; display: inline-block; cursor: help; }\n");
+            html.append(".tooltip .tooltiptext { visibility: hidden; width: 320px; background-color: rgba(0,0,0,0.95); color: #fff; ");
+            html.append("text-align: left; border-radius: 8px; padding: 15px; position: absolute; z-index: 1000; bottom: 125%; ");
+            html.append("left: 50%; margin-left: -160px; opacity: 0; transition: opacity 0.3s; font-size: 0.85em; ");
+            html.append("box-shadow: 0 8px 24px rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1); }\n");
+            html.append(".tooltip .tooltiptext::after { content: ''; position: absolute; top: 100%; left: 50%; margin-left: -5px; ");
+            html.append("border-width: 5px; border-style: solid; border-color: rgba(0,0,0,0.95) transparent transparent transparent; }\n");
+            html.append(".tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }\n");
+            html.append(".mermaid { background: rgba(0,0,0,0.3); border-radius: 12px; padding: 20px; margin: 20px 0; overflow-x: auto; }\n");
+            html.append(".network-graph { background: rgba(0,0,0,0.2); border-radius: 12px; padding: 30px; margin: 20px 0; min-height: 300px; position: relative; }\n");
+            html.append(".validator-node { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 50%; ");
+            html.append("width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; font-size: 1.5em; ");
+            html.append("position: absolute; box-shadow: 0 4px 12px rgba(0,0,0,0.3); cursor: pointer; transition: transform 0.3s; }\n");
+            html.append(".validator-node:hover { transform: scale(1.1); }\n");
+            html.append(".connection-line { stroke: rgba(255,255,255,0.3); stroke-width: 2; stroke-dasharray: 5,5; }\n");
             html.append("</style>\n");
             html.append("<script>\n");
             html.append("// Auto-refresh every 10 seconds\n");
@@ -401,17 +418,33 @@ public class SegmentHttpServer {
             // Validator Network Card (works for both blockchain and DAG mode)
             int validatorCount = 1; // Self
             String consensusType = "Single";
+            String myHeadId = "N/A";
             if (consensusEngine != null) {
                 validatorCount = 1 + consensusEngine.getPeerCount();
                 consensusType = "Blockchain PoA";
             } else if (dagConsensusEngine != null) {
-                validatorCount = 1 + dagConsensusEngine.getKnownHeads().size() - 1; // Self + peers
+                // In DAG mode, show total configured validators (self + peers)
+                validatorCount = 1 + dagConsensusEngine.getPeerUrls().size();
                 consensusType = "Distributed DAG";
+                
+                // Get my current HEAD ID
+                org.apache.jackrabbit.oak.segment.consensus.dag.DagHead myHead = dagConsensusEngine.getMyHead();
+                if (myHead != null && myHead.getRecordId() != null) {
+                    myHeadId = myHead.getRecordId().length() > 16 
+                        ? myHead.getRecordId().substring(0, 16) + "..."
+                        : myHead.getRecordId();
+                }
             }
             html.append("<div class='card'>\n");
             html.append("<h2>🗳️  Validator Network</h2>\n");
             html.append("<div class='stat'>").append(validatorCount).append("</div>\n");
             html.append("<div class='label'>").append(consensusType).append("</div>\n");
+            if (dagConsensusEngine != null) {
+                html.append("<div style='margin-top: 12px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 0.8em;'>\n");
+                html.append("<div style='opacity: 0.7; margin-bottom: 4px;'>My Current HEAD:</div>\n");
+                html.append("<code style='color: #fbbf24; font-weight: 600;'>").append(myHeadId).append("</code>\n");
+                html.append("</div>\n");
+            }
             html.append("</div>\n");
             
             // Connected Peers Card (dynamic - tracks actual Sling mounts)
@@ -487,6 +520,7 @@ public class SegmentHttpServer {
             if (dagConsensusEngine != null) {
                 html.append("<div class='card'>\n");
                 html.append("<h2>🌳 Distributed DAG State</h2>\n");
+                html.append("<p style='opacity: 0.8; margin: 10px 0 20px 0; font-size: 0.9em;'>").append("Git-like distributed consensus - hover over validators for merge details</p>\n");
                 html.append("<div style='background: rgba(0,0,0,0.2); padding: 20px; border-radius: 8px; margin-top: 15px;'>\n");
                 
                 // Get DAG state
@@ -536,9 +570,29 @@ public class SegmentHttpServer {
                     html.append("Depth: <span style='font-weight: 600;'>").append(head.getDepth()).append("</span>\n");
                     html.append("</div>\n");
                     
-                    // Show if merge HEAD
+                    // Show if merge HEAD with tooltip
                     if (head.isMerge()) {
-                        html.append("<div style='margin-top: 4px; font-size: 0.75em; color: #fbbf24;'>🔀 MERGE</div>\n");
+                        html.append("<div class='tooltip' style='margin-top: 4px; font-size: 0.75em; color: #fbbf24;'>");
+                        html.append("🔀 MERGE");
+                        html.append("<span class='tooltiptext'>");
+                        html.append("<strong>Merge Commit Details</strong><br/><br/>");
+                        html.append("This HEAD is a merge of multiple branches.<br/><br/>");
+                        if (head.getParentIds() != null && !head.getParentIds().isEmpty()) {
+                            html.append("<strong>Parents (").append(head.getParentIds().size()).append("):</strong><br/>");
+                            int parentCount = 0;
+                            for (String parentId : head.getParentIds()) {
+                                parentCount++;
+                                String shortParent = parentId != null && parentId.length() > 12 
+                                    ? parentId.substring(0, 12) + "..." 
+                                    : parentId;
+                                html.append("• Parent ").append(parentCount).append(": <code>").append(shortParent).append("</code><br/>");
+                            }
+                            html.append("<br/><em>Segments from all parents have been<br/>replicated and merged into this HEAD.</em>");
+                        } else {
+                            html.append("<em>Merge commit (parent info pending)</em>");
+                        }
+                        html.append("</span>");
+                        html.append("</div>\n");
                     }
                     html.append("</div>\n");
                     
@@ -557,6 +611,62 @@ public class SegmentHttpServer {
                 html.append("<div style='opacity: 0.8;'>• Parallel non-conflicting writes proceed independently</div>\n");
                 html.append("<div style='opacity: 0.8;'>• Periodic merges consolidate divergent branches</div>\n");
                 html.append("</div>\n");
+                html.append("</div>\n");
+                
+                // Mermaid DAG Visualization
+                html.append("<div style='margin-top: 20px;'>\n");
+                html.append("<h3 style='margin-bottom: 15px; font-size: 1.2em;'>📊 Network Topology</h3>\n");
+                html.append("<div class='mermaid'>\n");
+                html.append("graph TD\n");
+                
+                // Build Mermaid graph from knownHeads
+                int nodeIndex = 0;
+                java.util.Map<String, String> nodeIds = new java.util.HashMap<>();
+                
+                for (java.util.Map.Entry<String, org.apache.jackrabbit.oak.segment.consensus.dag.DagHead> entry : knownHeads.entrySet()) {
+                    org.apache.jackrabbit.oak.segment.consensus.dag.DagHead head = entry.getValue();
+                    String validatorUrl = entry.getKey();
+                    
+                    String validatorName = validatorUrl.contains("validator") 
+                        ? validatorUrl.substring(validatorUrl.indexOf("validator")).split(":")[0]
+                        : "V" + nodeIndex;
+                    
+                    String nodeId = "V" + nodeIndex;
+                    nodeIds.put(head.getRecordId(), nodeId);
+                    
+                    String shortHead = head.getRecordId() != null && head.getRecordId().length() > 8 
+                        ? head.getRecordId().substring(0, 8) 
+                        : head.getRecordId();
+                    
+                    // Node definition with styling
+                    String nodeStyle = head.isMerge() ? ":::mergeNode" : ":::normalNode";
+                    html.append("    ").append(nodeId).append("[\"").append(validatorName).append("<br/>").append(shortHead);
+                    html.append("<br/>Depth: ").append(head.getDepth());
+                    if (head.isMerge()) {
+                        html.append("<br/>🔀 MERGE");
+                    }
+                    html.append("\"]").append(nodeStyle).append("\n");
+                    
+                    nodeIndex++;
+                }
+                
+                // Add connections between validators (P2P mesh)
+                java.util.List<String> validatorNames = new java.util.ArrayList<>();
+                for (int i = 0; i < nodeIds.size(); i++) {
+                    validatorNames.add("V" + i);
+                }
+                for (int i = 0; i < validatorNames.size(); i++) {
+                    for (int j = i + 1; j < validatorNames.size(); j++) {
+                        html.append("    ").append(validatorNames.get(i)).append(" -.->|\"P2P sync\"| ").append(validatorNames.get(j)).append("\n");
+                    }
+                }
+                
+                // Styling for nodes
+                html.append("    classDef normalNode fill:#667eea,stroke:#fff,stroke-width:2px,color:#fff\n");
+                html.append("    classDef mergeNode fill:#fbbf24,stroke:#fff,stroke-width:3px,color:#000\n");
+                
+                html.append("</div>\n");
+                html.append("<p style='font-size: 0.85em; opacity: 0.7; margin-top: 10px; text-align: center;'>").append("Dotted lines show peer-to-peer connections | Yellow nodes are merge commits</p>\n");
                 html.append("</div>\n");
                 
                 html.append("</div>\n");
