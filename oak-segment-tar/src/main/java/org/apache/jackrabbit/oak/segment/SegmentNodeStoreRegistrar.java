@@ -511,6 +511,18 @@ class SegmentNodeStoreRegistrar {
     private SegmentNodeStore registerReadOnlySegmentStore(FileStoreBuilder builder) throws IOException {
         cfg.getLogger().info("Creating ReadOnlyFileStore for composite mount: {}", cfg.getRole());
         
+        // ReadOnlyFileStore.buildReadOnly() validates that the directory EXISTS
+        // Unlike FileStore.build() which calls directory.mkdirs(), buildReadOnly() does NOT create the directory
+        // We must create the full segment store directory before calling buildReadOnly()
+        File segmentDir = cfg.getSegmentDirectory();
+        if (!segmentDir.exists()) {
+            cfg.getLogger().info("Creating segment store directory for HTTP-backed read-only mount: {}", segmentDir);
+            if (!segmentDir.mkdirs()) {
+                throw new IOException("Failed to create segment store directory: " + segmentDir);
+            }
+            cfg.getLogger().info("✅ Segment store directory created: {}", segmentDir.getAbsolutePath());
+        }
+        
         ReadOnlyFileStore store;
         try {
             store = builder.buildReadOnly();

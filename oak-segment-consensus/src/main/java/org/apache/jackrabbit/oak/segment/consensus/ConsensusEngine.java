@@ -60,6 +60,16 @@ public class ConsensusEngine {
     
     private final Map<String, ProposalState> activeProposals = new ConcurrentHashMap<>();
     
+    // Metrics tracking
+    private final long startTime = System.currentTimeMillis();
+    private volatile long totalProposals = 0;
+    private volatile long successfulProposals = 0;
+    private volatile long failedProposals = 0;
+    private volatile long totalVotesReceived = 0;
+    private volatile long totalSegmentsReplicated = 0;
+    private volatile long totalBytesReplicated = 0;
+    private volatile long totalConsensusTimeMs = 0;
+    
     public ConsensusEngine(FileStore fileStore, String selfUrl, List<String> peerUrls) {
         this.fileStore = fileStore;
         this.selfUrl = selfUrl;
@@ -84,6 +94,47 @@ public class ConsensusEngine {
         return peerUrls.size();
     }
     
+    // Metrics getters
+    public long getUptimeMs() {
+        return System.currentTimeMillis() - startTime;
+    }
+    
+    public long getTotalProposals() {
+        return totalProposals;
+    }
+    
+    public long getSuccessfulProposals() {
+        return successfulProposals;
+    }
+    
+    public long getFailedProposals() {
+        return failedProposals;
+    }
+    
+    public double getConsensusSuccessRate() {
+        return totalProposals > 0 ? (double) successfulProposals / totalProposals * 100.0 : 0.0;
+    }
+    
+    public long getAverageConsensusTimeMs() {
+        return totalProposals > 0 ? totalConsensusTimeMs / totalProposals : 0;
+    }
+    
+    public long getTotalVotesReceived() {
+        return totalVotesReceived;
+    }
+    
+    public long getTotalSegmentsReplicated() {
+        return totalSegmentsReplicated;
+    }
+    
+    public long getTotalBytesReplicated() {
+        return totalBytesReplicated;
+    }
+    
+    public String getSelfUrl() {
+        return selfUrl;
+    }
+    
     /**
      * Propose a write to the network and wait for consensus.
      * 
@@ -91,6 +142,9 @@ public class ConsensusEngine {
      * @return true if consensus reached, false otherwise
      */
     public boolean proposeWrite(WriteProposal proposal) {
+        long startTime = System.currentTimeMillis();
+        totalProposals++;
+        
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         log.info("📤 PROPOSING WRITE: {}", proposal);
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -120,7 +174,12 @@ public class ConsensusEngine {
         // Wait for consensus
         boolean consensusReached = state.awaitConsensus(VOTE_TIMEOUT_SECONDS);
         
+        // Track consensus time and result
+        long consensusTime = System.currentTimeMillis() - startTime;
+        totalConsensusTimeMs += consensusTime;
+        
         if (consensusReached) {
+            successfulProposals++;
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             log.info("🎉 CONSENSUS REACHED!");
             log.info("   Votes: {}/{} ACCEPT ({}/{})",
@@ -128,11 +187,14 @@ public class ConsensusEngine {
                 state.getTotalValidators(),
                 state.getAcceptCount(),
                 state.getTotalValidators());
+            log.info("   Consensus time: {}ms", consensusTime);
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         } else {
+            failedProposals++;
             log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             log.warn("❌ CONSENSUS FAILED (timeout)");
             log.warn("   Votes: {}/{} ACCEPT", state.getAcceptCount(), state.getTotalValidators());
+            log.warn("   Time waited: {}ms", consensusTime);
             log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         }
         
@@ -233,6 +295,7 @@ public class ConsensusEngine {
      * Handle incoming vote from peer.
      */
     public void handleVote(Vote vote) {
+        totalVotesReceived++;
         ProposalState state = activeProposals.get(vote.getProposalId());
         
         if (state != null) {
@@ -413,6 +476,10 @@ public class ConsensusEngine {
         // Read segment bytes from peer
         byte[] segmentData = conn.getInputStream().readAllBytes();
         log.info("📥 Fetched segment {} from {} ({} bytes)", segmentUuid, peerUrl, segmentData.length);
+        
+        // Track replication metrics
+        totalSegmentsReplicated++;
+        totalBytesReplicated += segmentData.length;
         
         conn.disconnect();
         

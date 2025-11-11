@@ -271,6 +271,13 @@ public class SegmentHttpServer {
                     return;
                 }
                 
+                // Metrics API - Consensus and replication metrics
+                if ("/api/metrics".equals(path) && "GET".equals(method)) {
+                    handleMetrics(response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
                 // TEST ENDPOINT - Simulate a write with consensus
                 if ("/v1/test-write".equals(path) && "POST".equals(method)) {
                     handleTestWrite(request, response);
@@ -319,7 +326,7 @@ public class SegmentHttpServer {
             html.append("<html>\n<head>\n");
             html.append("<meta charset='UTF-8'>\n");
             html.append("<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n");
-            html.append("<title>⛓️ Blockchain AEM - Global Store</title>\n");
+            html.append("<title>🔗 Oak Segment Consensus - Global Store</title>\n");
             html.append("<style>\n");
             html.append("* { margin: 0; padding: 0; box-sizing: border-box; }\n");
             html.append("body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; ");
@@ -328,7 +335,7 @@ public class SegmentHttpServer {
             html.append("header { text-align: center; padding: 40px 0; }\n");
             html.append("h1 { font-size: 3em; margin-bottom: 10px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }\n");
             html.append(".subtitle { font-size: 1.2em; opacity: 0.9; }\n");
-            html.append(".grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 30px 0; }\n");
+            html.append(".grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin: 30px 0; max-width: 1400px; }\n");
             html.append(".card { background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); border-radius: 15px; ");
             html.append("padding: 25px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); border: 1px solid rgba(255,255,255,0.2); }\n");
             html.append(".card h2 { font-size: 1.5em; margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }\n");
@@ -353,8 +360,8 @@ public class SegmentHttpServer {
             
             // Header
             html.append("<header>\n");
-            html.append("<h1>⛓️ Blockchain AEM</h1>\n");
-            html.append("<div class='subtitle'>Global Read-Only Oak Repository</div>\n");
+            html.append("<h1>🔗 Oak Segment Consensus</h1>\n");
+            html.append("<div class='subtitle'>Global P2P Oak Repository</div>\n");
             html.append("</header>\n");
             
             // Stats Grid
@@ -389,6 +396,9 @@ public class SegmentHttpServer {
             html.append("<div class='stat'>").append(peerCount).append("</div>\n");
             html.append("<div class='label'>Sling Author Instances</div>\n");
             html.append("</div>\n");
+            
+            // Add dynamic metrics cards via JavaScript
+            html.append("<div id='dynamic-metrics'></div>\n");
             
             html.append("</div>\n"); // End grid
             
@@ -467,6 +477,7 @@ public class SegmentHttpServer {
             html.append("<div class='endpoint'><code>GET /api/explore?path={path}</code> - Browse node tree with properties (JSON)</div>\n");
             html.append("<div class='endpoint'><code>GET /api/segments/tars</code> - TAR files and storage blocks (JSON)</div>\n");
             html.append("<div class='endpoint'><code>GET /api/segments/recent</code> - Recent segment writes from journal (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /api/metrics</code> - Consensus, replication, and system metrics (JSON)</div>\n");
             html.append("<div class='endpoint'><code>GET /health</code> - Health check</div>\n");
             html.append("<div class='endpoint'><code>GET /journal.log</code> - Journal file</div>\n");
             html.append("<div class='endpoint'><code>GET /manifest</code> - Manifest file</div>\n");
@@ -475,6 +486,69 @@ public class SegmentHttpServer {
             html.append("</div>\n");
             
             html.append("</div>\n"); // End container
+            
+            // Add JavaScript for dynamic metrics
+            html.append("<script>\n");
+            html.append("async function loadMetrics() {\n");
+            html.append("  try {\n");
+            html.append("    const response = await fetch('/api/metrics');\n");
+            html.append("    const data = await response.json();\n");
+            html.append("    \n");
+            html.append("    let html = '';\n");
+            html.append("    \n");
+            html.append("    // Consensus Performance Card\n");
+            html.append("    if (data.consensus) {\n");
+            html.append("      html += '<div class=\"card\">';\n");
+            html.append("      html += '<h2>🎯 Consensus Performance</h2>';\n");
+            html.append("      html += '<div class=\"stat\">' + data.consensus.successRate.toFixed(1) + '%</div>';\n");
+            html.append("      html += '<div class=\"label\">Success Rate (' + data.consensus.successfulProposals + '/' + data.consensus.totalProposals + ')</div>';\n");
+            html.append("      html += '<div style=\"margin-top: 10px; font-size: 0.9em; opacity: 0.8;\">⏱️  Avg Consensus: ' + data.consensus.averageConsensusTimeMs + 'ms</div>';\n");
+            html.append("      html += '</div>';\n");
+            html.append("    }\n");
+            html.append("    \n");
+            html.append("    // Replication Metrics Card\n");
+            html.append("    if (data.replication) {\n");
+            html.append("      html += '<div class=\"card\">';\n");
+            html.append("      html += '<h2>🔄 Replication</h2>';\n");
+            html.append("      html += '<div class=\"stat\">' + data.replication.totalSegments + '</div>';\n");
+            html.append("      html += '<div class=\"label\">Segments Replicated (' + data.replication.totalMb + ' MB)</div>';\n");
+            html.append("      html += '</div>';\n");
+            html.append("    }\n");
+            html.append("    \n");
+            html.append("    // System Health Card\n");
+            html.append("    if (data.system) {\n");
+            html.append("      const uptimeSec = Math.floor(data.system.uptimeMs / 1000);\n");
+            html.append("      const uptimeMin = Math.floor(uptimeSec / 60);\n");
+            html.append("      const uptimeHour = Math.floor(uptimeMin / 60);\n");
+            html.append("      const uptimeStr = uptimeHour > 0 ? uptimeHour + 'h ' + (uptimeMin % 60) + 'm' : uptimeMin + 'm';\n");
+            html.append("      html += '<div class=\"card\">';\n");
+            html.append("      html += '<h2>💚 System Health</h2>';\n");
+            html.append("      html += '<div class=\"stat\">' + uptimeStr + '</div>';\n");
+            html.append("      html += '<div class=\"label\">Uptime</div>';\n");
+            html.append("      html += '<div style=\"margin-top: 10px; font-size: 0.9em; opacity: 0.8;\">💾 Memory: ' + data.system.memoryUsedMb + '/' + data.system.memoryMaxMb + ' MB</div>';\n");
+            html.append("      html += '</div>';\n");
+            html.append("    }\n");
+            html.append("    \n");
+            html.append("    // Validator Identity Card\n");
+            html.append("    if (data.validator) {\n");
+            html.append("      html += '<div class=\"card\">';\n");
+            html.append("      html += '<h2>🪪 Validator Identity</h2>';\n");
+            html.append("      html += '<div style=\"font-family: monospace; font-size: 0.85em; word-break: break-all; margin: 10px 0;\">' + data.validator.url + '</div>';\n");
+            html.append("      html += '<div class=\"label\">My Address</div>';\n");
+            html.append("      html += '</div>';\n");
+            html.append("    }\n");
+            html.append("    \n");
+            html.append("    document.getElementById('dynamic-metrics').innerHTML = html;\n");
+            html.append("  } catch (e) {\n");
+            html.append("    console.error('Failed to load metrics:', e);\n");
+            html.append("  }\n");
+            html.append("}\n");
+            html.append("\n");
+            html.append("// Load metrics on page load and refresh every 5 seconds\n");
+            html.append("loadMetrics();\n");
+            html.append("setInterval(loadMetrics, 5000);\n");
+            html.append("</script>\n");
+            
             html.append("</body>\n</html>");
             
             response.getWriter().write(html.toString());
@@ -554,7 +628,7 @@ public class SegmentHttpServer {
             StringBuilder html = new StringBuilder();
             html.append("<!DOCTYPE html>\n<html>\n<head>\n");
             html.append("<meta charset='UTF-8'>\n");
-            html.append("<title>⛓️ Blockchain AEM Explorer</title>\n");
+            html.append("<title>🔗 Oak Segment Consensus Explorer</title>\n");
             html.append("<style>\n");
             html.append("* { margin: 0; padding: 0; box-sizing: border-box; }\n");
             html.append("body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; ");
@@ -674,7 +748,7 @@ public class SegmentHttpServer {
             html.append("</script>\n");
             html.append("</head>\n<body>\n");
             html.append("<div class='header'>\n");
-            html.append("<div class='container'><h1>⛓️ Blockchain AEM Explorer</h1>\n");
+            html.append("<div class='container'><h1>🔗 Oak Segment Consensus Explorer</h1>\n");
             html.append("<div>Content Browser & Segment Inspector</div></div>\n");
             html.append("</div>\n");
             html.append("<div class='container'>\n");
@@ -1114,6 +1188,62 @@ public class SegmentHttpServer {
             
             // Return empty list for now (will be populated when consensus engine is set)
             response.getWriter().write("{\"peers\":[]}");
+        }
+        
+        /**
+         * Handle GET /api/metrics - Return consensus and replication metrics
+         */
+        private void handleMetrics(HttpServletResponse response) throws IOException {
+            response.setContentType("application/json");
+            response.setStatus(HttpServletResponse.SC_OK);
+            
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            
+            // System metrics
+            Runtime runtime = Runtime.getRuntime();
+            long totalMemory = runtime.totalMemory();
+            long freeMemory = runtime.freeMemory();
+            long usedMemory = totalMemory - freeMemory;
+            long maxMemory = runtime.maxMemory();
+            
+            json.append("  \"system\": {\n");
+            json.append("    \"uptimeMs\": ").append(consensusEngine != null ? consensusEngine.getUptimeMs() : 0).append(",\n");
+            json.append("    \"memoryUsedMb\": ").append(usedMemory / (1024 * 1024)).append(",\n");
+            json.append("    \"memoryTotalMb\": ").append(totalMemory / (1024 * 1024)).append(",\n");
+            json.append("    \"memoryMaxMb\": ").append(maxMemory / (1024 * 1024)).append("\n");
+            json.append("  },\n");
+            
+            // Consensus metrics
+            if (consensusEngine != null) {
+                json.append("  \"consensus\": {\n");
+                json.append("    \"totalProposals\": ").append(consensusEngine.getTotalProposals()).append(",\n");
+                json.append("    \"successfulProposals\": ").append(consensusEngine.getSuccessfulProposals()).append(",\n");
+                json.append("    \"failedProposals\": ").append(consensusEngine.getFailedProposals()).append(",\n");
+                json.append("    \"successRate\": ").append(String.format("%.1f", consensusEngine.getConsensusSuccessRate())).append(",\n");
+                json.append("    \"averageConsensusTimeMs\": ").append(consensusEngine.getAverageConsensusTimeMs()).append(",\n");
+                json.append("    \"totalVotesReceived\": ").append(consensusEngine.getTotalVotesReceived()).append("\n");
+                json.append("  },\n");
+                
+                json.append("  \"replication\": {\n");
+                json.append("    \"totalSegments\": ").append(consensusEngine.getTotalSegmentsReplicated()).append(",\n");
+                json.append("    \"totalBytes\": ").append(consensusEngine.getTotalBytesReplicated()).append(",\n");
+                json.append("    \"totalMb\": ").append(String.format("%.2f", consensusEngine.getTotalBytesReplicated() / (1024.0 * 1024.0))).append("\n");
+                json.append("  },\n");
+                
+                json.append("  \"validator\": {\n");
+                json.append("    \"url\": \"").append(consensusEngine.getSelfUrl()).append("\",\n");
+                json.append("    \"peers\": ").append(consensusEngine.getPeerCount()).append("\n");
+                json.append("  }\n");
+            } else {
+                json.append("  \"consensus\": null,\n");
+                json.append("  \"replication\": null,\n");
+                json.append("  \"validator\": null\n");
+            }
+            
+            json.append("}\n");
+            
+            response.getWriter().write(json.toString());
         }
         
         /**
