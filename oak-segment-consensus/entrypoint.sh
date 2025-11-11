@@ -12,6 +12,15 @@ if ! command -v gosu >/dev/null 2>&1; then
     rm -rf /var/lib/apt/lists/*
 fi
 
+# Use JAVA_OPTS if provided (for consensus configuration)
+# JAVA_OPTS should contain -D system properties like:
+# -Dconsensus.enabled=true -Dconsensus.mode=dag -Dconsensus.self.url=...
+JAVA_ARGS=""
+if [ -n "$JAVA_OPTS" ]; then
+    JAVA_ARGS="$JAVA_OPTS"
+fi
+
 # Run Java as user 999
-exec gosu 999:999 java -jar /app/oak-segment-consensus.jar "$@"
+# Format: java [JAVA_OPTS] -jar /app/oak-segment-consensus.jar [CMD args]
+exec gosu 999:999 java $JAVA_ARGS -jar /app/oak-segment-consensus.jar "$@"
 

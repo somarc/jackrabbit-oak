@@ -147,6 +147,11 @@ public class HttpSegmentStoreSync implements Runnable {
         log.info("   ");
         log.info("   📍 Running from oak-segment-tar (Cold Standby pattern)");
         log.info("   ✅ Direct access to ReadOnlyFileStore internals");
+        
+        // Register with validator after successful activation
+        log.info("📞 Calling registerWithValidator()...");
+        registerWithValidator();
+        log.info("📞 registerWithValidator() call completed");
     }
     
     @Deactivate
@@ -215,6 +220,85 @@ public class HttpSegmentStoreSync implements Runnable {
             
         } catch (Exception e) {
             log.warn("Failed to sync from global store", e);
+        }
+    }
+    
+    /**
+     * Register this Sling author instance with the validator.
+     * Called once during activation to inform the validator of this client's presence.
+     */
+    private void registerWithValidator() {
+        try {
+            log.info("📝 Attempting to register with validator: {}", globalStoreUrl);
+            
+            // Get client identifier from system properties or environment
+            String clientId = System.getProperty("sling.instance.id", 
+                System.getProperty("sling.home", "sling-author"));
+            
+            // Extract container/hostname from clientId if it contains path separators
+            if (clientId.contains("/")) {
+                clientId = clientId.substring(clientId.lastIndexOf("/") + 1);
+            }
+            
+            // Try to get hostname from environment (Docker sets HOSTNAME)
+            String hostname = System.getenv("HOSTNAME");
+            if (hostname != null && !hostname.isEmpty()) {
+                clientId = hostname; // Use Docker container name
+            }
+            
+            // Get client URL (default to localhost:8080, can be overridden)
+            String clientUrl = System.getProperty("sling.server.url", "http://localhost:8080");
+            if (hostname != null && !hostname.isEmpty()) {
+                clientUrl = "http://" + hostname + ":8080";
+            }
+            
+            log.info("   Client ID: {}", clientId);
+            log.info("   Client URL: {}", clientUrl);
+            
+            // Construct registration URL
+            String registrationUrl = globalStoreUrl + "/v1/register-client";
+            log.info("   Registration URL: {}", registrationUrl);
+            
+            // Build JSON payload
+            String jsonPayload = String.format(
+                "{\"clientId\":\"%s\",\"clientUrl\":\"%s\"}",
+                clientId.replace("\"", "\\\""),
+                clientUrl.replace("\"", "\\\"")
+            );
+            
+            // Send registration request
+            URL url = new URL(registrationUrl);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(10000);
+            
+            // Write JSON payload
+            try (java.io.OutputStream os = conn.getOutputStream()) {
+                byte[] input = jsonPayload.getBytes(StandardCharsets.UTF_8);
+                os.write(input, 0, input.length);
+            }
+            
+            int responseCode = conn.getResponseCode();
+            if (responseCode == 200) {
+                log.info("✅ Registered with validator: {} (clientId: {})", globalStoreUrl, clientId);
+            } else {
+                log.warn("⚠️  Registration failed: HTTP {} (clientId: {})", responseCode, clientId);
+                // Read error response
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(conn.getErrorStream(), StandardCharsets.UTF_8))) {
+                    String errorLine;
+                    while ((errorLine = reader.readLine()) != null) {
+                        log.warn("   Error response: {}", errorLine);
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            // Non-fatal - registration failure shouldn't prevent sync from working
+            log.warn("⚠️  Failed to register with validator (non-fatal): {}", e.getMessage(), e);
         }
     }
     

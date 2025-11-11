@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 # Copy the fat JAR and entrypoint script
-COPY oak-segment-consensus/target/oak-segment-consensus.jar /app/oak-segment-consensus.jar
-COPY oak-segment-consensus/entrypoint.sh /entrypoint.sh
+COPY target/oak-segment-consensus.jar /app/oak-segment-consensus.jar
+COPY entrypoint.sh /entrypoint.sh
 
 # Create store directory and install gosu
 RUN mkdir -p /var/oak-chain && \

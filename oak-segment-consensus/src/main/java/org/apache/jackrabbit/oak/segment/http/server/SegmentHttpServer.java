@@ -67,12 +67,58 @@ public class SegmentHttpServer {
     private NodeStore nodeStore;  // Oak NodeStore for content browsing
     private ConsensusEngine consensusEngine;  // Linear blockchain consensus
     private org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine dagConsensusEngine;  // Distributed DAG consensus
+    private org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine leaderConsensusEngine;  // Leader-based consensus
+    
+    // Track registered Sling Author clients (deterministic registration)
+    private final java.util.Map<String, ClientRegistration> registeredClients = new java.util.concurrent.ConcurrentHashMap<>();
+    
+    // Track registered validator peers (validator-to-validator registration)
+    private final java.util.Map<String, ValidatorRegistration> registeredValidators = new java.util.concurrent.ConcurrentHashMap<>();
+    
+    // Self URL for this validator (set by GlobalStoreServer)
+    private String selfUrl = "http://localhost:8090";
     
     // Track connected peers (Sling Author instances mounting this store)
     private final java.util.Set<String> connectedPeers = java.util.concurrent.ConcurrentHashMap.newKeySet();
     
     // Track recent writes with metadata (recordId -> WriteMetadata)
     private final java.util.Map<String, WriteMetadata> recentWriteMetadata = new java.util.concurrent.ConcurrentHashMap<>();
+    
+    /**
+     * Client registration information
+     */
+    private static class ClientRegistration {
+        String clientId;        // Unique identifier (e.g., container name)
+        String clientUrl;       // Client's URL/address
+        String walletAddress;   // Wallet address if provided
+        long registeredAt;      // Timestamp
+        long lastSeen;          // Last heartbeat
+        
+        ClientRegistration(String clientId, String clientUrl, String walletAddress) {
+            this.clientId = clientId;
+            this.clientUrl = clientUrl;
+            this.walletAddress = walletAddress;
+            this.registeredAt = System.currentTimeMillis();
+            this.lastSeen = System.currentTimeMillis();
+        }
+    }
+    
+    /**
+     * Validator peer registration information
+     */
+    private static class ValidatorRegistration {
+        String validatorId;     // Unique identifier (e.g., validator-1)
+        String validatorUrl;    // Validator's URL/address
+        long registeredAt;      // Timestamp
+        long lastSeen;          // Last heartbeat
+        
+        ValidatorRegistration(String validatorId, String validatorUrl) {
+            this.validatorId = validatorId;
+            this.validatorUrl = validatorUrl;
+            this.registeredAt = System.currentTimeMillis();
+            this.lastSeen = System.currentTimeMillis();
+        }
+    }
     
     /**
      * Metadata about a write for dashboard display
@@ -130,6 +176,85 @@ public class SegmentHttpServer {
     public void setDagConsensusEngine(org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine engine) {
         this.dagConsensusEngine = engine;
         log.info("🌳 DAG consensus engine configured");
+    }
+    
+    /**
+     * Set the Leader consensus engine (leader-based mode).
+     * Must be called before start() if Leader consensus is needed.
+     */
+    public void setLeaderConsensusEngine(org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine engine) {
+        this.leaderConsensusEngine = engine;
+        log.info("🎖️  Leader consensus engine configured");
+    }
+    
+    /**
+     * Set the self URL for this validator (used for correct display in dashboard).
+     */
+    public void setSelfUrl(String url) {
+        this.selfUrl = url;
+        log.info("Self URL set to: {}", url);
+    }
+    
+    /**
+     * Register this validator with peer validators.
+     * Called during startup to announce this validator's presence to the network.
+     * 
+     * @param validatorId Unique identifier for this validator (e.g., "validator-1")
+     * @param peerUrls List of peer validator URLs to register with
+     */
+    public void registerWithPeers(String validatorId, java.util.List<String> peerUrls) {
+        if (peerUrls == null || peerUrls.isEmpty()) {
+            log.debug("No peer validators configured, skipping registration");
+            return;
+        }
+        
+        log.info("📡 Registering with {} peer validators...", peerUrls.size());
+        
+        for (String peerUrl : peerUrls) {
+            try {
+                // Skip self
+                if (peerUrl.equals(selfUrl)) {
+                    continue;
+                }
+                
+                // Build registration URL
+                String registrationUrl = peerUrl + "/v1/register-validator";
+                
+                // Build JSON payload
+                String jsonPayload = String.format(
+                    "{\"validatorId\":\"%s\",\"validatorUrl\":\"%s\"}",
+                    validatorId.replace("\"", "\\\""),
+                    selfUrl.replace("\"", "\\\"")
+                );
+                
+                // Send registration request
+                java.net.URL url = new java.net.URL(registrationUrl);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(10000);
+                
+                // Write JSON payload
+                try (java.io.OutputStream os = conn.getOutputStream()) {
+                    byte[] input = jsonPayload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+                
+                int responseCode = conn.getResponseCode();
+                if (responseCode == 200) {
+                    log.info("✅ Registered with peer validator: {} ({})", peerUrl, validatorId);
+                } else {
+                    log.warn("⚠️  Failed to register with {}: HTTP {}", peerUrl, responseCode);
+                }
+                
+            } catch (Exception e) {
+                log.warn("⚠️  Failed to register with peer validator {}: {}", peerUrl, e.getMessage());
+            }
+        }
+        
+        log.info("📡 Validator peer registration complete");
     }
     
     /**
@@ -288,6 +413,20 @@ public class SegmentHttpServer {
                     return;
                 }
                 
+                // CLIENT REGISTRATION - Sling authors register when mounting
+                if ("/v1/register-client".equals(path) && ("POST".equals(method) || "PUT".equals(method))) {
+                    handleClientRegistration(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // VALIDATOR REGISTRATION - Validators register with each other
+                if ("/v1/register-validator".equals(path) && ("POST".equals(method) || "PUT".equals(method))) {
+                    handleValidatorRegistration(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
                 // TEST ENDPOINT - Simulate a write with consensus
                 if ("/v1/test-write".equals(path) && "POST".equals(method)) {
                     handleTestWrite(request, response);
@@ -298,6 +437,13 @@ public class SegmentHttpServer {
                 // DAG ENDPOINT - Receive HEAD update from peer (git fetch)
                 if ("/v1/dag/head".equals(path) && "POST".equals(method)) {
                     handleDagHeadUpdate(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // LEADER ENDPOINT - Follower receives HEAD update from leader
+                if ("/v1/follower/head-update".equals(path) && "POST".equals(method)) {
+                    handleFollowerHeadUpdate(request, response);
                     baseRequest.setHandled(true);
                     return;
                 }
@@ -415,10 +561,14 @@ public class SegmentHttpServer {
             html.append("<div class='label'>").append(segmentCount).append(" Segments</div>\n");
             html.append("</div>\n");
             
-            // Validator Network Card (works for both blockchain and DAG mode)
+            // Validator Network Card (works for blockchain, DAG, and Leader mode)
             int validatorCount = 1; // Self
             String consensusType = "Single";
             String myHeadId = "N/A";
+            String myRole = "STANDALONE";
+            String roleColor = "#94a3b8"; // slate
+            String currentLeader = null;
+            
             if (consensusEngine != null) {
                 validatorCount = 1 + consensusEngine.getPeerCount();
                 consensusType = "Blockchain PoA";
@@ -434,26 +584,184 @@ public class SegmentHttpServer {
                         ? myHead.getRecordId().substring(0, 16) + "..."
                         : myHead.getRecordId();
                 }
+            } else if (leaderConsensusEngine != null) {
+                // Leader-based consensus mode
+                validatorCount = 1 + leaderConsensusEngine.getElection().getPeerValidators().size();
+                consensusType = "Leader-Based";
+                
+                if (leaderConsensusEngine.isLeader()) {
+                    myRole = "LEADER";
+                    roleColor = "#fbbf24"; // gold
+                } else {
+                    myRole = "FOLLOWER";
+                    roleColor = "#3b82f6"; // blue
+                }
+                currentLeader = leaderConsensusEngine.getCurrentLeader();
             }
+            
             html.append("<div class='card'>\n");
             html.append("<h2>🗳️  Validator Network</h2>\n");
             html.append("<div class='stat'>").append(validatorCount).append("</div>\n");
             html.append("<div class='label'>").append(consensusType).append("</div>\n");
-            if (dagConsensusEngine != null) {
+            
+            // Leader mode: Show role prominently
+            if (leaderConsensusEngine != null) {
+                html.append("<div style='margin-top: 12px; padding: 10px; background: ").append(roleColor).append("; border-radius: 8px; text-align: center;'>\n");
+                html.append("<div style='font-size: 1.2em; font-weight: 700; color: #fff;'>");
+                if (leaderConsensusEngine.isLeader()) {
+                    html.append("👑 ").append(myRole).append(" 👑");
+                } else {
+                    html.append("📡 ").append(myRole);
+                }
+                html.append("</div>\n");
+                html.append("</div>\n");
+                
+                // Show current leader if we're a follower
+                if (!leaderConsensusEngine.isLeader() && currentLeader != null) {
+                    String leaderName = currentLeader.contains("validator-") 
+                        ? currentLeader.substring(currentLeader.indexOf("validator-")).split(":")[0]
+                        : "unknown";
+                    html.append("<div style='margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 0.8em; text-align: center;'>\n");
+                    html.append("<div style='opacity: 0.8;'>Current Leader:</div>\n");
+                    html.append("<div style='font-weight: 600; color: #fbbf24; margin-top: 4px;'>👑 ").append(leaderName).append("</div>\n");
+                    html.append("</div>\n");
+                }
+                
+                // Leader rewards note
+                if (leaderConsensusEngine.isLeader()) {
+                    html.append("<div style='margin-top: 8px; padding: 8px; background: rgba(251,191,36,0.15); border-radius: 6px; font-size: 0.75em; border-left: 3px solid #fbbf24;'>\n");
+                    html.append("<div style='font-weight: 600; margin-bottom: 4px;'>💰 Leader Rewards:</div>\n");
+                    html.append("<div style='opacity: 0.9; line-height: 1.4;'>Earning all transaction fees during leadership term</div>\n");
+                    html.append("</div>\n");
+                }
+            } else if (dagConsensusEngine != null) {
                 html.append("<div style='margin-top: 12px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 0.8em;'>\n");
                 html.append("<div style='opacity: 0.7; margin-bottom: 4px;'>My Current HEAD:</div>\n");
                 html.append("<code style='color: #fbbf24; font-weight: 600;'>").append(myHeadId).append("</code>\n");
                 html.append("</div>\n");
             }
+            
+            // Show all validators in network (Leader mode only - deterministic from config)
+            if (leaderConsensusEngine != null) {
+                java.util.List<String> allValidators = leaderConsensusEngine.getElection().getAllValidators();
+                html.append("<div style='margin-top: 12px; font-size: 0.75em; opacity: 0.8;'>");
+                html.append("<div style='margin-bottom: 6px; font-weight: 600;'>Validator Network:</div>");
+                
+                for (String validatorUrl : allValidators) {
+                    boolean isSelf = validatorUrl.equals(selfUrl);
+                    String validatorName = validatorUrl.contains("validator-") 
+                        ? validatorUrl.substring(validatorUrl.indexOf("validator-")).split(":")[0]
+                        : validatorUrl;
+                    
+                    html.append("<div style='margin-top: 4px; padding: 4px 8px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; justify-content: space-between; align-items: center;'>");
+                    html.append("<span>");
+                    if (isSelf) {
+                        html.append("🟢 <strong>").append(validatorName).append("</strong> (YOU)");
+                    } else {
+                        html.append("🔵 ").append(validatorName);
+                    }
+                    html.append("</span>");
+                    html.append("</div>");
+                }
+                html.append("</div>");
+            }
             html.append("</div>\n");
             
-            // Connected Peers Card (dynamic - tracks actual Sling mounts)
-            int peerCount = connectedPeers.size();
+            // Connected Peers Card (deterministic - tracks registered Sling authors)
+            int peerCount = registeredClients.size();
             html.append("<div class='card'>\n");
             html.append("<h2>🌐 Connected Peers</h2>\n");
             html.append("<div class='stat'>").append(peerCount).append("</div>\n");
-            html.append("<div class='label'>Sling Author Instances</div>\n");
+            html.append("<div class='label'>Registered Sling Authors</div>\n");
+            
+            // Show registered client details
+            if (!registeredClients.isEmpty()) {
+                html.append("<div style='margin-top: 12px; font-size: 0.75em; opacity: 0.8;'>");
+                html.append("<div style='margin-bottom: 4px;'>Registered Clients:</div>");
+                int shown = 0;
+                for (ClientRegistration reg : registeredClients.values()) {
+                    if (shown >= 5) {
+                        html.append("<div style='margin-top: 4px;'>... and ").append(registeredClients.size() - 5).append(" more</div>");
+                        break;
+                    }
+                    String displayName = reg.clientId;
+                    if (displayName.length() > 20) {
+                        displayName = displayName.substring(0, 17) + "...";
+                    }
+                    html.append("<div style='margin-top: 2px;'>• ").append(escapeHtml(displayName));
+                    if (reg.walletAddress != null && !reg.walletAddress.isEmpty()) {
+                        html.append(" (").append(escapeHtml(reg.walletAddress.substring(0, Math.min(10, reg.walletAddress.length())))).append("...)");
+                    }
+                    html.append("</div>");
+                    shown++;
+                }
+                html.append("</div>");
+            }
             html.append("</div>\n");
+            
+            // Next Leader Election Card (only in Leader mode)
+            if (leaderConsensusEngine != null) {
+                int currentEpoch = leaderConsensusEngine.getCurrentEpoch();
+                int leaderTermSeconds = leaderConsensusEngine.getElection().getLeaderTermSeconds();
+                
+                // Calculate time until next election
+                long epochStartTime = (long) currentEpoch * leaderTermSeconds * 1000L; // Convert to milliseconds
+                long currentTime = System.currentTimeMillis();
+                long nextElectionTime = epochStartTime + (leaderTermSeconds * 1000L);
+                long secondsUntilElection = (nextElectionTime - currentTime) / 1000;
+                
+                // Format time remaining
+                String timeRemaining = "0s";
+                if (secondsUntilElection > 0) {
+                    long minutes = secondsUntilElection / 60;
+                    long seconds = secondsUntilElection % 60;
+                    if (minutes > 0) {
+                        timeRemaining = minutes + "m " + seconds + "s";
+                    } else {
+                        timeRemaining = seconds + "s";
+                    }
+                }
+                
+                html.append("<div class='card'>\n");
+                html.append("<h2>⏱️  Next Leader Election</h2>\n");
+                html.append("<div class='stat' style='font-size: 2em;'>").append(timeRemaining).append("</div>\n");
+                html.append("<div class='label'>").append(leaderTermSeconds).append("s Term Duration</div>\n");
+                
+                // Show epoch info
+                html.append("<div style='margin-top: 12px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 0.8em;'>\n");
+                html.append("<div style='opacity: 0.7; margin-bottom: 4px;'>Current Epoch:</div>\n");
+                html.append("<div style='font-weight: 600; color: #3b82f6;'>").append(currentEpoch).append("</div>\n");
+                html.append("</div>\n");
+                
+                // Calculate next leader (deterministic)
+                int nextEpoch = currentEpoch + 1;
+                int nextLeaderIndex = nextEpoch % validatorCount;
+                java.util.List<String> allValidators = new java.util.ArrayList<>();
+                allValidators.add(selfUrl);
+                allValidators.addAll(leaderConsensusEngine.getElection().getPeerValidators());
+                java.util.Collections.sort(allValidators); // Ensure deterministic ordering
+                
+                if (nextLeaderIndex < allValidators.size()) {
+                    String nextLeaderUrl = allValidators.get(nextLeaderIndex);
+                    String nextLeaderName = nextLeaderUrl.contains("validator-") 
+                        ? nextLeaderUrl.substring(nextLeaderUrl.indexOf("validator-")).split(":")[0]
+                        : "unknown";
+                    boolean willBeMe = nextLeaderUrl.equals(selfUrl);
+                    
+                    html.append("<div style='margin-top: 8px; padding: 8px; background: rgba(59,130,246,0.15); border-radius: 6px; font-size: 0.75em; border-left: 3px solid #3b82f6;'>\n");
+                    html.append("<div style='font-weight: 600; margin-bottom: 4px;'>Next Leader:</div>\n");
+                    html.append("<div style='opacity: 0.9; line-height: 1.4;'>");
+                    if (willBeMe) {
+                        html.append("👑 <strong style='color: #fbbf24;'>YOU</strong> will be the next leader!");
+                    } else {
+                        html.append("👑 ").append(nextLeaderName);
+                    }
+                    html.append("</div>\n");
+                    html.append("</div>\n");
+                }
+                
+                html.append("</div>\n");
+            }
             
             // Add dynamic metrics cards via JavaScript
             html.append("<div id='dynamic-metrics'></div>\n");
@@ -483,6 +791,12 @@ public class SegmentHttpServer {
                         if ("consensus".equals(meta.source)) {
                             badge = "CONSENSUS";
                             badgeColor = "#10b981"; // green
+                        } else if ("dag-local".equals(meta.source)) {
+                            badge = "DAG";
+                            badgeColor = "#fbbf24"; // yellow/gold
+                        } else if ("leader-accepted".equals(meta.source)) {
+                            badge = "CONSENSUS";
+                            badgeColor = "#fbbf24"; // gold for leader writes
                         } else if ("epoch-sync".equals(meta.source)) {
                             badge = "EPOCH";
                             badgeColor = "#3b82f6"; // blue
@@ -1444,12 +1758,84 @@ public class SegmentHttpServer {
          */
         private void handleTestWrite(HttpServletRequest request, HttpServletResponse response) throws IOException {
             // Check if any consensus engine is configured
-            if (consensusEngine == null && dagConsensusEngine == null) {
+            if (consensusEngine == null && dagConsensusEngine == null && leaderConsensusEngine == null) {
                 response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Consensus engine not configured");
                 return;
             }
             
+            // LEADER CHECK: If using leader-based consensus, proxy to leader if we're a follower
+            if (leaderConsensusEngine != null) {
+                if (!leaderConsensusEngine.isLeader()) {
+                    String currentLeader = leaderConsensusEngine.getCurrentLeader();
+                    log.info("📡 FOLLOWER: Proxying write request to leader: {}", currentLeader);
+                    
+                    try {
+                        // Build the full URL with query parameters
+                        StringBuilder leaderUrl = new StringBuilder(currentLeader);
+                        leaderUrl.append("/v1/test-write");
+                        String queryString = request.getQueryString();
+                        if (queryString != null && !queryString.isEmpty()) {
+                            leaderUrl.append("?").append(queryString);
+                        }
+                        
+                        // Forward request to leader
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) 
+                            new java.net.URL(leaderUrl.toString()).openConnection();
+                        conn.setRequestMethod("POST");
+                        conn.setConnectTimeout(5000);
+                        conn.setReadTimeout(10000);
+                        
+                        // Forward headers
+                        String clientId = request.getHeader("X-Client-Id");
+                        if (clientId != null) {
+                            conn.setRequestProperty("X-Client-Id", clientId);
+                        }
+                        conn.setRequestProperty("X-Proxied-By", selfUrl);
+                        
+                        // Get response from leader
+                        int leaderStatus = conn.getResponseCode();
+                        
+                        // Read leader's response
+                        java.io.InputStream inputStream = leaderStatus >= 400 
+                            ? conn.getErrorStream() 
+                            : conn.getInputStream();
+                        
+                        if (inputStream != null) {
+                            java.io.BufferedReader reader = new java.io.BufferedReader(
+                                new java.io.InputStreamReader(inputStream)
+                            );
+                            StringBuilder leaderResponse = new StringBuilder();
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                leaderResponse.append(line);
+                            }
+                            reader.close();
+                            
+                            // Forward leader's response to client
+                            response.setStatus(leaderStatus);
+                            response.setContentType("application/json");
+                            response.setHeader("X-Proxied-From", currentLeader);
+                            response.getWriter().write(leaderResponse.toString());
+                            
+                            log.info("✅ Proxied write to leader - Status: {}", leaderStatus);
+                        }
+                        
+                    } catch (Exception e) {
+                        log.error("❌ Failed to proxy request to leader", e);
+                        response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                        response.setContentType("application/json");
+                        response.getWriter().write(String.format(
+                            "{\"error\":\"Proxy failed\",\"currentLeader\":\"%s\",\"message\":\"Failed to contact leader: %s\"}",
+                            currentLeader, e.getMessage()
+                        ));
+                    }
+                    return;
+                }
+                log.debug("✅ Leader check passed - I am the leader");
+            }
+            
             boolean usingDagMode = (dagConsensusEngine != null);
+            boolean usingLeaderMode = (leaderConsensusEngine != null);
             
             try {
                 // Read wallet-based write parameters
@@ -1478,9 +1864,59 @@ public class SegmentHttpServer {
                     return;
                 }
                 
+                // PATH ENFORCEMENT: Verify client is registered and wallet matches
+                String clientId = request.getHeader("X-Client-Id");
+                if (clientId == null || clientId.isEmpty()) {
+                    clientId = request.getParameter("clientId");
+                }
+                // Fallback to remote address if no client ID provided
+                if (clientId == null || clientId.isEmpty()) {
+                    String remoteAddr = request.getRemoteAddr();
+                    int remotePort = request.getRemotePort();
+                    clientId = remoteAddr + ":" + remotePort;
+                }
+                
+                log.debug("Path enforcement check: clientId={}, registeredClients.size()={}", clientId, registeredClients.size());
+                
+                // Normalize wallet addresses for comparison (case-insensitive)
+                String normalizedWallet = wallet.toLowerCase();
+                
+                // Look up registered client
+                ClientRegistration clientReg = registeredClients.get(clientId);
+                
+                if (clientReg == null) {
+                    // Client not registered - reject write
+                    log.warn("🚫 Write rejected: Client {} not registered", clientId);
+                    log.warn("   Available registered clients: {}", registeredClients.keySet());
+                    response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                        "Client not registered. Please register via /v1/register-client before writing.");
+                    return;
+                }
+                
+                log.debug("Client {} found in registry, wallet: {}", clientId, clientReg.walletAddress);
+                
+                // Verify wallet matches registered client's wallet
+                if (clientReg.walletAddress != null && !clientReg.walletAddress.isEmpty()) {
+                    String registeredWallet = clientReg.walletAddress.toLowerCase();
+                    if (!normalizedWallet.equals(registeredWallet)) {
+                        log.warn("🚫 Write rejected: Wallet mismatch for client {}", clientId);
+                        log.warn("   Requested wallet: {}", normalizedWallet);
+                        log.warn("   Registered wallet: {}", registeredWallet);
+                        response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                            String.format("Path enforcement violation: Client %s can only write to /oak-chain/content/%s/, " +
+                                         "but attempted to write to /oak-chain/content/%s/", 
+                                         clientId, registeredWallet, normalizedWallet));
+                        return;
+                    }
+                } else {
+                    // Client registered but no wallet address - allow write but log warning
+                    log.warn("⚠️  Client {} registered without wallet address - allowing write but path enforcement not possible", clientId);
+                }
+                
                 log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 log.info("🔐 WALLET-BASED WRITE INITIATED");
-                log.info("   Wallet: {}", wallet);
+                log.info("   Client: {} (registered)", clientId);
+                log.info("   Wallet: {} (verified)", wallet);
                 log.info("   Content Type: {}", contentType);
                 log.info("   Message: {}", message);
                 log.info("   Signature: {}...{}", signature.substring(0, Math.min(10, signature.length())), 
@@ -1489,6 +1925,11 @@ public class SegmentHttpServer {
                 
                 // TODO: Real signature verification with Web3j
                 // For now, we accept all signatures starting with "0x"
+                if (!signature.startsWith("0x")) {
+                    log.warn("🚫 Write rejected: Invalid signature format (must start with '0x')");
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid signature format");
+                    return;
+                }
                 log.info("✅ Signature verification: MOCK (accepted)");
                 
                 // Get current HEAD
@@ -1537,7 +1978,7 @@ public class SegmentHttpServer {
                 
                 // Create write proposal with wallet metadata
                 WriteProposal proposal = new WriteProposal(
-                    "http://localhost:8090", // Will be overridden by consensus engine with self URL
+                    selfUrl, // Use actual self URL (set by GlobalStoreServer)
                     previousHead,
                     newHead
                 );
@@ -1549,19 +1990,52 @@ public class SegmentHttpServer {
                 // TODO: Add actual segments to proposal
                 // For Phase 1, we'll rely on validators fetching via HTTP
                 
-                log.info("📤 Processing write via {} mode...", usingDagMode ? "DAG" : "Blockchain");
+                String mode = usingLeaderMode ? "Leader" : (usingDagMode ? "DAG" : "Blockchain");
+                log.info("📤 Processing write via {} mode...", mode);
                 log.info("   Storage path: /oak-chain/content/{}/{}", wallet.toLowerCase(), contentId);
                 
                 boolean success = false;
                 String consensusMode = "";
                 
-                if (usingDagMode) {
+                if (usingLeaderMode) {
+                    // LEADER MODE: Write succeeds immediately (we're the leader), broadcast HEAD to followers
+                    log.info("🎖️  LEADER MODE: Write succeeds (I am leader), broadcasting to followers...");
+                    
+                    // Broadcast new HEAD to all followers
+                    String newHeadStr = fileStore.getHead().getRecordId().toString10();
+                    leaderConsensusEngine.broadcastHeadToFollowers(newHeadStr);
+                    
+                    success = true;
+                    consensusMode = "leader-accepted";
+                    log.info("✅ Leader write complete, HEAD broadcasted to followers");
+                    
+                    // Track write metadata for dashboard (Leader mode)
+                    String recordIdShort = newHead.length() > 20 ? newHead.substring(0, 20) : newHead;
+                    recentWriteMetadata.put(recordIdShort, new WriteMetadata(
+                        newHead,
+                        "leader-accepted",
+                        selfUrl,
+                        System.currentTimeMillis(),
+                        "Leader write: " + contentType + " - " + message
+                    ));
+                    
+                } else if (usingDagMode) {
                     // DAG MODE: Write succeeds immediately, broadcast HEAD update
                     log.info("🌳 DAG MODE: Write succeeds locally (no immediate consensus needed)");
                     dagConsensusEngine.proposeWrite(newHead, "Wallet write: " + contentType + " - " + message);
                     success = true;
                     consensusMode = "dag-local";
                     log.info("✅ Local write complete, HEAD update broadcasted to peers");
+                    
+                    // Track write metadata for dashboard (DAG mode)
+                    String recordIdShort = newHead.length() > 20 ? newHead.substring(0, 20) : newHead;
+                    recentWriteMetadata.put(recordIdShort, new WriteMetadata(
+                        newHead,
+                        "dag-local",
+                        selfUrl,
+                        System.currentTimeMillis(),
+                        "Wallet write: " + contentType + " - " + message
+                    ));
                 } else {
                     // BLOCKCHAIN MODE: Requires consensus before committing
                     log.info("⛓️  BLOCKCHAIN MODE: Proposing to consensus network...");
@@ -1616,6 +2090,168 @@ public class SegmentHttpServer {
             } catch (Exception e) {
                 log.error("❌ Test write failed", e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Test write failed: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle POST/PUT /v1/register-client - Sling authors register when successfully mounting
+         * 
+         * Parameters (JSON body or query params):
+         *   - clientId: Unique identifier (e.g., container name "sling-author-1a")
+         *   - clientUrl: Client's URL/address (e.g., "http://sling-author-1a:8080")
+         *   - walletAddress: Optional wallet address
+         *   - signature: Optional signed message (for future verification)
+         */
+        private void handleClientRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            try {
+                // Read JSON body if present
+                StringBuilder json = new StringBuilder();
+                java.io.BufferedReader reader = request.getReader();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+                
+                String body = json.toString();
+                
+                // Parse parameters (from JSON body or query params)
+                String clientId = null;
+                String clientUrl = null;
+                String walletAddress = null;
+                
+                if (body != null && !body.isEmpty()) {
+                    clientId = extractJsonField(body, "clientId");
+                    clientUrl = extractJsonField(body, "clientUrl");
+                    walletAddress = extractJsonField(body, "walletAddress");
+                }
+                
+                // Fallback to query params if JSON not provided
+                if (clientId == null || clientId.isEmpty()) {
+                    clientId = request.getParameter("clientId");
+                }
+                if (clientUrl == null || clientUrl.isEmpty()) {
+                    clientUrl = request.getParameter("clientUrl");
+                }
+                if (walletAddress == null || walletAddress.isEmpty()) {
+                    walletAddress = request.getParameter("walletAddress");
+                }
+                
+                // Use remote address as fallback
+                if (clientId == null || clientId.isEmpty()) {
+                    String remoteAddr = request.getRemoteAddr();
+                    int remotePort = request.getRemotePort();
+                    clientId = remoteAddr + ":" + remotePort;
+                }
+                if (clientUrl == null || clientUrl.isEmpty()) {
+                    String remoteAddr = request.getRemoteAddr();
+                    int remotePort = request.getRemotePort();
+                    clientUrl = "http://" + remoteAddr + ":" + remotePort;
+                }
+                
+                // Register or update client
+                ClientRegistration registration = registeredClients.get(clientId);
+                if (registration == null) {
+                    registration = new ClientRegistration(clientId, clientUrl, walletAddress);
+                    registeredClients.put(clientId, registration);
+                    log.info("✅ New client registered: {} ({})", clientId, clientUrl);
+                } else {
+                    registration.lastSeen = System.currentTimeMillis();
+                    if (walletAddress != null && !walletAddress.isEmpty()) {
+                        registration.walletAddress = walletAddress;
+                    }
+                    log.debug("Client heartbeat: {} ({})", clientId, clientUrl);
+                }
+                
+                // Return success
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write("{\"success\":true,\"clientId\":\"" + clientId + "\",\"message\":\"Client registered\"}");
+                
+            } catch (Exception e) {
+                log.error("Failed to register client", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Registration failed: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle POST/PUT /v1/register-validator - Validators register with each other
+         * 
+         * Parameters (JSON body or query params):
+         *   - validatorId: Unique identifier (e.g., "validator-1")
+         *   - validatorUrl: Validator's URL/address (e.g., "http://validator-1:8090")
+         */
+        private void handleValidatorRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            try {
+                // Parse JSON body or query parameters
+                String validatorId = null;
+                String validatorUrl = null;
+                
+                // Try JSON body first
+                StringBuilder json = new StringBuilder();
+                java.io.BufferedReader reader = request.getReader();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+                
+                if (json.length() > 0) {
+                    String body = json.toString();
+                    validatorId = extractJsonField(body, "validatorId");
+                    validatorUrl = extractJsonField(body, "validatorUrl");
+                }
+                
+                // Fallback to query parameters
+                if (validatorId == null || validatorId.isEmpty()) {
+                    validatorId = request.getParameter("validatorId");
+                }
+                if (validatorUrl == null || validatorUrl.isEmpty()) {
+                    validatorUrl = request.getParameter("validatorUrl");
+                }
+                
+                // Validate required fields
+                if (validatorId == null || validatorId.isEmpty()) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Missing validatorId");
+                    return;
+                }
+                if (validatorUrl == null || validatorUrl.isEmpty()) {
+                    // Try to infer from request
+                    String remoteAddr = request.getRemoteAddr();
+                    int remotePort = request.getRemotePort();
+                    validatorUrl = "http://" + remoteAddr + ":" + remotePort;
+                }
+                
+                // Don't register self
+                if (validatorUrl.equals(selfUrl)) {
+                    response.setContentType("application/json");
+                    response.setStatus(HttpServletResponse.SC_OK);
+                    response.getWriter().write("{\"success\":true,\"message\":\"Self-registration ignored\"}");
+                    return;
+                }
+                
+                // Register or update validator
+                ValidatorRegistration registration = registeredValidators.get(validatorId);
+                if (registration == null) {
+                    registration = new ValidatorRegistration(validatorId, validatorUrl);
+                    registeredValidators.put(validatorId, registration);
+                    log.info("✅ New validator peer registered: {} ({})", validatorId, validatorUrl);
+                } else {
+                    registration.lastSeen = System.currentTimeMillis();
+                    if (!registration.validatorUrl.equals(validatorUrl)) {
+                        registration.validatorUrl = validatorUrl;
+                        log.info("🔄 Validator peer updated: {} ({})", validatorId, validatorUrl);
+                    } else {
+                        log.debug("Validator heartbeat: {} ({})", validatorId, validatorUrl);
+                    }
+                }
+                
+                // Return success
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write("{\"success\":true,\"validatorId\":\"" + validatorId + "\",\"message\":\"Validator registered\"}");
+                
+            } catch (Exception e) {
+                log.error("Failed to register validator", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Registration failed: " + e.getMessage());
             }
         }
         
@@ -1683,6 +2319,81 @@ public class SegmentHttpServer {
             } catch (Exception e) {
                 log.error("❌ Failed to process HEAD update", e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to process HEAD update: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle POST /v1/follower/head-update - Follower receives HEAD update from leader
+         * 
+         * Parameters (JSON body):
+         *   - head: The new HEAD RecordId from leader
+         *   - epoch: Current epoch number
+         *   - leaderUrl: URL of the current leader
+         */
+        private void handleFollowerHeadUpdate(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            if (leaderConsensusEngine == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Leader consensus not configured");
+                return;
+            }
+            
+            // Only followers should receive HEAD updates
+            if (leaderConsensusEngine.isLeader()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "I am the leader, not a follower");
+                return;
+            }
+            
+            try {
+                // Read JSON body
+                StringBuilder json = new StringBuilder();
+                java.io.BufferedReader reader = request.getReader();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+                
+                String body = json.toString();
+                
+                // Parse HEAD update
+                String head = extractJsonField(body, "head");
+                String epochStr = extractJsonField(body, "epoch");
+                String leaderUrl = extractJsonField(body, "leaderUrl");
+                
+                int epoch = Integer.parseInt(epochStr);
+                
+                // Verify this is from the legitimate leader
+                if (!leaderUrl.equals(leaderConsensusEngine.getCurrentLeader())) {
+                    log.warn("🚫 HEAD update from non-leader: {} (expected: {})", 
+                        leaderUrl, leaderConsensusEngine.getCurrentLeader());
+                    response.sendError(HttpServletResponse.SC_FORBIDDEN, "Not current leader");
+                    return;
+                }
+                
+                log.info("📥 Received HEAD update from leader: {}", leaderUrl);
+                log.info("   HEAD: {}...", head.substring(0, Math.min(16, head.length())));
+                log.info("   Epoch: {}", epoch);
+                
+                // Pull segments for this HEAD from leader
+                try {
+                    int segmentCount = leaderConsensusEngine.pullSegmentsForHead(head, leaderUrl);
+                    log.info("✅ HEAD update complete - replicated {} segments", segmentCount);
+                    
+                    // Return success
+                    response.setContentType("application/json");
+                    response.setStatus(HttpServletResponse.SC_OK);
+                    response.getWriter().write(String.format(
+                        "{\"success\":true,\"message\":\"HEAD replicated\",\"segmentCount\":%d}",
+                        segmentCount
+                    ));
+                } catch (Exception e) {
+                    log.error("❌ Failed to replicate HEAD from leader: {}", e.getMessage());
+                    response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                        "Segment replication failed: " + e.getMessage());
+                }
+                
+            } catch (Exception e) {
+                log.error("❌ Failed to process follower HEAD update", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                    "Failed to process HEAD update: " + e.getMessage());
             }
         }
         

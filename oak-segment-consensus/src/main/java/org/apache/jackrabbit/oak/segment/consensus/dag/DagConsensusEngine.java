@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.dag;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,6 +68,7 @@ public class DagConsensusEngine {
     private static final double CONSENSUS_THRESHOLD = 0.67; // 2/3+ majority
     
     private final FileStore fileStore;
+    private final NodeStore nodeStore;  // Needed for committing merges
     private final String selfUrl;
     private final List<String> peerUrls;
     
@@ -76,8 +78,9 @@ public class DagConsensusEngine {
     // My current HEAD
     private DagHead myHead;
     
-    public DagConsensusEngine(FileStore fileStore, String selfUrl, List<String> peerUrls) {
+    public DagConsensusEngine(FileStore fileStore, NodeStore nodeStore, String selfUrl, List<String> peerUrls) {
         this.fileStore = fileStore;
+        this.nodeStore = nodeStore;
         this.selfUrl = selfUrl;
         this.peerUrls = peerUrls;
         
@@ -290,14 +293,49 @@ public class DagConsensusEngine {
     /**
      * Decide if we should propose a merge.
      * Like Git, we don't merge constantly - only when divergence is significant.
+     * 
+     * Strategy: Only merge if there are NEW writes that haven't been consolidated yet.
+     * Check if the other HEADs are already ancestors of our current HEAD (meaning we've
+     * already merged them in).
      */
     private boolean shouldProposeMerge() {
-        // Get all unique HEADs
-        List<DagHead> uniqueHeads = knownHeads.values().stream()
-            .collect(Collectors.toList());
+        // Get all unique HEAD RecordIds (actual content pointers)
+        java.util.Set<String> uniqueRecordIds = knownHeads.values().stream()
+            .map(DagHead::getRecordId)
+            .collect(java.util.stream.Collectors.toSet());
         
-        // If more than 2 divergent HEADs, consider merging
-        return uniqueHeads.size() > 2;
+        // If all validators point to the same HEAD, no merge needed
+        if (uniqueRecordIds.size() == 1) {
+            log.debug("All validators at same HEAD - no merge needed");
+            return false; // Already converged
+        }
+        
+        // Check if the peer HEADs are already ancestors of my current HEAD
+        // (meaning I've already merged them in)
+        String myHeadId = myHead.getRecordId();
+        List<String> myParents = myHead.getParentIds();
+        
+        if (myParents != null && !myParents.isEmpty()) {
+            // Get peer HEAD IDs (excluding mine)
+            java.util.Set<String> peerHeadIds = knownHeads.values().stream()
+                .filter(head -> !head.getValidatorUrl().equals(selfUrl))
+                .map(DagHead::getRecordId)
+                .collect(java.util.stream.Collectors.toSet());
+            
+            // Check if all peer HEADs are in my parent list (I already merged them)
+            if (myParents.containsAll(peerHeadIds)) {
+                log.debug("Peer HEADs already merged into my HEAD - no merge needed");
+                return false;
+            }
+        }
+        
+        // Check if there are at least 2 truly divergent HEADs
+        if (uniqueRecordIds.size() >= 2) {
+            log.debug("Found {} divergent HEADs - merge needed", uniqueRecordIds.size());
+            return true;
+        }
+        
+        return false;
     }
     
     /**
@@ -358,12 +396,124 @@ public class DagConsensusEngine {
             org.apache.jackrabbit.oak.segment.RecordId oldHead = fileStore.getHead().getRecordId();
             String oldHeadStr = oldHead.toString10();
             
-            // PHASE 2: CREATE MERGE COMMIT
-            log.info("📝 Creating merge metadata...");
+            // PHASE 2: CREATE MERGE COMMIT WITH ACTUAL CONTENT MERGE
+            log.info("📝 Merging content from {} parent HEADs...", proposal.getSourceHeads().size());
             
-            // Create a simple merge marker in the repository
-            // In production, this would be a proper 3-way merge of content
+            // Start with current HEAD as base
             org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = fileStore.getHead().builder();
+            
+            // Ensure oak-chain/content path exists
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder oakChainBuilder = rootBuilder.child("oak-chain");
+            if (!oakChainBuilder.exists()) {
+                oakChainBuilder.setProperty("jcr:primaryType", "nt:unstructured");
+            }
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder contentBuilder = oakChainBuilder.child("content");
+            if (!contentBuilder.exists()) {
+                contentBuilder.setProperty("jcr:primaryType", "nt:unstructured");
+            }
+            
+            // Merge content from each parent HEAD
+            for (int i = 0; i < proposal.getSourceHeads().size(); i++) {
+                String parentHeadStr = proposal.getSourceHeads().get(i);
+                
+                try {
+                    // Parse parent HEAD RecordId
+                    org.apache.jackrabbit.oak.segment.RecordId parentRecordId = 
+                        org.apache.jackrabbit.oak.segment.RecordId.fromString(
+                            fileStore.getSegmentIdProvider(),
+                            parentHeadStr
+                        );
+                    
+                    log.info("   Analyzing parent {} HEAD: {}...", i, parentHeadStr.substring(0, 16));
+                    
+                    // Skip if this is our current HEAD (we already have its content in the builder)
+                    if (fileStore.getHead().getRecordId().equals(parentRecordId)) {
+                        log.info("   Parent {} is current HEAD, skipping (content already in base)", i);
+                        continue;
+                    }
+                    
+                    // Read NodeState from the parent HEAD RecordId
+                    log.info("   Reading parent {} HEAD state...", i);
+                    org.apache.jackrabbit.oak.segment.SegmentNodeState parentHeadState = 
+                        fileStore.getReader().readNode(parentRecordId);
+                    
+                    log.info("   Parent {} HEAD state exists: {}", i, parentHeadState.exists());
+                    log.info("   Parent {} root has {} children", i, parentHeadState.getChildNodeCount(Long.MAX_VALUE));
+                    
+                    // Log what children the parent root actually has
+                    StringBuilder childNames = new StringBuilder();
+                    for (org.apache.jackrabbit.oak.spi.state.ChildNodeEntry entry : parentHeadState.getChildNodeEntries()) {
+                        if (childNames.length() > 0) childNames.append(", ");
+                        childNames.append(entry.getName());
+                    }
+                    log.info("   Parent {} root children: [{}]", i, childNames.toString());
+                    
+                    // Oak's FileStore HEAD points to a "superroot" with a child "root" that is the actual repository root
+                    org.apache.jackrabbit.oak.spi.state.NodeState parentRoot = parentHeadState;
+                    if (parentHeadState.hasChildNode("root")) {
+                        log.info("   Parent {} has 'root' child - navigating to repository root", i);
+                        parentRoot = parentHeadState.getChildNode("root");
+                    }
+                    
+                    log.info("   Parent {} repository root has oak-chain: {}", i, parentRoot.hasChildNode("oak-chain"));
+                    
+                    // Get oak-chain node from the actual repository root
+                    org.apache.jackrabbit.oak.spi.state.NodeState parentOakChain = 
+                        parentRoot.getChildNode("oak-chain");
+                    log.info("   Parent {} oak-chain exists: {}", i, parentOakChain.exists());
+                    
+                    if (!parentOakChain.exists()) {
+                        log.warn("   ⚠️  Parent {} has no oak-chain node", i);
+                        continue;
+                    }
+                    
+                    log.info("   Parent {} oak-chain has content: {}", i, parentOakChain.hasChildNode("content"));
+                    
+                    // Get content from parent HEAD
+                    org.apache.jackrabbit.oak.spi.state.NodeState parentContent = 
+                        parentOakChain.getChildNode("content");
+                    
+                    log.info("   Parent {} content exists: {}", i, parentContent.exists());
+                    if (parentContent.exists()) {
+                        long childCount = parentContent.getChildNodeCount(Long.MAX_VALUE);
+                        log.info("   Parent {} content has {} children", i, childCount);
+                    }
+                    
+                    if (parentContent.exists()) {
+                        log.info("   Merging content from parent {}...", i);
+                        
+                        // Copy all child nodes from parent content to merged content
+                        for (org.apache.jackrabbit.oak.spi.state.ChildNodeEntry entry : parentContent.getChildNodeEntries()) {
+                            String childName = entry.getName();
+                            org.apache.jackrabbit.oak.spi.state.NodeState childState = entry.getNodeState();
+                            
+                            // Only merge if node doesn't exist (simple merge - no conflict resolution yet)
+                            if (!contentBuilder.hasChildNode(childName)) {
+                                log.debug("      Adding node: {}", childName);
+                                org.apache.jackrabbit.oak.spi.state.NodeBuilder childBuilder = contentBuilder.child(childName);
+                                
+                                // Copy properties
+                                for (org.apache.jackrabbit.oak.api.PropertyState prop : childState.getProperties()) {
+                                    childBuilder.setProperty(prop);
+                                }
+                                
+                                // Recursively copy child nodes
+                                copyNodeTree(childState, childBuilder);
+                            } else {
+                                log.debug("      Node {} already exists, skipping (conflict)", childName);
+                            }
+                        }
+                        
+                        log.info("   ✅ Merged content from parent {}", i);
+                    } else {
+                        log.warn("   ⚠️  Parent {} has no content node", i);
+                    }
+                    
+                } catch (Exception e) {
+                    log.error("   ❌ Failed to merge content from parent {}: {}", i, e.getMessage());
+                    // Continue with other parents
+                }
+            }
             
             // Create merge metadata node
             org.apache.jackrabbit.oak.spi.state.NodeBuilder mergeNode = rootBuilder
@@ -385,10 +535,17 @@ public class DagConsensusEngine {
                 mergeNode.setProperty("parent" + i, proposal.getSourceHeads().get(i));
             }
             
-            // Apply the merge (creates new segments)
-            rootBuilder.getNodeState();  // Force segment creation
+            // Commit the merge using NodeStore (this creates new segments and updates HEAD)
+            org.apache.jackrabbit.oak.spi.commit.CommitInfo commitInfo = 
+                new org.apache.jackrabbit.oak.spi.commit.CommitInfo(
+                    "dag-merge",
+                    null,
+                    java.util.Collections.singletonMap("mergeProposalId", proposal.getProposalId())
+                );
             
-            // Flush to create new segments and get new HEAD
+            nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, commitInfo);
+            
+            // Flush to ensure all segments are persisted
             fileStore.flush();
             
             org.apache.jackrabbit.oak.segment.RecordId newHead = fileStore.getHead().getRecordId();
@@ -421,6 +578,26 @@ public class DagConsensusEngine {
         } catch (Exception e) {
             log.error("Failed to execute merge", e);
             return false;
+        }
+    }
+    
+    /**
+     * Recursively copy a node tree from source NodeState to target NodeBuilder.
+     * Used for merging content from parent HEADs.
+     */
+    private void copyNodeTree(org.apache.jackrabbit.oak.spi.state.NodeState source, 
+                             org.apache.jackrabbit.oak.spi.state.NodeBuilder target) {
+        // Copy all properties
+        for (org.apache.jackrabbit.oak.api.PropertyState prop : source.getProperties()) {
+            target.setProperty(prop);
+        }
+        
+        // Recursively copy all child nodes
+        for (org.apache.jackrabbit.oak.spi.state.ChildNodeEntry entry : source.getChildNodeEntries()) {
+            String childName = entry.getName();
+            org.apache.jackrabbit.oak.spi.state.NodeState childState = entry.getNodeState();
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder childBuilder = target.child(childName);
+            copyNodeTree(childState, childBuilder);
         }
     }
     

@@ -107,6 +107,11 @@ public class GlobalStoreServer {
         System.out.println("Starting HTTP server on port " + port + "...");
         try {
             httpServer = new SegmentHttpServer(storeDir, port, fileStore, nodeStore);
+            
+            // Set self URL for correct dashboard display
+            String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
+            httpServer.setSelfUrl(selfUrl);
+            
             httpServer.start();
             System.out.println("✅ HTTP server started");
             System.out.println("   - GET /journal.log - journal file");
@@ -123,7 +128,7 @@ public class GlobalStoreServer {
         
         // Initialize Consensus Engine (Multi-Validator)
         String consensusEnabled = System.getProperty("consensus.enabled", "false");
-        String consensusMode = System.getProperty("consensus.mode", "blockchain"); // blockchain or dag
+        String consensusMode = System.getProperty("consensus.mode", "leader"); // leader, dag, or blockchain
         String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
         String peersConfig = System.getProperty("consensus.peers", "");
         String genesisNode = System.getProperty("consensus.genesis.node", "");  // Boot node for genesis sync
@@ -135,7 +140,51 @@ public class GlobalStoreServer {
             
             List<String> peerUrls = parsePeerUrls(peersConfig);
             
-            if ("dag".equalsIgnoreCase(consensusMode)) {
+            if ("leader".equalsIgnoreCase(consensusMode)) {
+                // LEADER-BASED CONSENSUS (Raft-style)
+                System.out.println("   🎖️  Using Leader-Based Consensus");
+                System.out.println("      - Single leader sequences all writes");
+                System.out.println("      - Followers replicate from leader");
+                System.out.println("      - Leader rotates every 5 minutes");
+                
+                // Get leader term from system property (default: 300 seconds = 5 minutes)
+                int leaderTermSeconds = Integer.parseInt(
+                    System.getProperty("consensus.leader.term.seconds", "300")
+                );
+                
+                org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine leaderEngine = 
+                    new org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine(
+                        fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds
+                    );
+                
+                // Wire leader engine to HTTP server
+                httpServer.setLeaderConsensusEngine(leaderEngine);
+                
+                // Start leader rotation monitor
+                leaderEngine.startRotationMonitor();
+                
+                System.out.println("✅ Leader Consensus engine initialized");
+                System.out.println("   - Model: Leader/Follower (Raft-style)");
+                System.out.println("   - Total validators: " + (1 + peerUrls.size()));
+                System.out.println("   - Leader term: " + leaderTermSeconds + " seconds");
+                System.out.println("   - Current role: " + leaderEngine.getCurrentRole());
+                System.out.println("   - Current leader: " + leaderEngine.getCurrentLeader());
+                
+                // Register with peer validators
+                String validatorId = System.getProperty("consensus.validator.id");
+                if (validatorId == null || validatorId.isEmpty()) {
+                    validatorId = System.getenv("HOSTNAME");
+                    if (validatorId == null || validatorId.isEmpty()) {
+                        if (selfUrl.contains("validator-")) {
+                            validatorId = selfUrl.substring(selfUrl.indexOf("validator-")).split(":")[0];
+                        } else {
+                            validatorId = "validator-unknown";
+                        }
+                    }
+                }
+                httpServer.registerWithPeers(validatorId, peerUrls);
+                
+            } else if ("dag".equalsIgnoreCase(consensusMode)) {
                 // DISTRIBUTED DAG CONSENSUS (like Git)
                 System.out.println("   🌳 Using Distributed DAG Consensus");
                 System.out.println("      - Multiple parallel HEADs allowed");
@@ -144,7 +193,7 @@ public class GlobalStoreServer {
                 
                 org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine dagEngine = 
                     new org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine(
-                        fileStore, selfUrl, peerUrls
+                        fileStore, nodeStore, selfUrl, peerUrls
                     );
                 
                 // Wire DAG engine to HTTP server
@@ -159,6 +208,22 @@ public class GlobalStoreServer {
                 System.out.println("   - Each validator maintains own HEAD");
                 System.out.println("   - Merges require 2/3+ vote");
                 System.out.println("   - Auto-merge: Monitors every 30s for divergence");
+                
+                // Register with peer validators
+                // Try to get validator ID from system property, then HOSTNAME env, then derive from selfUrl
+                String validatorId = System.getProperty("consensus.validator.id");
+                if (validatorId == null || validatorId.isEmpty()) {
+                    validatorId = System.getenv("HOSTNAME");
+                    if (validatorId == null || validatorId.isEmpty()) {
+                        // Derive from selfUrl (e.g., "http://validator-1:8090" -> "validator-1")
+                        if (selfUrl.contains("validator-")) {
+                            validatorId = selfUrl.substring(selfUrl.indexOf("validator-")).split(":")[0];
+                        } else {
+                            validatorId = "validator-unknown";
+                        }
+                    }
+                }
+                httpServer.registerWithPeers(validatorId, peerUrls);
                 
             } else {
                 // LINEAR BLOCKCHAIN CONSENSUS (traditional)
@@ -185,6 +250,20 @@ public class GlobalStoreServer {
                 System.out.println("   - Consensus: Proof-of-Authority");
                 System.out.println("   - Threshold: 2/3+ majority");
                 System.out.println("   - Total validators: " + (1 + peerUrls.size()));
+                
+                // Register with peer validators
+                String validatorId = System.getProperty("consensus.validator.id");
+                if (validatorId == null || validatorId.isEmpty()) {
+                    validatorId = System.getenv("HOSTNAME");
+                    if (validatorId == null || validatorId.isEmpty()) {
+                        if (selfUrl.contains("validator-")) {
+                            validatorId = selfUrl.substring(selfUrl.indexOf("validator-")).split(":")[0];
+                        } else {
+                            validatorId = "validator-unknown";
+                        }
+                    }
+                }
+                httpServer.registerWithPeers(validatorId, peerUrls);
             }
         } else {
             System.out.println();
