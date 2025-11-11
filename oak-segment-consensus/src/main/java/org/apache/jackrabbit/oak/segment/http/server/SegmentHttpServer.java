@@ -295,6 +295,13 @@ public class SegmentHttpServer {
                     return;
                 }
                 
+                // DAG ENDPOINT - Receive HEAD update from peer (git fetch)
+                if ("/v1/dag/head".equals(path) && "POST".equals(method)) {
+                    handleDagHeadUpdate(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
                 // Not found
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 baseRequest.setHandled(true);
@@ -1527,6 +1534,73 @@ public class SegmentHttpServer {
             } catch (Exception e) {
                 log.error("❌ Test write failed", e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Test write failed: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle POST /v1/dag/head - Receive HEAD update from peer (like git fetch)
+         * 
+         * Parameters (JSON body):
+         *   - validatorUrl: URL of the validator sending HEAD
+         *   - recordId: The HEAD RecordId
+         *   - depth: Depth in DAG
+         *   - timestamp: When this HEAD was created
+         *   - parentIds: Parent HEADs (for merge commits)
+         */
+        private void handleDagHeadUpdate(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            if (dagConsensusEngine == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "DAG consensus not configured");
+                return;
+            }
+            
+            try {
+                // Read JSON body
+                StringBuilder json = new StringBuilder();
+                java.io.BufferedReader reader = request.getReader();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+                
+                String body = json.toString();
+                
+                // Parse HEAD update (simple JSON parsing for Phase 1)
+                String validatorUrl = extractJsonField(body, "validatorUrl");
+                String recordId = extractJsonField(body, "recordId");
+                String depthStr = extractJsonField(body, "depth");
+                int depth = Integer.parseInt(depthStr);
+                
+                // Create DagHead from received data
+                org.apache.jackrabbit.oak.segment.consensus.dag.DagHead peerHead = 
+                    new org.apache.jackrabbit.oak.segment.consensus.dag.DagHead(recordId, validatorUrl);
+                peerHead.setDepth(depth);
+                
+                // Parse parent IDs if present
+                String parentsJson = extractJsonField(body, "parentIds");
+                if (parentsJson != null && !parentsJson.isEmpty()) {
+                    // Simple comma-separated parsing
+                    String[] parents = parentsJson.split(",");
+                    for (String parent : parents) {
+                        if (!parent.trim().isEmpty()) {
+                            peerHead.addParent(parent.trim());
+                        }
+                    }
+                }
+                
+                log.info("📥 Received HEAD update from {}", validatorUrl);
+                log.info("   HEAD: {} (depth={})", recordId.substring(0, Math.min(16, recordId.length())) + "...", depth);
+                
+                // Update DAG consensus engine with peer HEAD
+                dagConsensusEngine.handlePeerHeadUpdate(validatorUrl, peerHead);
+                
+                // Return success
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write("{\"success\":true,\"message\":\"HEAD update received\"}");
+                
+            } catch (Exception e) {
+                log.error("❌ Failed to process HEAD update", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to process HEAD update: " + e.getMessage());
             }
         }
         

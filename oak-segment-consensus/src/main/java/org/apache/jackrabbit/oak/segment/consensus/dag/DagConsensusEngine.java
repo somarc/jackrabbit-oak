@@ -219,10 +219,54 @@ public class DagConsensusEngine {
     private void broadcastHeadUpdate() {
         log.info("📡 Broadcasting HEAD update to {} peers", peerUrls.size());
         
-        // TODO: Implement HTTP broadcast
-        // For now, just log
+        // Build JSON payload
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"validatorUrl\":\"").append(selfUrl).append("\",");
+        json.append("\"recordId\":\"").append(myHead.getRecordId()).append("\",");
+        json.append("\"depth\":").append(myHead.getDepth()).append(",");
+        json.append("\"timestamp\":").append(myHead.getTimestamp()).append(",");
+        json.append("\"parentIds\":\"");
+        for (int i = 0; i < myHead.getParentIds().size(); i++) {
+            if (i > 0) json.append(",");
+            json.append(myHead.getParentIds().get(i));
+        }
+        json.append("\"");
+        json.append("}");
+        
+        String payload = json.toString();
+        
+        // Broadcast to all peers asynchronously
         for (String peerUrl : peerUrls) {
-            log.info("   → {}", peerUrl);
+            String endpoint = peerUrl + "/v1/dag/head";
+            
+            // Run in separate thread to avoid blocking
+            new Thread(() -> {
+                try {
+                    java.net.URL url = new java.net.URL(endpoint);
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setDoOutput(true);
+                    
+                    // Send JSON payload
+                    try (java.io.OutputStream os = conn.getOutputStream()) {
+                        byte[] input = payload.getBytes("utf-8");
+                        os.write(input, 0, input.length);
+                    }
+                    
+                    // Check response
+                    int responseCode = conn.getResponseCode();
+                    if (responseCode == 200) {
+                        log.info("   ✅ HEAD sent to {}", peerUrl);
+                    } else {
+                        log.warn("   ⚠️  HEAD send failed to {}: HTTP {}", peerUrl, responseCode);
+                    }
+                    
+                } catch (Exception e) {
+                    log.warn("   ❌ Failed to send HEAD to {}: {}", peerUrl, e.getMessage());
+                }
+            }, "dag-broadcast-" + peerUrl.hashCode()).start();
         }
     }
     
