@@ -19,6 +19,8 @@ package org.apache.jackrabbit.oak.segment.consensus.leader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -33,6 +35,9 @@ import org.slf4j.LoggerFactory;
  * Single leader at any time accepts and sequences all writes.
  * Followers replicate state from leader and serve reads.
  * Leadership rotates automatically based on time epochs.
+ * 
+ * SECURITY: Enforces probationary period for new validators to prevent
+ * join/leave manipulation attacks on leadership.
  */
 public class LeaderConsensusEngine {
     
@@ -41,9 +46,15 @@ public class LeaderConsensusEngine {
     private final FileStore fileStore;
     private final NodeStore nodeStore;
     private final String selfUrl;
-    private final LeaderElection election;
+    private volatile LeaderElection election;  // Changed to volatile for dynamic peer updates
     private final SegmentReplicator replicator;
     private final LeaderHealthMonitor healthMonitor;
+    
+    /**
+     * Track when each validator joined the network (URL -> timestamp).
+     * Used to enforce probationary period before leadership eligibility.
+     */
+    private final Map<String, Long> validatorJoinTimes = new ConcurrentHashMap<>();
     
     private volatile ValidatorRole currentRole;
     private volatile int currentEpoch;
@@ -62,9 +73,19 @@ public class LeaderConsensusEngine {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.selfUrl = selfUrl;
-        this.election = new LeaderElection(selfUrl, peerUrls, leaderTermSeconds);
         this.replicator = new SegmentReplicator(fileStore);
         this.healthMonitor = new LeaderHealthMonitor(selfUrl);
+        
+        // Record join times for self and all initial peers
+        long now = System.currentTimeMillis();
+        validatorJoinTimes.put(selfUrl, now);
+        for (String peerUrl : peerUrls) {
+            // Initial peers are assumed to have joined at the same time (genesis or config)
+            validatorJoinTimes.put(peerUrl, now);
+        }
+        
+        // Create election with join times
+        this.election = new LeaderElection(selfUrl, peerUrls, leaderTermSeconds, validatorJoinTimes);
         
         // Determine initial role
         this.currentEpoch = election.getCurrentEpoch();
@@ -78,6 +99,123 @@ public class LeaderConsensusEngine {
         log.info("   My role: {}", currentRole);
         log.info("   Rotation: every {} seconds", leaderTermSeconds);
         log.info("   Heartbeat: 10s interval, 30s failure threshold");
+        log.info("   🛡️  Probationary period: {} seconds (new validators must be followers)", leaderTermSeconds);
+    }
+    
+    /**
+     * Dynamically add a new peer to the consensus network.
+     * Triggers leader election refresh and role recalculation.
+     * 
+     * This is called when a new validator joins the network and broadcasts
+     * its presence. Enables true dynamic peer discovery.
+     * 
+     * @param peerUrl The URL of the new peer validator
+     */
+    public synchronized void addPeer(String peerUrl) {
+        if (peerUrl == null || peerUrl.trim().isEmpty()) {
+            log.warn("Attempted to add empty peer URL");
+            return;
+        }
+        
+        if (peerUrl.equals(selfUrl)) {
+            log.debug("Ignoring self-registration: {}", peerUrl);
+            return;
+        }
+        
+        // Check if peer already exists
+        List<String> currentValidators = election.getAllValidators();
+        if (currentValidators.contains(peerUrl)) {
+            log.debug("Peer already registered: {}", peerUrl);
+            return;
+        }
+        
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("🔗 DYNAMIC PEER DISCOVERY: Adding new validator");
+        log.info("   Peer URL: {}", peerUrl);
+        log.info("   Current validators: {}", currentValidators.size());
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        // Record join time for new peer (NOW - they just joined)
+        long joinTime = System.currentTimeMillis();
+        validatorJoinTimes.put(peerUrl, joinTime);
+        
+        int leaderTermSeconds = election.getLeaderTermSeconds();
+        long probationEndTime = joinTime + (leaderTermSeconds * 1000L);
+        
+        log.info("🛡️  New validator on probation until: {}", new java.util.Date(probationEndTime));
+        log.info("   Probationary period: {} seconds", leaderTermSeconds);
+        log.info("   Cannot be elected leader until probation ends");
+        
+        // Rebuild election with new peer and updated join times
+        List<String> newPeers = new java.util.ArrayList<>(election.getPeerValidators());
+        newPeers.add(peerUrl);
+        
+        // Get existing join times from current election and merge with new one
+        Map<String, Long> updatedJoinTimes = election.getValidatorJoinTimes();
+        updatedJoinTimes.put(peerUrl, joinTime);
+        
+        this.election = new LeaderElection(selfUrl, newPeers, leaderTermSeconds, updatedJoinTimes);
+        
+        // Recalculate current state with new peer list
+        int newEpoch = election.getCurrentEpoch();
+        String newLeader = election.electLeader();
+        ValidatorRole newRole = election.getRole();
+        
+        log.info("📊 Consensus network updated:");
+        log.info("   Total validators: {}", election.getAllValidators().size());
+        log.info("   Rotation order: {}", election.getAllValidators());
+        log.info("   Current epoch: {}", newEpoch);
+        log.info("   Elected leader: {}", newLeader);
+        log.info("   My role: {}", newRole);
+        
+        // Check if our role changed
+        if (newRole != currentRole) {
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("🔄 ROLE CHANGE TRIGGERED BY PEER JOIN");
+            log.info("   Old role: {}", currentRole);
+            log.info("   New role: {}", newRole);
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            
+            // Update role
+            ValidatorRole oldRole = currentRole;
+            currentRole = newRole;
+            currentLeader = newLeader;
+            currentEpoch = newEpoch;
+            
+            // Handle role transition
+            if (newRole == ValidatorRole.FOLLOWER && oldRole == ValidatorRole.LEADER) {
+                log.info("📥 TRANSITIONING TO FOLLOWER (new validator joined, no longer leader)");
+                // Stop heartbeat broadcast if we were leader
+                healthMonitor.stopHeartbeatBroadcast();
+                // Start monitoring leader
+                healthMonitor.startMonitoring();
+                
+            } else if (newRole == ValidatorRole.LEADER && oldRole == ValidatorRole.FOLLOWER) {
+                log.info("📤 TRANSITIONING TO LEADER (peer join triggered leader change)");
+                // Stop monitoring
+                healthMonitor.stopMonitoring();
+                // Start heartbeat broadcast
+                List<String> followers = election.getPeerValidators();
+                healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch);
+            }
+        } else {
+            log.info("✅ Role unchanged: {}", currentRole);
+            
+            // Update epoch and leader even if role didn't change
+            currentLeader = newLeader;
+            currentEpoch = newEpoch;
+            
+            // If we're still leader, update follower list for heartbeats
+            if (currentRole == ValidatorRole.LEADER) {
+                List<String> followers = election.getPeerValidators();
+                healthMonitor.updateFollowerList(followers);
+                log.info("💓 Updated follower list: {} followers", followers.size());
+            }
+        }
+        
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("✅ Peer successfully added to consensus network");
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
     
     /**

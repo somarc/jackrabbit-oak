@@ -114,6 +114,13 @@ public class GlobalStoreServer {
             bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
             List<String> peers = parsePeerUrls(peersConfig);
             
+            // Initialize HTTP server FIRST (needed for startConsensusPrimary callback)
+            System.out.println("Initializing HTTP server on port " + port + "...");
+            httpServer = new SegmentHttpServer(storeDir, port, fileStore, nodeStore);
+            String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
+            httpServer.setSelfUrl(selfUrl);
+            System.out.println("✅ HTTP server initialized (not yet started)");
+            
             // Detect mode if AUTO
             if ("auto".equalsIgnoreCase(bootstrapMode)) {
                 detectedMode = ValidatorBootstrap.detectMode(fileStore, nodeStore, peers);
@@ -168,15 +175,9 @@ public class GlobalStoreServer {
             throw new IOException("Invalid FileStore version", e);
         }
         
-        // Initialize and start HTTP server to expose segments
-        System.out.println("Starting HTTP server on port " + port + "...");
+        // Start HTTP server (already initialized earlier for STANDBY mode support)
+        System.out.println("Starting HTTP server...");
         try {
-            httpServer = new SegmentHttpServer(storeDir, port, fileStore, nodeStore);
-            
-            // Set self URL for correct dashboard display
-            String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
-            httpServer.setSelfUrl(selfUrl);
-            
             httpServer.start();
             System.out.println("✅ HTTP server started");
             System.out.println("   - GET /journal.log - journal file");
@@ -198,7 +199,11 @@ public class GlobalStoreServer {
         String peersConfig = System.getProperty("consensus.peers", "");
         String genesisNode = System.getProperty("consensus.genesis.node", "");  // Boot node for genesis sync
         
-        if ("true".equalsIgnoreCase(consensusEnabled) && !peersConfig.isEmpty()) {
+        // Allow leader consensus even with no peers (single validator = leader of 1)
+        boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled) && 
+                                 ("leader".equalsIgnoreCase(consensusMode) || !peersConfig.isEmpty());
+        
+        if (enableConsensus) {
             System.out.println();
             System.out.println("Initializing Consensus Engine...");
             System.out.println("   Mode: " + consensusMode.toUpperCase());
@@ -491,9 +496,9 @@ public class GlobalStoreServer {
             System.out.println("   - Role: " + leaderEngine.getCurrentRole());
             System.out.println("   - Leader: " + leaderEngine.getCurrentLeader());
             
-            // Register with peers
+            // Broadcast presence to network (Dynamic Peer Discovery)
             String validatorId = System.getProperty("consensus.validator.id", "validator-promoted");
-            httpServer.registerWithPeers(validatorId, peerUrls);
+            httpServer.broadcastPresenceToNetwork(validatorId, selfUrl, peerUrls);
             
         } else if ("dag".equalsIgnoreCase(consensusMode)) {
             org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine dagEngine = 
@@ -506,8 +511,9 @@ public class GlobalStoreServer {
             
             System.out.println("✅ DAG Consensus engine initialized");
             
+            // Broadcast presence to network (Dynamic Peer Discovery)
             String validatorId = System.getProperty("consensus.validator.id", "validator-promoted");
-            httpServer.registerWithPeers(validatorId, peerUrls);
+            httpServer.broadcastPresenceToNetwork(validatorId, selfUrl, peerUrls);
         }
         
         // Start StandbyServerSync (now a primary, serve other standbys)

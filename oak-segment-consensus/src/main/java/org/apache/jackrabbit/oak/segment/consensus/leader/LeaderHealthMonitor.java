@@ -52,6 +52,8 @@ public class LeaderHealthMonitor {
     private volatile boolean leaderAppearsDead;
     private Thread heartbeatMonitorThread;
     private volatile boolean running;
+    private volatile java.util.List<String> followerUrls = new java.util.ArrayList<>();
+    private volatile java.util.function.IntSupplier epochSupplier;
     
     public LeaderHealthMonitor(String selfUrl) {
         this.selfUrl = selfUrl;
@@ -217,14 +219,16 @@ public class LeaderHealthMonitor {
             return;
         }
         
+        this.followerUrls = new java.util.ArrayList<>(followerUrls);
+        this.epochSupplier = epochSupplier;
         running = true;
         
         heartbeatMonitorThread = new Thread(() -> {
-            log.info("💓 Started heartbeat broadcast (sending to {} followers)", followerUrls.size());
+            log.info("💓 Started heartbeat broadcast (sending to {} followers)", this.followerUrls.size());
             
             while (running) {
                 try {
-                    sendHeartbeatToFollowers(followerUrls, epochSupplier.getAsInt());
+                    sendHeartbeatToFollowers(this.followerUrls, this.epochSupplier.getAsInt());
                     Thread.sleep(HEARTBEAT_INTERVAL_MS);
                     
                 } catch (InterruptedException e) {
@@ -239,5 +243,24 @@ public class LeaderHealthMonitor {
         heartbeatMonitorThread.setDaemon(true);
         heartbeatMonitorThread.start();
     }
+    
+    /**
+     * Update the list of followers to send heartbeats to.
+     * Called when a new validator joins the network.
+     * 
+     * @param newFollowerUrls Updated list of follower URLs
+     */
+    public synchronized void updateFollowerList(java.util.List<String> newFollowerUrls) {
+        this.followerUrls = new java.util.ArrayList<>(newFollowerUrls);
+        log.debug("💓 Follower list updated: {} followers", newFollowerUrls.size());
+    }
+    
+    /**
+     * Stop heartbeat broadcast thread.
+     */
+    public void stopHeartbeatBroadcast() {
+        stopMonitoring(); // Reuse same stop logic
+    }
 }
+
 

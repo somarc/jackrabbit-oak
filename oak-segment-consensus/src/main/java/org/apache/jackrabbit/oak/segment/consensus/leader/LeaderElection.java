@@ -19,6 +19,8 @@ package org.apache.jackrabbit.oak.segment.consensus.leader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +32,10 @@ import org.slf4j.LoggerFactory;
  * - Current time
  * - Leader term duration
  * - Sorted list of validator URLs
+ * 
+ * SECURITY: New validators have a probationary period of one full epoch
+ * before they're eligible for leadership. This prevents malicious actors
+ * from repeatedly joining/leaving to manipulate leadership.
  * 
  * This ensures all validators agree on who the leader is without
  * needing network coordination or voting.
@@ -51,13 +57,24 @@ public class LeaderElection {
     private final List<String> allValidators;
     
     /**
+     * Timestamps when each validator joined the network (URL -> joinedAt millis).
+     * Used to enforce probationary period for new validators.
+     */
+    private final Map<String, Long> validatorJoinTimes;
+    
+    /**
      * This validator's URL.
      */
     private final String selfUrl;
     
     public LeaderElection(String selfUrl, List<String> peerUrls, int leaderTermSeconds) {
+        this(selfUrl, peerUrls, leaderTermSeconds, new HashMap<>());
+    }
+    
+    public LeaderElection(String selfUrl, List<String> peerUrls, int leaderTermSeconds, Map<String, Long> validatorJoinTimes) {
         this.selfUrl = selfUrl;
         this.leaderTermSeconds = leaderTermSeconds;
+        this.validatorJoinTimes = new HashMap<>(validatorJoinTimes);
         
         // Create sorted list of all validators
         this.allValidators = new ArrayList<>();
@@ -65,10 +82,21 @@ public class LeaderElection {
         this.allValidators.addAll(peerUrls);
         Collections.sort(this.allValidators);
         
+        // Set join time for self if not already set (genesis case)
+        if (!this.validatorJoinTimes.containsKey(selfUrl)) {
+            this.validatorJoinTimes.put(selfUrl, System.currentTimeMillis());
+        }
+        
         log.info("📋 Leader Election initialized");
         log.info("   Validators: {}", allValidators.size());
         log.info("   Leader term: {} seconds", leaderTermSeconds);
         log.info("   Rotation order: {}", allValidators);
+        
+        // Log probationary status
+        List<String> onProbation = getValidatorsOnProbation();
+        if (!onProbation.isEmpty()) {
+            log.warn("⚠️  Validators on probation (not eligible for leadership yet): {}", onProbation);
+        }
     }
     
     /**
@@ -83,17 +111,95 @@ public class LeaderElection {
     }
     
     /**
+     * Get validators that are eligible for leadership (past probationary period).
+     * 
+     * A validator is eligible if:
+     * - It joined more than one full epoch ago (leaderTermSeconds)
+     * 
+     * This prevents new validators from immediately becoming leaders and
+     * protects against join/leave manipulation attacks.
+     * 
+     * @return List of eligible validator URLs
+     */
+    private List<String> getEligibleValidators() {
+        long now = System.currentTimeMillis();
+        long probationPeriodMs = leaderTermSeconds * 1000L;
+        
+        List<String> eligible = new ArrayList<>();
+        for (String validatorUrl : allValidators) {
+            Long joinedAt = validatorJoinTimes.get(validatorUrl);
+            if (joinedAt == null) {
+                // Unknown join time - assume eligible (backward compatibility)
+                eligible.add(validatorUrl);
+            } else {
+                long timeSinceJoin = now - joinedAt;
+                if (timeSinceJoin >= probationPeriodMs) {
+                    eligible.add(validatorUrl);
+                }
+            }
+        }
+        
+        // If no validators are eligible (all too new), use all validators
+        // to ensure there's always a leader
+        if (eligible.isEmpty()) {
+            log.warn("⚠️  No eligible validators (all on probation), using all validators");
+            return new ArrayList<>(allValidators);
+        }
+        
+        return eligible;
+    }
+    
+    /**
+     * Get validators currently on probation (not yet eligible for leadership).
+     * 
+     * @return List of validators on probation
+     */
+    public List<String> getValidatorsOnProbation() {
+        long now = System.currentTimeMillis();
+        long probationPeriodMs = leaderTermSeconds * 1000L;
+        
+        List<String> onProbation = new ArrayList<>();
+        for (String validatorUrl : allValidators) {
+            Long joinedAt = validatorJoinTimes.get(validatorUrl);
+            if (joinedAt != null) {
+                long timeSinceJoin = now - joinedAt;
+                if (timeSinceJoin < probationPeriodMs) {
+                    onProbation.add(validatorUrl);
+                }
+            }
+        }
+        return onProbation;
+    }
+    
+    /**
      * Elect the leader for the current epoch.
      * All validators compute the same result independently.
      * 
-     * Algorithm: leader_index = current_epoch % validator_count
+     * SECURITY: Only validators past their probationary period are eligible.
+     * This prevents join/leave manipulation attacks.
+     * 
+     * Algorithm: leader_index = current_epoch % eligible_validator_count
      * 
      * @return URL of the elected leader
      */
     public String electLeader() {
+        List<String> eligible = getEligibleValidators();
         int epoch = getCurrentEpoch();
-        int leaderIndex = epoch % allValidators.size();
-        return allValidators.get(leaderIndex);
+        int leaderIndex = epoch % eligible.size();
+        String electedLeader = eligible.get(leaderIndex);
+        
+        // Log if a probationary validator would have been elected
+        List<String> onProbation = getValidatorsOnProbation();
+        if (!onProbation.isEmpty()) {
+            int wouldBeIndex = epoch % allValidators.size();
+            String wouldBeLeader = allValidators.get(wouldBeIndex);
+            if (!wouldBeLeader.equals(electedLeader)) {
+                log.info("🛡️  Probationary protection: {} would be leader but is on probation, {} elected instead", 
+                    wouldBeLeader, electedLeader);
+            }
+        }
+        
+        return electedLeader;
     }
     
     /**
@@ -165,6 +271,15 @@ public class LeaderElection {
      */
     public int getLeaderTermSeconds() {
         return leaderTermSeconds;
+    }
+    
+    /**
+     * Get validator join times for rebuilding election with updated info.
+     * 
+     * @return Map of validator URL to join timestamp
+     */
+    public Map<String, Long> getValidatorJoinTimes() {
+        return new HashMap<>(validatorJoinTimes);
     }
 }
 

@@ -112,15 +112,28 @@ public class SegmentHttpServer {
      * Validator peer registration information
      */
     private static class ValidatorRegistration {
+        enum Status {
+            JOINING,    // Just joined, broadcasting presence
+            SYNCING,    // Bootstrap sync in progress
+            READY       // Fully synced and participating in consensus
+        }
+        
         String validatorId;     // Unique identifier (e.g., validator-1)
         String validatorUrl;    // Validator's URL/address
+        Status status;          // Current validator status
         long registeredAt;      // Timestamp
         long lastSeen;          // Last heartbeat
         
         ValidatorRegistration(String validatorId, String validatorUrl) {
             this.validatorId = validatorId;
             this.validatorUrl = validatorUrl;
+            this.status = Status.JOINING;  // Start as JOINING
             this.registeredAt = System.currentTimeMillis();
+            this.lastSeen = System.currentTimeMillis();
+        }
+        
+        void updateStatus(Status newStatus) {
+            this.status = newStatus;
             this.lastSeen = System.currentTimeMillis();
         }
     }
@@ -264,6 +277,122 @@ public class SegmentHttpServer {
         }
         
         log.info("📡 Validator peer registration complete");
+    }
+    
+    /**
+     * Broadcast presence to the consensus network (Dynamic Peer Discovery).
+     * 
+     * This is called when a validator is promoted to PRIMARY and is ready to
+     * join the consensus network. Existing validators will receive this broadcast
+     * and dynamically add this validator to their consensus peer list.
+     * 
+     * @param validatorId The unique ID of this validator
+     * @param validatorUrl The URL of this validator (consensus endpoint)
+     * @param peerUrls List of known peer validators to broadcast to
+     */
+    public void broadcastPresenceToNetwork(String validatorId, String validatorUrl, 
+                                          java.util.List<String> peerUrls) {
+        if (peerUrls == null || peerUrls.isEmpty()) {
+            log.info("📡 No peers configured - running as genesis validator");
+            return;
+        }
+        
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("📣 BROADCASTING PRESENCE TO CONSENSUS NETWORK");
+        log.info("   Validator ID: {}", validatorId);
+        log.info("   Validator URL: {}", validatorUrl);
+        log.info("   Broadcasting to: {} peers", peerUrls.size());
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        int successCount = 0;
+        int failureCount = 0;
+        
+        for (String peerUrl : peerUrls) {
+            try {
+                // Skip self
+                if (peerUrl.equals(validatorUrl)) {
+                    log.debug("   Skipping self: {}", peerUrl);
+                    continue;
+                }
+                
+                // Build peer-joined endpoint URL
+                String peerJoinedUrl = peerUrl + "/v1/consensus/peer-joined";
+                
+                // Build JSON payload
+                String jsonPayload = String.format(
+                    "{\"validatorId\":\"%s\",\"validatorUrl\":\"%s\"}",
+                    validatorId.replace("\"", "\\\""),
+                    validatorUrl.replace("\"", "\\\"")
+                );
+                
+                log.info("   → Broadcasting to {}", peerUrl);
+                
+                // Send broadcast request
+                java.net.URL url = new java.net.URL(peerJoinedUrl);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(10000);
+                
+                // Write JSON payload
+                try (java.io.OutputStream os = conn.getOutputStream()) {
+                    byte[] input = jsonPayload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+                
+                int responseCode = conn.getResponseCode();
+                
+                if (responseCode == 200) {
+                    // Read response
+                    java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(conn.getInputStream())
+                    );
+                    String response = reader.lines().collect(java.util.stream.Collectors.joining());
+                    reader.close();
+                    
+                    log.info("   ✅ Accepted by peer: {}", peerUrl);
+                    log.debug("      Response: {}", response);
+                    successCount++;
+                    
+                } else {
+                    log.warn("   ❌ Rejected by peer {}: HTTP {}", peerUrl, responseCode);
+                    failureCount++;
+                }
+                
+            } catch (java.net.ConnectException e) {
+                log.warn("   ⚠️  Cannot reach peer {}: {}", peerUrl, e.getMessage());
+                failureCount++;
+            } catch (Exception e) {
+                log.error("   ❌ Failed to broadcast to peer {}: {}", peerUrl, e.getMessage());
+                failureCount++;
+            }
+        }
+        
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("📡 BROADCAST COMPLETE: {} accepted, {} failed", successCount, failureCount);
+        
+        if (successCount > 0) {
+            log.info("✅ Successfully joined consensus network ({}/{} peers)", 
+                successCount, peerUrls.size());
+            // Mark self as READY after successful broadcast
+            ValidatorRegistration selfReg = new ValidatorRegistration(validatorId, validatorUrl);
+            selfReg.updateStatus(ValidatorRegistration.Status.READY);
+            registeredValidators.put(validatorId, selfReg);
+            log.info("✅ Self marked as READY");
+        } else if (peerUrls.isEmpty() || (peerUrls.size() == 1 && peerUrls.get(0).equals(validatorUrl))) {
+            log.info("✅ Genesis validator - no peers to broadcast to");
+            // Genesis validator is immediately READY
+            ValidatorRegistration selfReg = new ValidatorRegistration(validatorId, validatorUrl);
+            selfReg.updateStatus(ValidatorRegistration.Status.READY);
+            registeredValidators.put(validatorId, selfReg);
+        } else {
+            log.warn("⚠️  FAILED to join consensus - no peers accepted broadcast!");
+            log.warn("    This validator may be isolated from the network.");
+        }
+        
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
     
     /**
@@ -512,6 +641,13 @@ public class SegmentHttpServer {
                     return;
                 }
                 
+                // PEER JOINED ENDPOINT - Validator broadcasts its presence to network
+                if ("/v1/consensus/peer-joined".equals(path) && "POST".equals(method)) {
+                    handlePeerJoined(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
                 // Not found
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 baseRequest.setHandled(true);
@@ -717,12 +853,42 @@ public class SegmentHttpServer {
                         ? validatorUrl.substring(validatorUrl.indexOf("validator-")).split(":")[0]
                         : validatorUrl;
                     
+                    // Get validator status
+                    ValidatorRegistration.Status status = ValidatorRegistration.Status.READY;  // Default
+                    String statusEmoji = "🟢";  // Default green
+                    String statusLabel = "";
+                    
+                    if (!isSelf) {
+                        // Check if we have status for this validator
+                        for (ValidatorRegistration reg : registeredValidators.values()) {
+                            if (reg.validatorUrl.equals(validatorUrl)) {
+                                status = reg.status;
+                                break;
+                            }
+                        }
+                        
+                        // Set emoji and label based on status
+                        switch (status) {
+                            case JOINING:
+                                statusEmoji = "🟡";  // Yellow
+                                statusLabel = " <span style='font-size: 10px; background: rgba(234,179,8,0.2); color: #fbbf24; padding: 2px 6px; border-radius: 3px;'>JOINING</span>";
+                                break;
+                            case SYNCING:
+                                statusEmoji = "🟠";  // Orange
+                                statusLabel = " <span style='font-size: 10px; background: rgba(249,115,22,0.2); color: #fb923c; padding: 2px 6px; border-radius: 3px;'>SYNCING</span>";
+                                break;
+                            case READY:
+                                statusEmoji = "🔵";  // Blue
+                                break;
+                        }
+                    }
+                    
                     html.append("<div style='margin-top: 4px; padding: 4px 8px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; justify-content: space-between; align-items: center;'>");
                     html.append("<span>");
                     if (isSelf) {
                         html.append("🟢 <strong>").append(validatorName).append("</strong> (YOU)");
                     } else {
-                        html.append("🔵 ").append(validatorName);
+                        html.append(statusEmoji).append(" ").append(validatorName).append(statusLabel);
                     }
                     html.append("</span>");
                     html.append("</div>");
@@ -3087,6 +3253,74 @@ public class SegmentHttpServer {
                 log.error("❌ Failed to process heartbeat", e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
                     "Failed to process heartbeat: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle POST /v1/consensus/peer-joined - A validator broadcasts its presence
+         * 
+         * Called when a validator completes bootstrap and is ready to join consensus.
+         * The receiving validator adds the new peer to its consensus engine.
+         */
+        private void handlePeerJoined(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            try {
+                // Read JSON body
+                StringBuilder json = new StringBuilder();
+                java.io.BufferedReader reader = request.getReader();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+                
+                String body = json.toString();
+                
+                // Extract fields
+                String validatorId = extractJsonField(body, "validatorId");
+                String validatorUrl = extractJsonField(body, "validatorUrl");
+                
+                if (validatorId == null || validatorUrl == null) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                        "Missing required fields: validatorId, validatorUrl");
+                    return;
+                }
+                
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                log.info("📣 PEER JOIN BROADCAST RECEIVED");
+                log.info("   Validator ID: {}", validatorId);
+                log.info("   Validator URL: {}", validatorUrl);
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                
+                // Register in HTTP server's peer list
+                // Mark as READY because they've already completed bootstrap before broadcasting
+                ValidatorRegistration registration = new ValidatorRegistration(validatorId, validatorUrl);
+                registration.updateStatus(ValidatorRegistration.Status.READY);
+                registeredValidators.putIfAbsent(validatorId, registration);
+                log.info("✅ Validator registered in HTTP server (status: READY)");
+                
+                // Update consensus engine
+                if (leaderConsensusEngine != null) {
+                    leaderConsensusEngine.addPeer(validatorUrl);
+                    log.info("✅ Peer added to leader consensus engine");
+                } else if (dagConsensusEngine != null) {
+                    log.warn("⚠️  DAG consensus doesn't support dynamic peers yet");
+                } else {
+                    log.warn("⚠️  No consensus engine to update");
+                }
+                
+                // Return success
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write(String.format(
+                    "{\"success\":true,\"message\":\"Peer %s accepted into network\"}", validatorId));
+                
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                log.info("✅ Peer join processed successfully");
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                
+            } catch (Exception e) {
+                log.error("❌ Failed to process peer join", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                    "Failed to process peer join: " + e.getMessage());
             }
         }
         
