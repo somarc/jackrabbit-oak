@@ -717,39 +717,23 @@ public class GlobalStoreServer {
                 System.getProperty("consensus.leader.term.seconds", "300")
             );
             
+            // SCALABLE BOOTSTRAP JOIN
+            // Pass isBootstrapJoin=true so constructor skips election math
+            // and starts directly as FOLLOWER. Scales to 1000s of validators.
             org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine leaderEngine = 
                 new org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine(
-                    fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds
+                    fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds,
+                    true  // isBootstrapJoin = true (post-genesis join)
                 );
             
             httpServer.setLeaderConsensusEngine(leaderEngine);
             
-            // CRITICAL FIX: After bootstrap, ALWAYS start as FOLLOWER
-            // Being PRIMARY doesn't mean we're LEADER!
-            // 
-            // The network already has a leader (the node we bootstrapped from).
-            // We must join as FOLLOWER and let heartbeats establish leadership.
-            // 
-            // If we immediately claim to be leader based on epoch calculation,
-            // we create a split-brain scenario.
-            
             System.out.println("✅ Leader Consensus engine initialized");
-            System.out.println("   - Calculated role: " + leaderEngine.getCurrentRole());
-            System.out.println("   - Calculated leader: " + leaderEngine.getCurrentLeader());
+            System.out.println("   - Join type: BOOTSTRAP (post-genesis)");
+            System.out.println("   - Initial role: " + leaderEngine.getCurrentRole() + " (no election math)");
+            System.out.println("   - Expected leader: " + leaderEngine.getCurrentLeader());
+            System.out.println("   - Will learn actual leader from heartbeat");
             System.out.println("");
-            System.out.println("   ⚠️  FORCING FOLLOWER MODE (just joined network)");
-            System.out.println("   - Will listen for leader heartbeats");
-            System.out.println("   - Leader will announce itself via heartbeat");
-            System.out.println("");
-            
-            // Force FOLLOWER role
-            leaderEngine.forceFollowerMode();
-            
-            // DO NOT start rotation monitor yet!
-            // Rotation monitor does epoch-based leader checks which would override forced follower mode.
-            // V2 will start rotation monitor AFTER receiving first heartbeat from V1.
-            // For now, just listen for heartbeats (already started in forceFollowerMode()).
-            System.out.println("   ⏸️  Rotation monitor deferred until first heartbeat received");
             
             // Broadcast presence to network (Dynamic Peer Discovery)
             String validatorId = System.getProperty("consensus.validator.id", "validator-promoted");

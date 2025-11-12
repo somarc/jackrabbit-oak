@@ -70,12 +70,24 @@ public class LeaderConsensusEngine {
     
     public LeaderConsensusEngine(FileStore fileStore, NodeStore nodeStore, 
                                   String selfUrl, List<String> peerUrls) {
-        this(fileStore, nodeStore, selfUrl, peerUrls, 300); // Default: 5 min term
+        this(fileStore, nodeStore, selfUrl, peerUrls, 300, false); // Default: 5 min term, not bootstrap
     }
     
     public LeaderConsensusEngine(FileStore fileStore, NodeStore nodeStore, 
                                   String selfUrl, List<String> peerUrls, 
                                   int leaderTermSeconds) {
+        this(fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds, false); // Not bootstrap
+    }
+    
+    /**
+     * Constructor with bootstrap join flag.
+     * 
+     * @param isBootstrapJoin true if this validator is joining via bootstrap (post-genesis),
+     *                        false if this is genesis or config-based start
+     */
+    public LeaderConsensusEngine(FileStore fileStore, NodeStore nodeStore, 
+                                  String selfUrl, List<String> peerUrls, 
+                                  int leaderTermSeconds, boolean isBootstrapJoin) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.selfUrl = selfUrl;
@@ -94,19 +106,46 @@ public class LeaderConsensusEngine {
         // Create election with join times (initial peers are part of electorate)
         this.election = new LeaderElection(selfUrl, peerUrls, leaderTermSeconds, validatorJoinTimes);
         
-        // Determine initial role
-        this.currentEpoch = election.getCurrentEpoch();
-        this.currentLeader = election.electLeader();
-        this.currentRole = election.getRole();
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // SCALABLE BOOTSTRAP JOIN
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // If joining via bootstrap, skip expensive election math.
+        // Network already has a leader - we'll learn from heartbeat.
+        // This scales to 1000s of validators without wasted computation.
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         
-        log.info("🎖️  Leader-Based Consensus Engine initialized");
-        log.info("   Mode: Leader/Follower with Failure Detection");
-        log.info("   Epoch: {}", currentEpoch);
-        log.info("   Current leader: {}", currentLeader);
-        log.info("   My role: {}", currentRole);
-        log.info("   Rotation: every {} seconds", leaderTermSeconds);
-        log.info("   Heartbeat: 10s interval, 30s failure threshold");
-        log.info("   🛡️  Probationary period: {} seconds (new validators must be followers)", leaderTermSeconds);
+        if (isBootstrapJoin) {
+            // Bootstrap join: Start as FOLLOWER immediately
+            this.currentRole = ValidatorRole.FOLLOWER;
+            this.currentLeader = peerUrls.isEmpty() ? "unknown" : peerUrls.get(0); // Bootstrap primary
+            this.currentEpoch = election.getCurrentEpoch(); // Still track epoch for sync
+            
+            log.info("🎖️  Leader-Based Consensus Engine initialized (BOOTSTRAP JOIN)");
+            log.info("   Mode: Leader/Follower with Failure Detection");
+            log.info("   Join Type: Bootstrap (post-genesis)");
+            log.info("   Initial Role: FOLLOWER (no election math)");
+            log.info("   Expected Leader: {}", currentLeader);
+            log.info("   Current Epoch: {}", currentEpoch);
+            log.info("   Rotation: every {} seconds", leaderTermSeconds);
+            log.info("   Heartbeat: 10s interval, 30s failure threshold");
+            log.info("   🛡️  Probationary period: {} seconds (new validators must be followers)", leaderTermSeconds);
+            log.info("   ℹ️  Will learn actual leader from heartbeat");
+        } else {
+            // Genesis or config-based start: Calculate role via election
+            this.currentEpoch = election.getCurrentEpoch();
+            this.currentLeader = election.electLeader();
+            this.currentRole = election.getRole();
+            
+            log.info("🎖️  Leader-Based Consensus Engine initialized (GENESIS/CONFIG)");
+            log.info("   Mode: Leader/Follower with Failure Detection");
+            log.info("   Join Type: Genesis or configured peers");
+            log.info("   Epoch: {}", currentEpoch);
+            log.info("   Current leader: {}", currentLeader);
+            log.info("   My role: {}", currentRole);
+            log.info("   Rotation: every {} seconds", leaderTermSeconds);
+            log.info("   Heartbeat: 10s interval, 30s failure threshold");
+            log.info("   🛡️  Probationary period: {} seconds (new validators must be followers)", leaderTermSeconds);
+        }
     }
     
     /**
