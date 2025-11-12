@@ -101,9 +101,9 @@ public class LeaderConsensusEngine {
         this.replicator = new SegmentReplicator(fileStore);
         this.healthMonitor = new LeaderHealthMonitor(selfUrl);
         
-        // PHASE 3: Use wallet for cryptographic signing (replaces ClaimSigner)
-        // Validator identity is now the wallet address, not selfUrl
-        this.claimSigner = new org.apache.jackrabbit.oak.segment.consensus.security.ClaimSigner(selfUrl);
+        // PHASE 3: Use wallet for cryptographic signing
+        // ClaimSigner now delegates to wallet for persistent keys
+        this.claimSigner = new org.apache.jackrabbit.oak.segment.consensus.security.ClaimSigner(selfUrl, wallet);
         this.claimVerifier = new org.apache.jackrabbit.oak.segment.consensus.security.ClaimVerifier();
         // Register self's public key from wallet
         this.claimVerifier.registerPublicKey(selfUrl, wallet.getPublicKeyHex());

@@ -28,51 +28,39 @@ import org.slf4j.LoggerFactory;
 /**
  * Signs leadership claims with validator's private key.
  * 
- * PHASE 3: Cryptographic Signatures
+ * PRODUCTION: Delegates to EthereumWallet for real persistent keys
  * - Byzantine fault tolerance via cryptographic proof
  * - Prevents claim forgery and impersonation
- * - Uses ECDSA (Ethereum-compatible)
+ * - Uses ECDSA (Ethereum-compatible secp256k1)
  */
 public class ClaimSigner {
     
     private static final Logger log = LoggerFactory.getLogger(ClaimSigner.class);
     
-    private final PrivateKey privateKey;
-    private final PublicKey publicKey;
+    private final EthereumWallet wallet;
     private final String validatorUrl;
     
     /**
-     * Create a new claim signer with generated keys.
+     * Create a new claim signer using an Ethereum wallet.
      * 
-     * For POC: Generates ephemeral keys in-memory
-     * For Production: Load from HSM or key file
+     * PRODUCTION: Uses persistent wallet keys (no more ephemeral keys)
+     * 
+     * @param validatorUrl The validator's URL (for logging)
+     * @param wallet       The Ethereum wallet containing persistent keys
      */
-    public ClaimSigner(String validatorUrl) {
+    public ClaimSigner(String validatorUrl, EthereumWallet wallet) {
         this.validatorUrl = validatorUrl;
+        this.wallet = wallet;
         
-        try {
-            // Generate ECDSA key pair (secp256r1 - widely supported)
-            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC");
-            keyGen.initialize(256);  // 256-bit curve (equivalent to 128-bit symmetric)
-            KeyPair keyPair = keyGen.generateKeyPair();
-            
-            this.privateKey = keyPair.getPrivate();
-            this.publicKey = keyPair.getPublic();
-            
-            log.info("🔐 Claim signer initialized for {}", validatorUrl);
-            log.info("   Algorithm: ECDSA (secp256r1)");
-            log.info("   Key size: 256 bits");
-            log.info("   Public key: 0x{}", bytesToHex(publicKey.getEncoded()).substring(0, 32) + "...");
-            
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to initialize claim signer", e);
-        }
+        log.info("🔐 Claim signer initialized for {}", validatorUrl);
+        log.info("   Wallet address: {}", wallet.getWalletAddress());
+        log.info("   Public key: {}...", wallet.getPublicKeyHex().substring(0, Math.min(32, wallet.getPublicKeyHex().length())));
     }
     
     /**
      * Sign a leadership claim.
      * 
-     * Creates canonical message and signs with ECDSA.
+     * PRODUCTION: Delegates to EthereumWallet for signing with persistent keys.
      * 
      * @param epoch        The epoch being claimed
      * @param validatorUrl The validator claiming leadership
@@ -84,16 +72,11 @@ public class ClaimSigner {
             // Construct canonical message (order matters for verification)
             String message = constructCanonicalMessage(epoch, validatorUrl, timestamp);
             
-            // Sign with SHA256withECDSA
-            Signature signer = Signature.getInstance("SHA256withECDSA");
-            signer.initSign(privateKey);
-            signer.update(message.getBytes("UTF-8"));
-            byte[] signatureBytes = signer.sign();
-            
-            // Return hex-encoded signature
-            String signature = "0x" + bytesToHex(signatureBytes);
+            // Delegate to wallet for signing
+            String signature = wallet.sign(message);
             
             log.debug("✍️  Signed claim: epoch={}, validator={}", epoch, validatorUrl);
+            log.debug("   Wallet: {}", wallet.getWalletAddress());
             log.debug("   Message: {}", message);
             log.debug("   Signature: {}...", signature.substring(0, Math.min(18, signature.length())));
             
@@ -107,17 +90,15 @@ public class ClaimSigner {
     
     /**
      * Sign an acknowledgment.
+     * 
+     * PRODUCTION: Delegates to EthereumWallet.
      */
     public String signAck(int epoch, String claimantUrl, String ackValidatorUrl, long timestamp) {
         try {
             String message = epoch + "|ACK|" + claimantUrl + "|" + ackValidatorUrl + "|" + timestamp;
             
-            Signature signer = Signature.getInstance("SHA256withECDSA");
-            signer.initSign(privateKey);
-            signer.update(message.getBytes("UTF-8"));
-            byte[] signatureBytes = signer.sign();
-            
-            return "0x" + bytesToHex(signatureBytes);
+            // Delegate to wallet
+            return wallet.sign(message);
             
         } catch (Exception e) {
             log.error("❌ Failed to sign ACK", e);
@@ -135,16 +116,20 @@ public class ClaimSigner {
     
     /**
      * Get the public key for broadcasting to other validators.
+     * 
+     * PRODUCTION: Delegates to EthereumWallet.
      */
     public PublicKey getPublicKey() {
-        return publicKey;
+        return wallet.getPublicKey();
     }
     
     /**
      * Get hex-encoded public key for network transmission.
+     * 
+     * PRODUCTION: Delegates to EthereumWallet.
      */
     public String getPublicKeyHex() {
-        return "0x" + bytesToHex(publicKey.getEncoded());
+        return wallet.getPublicKeyHex();
     }
     
     /**
