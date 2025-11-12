@@ -2779,13 +2779,26 @@ public class SegmentHttpServer {
                 String previousHead = fileStore.getHead().getRecordId().toString();
                 log.info("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
                 
-                // Make a write to the repository at /oak-chain/content/<wallet>/
+                // Make a write to the repository using SHARDED path
                 org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = nodeStore.getRoot().builder();
                 
-                // Create wallet-specific path: /oak-chain/content/<wallet>/
-                org.apache.jackrabbit.oak.spi.state.NodeBuilder walletPath = rootBuilder.child("oak-chain")
+                // Get sharded path: /oak-chain/content/{L1}/{L2}/{L3}/0x{wallet}/
+                String shardedPath = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil
+                    .toShardedPath(wallet.toLowerCase());
+                log.info("🪣 Using sharded path: {}", shardedPath);
+                
+                // Navigate through sharded structure
+                // Example: /oak-chain/content/74/2d/35/0x742d35cc.../
+                String normalizedWallet = wallet.toLowerCase();
+                String addr = normalizedWallet.replace("0x", "");
+                
+                org.apache.jackrabbit.oak.spi.state.NodeBuilder walletPath = rootBuilder
+                    .child("oak-chain")
                     .child("content")
-                    .child(wallet.toLowerCase()); // Wallet addresses are case-insensitive
+                    .child(addr.substring(0, 2))  // L1: 74
+                    .child(addr.substring(2, 4))  // L2: 2d
+                    .child(addr.substring(4, 6))  // L3: 35
+                    .child(normalizedWallet);      // Wallet: 0x742d35cc...
                 
                 // Create content node under wallet path
                 String contentId = contentType + "-" + System.currentTimeMillis();
@@ -2835,7 +2848,7 @@ public class SegmentHttpServer {
                 
                 String mode = usingLeaderMode ? "Leader" : (usingDagMode ? "DAG" : "Blockchain");
                 log.info("📤 Processing write via {} mode...", mode);
-                log.info("   Storage path: /oak-chain/content/{}/{}", wallet.toLowerCase(), contentId);
+                log.info("   Storage path: {}/{}", shardedPath, contentId);
                 
                 boolean success = false;
                 String consensusMode = "";
@@ -2895,7 +2908,7 @@ public class SegmentHttpServer {
                     "\"proposalId\":\"" + proposal.getProposalId() + "\"," +
                     "\"wallet\":\"" + wallet + "\"," +
                     "\"contentId\":\"" + contentId + "\"," +
-                    "\"storagePath\":\"/oak-chain/content/" + wallet.toLowerCase() + "/" + contentId + "\"," +
+                    "\"storagePath\":\"" + shardedPath + "/" + contentId + "\"," +
                     "\"previousHead\":\"" + previousHead + "\"," +
                     "\"newHead\":\"" + newHead + "\"," +
                     "\"message\":\"" + message + "\"," +
