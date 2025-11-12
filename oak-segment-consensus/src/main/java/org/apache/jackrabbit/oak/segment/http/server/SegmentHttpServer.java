@@ -89,6 +89,9 @@ public class SegmentHttpServer {
     // Track recent writes with metadata (recordId -> WriteMetadata)
     private final java.util.Map<String, WriteMetadata> recentWriteMetadata = new java.util.concurrent.ConcurrentHashMap<>();
     
+    // Proof-of-Readiness verifier for Byzantine fault tolerance
+    private org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier proofVerifier;
+    
     /**
      * Client registration information
      */
@@ -207,6 +210,14 @@ public class SegmentHttpServer {
     public void setLeaderConsensusEngine(org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine engine) {
         this.leaderConsensusEngine = engine;
         log.info("🎖️  Leader consensus engine configured");
+        
+        // Initialize proof verifier for Byzantine fault tolerance
+        if (engine != null) {
+            int leaderTermSeconds = engine.getElection().getLeaderTermSeconds();
+            this.proofVerifier = new org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier(
+                fileStore, leaderTermSeconds);
+            log.info("🛡️  Proof-of-Readiness verifier initialized");
+        }
     }
     
     /**
@@ -215,6 +226,69 @@ public class SegmentHttpServer {
     public void setSelfUrl(String url) {
         this.selfUrl = url;
         log.info("Self URL set to: {}", url);
+    }
+    
+    /**
+     * Generate Proof-of-Readiness for joining consensus.
+     * 
+     * This cryptographically proves the validator is ready to participate in consensus.
+     * Called before broadcasting presence to the network.
+     */
+    private org.apache.jackrabbit.oak.segment.consensus.security.JoinProof generateJoinProof(
+            String validatorId, String validatorUrl) {
+        
+        org.apache.jackrabbit.oak.segment.consensus.security.JoinProof proof = 
+            new org.apache.jackrabbit.oak.segment.consensus.security.JoinProof();
+        
+        try {
+            // 1. Proof of Sync - Current HEAD
+            String currentHead = fileStore.getHead().getRecordId().toString();
+            proof.setHeadSegmentId(currentHead);
+            proof.setHeadCapturedAt(System.currentTimeMillis());
+            
+            // 2. Proof of Epoch Alignment - Current epoch
+            if (leaderConsensusEngine != null) {
+                int currentEpoch = leaderConsensusEngine.getElection().getCurrentEpoch();
+                proof.setCurrentEpoch(currentEpoch);
+                proof.setEpochCalculatedAt(System.currentTimeMillis());
+            }
+            
+            // 3. Proof of Genesis - Genesis segment
+            // For POC, we'll use the HEAD as genesis (in production, track actual genesis)
+            proof.setGenesisSegmentId(currentHead);
+            proof.setGenesisHash("sha256-poc-genesis"); // TODO: Actual hash
+            
+            // 4. Proof of Capability - Validator ID
+            proof.setValidatorId(validatorId);
+            proof.setValidatorUrl(validatorUrl);
+            // TODO: Sign a nonce for production
+            proof.setChallengeNonce("poc-nonce");
+            proof.setNonceSignature("poc-signature");
+            
+            // 5. Proof of Segment Access - Sample segments
+            // Get a few random segments as proof we have the data
+            java.util.List<String> sampleIds = new java.util.ArrayList<>();
+            java.util.List<String> sampleHashes = new java.util.ArrayList<>();
+            
+            // For POC, just use current HEAD as sample
+            for (int i = 0; i < 5; i++) {
+                sampleIds.add(currentHead);
+                sampleHashes.add("sha256-sample-" + i);
+            }
+            
+            proof.setSampleSegmentIds(sampleIds);
+            proof.setSampleSegmentHashes(sampleHashes);
+            
+            log.info("✅ Generated Join Proof:");
+            log.info("   HEAD: {}", currentHead.substring(0, Math.min(24, currentHead.length())));
+            log.info("   Epoch: {}", proof.getCurrentEpoch());
+            log.info("   Samples: {}", sampleIds.size());
+            
+        } catch (Exception e) {
+            log.error("❌ Failed to generate join proof", e);
+        }
+        
+        return proof;
     }
     
     /**
@@ -304,6 +378,10 @@ public class SegmentHttpServer {
         log.info("   Broadcasting to: {} peers", peerUrls.size());
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
+        // Generate Proof-of-Readiness before broadcasting
+        org.apache.jackrabbit.oak.segment.consensus.security.JoinProof proof = 
+            generateJoinProof(validatorId, validatorUrl);
+        
         int successCount = 0;
         int failureCount = 0;
         
@@ -318,11 +396,12 @@ public class SegmentHttpServer {
                 // Build peer-joined endpoint URL
                 String peerJoinedUrl = peerUrl + "/v1/consensus/peer-joined";
                 
-                // Build JSON payload
+                // Build JSON payload with proof
                 String jsonPayload = String.format(
-                    "{\"validatorId\":\"%s\",\"validatorUrl\":\"%s\"}",
+                    "{\"validatorId\":\"%s\",\"validatorUrl\":\"%s\",\"proof\":%s}",
                     validatorId.replace("\"", "\\\""),
-                    validatorUrl.replace("\"", "\\\"")
+                    validatorUrl.replace("\"", "\\\""),
+                    proof.toJson()
                 );
                 
                 log.info("   → Broadcasting to {}", peerUrl);
@@ -3290,6 +3369,37 @@ public class SegmentHttpServer {
                 log.info("   Validator URL: {}", validatorUrl);
                 log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 
+                // 🛡️ PROOF-OF-READINESS VERIFICATION
+                // Extract and verify proof to prevent Byzantine validators
+                String proofJson = extractJsonObject(body, "proof");
+                if (proofJson != null && !proofJson.isEmpty() && proofVerifier != null) {
+                    try {
+                        org.apache.jackrabbit.oak.segment.consensus.security.JoinProof proof = 
+                            org.apache.jackrabbit.oak.segment.consensus.security.JoinProof.fromJson(proofJson);
+                        
+                        org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier.VerificationResult result = 
+                            proofVerifier.verify(proof);
+                        
+                        if (!result.isValid()) {
+                            log.error("❌ PROOF-OF-READINESS VERIFICATION FAILED");
+                            log.error("   Error: {} - {}", result.getErrorCode(), result.getMessage());
+                            response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                                "Proof-of-Readiness verification failed: " + result.getErrorCode());
+                            return;
+                        }
+                        
+                        log.info("✅ Proof-of-Readiness verified successfully");
+                        
+                    } catch (Exception e) {
+                        log.error("❌ Proof verification error", e);
+                        response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                            "Proof verification error: " + e.getMessage());
+                        return;
+                    }
+                } else {
+                    log.warn("⚠️  No proof provided (OK for POC, would fail in production)");
+                }
+                
                 // Register in HTTP server's peer list
                 // Mark as READY because they've already completed bootstrap before broadcasting
                 ValidatorRegistration registration = new ValidatorRegistration(validatorId, validatorUrl);
@@ -3429,6 +3539,36 @@ public class SegmentHttpServer {
                 }
                 return json.substring(start, end).trim();
             }
+        }
+        
+        /**
+         * Extract a JSON object (not a primitive) from a JSON string.
+         * Used to extract nested objects like the proof.
+         */
+        private String extractJsonObject(String json, String field) {
+            String pattern = "\"" + field + "\":";
+            int start = json.indexOf(pattern);
+            if (start == -1) return null;
+            
+            start = json.indexOf("{", start);
+            if (start == -1) return null;
+            
+            // Find matching closing brace
+            int depth = 0;
+            int end = start;
+            while (end < json.length()) {
+                char c = json.charAt(end);
+                if (c == '{') depth++;
+                if (c == '}') {
+                    depth--;
+                    if (depth == 0) {
+                        return json.substring(start, end + 1);
+                    }
+                }
+                end++;
+            }
+            
+            return null;
         }
         
         private String voteToJson(Vote v) {

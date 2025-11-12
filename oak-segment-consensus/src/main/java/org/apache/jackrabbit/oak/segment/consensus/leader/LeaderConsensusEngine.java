@@ -225,6 +225,9 @@ public class LeaderConsensusEngine {
     public void startRotationMonitor() {
         // Start health monitoring based on initial role
         if (currentRole == ValidatorRole.LEADER) {
+            // Set up split-brain detection callback
+            healthMonitor.setDemotionCallback(() -> demoteToFollowerOnQuorumLoss());
+            
             List<String> followers = election.getPeerValidators();
             healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch);
             log.info("💓 Started heartbeat broadcast to {} followers", followers.size());
@@ -312,10 +315,36 @@ public class LeaderConsensusEngine {
         // Stop monitoring followers (we don't monitor ourselves)
         healthMonitor.stopMonitoring();
         
+        // Set up split-brain detection callback
+        healthMonitor.setDemotionCallback(() -> demoteToFollowerOnQuorumLoss());
+        
         // Start broadcasting heartbeats to followers
         List<String> followers = election.getPeerValidators();
         healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch);
         log.info("💓 Started heartbeat broadcast to {} followers", followers.size());
+    }
+    
+    /**
+     * Demote this validator to FOLLOWER when quorum is lost (split-brain prevention).
+     */
+    private synchronized void demoteToFollowerOnQuorumLoss() {
+        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.error("🧠 DEMOTING TO FOLLOWER DUE TO QUORUM LOSS");
+        log.error("   This prevents split-brain scenarios");
+        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        // Change role
+        currentRole = ValidatorRole.FOLLOWER;
+        
+        // Update metrics
+        ConsensusMetrics.updateLeaderStatus(false, currentEpoch);
+        
+        // Stop broadcasting heartbeats
+        healthMonitor.stopMonitoring();
+        
+        // Enter read-only mode
+        log.warn("⚠️  Entering read-only mode until quorum restored");
+        log.warn("⚠️  Will attempt to rejoin consensus when possible");
     }
     
     /**

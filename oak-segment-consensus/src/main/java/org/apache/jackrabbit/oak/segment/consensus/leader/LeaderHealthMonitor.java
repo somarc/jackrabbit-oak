@@ -55,11 +55,23 @@ public class LeaderHealthMonitor {
     private volatile java.util.List<String> followerUrls = new java.util.ArrayList<>();
     private volatile java.util.function.IntSupplier epochSupplier;
     
+    // Split-brain detection: Track heartbeat responses
+    private volatile int successfulHeartbeats = 0;
+    private volatile int totalValidators = 1; // Start with self
+    private volatile Runnable demotionCallback;
+    
     public LeaderHealthMonitor(String selfUrl) {
         this.selfUrl = selfUrl;
         this.lastHeartbeatTime = System.currentTimeMillis();
         this.leaderAppearsDead = false;
         this.running = false;
+    }
+    
+    /**
+     * Set callback for when leader should demote itself (split-brain detection).
+     */
+    public void setDemotionCallback(Runnable callback) {
+        this.demotionCallback = callback;
     }
     
     /**
@@ -176,6 +188,13 @@ public class LeaderHealthMonitor {
      * @param currentEpoch Current epoch for validation
      */
     public void sendHeartbeatToFollowers(java.util.List<String> followerUrls, int currentEpoch) {
+        // Reset counter for this round (SPLIT-BRAIN DETECTION)
+        successfulHeartbeats = 0;
+        totalValidators = 1 + followerUrls.size(); // self + followers
+        
+        java.util.concurrent.CountDownLatch latch = 
+            new java.util.concurrent.CountDownLatch(followerUrls.size());
+        
         for (String followerUrl : followerUrls) {
             // Send asynchronously to avoid blocking
             new Thread(() -> {
@@ -197,15 +216,65 @@ public class LeaderHealthMonitor {
                     
                     int responseCode = conn.getResponseCode();
                     if (responseCode == 200) {
-                        log.debug("💓 Heartbeat sent to {}", followerUrl);
+                        synchronized (this) {
+                            successfulHeartbeats++; // Count successful responses
+                        }
+                        log.debug("💓 Heartbeat ACK from {}", followerUrl);
                     } else {
                         log.debug("⚠️  Heartbeat to {} failed: HTTP {}", followerUrl, responseCode);
                     }
                     
                 } catch (Exception e) {
                     log.debug("⚠️  Failed to send heartbeat to {}: {}", followerUrl, e.getMessage());
+                } finally {
+                    latch.countDown();
                 }
             }, "heartbeat-sender-" + followerUrl.hashCode()).start();
+        }
+        
+        // Wait for all responses (with timeout)
+        try {
+            latch.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        
+        // Check quorum after all responses received
+        checkQuorum();
+    }
+    
+    /**
+     * Check if leader has quorum (majority of validators responding).
+     * 
+     * SPLIT-BRAIN DETECTION: If leader can't reach majority, it should step down
+     * to prevent dual-leader scenarios during network partitions.
+     */
+    private void checkQuorum() {
+        int requiredQuorum = (totalValidators / 2) + 1; // Majority
+        int responding = successfulHeartbeats + 1; // +1 for self
+        
+        if (responding < requiredQuorum) {
+            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.warn("🧠 SPLIT-BRAIN DETECTION: QUORUM LOST!");
+            log.warn("   Total validators: {}", totalValidators);
+            log.warn("   Required quorum: {}", requiredQuorum);
+            log.warn("   Responding: {} (self + {} followers)", responding, successfulHeartbeats);
+            log.warn("   Missing: {}", totalValidators - responding);
+            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.error("❌ LEADER MUST DEMOTE TO PREVENT SPLIT-BRAIN");
+            
+            // Trigger demotion callback
+            if (demotionCallback != null) {
+                try {
+                    demotionCallback.run();
+                } catch (Exception e) {
+                    log.error("Failed to execute demotion callback", e);
+                }
+            } else {
+                log.error("⚠️  No demotion callback configured!");
+            }
+        } else {
+            log.debug("✅ Quorum maintained: {}/{} validators responding", responding, totalValidators);
         }
     }
     
