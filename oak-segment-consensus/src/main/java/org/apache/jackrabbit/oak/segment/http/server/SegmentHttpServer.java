@@ -401,6 +401,13 @@ public class SegmentHttpServer {
                     return;
                 }
                 
+                // API Browser UI (HAL-style interactive API explorer)
+                if ("/api-browser".equals(path)) {
+                    handleApiBrowserUI(response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
                 // Consensus API - Propose write
                 if ("/v1/propose".equals(path) && "POST".equals(method)) {
                     handleWriteProposal(request, response);
@@ -1055,19 +1062,63 @@ public class SegmentHttpServer {
             html.append("Launch Explorer →</a>\n");
             html.append("</div>\n");
             
-            // API Endpoints
+            // API Endpoints - Comprehensive List
             html.append("<div class='card'>\n");
             html.append("<h2>🔌 API Endpoints</h2>\n");
+            
+            // Interactive API Browser Link
+            html.append("<div style='margin-bottom: 16px; padding: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px;'>\n");
+            html.append("<a href='/api-browser' style='color: white; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 8px;'>\n");
+            html.append("🧪 Interactive API Browser →</a>\n");
+            html.append("</div>\n");
+            
             html.append("<div class='endpoints'>\n");
+            
+            // Explorer APIs
+            html.append("<div style='margin-top: 12px; font-weight: 600; color: #3b82f6;'>📊 Explorer APIs</div>\n");
             html.append("<div class='endpoint'><code>GET /explorer</code> - Blockchain content explorer UI</div>\n");
-            html.append("<div class='endpoint'><code>GET /api/explore?path={path}</code> - Browse node tree with properties (JSON)</div>\n");
-            html.append("<div class='endpoint'><code>GET /api/segments/tars</code> - TAR files and storage blocks (JSON)</div>\n");
-            html.append("<div class='endpoint'><code>GET /api/segments/recent</code> - Recent segment writes from journal (JSON)</div>\n");
-            html.append("<div class='endpoint'><code>GET /api/metrics</code> - Consensus, replication, and system metrics (JSON)</div>\n");
-            html.append("<div class='endpoint'><code>GET /health</code> - Health check</div>\n");
-            html.append("<div class='endpoint'><code>GET /journal.log</code> - Journal file</div>\n");
-            html.append("<div class='endpoint'><code>GET /manifest</code> - Manifest file</div>\n");
-            html.append("<div class='endpoint'><code>GET /segments/{id}</code> - Fetch segment by ID</div>\n");
+            html.append("<div class='endpoint'><code>GET /api/explore?path={path}</code> - Browse node tree (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /api/segments/tars</code> - TAR files and storage (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /api/segments/recent</code> - Recent segment writes (JSON)</div>\n");
+            
+            // Health & Monitoring
+            html.append("<div style='margin-top: 12px; font-weight: 600; color: #10b981;'>💚 Health & Monitoring</div>\n");
+            html.append("<div class='endpoint'><code>GET /health</code> - Basic health check (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /health/deep</code> - Comprehensive health validation (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /api/metrics</code> - Consensus & replication metrics (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /metrics</code> - Prometheus metrics (text)</div>\n");
+            
+            // Consensus APIs
+            html.append("<div style='margin-top: 12px; font-weight: 600; color: #f59e0b;'>🔄 Consensus APIs</div>\n");
+            html.append("<div class='endpoint'><code>POST /v1/propose</code> - Propose write to consensus</div>\n");
+            html.append("<div class='endpoint'><code>POST /v1/vote</code> - Submit vote for proposal</div>\n");
+            html.append("<div class='endpoint'><code>POST /v1/test-write</code> - Test write with consensus</div>\n");
+            html.append("<div class='endpoint'><code>GET /v1/head</code> - Current HEAD record ID (text)</div>\n");
+            
+            // Registration & Discovery
+            html.append("<div style='margin-top: 12px; font-weight: 600; color: #8b5cf6;'>🌐 Registration & Discovery</div>\n");
+            html.append("<div class='endpoint'><code>POST /v1/register-client</code> - Register Sling author</div>\n");
+            html.append("<div class='endpoint'><code>POST /v1/register-validator</code> - Register validator node</div>\n");
+            html.append("<div class='endpoint'><code>GET /v1/peers</code> - List all known validators (JSON)</div>\n");
+            html.append("<div class='endpoint'><code>GET /v1/ngrok-url</code> - Get public ngrok URL (text)</div>\n");
+            
+            // Leader-Based Consensus
+            html.append("<div style='margin-top: 12px; font-weight: 600; color: #ec4899;'>👑 Leader Consensus</div>\n");
+            html.append("<div class='endpoint'><code>POST /v1/follower/head-update</code> - Leader broadcasts HEAD</div>\n");
+            html.append("<div class='endpoint'><code>POST /v1/heartbeat</code> - Leader heartbeat</div>\n");
+            
+            // DAG Consensus
+            html.append("<div style='margin-top: 12px; font-weight: 600; color: #06b6d4;'>🕸️  DAG Consensus</div>\n");
+            html.append("<div class='endpoint'><code>POST /v1/dag/head</code> - Receive HEAD update from peer</div>\n");
+            
+            // Oak Files
+            html.append("<div style='margin-top: 12px; font-weight: 600; color: #6b7280;'>📄 Oak Files</div>\n");
+            html.append("<div class='endpoint'><code>GET /journal.log</code> - Journal file (text)</div>\n");
+            html.append("<div class='endpoint'><code>GET /manifest</code> - Manifest file (text)</div>\n");
+            html.append("<div class='endpoint'><code>GET /gc.log</code> - Garbage collection log (text)</div>\n");
+            html.append("<div class='endpoint'><code>GET /segments/{id}</code> - Fetch segment by ID (binary)</div>\n");
+            html.append("<div class='endpoint'><code>HEAD /segments/{id}</code> - Check segment existence</div>\n");
+            
             html.append("</div>\n");
             html.append("</div>\n");
             
@@ -1469,6 +1520,265 @@ public class SegmentHttpServer {
             html.append("</div>\n</body>\n</html>");
             
             response.getWriter().write(html.toString());
+        }
+        
+        /**
+         * Handle interactive API Browser UI (HAL-style explorer).
+         */
+        private void handleApiBrowserUI(HttpServletResponse response) throws IOException {
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.setContentType("text/html; charset=UTF-8");
+            
+            StringBuilder html = new StringBuilder();
+            html.append("<!DOCTYPE html>\n<html>\n<head>\n");
+            html.append("<meta charset='UTF-8'>\n");
+            html.append("<title>🧪 Oak Consensus API Browser</title>\n");
+            html.append("<style>\n");
+            html.append("* { margin: 0; padding: 0; box-sizing: border-box; }\n");
+            html.append("body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; ");
+            html.append("background: #0f172a; color: #e2e8f0; min-height: 100vh; }\n");
+            html.append(".header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; ");
+            html.append("box-shadow: 0 4px 6px rgba(0,0,0,0.3); }\n");
+            html.append(".header h1 { font-size: 2em; margin-bottom: 5px; }\n");
+            html.append(".header p { opacity: 0.9; }\n");
+            html.append(".container { max-width: 1600px; margin: 0 auto; padding: 20px; }\n");
+            html.append(".api-categories { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }\n");
+            html.append(".category { background: #1e293b; border-radius: 10px; padding: 20px; border: 1px solid #334155; }\n");
+            html.append(".category h2 { color: #a78bfa; margin-bottom: 15px; font-size: 1.2em; }\n");
+            html.append(".endpoint { background: #0f172a; padding: 12px; margin: 8px 0; border-radius: 6px; ");
+            html.append("cursor: pointer; border-left: 3px solid #8b5cf6; transition: all 0.2s; }\n");
+            html.append(".endpoint:hover { background: #1e293b; transform: translateX(5px); }\n");
+            html.append(".method { display: inline-block; padding: 3px 8px; border-radius: 4px; font-weight: 600; ");
+            html.append("font-size: 0.75em; margin-right: 8px; }\n");
+            html.append(".method-GET { background: #10b981; color: white; }\n");
+            html.append(".method-POST { background: #3b82f6; color: white; }\n");
+            html.append(".method-PUT { background: #f59e0b; color: white; }\n");
+            html.append(".method-DELETE { background: #ef4444; color: white; }\n");
+            html.append(".method-HEAD { background: #6b7280; color: white; }\n");
+            html.append(".endpoint-path { font-family: monospace; color: #60a5fa; font-size: 0.9em; }\n");
+            html.append(".endpoint-desc { color: #94a3b8; font-size: 0.85em; margin-top: 5px; }\n");
+            html.append(".test-panel { background: #1e293b; border-radius: 10px; padding: 20px; margin: 20px 0; ");
+            html.append("border: 1px solid #334155; display: none; }\n");
+            html.append(".test-panel h3 { color: #a78bfa; margin-bottom: 15px; }\n");
+            html.append(".form-group { margin: 15px 0; }\n");
+            html.append(".form-group label { display: block; margin-bottom: 5px; color: #94a3b8; font-size: 0.9em; }\n");
+            html.append("input, textarea { width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; ");
+            html.append("border-radius: 5px; color: #e2e8f0; font-family: monospace; }\n");
+            html.append("textarea { min-height: 100px; font-size: 0.9em; }\n");
+            html.append("button { padding: 10px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); ");
+            html.append("color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: 600; }\n");
+            html.append("button:hover { transform: scale(1.05); }\n");
+            html.append(".response { background: #0f172a; border-radius: 5px; padding: 15px; margin: 15px 0; ");
+            html.append("border-left: 3px solid #10b981; }\n");
+            html.append(".response-header { color: #94a3b8; font-size: 0.85em; margin-bottom: 10px; }\n");
+            html.append(".response-body { font-family: monospace; font-size: 0.85em; white-space: pre-wrap; ");
+            html.append("word-wrap: break-word; color: #34d399; }\n");
+            html.append(".back-link { display: inline-block; margin-bottom: 20px; color: #60a5fa; text-decoration: none; }\n");
+            html.append(".back-link:hover { text-decoration: underline; }\n");
+            html.append("</style>\n");
+            html.append("</head>\n");
+            html.append("<body>\n");
+            
+            html.append("<div class='header'>\n");
+            html.append("<h1>🧪 Interactive API Browser</h1>\n");
+            html.append("<p>Explore and test all Oak Segment Consensus APIs</p>\n");
+            html.append("</div>\n");
+            
+            html.append("<div class='container'>\n");
+            html.append("<a href='/' class='back-link'>← Back to Dashboard</a>\n");
+            
+            // Test Panel (hidden by default)
+            html.append("<div id='test-panel' class='test-panel'>\n");
+            html.append("<h3 id='test-title'></h3>\n");
+            html.append("<div id='test-form'></div>\n");
+            html.append("<div id='response-container'></div>\n");
+            html.append("</div>\n");
+            
+            html.append("<div class='api-categories'>\n");
+            
+            // Explorer APIs
+            html.append("<div class='category'>\n");
+            html.append("<h2>📊 Explorer APIs</h2>\n");
+            addApiEndpoint(html, "GET", "/explorer", "Blockchain content explorer UI", "explorer");
+            addApiEndpoint(html, "GET", "/api/explore?path=/", "Browse node tree structure (JSON)", "explore");
+            addApiEndpoint(html, "GET", "/api/segments/tars", "List all TAR files and storage blocks (JSON)", "tars");
+            addApiEndpoint(html, "GET", "/api/segments/recent", "Recent segment writes from journal (JSON)", "recent");
+            html.append("</div>\n");
+            
+            // Health & Monitoring
+            html.append("<div class='category'>\n");
+            html.append("<h2>💚 Health & Monitoring</h2>\n");
+            addApiEndpoint(html, "GET", "/health", "Basic health check (JSON)", "health");
+            addApiEndpoint(html, "GET", "/health/deep", "Comprehensive health validation (JSON)", "health_deep");
+            addApiEndpoint(html, "GET", "/api/metrics", "Consensus & replication metrics (JSON)", "metrics");
+            addApiEndpoint(html, "GET", "/metrics", "Prometheus metrics (text)", "prometheus");
+            html.append("</div>\n");
+            
+            // Consensus APIs
+            html.append("<div class='category'>\n");
+            html.append("<h2>🔄 Consensus APIs</h2>\n");
+            addApiEndpoint(html, "POST", "/v1/propose", "Propose write to consensus network", "propose");
+            addApiEndpoint(html, "POST", "/v1/vote", "Submit vote for a proposal", "vote");
+            addApiEndpoint(html, "POST", "/v1/test-write", "Test write with consensus (demo)", "test_write");
+            addApiEndpoint(html, "GET", "/v1/head", "Get current HEAD record ID (text)", "head");
+            html.append("</div>\n");
+            
+            // Registration & Discovery
+            html.append("<div class='category'>\n");
+            html.append("<h2>🌐 Registration & Discovery</h2>\n");
+            addApiEndpoint(html, "POST", "/v1/register-client", "Register a Sling author client", "register_client");
+            addApiEndpoint(html, "POST", "/v1/register-validator", "Register a validator node", "register_validator");
+            addApiEndpoint(html, "GET", "/v1/peers", "List all known validators (JSON)", "peers");
+            addApiEndpoint(html, "GET", "/v1/ngrok-url", "Get public ngrok URL (text)", "ngrok");
+            html.append("</div>\n");
+            
+            // Leader Consensus
+            html.append("<div class='category'>\n");
+            html.append("<h2>👑 Leader Consensus</h2>\n");
+            addApiEndpoint(html, "POST", "/v1/follower/head-update", "Leader broadcasts HEAD to follower", "follower_update");
+            addApiEndpoint(html, "POST", "/v1/heartbeat", "Leader heartbeat signal", "heartbeat");
+            html.append("</div>\n");
+            
+            // DAG Consensus
+            html.append("<div class='category'>\n");
+            html.append("<h2>🕸️ DAG Consensus</h2>\n");
+            addApiEndpoint(html, "POST", "/v1/dag/head", "Receive HEAD update from peer (git-style)", "dag_head");
+            html.append("</div>\n");
+            
+            // Oak Files
+            html.append("<div class='category'>\n");
+            html.append("<h2>📄 Oak Files</h2>\n");
+            addApiEndpoint(html, "GET", "/journal.log", "Journal file (text)", "journal");
+            addApiEndpoint(html, "GET", "/manifest", "Manifest file (text)", "manifest");
+            addApiEndpoint(html, "GET", "/gc.log", "Garbage collection log (text)", "gc");
+            addApiEndpoint(html, "GET", "/segments/{id}", "Fetch segment by ID (binary)", "segment_get");
+            addApiEndpoint(html, "HEAD", "/segments/{id}", "Check segment existence", "segment_head");
+            html.append("</div>\n");
+            
+            html.append("</div>\n"); // End api-categories
+            
+            // JavaScript for interactive testing
+            html.append("<script>\n");
+            html.append("function testEndpoint(method, path, id) {\n");
+            html.append("  const panel = document.getElementById('test-panel');\n");
+            html.append("  const title = document.getElementById('test-title');\n");
+            html.append("  const form = document.getElementById('test-form');\n");
+            html.append("  const responseContainer = document.getElementById('response-container');\n");
+            html.append("  \n");
+            html.append("  panel.style.display = 'block';\n");
+            html.append("  title.textContent = method + ' ' + path;\n");
+            html.append("  responseContainer.innerHTML = '';\n");
+            html.append("  \n");
+            html.append("  let formHtml = '';\n");
+            html.append("  \n");
+            html.append("  if (path.includes('{')) {\n");
+            html.append("    formHtml += '<div class=\"form-group\">';\n");
+            html.append("    formHtml += '<label>Path Parameters:</label>';\n");
+            html.append("    formHtml += '<input type=\"text\" id=\"path-params\" placeholder=\"e.g., segment ID\" />';\n");
+            html.append("    formHtml += '</div>';\n");
+            html.append("  }\n");
+            html.append("  \n");
+            html.append("  if (path.includes('?')) {\n");
+            html.append("    formHtml += '<div class=\"form-group\">';\n");
+            html.append("    formHtml += '<label>Query Parameters:</label>';\n");
+            html.append("    formHtml += '<input type=\"text\" id=\"query-params\" placeholder=\"e.g., path=/oak-chain\" value=\"' + (path.split('?')[1] || '') + '\" />';\n");
+            html.append("    formHtml += '</div>';\n");
+            html.append("  }\n");
+            html.append("  \n");
+            html.append("  if (method === 'POST' || method === 'PUT') {\n");
+            html.append("    formHtml += '<div class=\"form-group\">';\n");
+            html.append("    formHtml += '<label>Request Body (JSON):</label>';\n");
+            html.append("    formHtml += '<textarea id=\"request-body\">' + getExampleBody(id) + '</textarea>';\n");
+            html.append("    formHtml += '</div>';\n");
+            html.append("  }\n");
+            html.append("  \n");
+            html.append("  formHtml += '<button onclick=\"sendRequest(\\'' + method + '\\', \\'' + path + '\\')\">Send Request</button>';\n");
+            html.append("  form.innerHTML = formHtml;\n");
+            html.append("  \n");
+            html.append("  panel.scrollIntoView({ behavior: 'smooth' });\n");
+            html.append("}\n");
+            html.append("\n");
+            html.append("function getExampleBody(id) {\n");
+            html.append("  const examples = {\n");
+            html.append("    'propose': JSON.stringify({proposalId: 'proposal-' + Date.now(), data: 'test content'}, null, 2),\n");
+            html.append("    'vote': JSON.stringify({proposalId: 'proposal-123', vote: 'ACCEPT'}, null, 2),\n");
+            html.append("    'test_write': JSON.stringify({walletAddress: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0', message: 'Hello Blockchain!'}, null, 2),\n");
+            html.append("    'register_client': JSON.stringify({clientId: 'sling-author-1', clientUrl: 'http://localhost:8080', walletAddress: '0xabc...def'}, null, 2),\n");
+            html.append("    'register_validator': JSON.stringify({validatorId: 'validator-4', validatorUrl: 'http://validator-4:8090'}, null, 2),\n");
+            html.append("    'dag_head': JSON.stringify({validatorId: 'validator-2', headRecordId: 'abc123...xyz'}, null, 2)\n");
+            html.append("  };\n");
+            html.append("  return examples[id] || '{}';\n");
+            html.append("}\n");
+            html.append("\n");
+            html.append("async function sendRequest(method, path) {\n");
+            html.append("  const responseContainer = document.getElementById('response-container');\n");
+            html.append("  responseContainer.innerHTML = '<div class=\"response\"><div class=\"response-header\">Sending request...</div></div>';\n");
+            html.append("  \n");
+            html.append("  try {\n");
+            html.append("    let finalPath = path.split('?')[0];\n");
+            html.append("    \n");
+            html.append("    const pathParams = document.getElementById('path-params');\n");
+            html.append("    if (pathParams && pathParams.value) {\n");
+            html.append("      finalPath = finalPath.replace('{id}', pathParams.value);\n");
+            html.append("    }\n");
+            html.append("    \n");
+            html.append("    const queryParams = document.getElementById('query-params');\n");
+            html.append("    if (queryParams && queryParams.value) {\n");
+            html.append("      finalPath += '?' + queryParams.value;\n");
+            html.append("    }\n");
+            html.append("    \n");
+            html.append("    const options = { method };\n");
+            html.append("    \n");
+            html.append("    const bodyField = document.getElementById('request-body');\n");
+            html.append("    if (bodyField && bodyField.value) {\n");
+            html.append("      options.headers = { 'Content-Type': 'application/json' };\n");
+            html.append("      options.body = bodyField.value;\n");
+            html.append("    }\n");
+            html.append("    \n");
+            html.append("    const startTime = Date.now();\n");
+            html.append("    const response = await fetch(finalPath, options);\n");
+            html.append("    const duration = Date.now() - startTime;\n");
+            html.append("    \n");
+            html.append("    const contentType = response.headers.get('content-type');\n");
+            html.append("    let body;\n");
+            html.append("    \n");
+            html.append("    if (contentType && contentType.includes('application/json')) {\n");
+            html.append("      body = JSON.stringify(await response.json(), null, 2);\n");
+            html.append("    } else {\n");
+            html.append("      body = await response.text();\n");
+            html.append("    }\n");
+            html.append("    \n");
+            html.append("    responseContainer.innerHTML = \n");
+            html.append("      '<div class=\"response\">' +\n");
+            html.append("      '<div class=\"response-header\">Status: ' + response.status + ' ' + response.statusText + ' (' + duration + 'ms)</div>' +\n");
+            html.append("      '<div class=\"response-body\">' + body + '</div>' +\n");
+            html.append("      '</div>';\n");
+            html.append("    \n");
+            html.append("  } catch (error) {\n");
+            html.append("    responseContainer.innerHTML = \n");
+            html.append("      '<div class=\"response\" style=\"border-left-color: #ef4444;\">' +\n");
+            html.append("      '<div class=\"response-header\">Error</div>' +\n");
+            html.append("      '<div class=\"response-body\" style=\"color: #f87171;\">' + error.message + '</div>' +\n");
+            html.append("      '</div>';\n");
+            html.append("  }\n");
+            html.append("}\n");
+            html.append("</script>\n");
+            
+            html.append("</div>\n"); // End container
+            html.append("</body>\n</html>\n");
+            
+            response.getWriter().write(html.toString());
+        }
+        
+        /**
+         * Helper method to add an API endpoint to the browser UI.
+         */
+        private void addApiEndpoint(StringBuilder html, String method, String path, String description, String id) {
+            html.append("<div class='endpoint' onclick='testEndpoint(\"").append(method).append("\", \"").append(path).append("\", \"").append(id).append("\")'>\n");
+            html.append("<span class='method method-").append(method).append("'>").append(method).append("</span>\n");
+            html.append("<span class='endpoint-path'>").append(escapeHtml(path)).append("</span>\n");
+            html.append("<div class='endpoint-desc'>").append(escapeHtml(description)).append("</div>\n");
+            html.append("</div>\n");
         }
         
         /**
