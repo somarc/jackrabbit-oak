@@ -869,9 +869,20 @@ public class SegmentHttpServer {
                 validatorCount = 1 + leaderConsensusEngine.getElection().getPeerValidators().size();
                 consensusType = "Leader-Based";
                 
+                // Check if I'm on probation (self-awareness)
+                boolean amOnProbation = false;
+                if (!leaderConsensusEngine.isLeader()) {
+                    // Check if selfUrl is in non-voting followers
+                    java.util.List<String> nonVotingFollowers = leaderConsensusEngine.getNonVotingFollowers();
+                    amOnProbation = nonVotingFollowers.contains(selfUrl);
+                }
+                
                 if (leaderConsensusEngine.isLeader()) {
                     myRole = "LEADER";
                     roleColor = "#fbbf24"; // gold
+                } else if (amOnProbation) {
+                    myRole = "FOLLOWER (PROBATION)";
+                    roleColor = "#eab308"; // yellow (probation)
                 } else {
                     myRole = "FOLLOWER";
                     roleColor = "#3b82f6"; // blue
@@ -3123,16 +3134,38 @@ public class SegmentHttpServer {
         /**
          * Handle GET /v1/peers - Return list of all known validators for organic peer discovery
          * 
-         * Returns JSON array:
+         * Returns JSON array with enriched status:
          * [
-         *   {"validatorId": "validator-1", "validatorUrl": "http://validator-1:8090", "lastSeen": 1234567890},
-         *   {"validatorId": "validator-2", "validatorUrl": "http://validator-2:8090", "lastSeen": 1234567891}
+         *   {"validatorId": "validator-1", "validatorUrl": "http://validator-1:8090", "lastSeen": 1234567890, "status": "READY"},
+         *   {"validatorId": "validator-2", "validatorUrl": "http://validator-2:8090", "lastSeen": 1234567891, "status": "PROBATION"}
          * ]
+         * 
+         * Status values:
+         * - READY: Voting member, fully participating in consensus
+         * - PROBATION: Non-voting follower, must wait 1 epoch before joining electorate
+         * - OFFLINE: Last seen > 2 epochs ago (10 minutes), likely disconnected
          */
         private void handlePeerList(HttpServletResponse response) throws IOException {
             try {
                 response.setContentType("application/json");
                 response.setStatus(HttpServletResponse.SC_OK);
+                
+                // Get non-voting followers (probationary validators)
+                final java.util.List<String> nonVotingFollowers;
+                if (leaderConsensusEngine != null) {
+                    nonVotingFollowers = leaderConsensusEngine.getNonVotingFollowers();
+                } else {
+                    nonVotingFollowers = new java.util.ArrayList<>();
+                }
+                
+                final long now = System.currentTimeMillis();
+                // OFFLINE = missed 2 full epochs (2 x 300s = 600s = 10 minutes)
+                // A validator should be sending heartbeats or receiving them every epoch
+                int leaderTermSeconds = 300; // default
+                if (leaderConsensusEngine != null) {
+                    leaderTermSeconds = leaderConsensusEngine.getElection().getLeaderTermSeconds();
+                }
+                final long offlineThresholdMs = leaderTermSeconds * 2 * 1000L; // 2 epochs
                 
                 StringBuilder json = new StringBuilder();
                 json.append("[\n");
@@ -3144,17 +3177,39 @@ public class SegmentHttpServer {
                     }
                     first = false;
                     
+                    // Determine status
+                    String status;
+                    long timeSinceLastSeen = now - reg.lastSeen;
+                    
+                    if (timeSinceLastSeen > offlineThresholdMs) {
+                        status = "OFFLINE";  // Hasn't been seen in > 60s
+                    } else if (nonVotingFollowers.contains(reg.validatorUrl)) {
+                        status = "PROBATION";  // Non-voting, waiting for probation period
+                    } else {
+                        status = "READY";  // Voting member, fully participating
+                    }
+                    
                     json.append("  {");
                     json.append("\"validatorId\":\"").append(reg.validatorId.replace("\"", "\\\"")).append("\",");
                     json.append("\"validatorUrl\":\"").append(reg.validatorUrl.replace("\"", "\\\"")).append("\",");
-                    json.append("\"lastSeen\":").append(reg.lastSeen);
+                    json.append("\"lastSeen\":").append(reg.lastSeen).append(",");
+                    json.append("\"status\":\"").append(status).append("\"");
                     json.append("}");
                 }
                 
                 json.append("\n]");
                 response.getWriter().write(json.toString());
                 
-                log.debug("Served peer list: {} validators", registeredValidators.size());
+                log.debug("Served peer list: {} validators (READY={}, PROBATION={}, OFFLINE={})", 
+                    registeredValidators.size(),
+                    registeredValidators.values().stream().filter(r -> 
+                        (now - r.lastSeen <= offlineThresholdMs) && !nonVotingFollowers.contains(r.validatorUrl)
+                    ).count(),
+                    nonVotingFollowers.size(),
+                    registeredValidators.values().stream().filter(r -> 
+                        now - r.lastSeen > offlineThresholdMs
+                    ).count()
+                );
                 
             } catch (Exception e) {
                 log.error("Failed to serve peer list", e);
