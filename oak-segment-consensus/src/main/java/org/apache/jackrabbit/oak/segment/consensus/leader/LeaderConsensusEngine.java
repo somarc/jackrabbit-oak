@@ -282,6 +282,11 @@ public class LeaderConsensusEngine {
                 try {
                     Thread.sleep(10000); // Check every 10 seconds
                     
+                    // Check if any validators have completed probation and should graduate
+                    if (currentRole == ValidatorRole.LEADER) {
+                        graduateValidatorsFromProbation();
+                    }
+                    
                     int newEpoch = election.getCurrentEpoch();
                     
                     if (newEpoch != currentEpoch) {
@@ -297,6 +302,75 @@ public class LeaderConsensusEngine {
         
         rotationMonitor.setDaemon(true);
         rotationMonitor.start();
+    }
+    
+    /**
+     * Check if any validators have completed their probationary period
+     * and graduate them to full voting members (electorate).
+     * 
+     * Called periodically by the leader (every 10s) to ensure validators
+     * who have proven themselves by following for 300 seconds can now
+     * participate in leader elections.
+     */
+    private synchronized void graduateValidatorsFromProbation() {
+        long now = System.currentTimeMillis();
+        long probationPeriod = election.getLeaderTermSeconds() * 1000L; // 300 seconds
+        
+        java.util.List<String> graduatingValidators = new java.util.ArrayList<>();
+        
+        // Find validators who have been in network for >= probation period
+        for (String validatorUrl : allFollowers) {
+            Long joinTime = validatorJoinTimes.get(validatorUrl);
+            if (joinTime == null) {
+                continue; // Skip if no join time recorded
+            }
+            
+            long timeSinceJoin = now - joinTime;
+            
+            // Check if they're still on probation but have completed it
+            if (timeSinceJoin >= probationPeriod) {
+                // Check if they're still in non-voting list
+                boolean isStillNonVoting = false;
+                for (String nv : election.getValidatorsOnProbation()) {
+                    if (nv.equals(validatorUrl)) {
+                        isStillNonVoting = true;
+                        break;
+                    }
+                }
+                
+                if (isStillNonVoting) {
+                    graduatingValidators.add(validatorUrl);
+                }
+            }
+        }
+        
+        // If any validators are ready to graduate, rebuild election
+        if (!graduatingValidators.isEmpty()) {
+            log.info("🎓 PROBATION GRADUATION");
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            
+            for (String graduatingUrl : graduatingValidators) {
+                Long joinTime = validatorJoinTimes.get(graduatingUrl);
+                long timeSinceJoin = now - joinTime;
+                log.info("   ✅ {} ({}s in network → VOTING MEMBER)", 
+                    graduatingUrl, timeSinceJoin / 1000);
+            }
+            
+            // Rebuild election with all followers (graduated validators included)
+            java.util.List<String> allPeers = new java.util.ArrayList<>(allFollowers);
+            this.election = new LeaderElection(selfUrl, allPeers, election.getLeaderTermSeconds(), validatorJoinTimes);
+            
+            // Update health monitor's quorum calculation
+            int newElectorateSize = election.getAllValidators().size();
+            healthMonitor.updateElectorateSize(newElectorateSize);
+            
+            // Update follower list for heartbeats (no change, but refresh)
+            healthMonitor.updateFollowerList(allPeers);
+            
+            log.info("   📊 New electorate size: {}", newElectorateSize);
+            log.info("   🗳️  Voting members: {}", election.getAllValidators());
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        }
     }
     
     /**
