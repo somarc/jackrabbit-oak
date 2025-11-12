@@ -373,9 +373,14 @@ public class GlobalStoreServer {
                 }
                 httpServer.registerWithPeers(validatorId, peerUrls);
             }
-        } else {
+        } else if (!isStandbyMode) {
+            // Only print this if NOT in standby mode (standby will init via callback)
             System.out.println();
             System.out.println("ℹ️  Consensus disabled (single-validator mode)");
+        } else {
+            // STANDBY mode - consensus will be initialized after bootstrap
+            System.out.println();
+            System.out.println("ℹ️  Consensus initialization deferred (STANDBY mode → callback)");
         }
         
         // Start StandbyServerSync for PRIMARY mode (serve other standbys)
@@ -608,36 +613,63 @@ public class GlobalStoreServer {
             nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
                            org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY);
             
-            // Calculate genesis state ID
-            String genesisStateId = nodeStore.getRoot()
-                .getChildNode("oak-chain")
-                .getChildNode("content")
-                .getChildNode("00")
-                .getChildNode("00")
-                .getChildNode("00")
-                .getChildNode(GENESIS_ADDRESS)
-                .getChildNode("genesis")
-                .toString();
-            
             System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("   ✅ IMMORTAL GENESIS NODE CREATED");
-            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("   📍 Path: " + genesisShardedPath + "/genesis");
-            System.out.println("   🪣 Bucket: 00/00/00 (Genesis bucket - fault isolated)");
-            System.out.println("   🔗 Chain ID: oak-blockchain-aem-poc");
-            System.out.println("   📅 Birth: " + genesisDate);
-            System.out.println("   🎖️  Message: \"DO IT LIVE!\"");
-            System.out.println("   👛 Genesis Address: " + GENESIS_ADDRESS + " (Zero Address)");
-            System.out.println("   🌐 Genesis Validator: " + genesisValidator);
-            System.out.println("   🔐 Genesis State: " + genesisStateId.substring(0, Math.min(40, genesisStateId.length())));
+            System.out.println("   🎊 IMMORTAL GENESIS NODE CREATED");
             System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             System.out.println("");
-            System.out.println("   New validators: Bootstrap from " + genesisHost + ":8091");
-            System.out.println("   Query genesis: /api/explore?path=" + genesisShardedPath + "/genesis");
+            System.out.println("   📍 LOCATION:");
+            System.out.println("      Path: " + genesisShardedPath + "/genesis");
+            System.out.println("      Bucket: 00/00/00 (Genesis bucket - fault isolated)");
+            System.out.println("      Address: " + GENESIS_ADDRESS + " (Ethereum Zero Address)");
             System.out.println("");
-            System.out.println("   ℹ️  Genesis uses sharded path for fault isolation");
-            System.out.println("   ℹ️  All wallets follow pattern: /content/{L1}/{L2}/{L3}/0x{address}/");
-            System.out.println("   ℹ️  Max 256 children per node = stable DAG, fast writes");
+            System.out.println("   🔐 PROTOCOL:");
+            System.out.println("      Chain ID: oak-blockchain-aem-poc");
+            System.out.println("      Message: \"DO IT LIVE!\"");
+            System.out.println("      Version: 1.0.0-POC");
+            System.out.println("      Birth: " + genesisDate);
+            System.out.println("");
+            System.out.println("   🎖️  CONSENSUS:");
+            System.out.println("      Model: leader-based-raft");
+            System.out.println("      Leader Term: 300 seconds (5 minutes)");
+            System.out.println("      Probation: 300 seconds (new validators)");
+            System.out.println("      Heartbeat: 10 seconds");
+            System.out.println("      Quorum: (totalVotingMembers / 2) + 1");
+            System.out.println("");
+            System.out.println("   🌐 NETWORK:");
+            System.out.println("      Genesis Validator: " + genesisValidator);
+            System.out.println("      Bootstrap Host: " + genesisHost);
+            System.out.println("      Bootstrap Port: 8091");
+            System.out.println("      Consensus Port: 8090");
+            System.out.println("");
+            System.out.println("   🛡️  SECURITY:");
+            System.out.println("      ✅ Proof-of-Readiness (Byzantine protection)");
+            System.out.println("      ✅ Split-Brain Detection (quorum enforcement)");
+            System.out.println("      ✅ Probationary Period (manipulation prevention)");
+            System.out.println("      ✅ Genesis Verification (state integrity)");
+            System.out.println("");
+            System.out.println("   🚀 TO JOIN THIS NETWORK:");
+            System.out.println("      1. BOOTSTRAP_PRIMARY_HOST=" + genesisHost);
+            System.out.println("      2. BOOTSTRAP_PRIMARY_PORT=8091");
+            System.out.println("      3. VALIDATOR_MODE=auto");
+            System.out.println("      4. CONSENSUS_ENABLED=true");
+            System.out.println("      5. CONSENSUS_MODE=leader");
+            System.out.println("      6. CONSENSUS_SELF_URL=http://your-validator:8090");
+            System.out.println("");
+            System.out.println("      → You'll join as NON-VOTING follower (300s probation)");
+            System.out.println("      → After probation, eligible for voting & leadership");
+            System.out.println("");
+            System.out.println("   📊 QUERY GENESIS:");
+            System.out.println("      GET /api/explore?path=" + genesisShardedPath + "/genesis");
+            System.out.println("");
+            System.out.println("   ℹ️  ARCHITECTURE:");
+            System.out.println("      • Sharded paths for fault isolation");
+            System.out.println("      • Max 256 children/node = stable DAG");
+            System.out.println("      • Pattern: /content/{L1}/{L2}/{L3}/0x{wallet}/");
+            System.out.println("      • SNFE contained to 0.0004% of chain");
+            System.out.println("");
+            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            System.out.println("   🎉 Network initialized and ready for validators!");
+            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             System.out.println("");
             
         } catch (Exception e) {
