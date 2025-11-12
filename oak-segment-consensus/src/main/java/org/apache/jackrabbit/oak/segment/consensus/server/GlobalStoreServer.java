@@ -707,8 +707,11 @@ public class GlobalStoreServer {
             // Force FOLLOWER role
             leaderEngine.forceFollowerMode();
             
-            // Start follower monitoring (listens for heartbeats)
-            leaderEngine.startRotationMonitor();
+            // DO NOT start rotation monitor yet!
+            // Rotation monitor does epoch-based leader checks which would override forced follower mode.
+            // V2 will start rotation monitor AFTER receiving first heartbeat from V1.
+            // For now, just listen for heartbeats (already started in forceFollowerMode()).
+            System.out.println("   ⏸️  Rotation monitor deferred until first heartbeat received");
             
             // Broadcast presence to network (Dynamic Peer Discovery)
             String validatorId = System.getProperty("consensus.validator.id", "validator-promoted");
