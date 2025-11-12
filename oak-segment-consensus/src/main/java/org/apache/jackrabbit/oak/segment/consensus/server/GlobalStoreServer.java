@@ -226,6 +226,7 @@ public class GlobalStoreServer {
         }
         
         // Initialize Consensus Engine (Multi-Validator)
+        // CRITICAL: Skip this if we're in STANDBY mode (bootstrap will initialize via callback)
         String consensusEnabled = System.getProperty("consensus.enabled", "false");
         String consensusMode = System.getProperty("consensus.mode", "leader"); // leader, dag, or blockchain
         String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
@@ -236,7 +237,11 @@ public class GlobalStoreServer {
         boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled) && 
                                  ("leader".equalsIgnoreCase(consensusMode) || !peersConfig.isEmpty());
         
-        if (enableConsensus) {
+        // CRITICAL: Don't initialize consensus here if we're in STANDBY mode
+        // The bootstrap promotion callback (startConsensusPrimary) will initialize it
+        boolean isStandbyMode = (detectedMode == BootstrapMode.STANDBY);
+        
+        if (enableConsensus && !isStandbyMode) {
             System.out.println();
             System.out.println("Initializing Consensus Engine...");
             System.out.println("   Mode: " + consensusMode.toUpperCase());
