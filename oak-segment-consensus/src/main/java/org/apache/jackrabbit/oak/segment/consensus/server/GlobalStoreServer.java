@@ -294,18 +294,8 @@ public class GlobalStoreServer {
                 System.out.println("   - Current role: " + leaderEngine.getCurrentRole());
                 System.out.println("   - Current leader: " + leaderEngine.getCurrentLeader());
                 
-                // Register with peer validators
-                String validatorId = System.getProperty("consensus.validator.id");
-                if (validatorId == null || validatorId.isEmpty()) {
-                    validatorId = System.getenv("HOSTNAME");
-                    if (validatorId == null || validatorId.isEmpty()) {
-                        if (selfUrl.contains("validator-")) {
-                            validatorId = selfUrl.substring(selfUrl.indexOf("validator-")).split(":")[0];
-                        } else {
-                            validatorId = "validator-unknown";
-                        }
-                    }
-                }
+                // Register with peer validators using wallet address as ID
+                String validatorId = wallet.getWalletAddress();
                 httpServer.registerWithPeers(validatorId, peerUrls);
                 
             } else if ("dag".equalsIgnoreCase(consensusMode)) {
@@ -375,18 +365,8 @@ public class GlobalStoreServer {
                 System.out.println("   - Threshold: 2/3+ majority");
                 System.out.println("   - Total validators: " + (1 + peerUrls.size()));
                 
-                // Register with peer validators
-                String validatorId = System.getProperty("consensus.validator.id");
-                if (validatorId == null || validatorId.isEmpty()) {
-                    validatorId = System.getenv("HOSTNAME");
-                    if (validatorId == null || validatorId.isEmpty()) {
-                        if (selfUrl.contains("validator-")) {
-                            validatorId = selfUrl.substring(selfUrl.indexOf("validator-")).split(":")[0];
-                        } else {
-                            validatorId = "validator-unknown";
-                        }
-                    }
-                }
+                // Register with peer validators using wallet address as ID
+                String validatorId = wallet.getWalletAddress();
                 httpServer.registerWithPeers(validatorId, peerUrls);
             }
         } else if (!isStandbyMode) {
@@ -752,7 +732,8 @@ public class GlobalStoreServer {
             System.out.println("");
             
             // Broadcast presence to network (Dynamic Peer Discovery)
-            String validatorId = System.getProperty("consensus.validator.id", "validator-promoted");
+            // Use wallet address as permanent validator identity
+            String validatorId = wallet.getWalletAddress();
             httpServer.broadcastPresenceToNetwork(validatorId, selfUrl, peerUrls);
             
         } else if ("dag".equalsIgnoreCase(consensusMode)) {
@@ -767,7 +748,8 @@ public class GlobalStoreServer {
             System.out.println("✅ DAG Consensus engine initialized");
             
             // Broadcast presence to network (Dynamic Peer Discovery)
-            String validatorId = System.getProperty("consensus.validator.id", "validator-promoted");
+            // Use wallet address as permanent validator identity
+            String validatorId = wallet.getWalletAddress();
             httpServer.broadcastPresenceToNetwork(validatorId, selfUrl, peerUrls);
         }
         

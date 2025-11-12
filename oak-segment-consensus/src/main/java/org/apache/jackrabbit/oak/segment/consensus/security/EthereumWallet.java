@@ -84,7 +84,7 @@ public class EthereumWallet {
         
         // Derive wallet address from public key (Ethereum standard)
         this.walletAddress = deriveWalletAddress(keyPair.getPublic());
-        this.publicKeyHex = bytesToHex(keyPair.getPublic().getEncoded());
+        this.publicKeyHex = "0x" + bytesToHex(keyPair.getPublic().getEncoded());
         
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         log.info("💎 ETHEREUM WALLET LOADED");
