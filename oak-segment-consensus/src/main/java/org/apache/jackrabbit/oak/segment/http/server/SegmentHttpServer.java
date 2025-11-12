@@ -444,6 +444,27 @@ public class SegmentHttpServer {
                     
                     log.info("   ✅ Accepted by peer: {}", peerUrl);
                     log.debug("      Response: {}", response);
+                    
+                    // CRITICAL: Extract peer's public key from response and register it
+                    // This allows us to verify their leadership claims later
+                    try {
+                        int pkStart = response.indexOf("\"publicKey\"");
+                        if (pkStart != -1 && leaderConsensusEngine != null) {
+                            pkStart = response.indexOf(":", pkStart) + 1;
+                            int pkEnd = response.indexOf("\"", pkStart + 2);
+                            if (pkEnd != -1) {
+                                String peerPublicKey = response.substring(pkStart + 1, pkEnd);
+                                if (!peerPublicKey.isEmpty()) {
+                                    leaderConsensusEngine.getClaimVerifier().registerPublicKey(peerUrl, peerPublicKey);
+                                    log.info("   🔑 Registered public key from peer: {}...", 
+                                        peerPublicKey.substring(0, Math.min(18, peerPublicKey.length())));
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("   ⚠️  Failed to extract peer public key: {}", e.getMessage());
+                    }
+                    
                     successCount++;
                     
                 } else {
