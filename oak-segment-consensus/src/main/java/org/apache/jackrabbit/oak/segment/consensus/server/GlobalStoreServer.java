@@ -710,6 +710,7 @@ public class GlobalStoreServer {
         }
         
         List<String> peerUrls = parsePeerUrls(peersConfig);
+        System.out.println("   📋 Parsed peer URLs: " + peerUrls);
         
         if ("leader".equalsIgnoreCase(consensusMode)) {
             int leaderTermSeconds = Integer.parseInt(
