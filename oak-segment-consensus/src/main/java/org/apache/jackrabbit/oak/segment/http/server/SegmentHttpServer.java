@@ -915,9 +915,13 @@ public class SegmentHttpServer {
                 html.append("</div>\n");
             }
             
-            // Show all validators in network (Leader mode only - deterministic from config)
+            // Show all validators in network (voting + non-voting)
             if (leaderConsensusEngine != null) {
-                java.util.List<String> allValidators = leaderConsensusEngine.getElection().getAllValidators();
+                // Build complete validator list: self + all followers (voting + non-voting)
+                java.util.List<String> allValidators = new java.util.ArrayList<>();
+                allValidators.add(selfUrl); // Add self first
+                allValidators.addAll(leaderConsensusEngine.getAllFollowers()); // Add all followers
+                
                 html.append("<div style='margin-top: 12px; font-size: 0.75em; opacity: 0.8;'>");
                 html.append("<div style='margin-bottom: 6px; font-weight: 600;'>Validator Network:</div>");
                 
