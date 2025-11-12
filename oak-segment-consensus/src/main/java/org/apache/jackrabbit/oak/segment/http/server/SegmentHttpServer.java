@@ -3232,15 +3232,35 @@ public class SegmentHttpServer {
                     long lastSeen = reg != null ? reg.lastSeen : now;
                     long timeSinceLastSeen = now - lastSeen;
                     
-                    // Check if this is self and on probation
+                    // Check if this is self
                     boolean isSelf = validatorUrl.equals(selfUrl);
-                    if (isSelf && nonVotingFollowers.contains(validatorUrl)) {
-                        // Self-awareness: we know we're on probation
-                        status = "PROBATION";
-                    } else if (timeSinceLastSeen > offlineThresholdMs) {
+                    
+                    // Determine status with self-awareness for probation
+                    if (timeSinceLastSeen > offlineThresholdMs) {
                         status = "OFFLINE";
                     } else if (nonVotingFollowers.contains(validatorUrl)) {
-                        status = "PROBATION";  // Non-voting, waiting for probation period
+                        // Leader knows this validator is on probation
+                        status = "PROBATION";
+                    } else if (isSelf && leaderConsensusEngine != null) {
+                        // Self-check: Are WE still on probation?
+                        // Even if leader doesn't have us in nonVotingFollowers yet,
+                        // we know our own join time
+                        java.util.Map<String, Long> joinTimes = leaderConsensusEngine.getValidatorJoinTimes();
+                        Long myJoinTime = joinTimes.get(selfUrl);
+                        
+                        if (myJoinTime != null) {
+                            long timeSinceJoin = now - myJoinTime;
+                            long probationPeriod = leaderTermSeconds * 1000L; // 300 seconds (1 epoch)
+                            
+                            if (timeSinceJoin < probationPeriod) {
+                                status = "PROBATION";  // Still within probationary period
+                            } else {
+                                status = "READY";  // Probation ended, fully participating
+                            }
+                        } else {
+                            // No join time recorded (shouldn't happen), assume READY
+                            status = "READY";
+                        }
                     } else {
                         status = "READY";  // Voting member, fully participating
                     }

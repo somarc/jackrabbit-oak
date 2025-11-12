@@ -688,6 +688,14 @@ public class LeaderConsensusEngine {
     }
     
     /**
+     * Get validator join times (for probation status calculation).
+     * Returns a copy to prevent external modification.
+     */
+    public Map<String, Long> getValidatorJoinTimes() {
+        return new java.util.HashMap<>(validatorJoinTimes);
+    }
+    
+    /**
      * Get only non-voting followers (those still on probation).
      */
     public List<String> getNonVotingFollowers() {
