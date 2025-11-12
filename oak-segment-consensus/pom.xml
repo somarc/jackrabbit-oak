@@ -189,11 +189,11 @@
             <artifactId>netty-all</artifactId>
             <version>4.1.94.Final</version>
         </dependency>
-        <!-- Commons Lang3 (required by Standby) -->
+        <!-- Commons Lang3 (required by Standby) - matches oak-parent version -->
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
-            <version>3.17.0</version>
+            <version>3.19.0</version>
         </dependency>
         
         <!-- Servlet API (compile scope for standalone JAR - needed by Jetty/oak-segment-http) -->

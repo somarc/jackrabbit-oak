@@ -436,6 +436,26 @@ public class SegmentHttpServer {
                     return;
                 }
                 
+                // HEAD ENDPOINT - Return current HEAD record ID (for bootstrap sync detection)
+                if ("/v1/head".equals(path) && "GET".equals(method)) {
+                    response.setContentType("text/plain");
+                    response.setStatus(HttpServletResponse.SC_OK);
+                    String headId = fileStore.getHead().getRecordId().toString();
+                    response.getWriter().write(headId);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // NGROK URL ENDPOINT - Return this validator's ngrok public URL for dynamic discovery
+                if ("/v1/ngrok-url".equals(path) && "GET".equals(method)) {
+                    response.setContentType("text/plain");
+                    response.setStatus(HttpServletResponse.SC_OK);
+                    // selfUrl is set from CONSENSUS_SELF_URL which includes ngrok URL
+                    response.getWriter().write(selfUrl != null ? selfUrl : "");
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
                 // CLIENT REGISTRATION - Sling authors register when mounting
                 if ("/v1/register-client".equals(path) && ("POST".equals(method) || "PUT".equals(method))) {
                     handleClientRegistration(request, response);
@@ -446,6 +466,13 @@ public class SegmentHttpServer {
                 // VALIDATOR REGISTRATION - Validators register with each other
                 if ("/v1/register-validator".equals(path) && ("POST".equals(method) || "PUT".equals(method))) {
                     handleValidatorRegistration(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // PEER LIST - Return list of all known validators for organic discovery
+                if ("/v1/peers".equals(path) && "GET".equals(method)) {
+                    handlePeerList(response);
                     baseRequest.setHandled(true);
                     return;
                 }
@@ -1948,24 +1975,27 @@ public class SegmentHttpServer {
             
             // Update storage metrics
             try {
-                long segmentCount = Files.list(storeDirectory.resolve("data"))
-                    .filter(p -> p.toString().endsWith(".tar"))
-                    .count();
-                ConsensusMetrics.segmentsStoredTotal.set(segmentCount);
-                
-                long diskUsage = Files.walk(storeDirectory)
-                    .filter(Files::isRegularFile)
-                    .mapToLong(p -> {
-                        try {
-                            return Files.size(p);
-                        } catch (IOException e) {
-                            return 0;
-                        }
-                    })
-                    .sum();
-                ConsensusMetrics.segmentsDiskUsageBytes.set(diskUsage);
+                // Count TAR files directly in storeDirectory (Oak's segment files are here)
+                if (Files.exists(storeDirectory)) {
+                    long segmentCount = Files.list(storeDirectory)
+                        .filter(p -> p.toString().endsWith(".tar"))
+                        .count();
+                    ConsensusMetrics.segmentsStoredTotal.set(segmentCount);
+                    
+                    long diskUsage = Files.walk(storeDirectory)
+                        .filter(Files::isRegularFile)
+                        .mapToLong(p -> {
+                            try {
+                                return Files.size(p);
+                            } catch (IOException e) {
+                                return 0;
+                            }
+                        })
+                        .sum();
+                    ConsensusMetrics.segmentsDiskUsageBytes.set(diskUsage);
+                }
             } catch (IOException e) {
-                log.warn("Failed to update storage metrics", e);
+                log.debug("Failed to update storage metrics: {}", e.getMessage());
             }
             
             // Update active connections (approximation via registered clients)
@@ -2510,6 +2540,48 @@ public class SegmentHttpServer {
             } catch (Exception e) {
                 log.error("Failed to register validator", e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Registration failed: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle GET /v1/peers - Return list of all known validators for organic peer discovery
+         * 
+         * Returns JSON array:
+         * [
+         *   {"validatorId": "validator-1", "validatorUrl": "http://validator-1:8090", "lastSeen": 1234567890},
+         *   {"validatorId": "validator-2", "validatorUrl": "http://validator-2:8090", "lastSeen": 1234567891}
+         * ]
+         */
+        private void handlePeerList(HttpServletResponse response) throws IOException {
+            try {
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                
+                StringBuilder json = new StringBuilder();
+                json.append("[\n");
+                
+                boolean first = true;
+                for (ValidatorRegistration reg : registeredValidators.values()) {
+                    if (!first) {
+                        json.append(",\n");
+                    }
+                    first = false;
+                    
+                    json.append("  {");
+                    json.append("\"validatorId\":\"").append(reg.validatorId.replace("\"", "\\\"")).append("\",");
+                    json.append("\"validatorUrl\":\"").append(reg.validatorUrl.replace("\"", "\\\"")).append("\",");
+                    json.append("\"lastSeen\":").append(reg.lastSeen);
+                    json.append("}");
+                }
+                
+                json.append("\n]");
+                response.getWriter().write(json.toString());
+                
+                log.debug("Served peer list: {} validators", registeredValidators.size());
+                
+            } catch (Exception e) {
+                log.error("Failed to serve peer list", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to get peer list: " + e.getMessage());
             }
         }
         

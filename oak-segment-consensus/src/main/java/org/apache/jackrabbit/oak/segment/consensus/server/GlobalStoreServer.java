@@ -116,7 +116,7 @@ public class GlobalStoreServer {
             
             // Detect mode if AUTO
             if ("auto".equalsIgnoreCase(bootstrapMode)) {
-                detectedMode = ValidatorBootstrap.detectMode(fileStore, peers);
+                detectedMode = ValidatorBootstrap.detectMode(fileStore, nodeStore, peers);
                 System.out.println("🔍 AUTO MODE → " + detectedMode);
             } else {
                 detectedMode = BootstrapMode.valueOf(bootstrapMode.toUpperCase());

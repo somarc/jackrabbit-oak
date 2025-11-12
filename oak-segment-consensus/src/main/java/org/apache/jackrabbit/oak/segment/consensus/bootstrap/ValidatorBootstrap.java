@@ -43,6 +43,7 @@ public class ValidatorBootstrap {
     
     private final FileStore fileStore;
     private final int standbyPort;
+    private String primaryUrl;  // HTTP endpoint of primary (for HEAD comparison)
     private StandbyClientSync standbyClient;
     private StandbyServerSync standbyServer;
     private ScheduledExecutorService syncScheduler;
@@ -89,6 +90,11 @@ public class ValidatorBootstrap {
         log.info("🌱 STANDBY MODE: Bootstrapping from primary");
         log.info("   Primary: {}:{}", primaryHost, primaryPort);
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        // Store primary HTTP URL for HEAD comparison (standby port - 1 = HTTP port)
+        int httpPort = primaryPort - 1;
+        this.primaryUrl = String.format("http://%s:%d", primaryHost, httpPort);
+        log.info("   Primary HTTP endpoint: {}", primaryUrl);
         
         try {
             // Create StandbyClientSync
@@ -147,18 +153,51 @@ public class ValidatorBootstrap {
     }
     
     /**
-     * Check if standby is caught up with primary.
-     * In real implementation, this would compare HEAD timestamps or check sync status.
-     * For now, we use a simple heuristic: if we have segments, we're caught up.
+     * Check if standby is caught up with primary by comparing HEAD record IDs.
+     * The standby is caught up when its HEAD matches the primary's HEAD.
      */
     private boolean isCaughtUp() {
+        if (primaryUrl == null) {
+            return true;  // No primary to sync from, already caught up
+        }
+        
         try {
-            long size = fileStore.size();
-            // Caught up if we have at least 1 MB of segments
-            // (Real impl would check HEAD age vs primary)
-            return size > (1024 * 1024);
+            // Get local HEAD
+            String localHead = fileStore.getHead().getRecordId().toString();
+            
+            // Get primary HEAD via HTTP
+            java.net.URL url = new java.net.URL(primaryUrl + "/v1/head");
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(3000);
+            
+            int responseCode = conn.getResponseCode();
+            if (responseCode == 200) {
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(conn.getInputStream())
+                );
+                String primaryHead = reader.readLine();
+                reader.close();
+                
+                boolean caughtUp = localHead.equals(primaryHead);
+                
+                if (caughtUp) {
+                    log.info("✅ CAUGHT UP! Local HEAD matches primary");
+                    log.info("   HEAD: {}", localHead.substring(0, Math.min(20, localHead.length())) + "...");
+                } else {
+                    log.debug("   Still syncing... Local: {} vs Primary: {}", 
+                        localHead.substring(0, Math.min(12, localHead.length())),
+                        primaryHead.substring(0, Math.min(12, primaryHead.length())));
+                }
+                
+                return caughtUp;
+            } else {
+                log.warn("Failed to get primary HEAD: HTTP {}", responseCode);
+                return false;
+            }
         } catch (Exception e) {
-            log.warn("Failed to check sync status", e);
+            log.debug("Failed to check sync status: {}", e.getMessage());
             return false;
         }
     }
@@ -254,23 +293,61 @@ public class ValidatorBootstrap {
     }
     
     /**
-     * Detect startup mode based on FileStore state and peer configuration.
+     * Detect startup mode based on FileStore state and peer reachability.
+     * 
+     * Detection logic:
+     * - GENESIS: No genesis content + no reachable peers → Create genesis locally
+     * - STANDBY: No genesis content + has reachable peers → Bootstrap from peer
+     * - PRIMARY: Has genesis content → Join consensus immediately
      */
-    public static BootstrapMode detectMode(FileStore fileStore, List<String> peers) {
-        boolean isEmpty = false;
+    public static BootstrapMode detectMode(FileStore fileStore, org.apache.jackrabbit.oak.spi.state.NodeStore nodeStore, List<String> peers) {
+        // Check if genesis content exists (the definitive test!)
+        boolean hasGenesisContent = false;
         try {
-            isEmpty = (fileStore.size() == 0);
+            org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
+            org.apache.jackrabbit.oak.spi.state.NodeState oakChain = root.getChildNode("oak-chain");
+            if (oakChain.exists()) {
+                org.apache.jackrabbit.oak.spi.state.NodeState content = oakChain.getChildNode("content");
+                if (content.exists()) {
+                    org.apache.jackrabbit.oak.spi.state.NodeState genesis = content.getChildNode("genesis");
+                    hasGenesisContent = genesis.exists();
+                }
+            }
         } catch (Exception e) {
-            log.warn("Failed to check FileStore size", e);
+            log.warn("Failed to check for genesis content", e);
         }
         
-        boolean hasPeers = (peers != null && !peers.isEmpty());
+        // Check if any peers are reachable (have /health endpoint responding)
+        boolean hasReachablePeers = false;
+        if (peers != null && !peers.isEmpty()) {
+            for (String peerUrl : peers) {
+                try {
+                    java.net.URL url = new java.net.URL(peerUrl + "/health");
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setConnectTimeout(2000);  // 2 second timeout
+                    conn.setReadTimeout(2000);
+                    
+                    int responseCode = conn.getResponseCode();
+                    if (responseCode == 200) {
+                        log.info("✅ Found reachable peer: {}", peerUrl);
+                        hasReachablePeers = true;
+                        break;  // Found at least one reachable peer
+                    }
+                } catch (Exception e) {
+                    log.debug("Peer not reachable: {} - {}", peerUrl, e.getMessage());
+                }
+            }
+        }
         
-        if (isEmpty && !hasPeers) {
+        if (!hasGenesisContent && !hasReachablePeers) {
+            // Empty + no reachable peers = First validator (create genesis)
             return BootstrapMode.GENESIS;
-        } else if (isEmpty && hasPeers) {
+        } else if (!hasGenesisContent && hasReachablePeers) {
+            // Empty + has reachable peers = New validator (bootstrap from peers)
             return BootstrapMode.STANDBY;
         } else {
+            // Has genesis content = Existing validator (resume)
             return BootstrapMode.PRIMARY;
         }
     }
