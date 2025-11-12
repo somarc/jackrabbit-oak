@@ -299,8 +299,14 @@ public class SegmentHttpServer {
      * @param peerUrls List of peer validator URLs to register with
      */
     public void registerWithPeers(String validatorId, java.util.List<String> peerUrls) {
+        // CRITICAL: Register self first, even with no peers (genesis scenario)
+        ValidatorRegistration selfReg = new ValidatorRegistration(validatorId, selfUrl);
+        selfReg.updateStatus(ValidatorRegistration.Status.READY);
+        registeredValidators.put(validatorId, selfReg);
+        log.info("✅ Self registered: {} ({})", validatorId, selfUrl);
+        
         if (peerUrls == null || peerUrls.isEmpty()) {
-            log.debug("No peer validators configured, skipping registration");
+            log.info("📡 Genesis validator - no peers to register with");
             return;
         }
         
