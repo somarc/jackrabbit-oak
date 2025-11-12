@@ -56,6 +56,12 @@ public class LeaderConsensusEngine {
      */
     private final Map<String, Long> validatorJoinTimes = new ConcurrentHashMap<>();
     
+    /**
+     * ALL followers (voting + non-voting). Used for heartbeats and replication.
+     * New validators join here first as NON-VOTING followers.
+     */
+    private final List<String> allFollowers = new java.util.concurrent.CopyOnWriteArrayList<>();
+    
     private volatile ValidatorRole currentRole;
     private volatile int currentEpoch;
     private volatile String currentLeader;
@@ -82,9 +88,10 @@ public class LeaderConsensusEngine {
         for (String peerUrl : peerUrls) {
             // Initial peers are assumed to have joined at the same time (genesis or config)
             validatorJoinTimes.put(peerUrl, now);
+            allFollowers.add(peerUrl);  // Add to follower list for heartbeats
         }
         
-        // Create election with join times
+        // Create election with join times (initial peers are part of electorate)
         this.election = new LeaderElection(selfUrl, peerUrls, leaderTermSeconds, validatorJoinTimes);
         
         // Determine initial role
@@ -122,99 +129,67 @@ public class LeaderConsensusEngine {
             return;
         }
         
-        // Check if peer already exists
-        List<String> currentValidators = election.getAllValidators();
-        if (currentValidators.contains(peerUrl)) {
-            log.debug("Peer already registered: {}", peerUrl);
+        // Check if peer already exists in followers
+        if (allFollowers.contains(peerUrl)) {
+            log.debug("Peer already registered as follower: {}", peerUrl);
+            return;
+        }
+        
+        // Check if peer is already in electorate
+        List<String> currentElectorate = election.getAllValidators();
+        if (currentElectorate.contains(peerUrl)) {
+            log.debug("Peer already in electorate: {}", peerUrl);
             return;
         }
         
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("🔗 DYNAMIC PEER DISCOVERY: Adding new validator");
+        log.info("👥 NEW VALIDATOR JOINING AS NON-VOTING FOLLOWER");
         log.info("   Peer URL: {}", peerUrl);
-        log.info("   Current validators: {}", currentValidators.size());
+        log.info("   Current electorate: {} validators", currentElectorate.size());
+        log.info("   Total followers (voting + non-voting): {}", allFollowers.size() + 1);
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
         // Record join time for new peer (NOW - they just joined)
         long joinTime = System.currentTimeMillis();
         validatorJoinTimes.put(peerUrl, joinTime);
         
+        // Add to followers list (for heartbeats and replication)
+        allFollowers.add(peerUrl);
+        
         int leaderTermSeconds = election.getLeaderTermSeconds();
         long probationEndTime = joinTime + (leaderTermSeconds * 1000L);
         
-        log.info("🛡️  New validator on probation until: {}", new java.util.Date(probationEndTime));
-        log.info("   Probationary period: {} seconds", leaderTermSeconds);
-        log.info("   Cannot be elected leader until probation ends");
+        log.info("🛡️  Probationary period: {} seconds", leaderTermSeconds);
+        log.info("   Promotion to electorate after: {}", new java.util.Date(probationEndTime));
+        log.info("   Status: NON-VOTING FOLLOWER");
+        log.info("   - Receives heartbeats ✅");
+        log.info("   - Replicates data ✅");
+        log.info("   - Can vote for leader ❌");
+        log.info("   - Can become leader ❌");
         
-        // Rebuild election with new peer and updated join times
-        List<String> newPeers = new java.util.ArrayList<>(election.getPeerValidators());
-        newPeers.add(peerUrl);
+        // DO NOT rebuild election - electorate stays the same!
+        // The leader does NOT change just because a follower joined
         
-        // Get existing join times from current election and merge with new one
-        Map<String, Long> updatedJoinTimes = election.getValidatorJoinTimes();
-        updatedJoinTimes.put(peerUrl, joinTime);
+        log.info("📊 Network status:");
+        log.info("   Voting members (electorate): {}", currentElectorate.size());
+        log.info("   Non-voting followers: {}", allFollowers.size() - currentElectorate.size() + 1);
+        log.info("   Total validators: {}", allFollowers.size() + 1);
+        log.info("   Current leader: {} (UNCHANGED)", currentLeader);
+        log.info("   My role: {} (UNCHANGED)", currentRole);
         
-        this.election = new LeaderElection(selfUrl, newPeers, leaderTermSeconds, updatedJoinTimes);
-        
-        // Recalculate current state with new peer list
-        int newEpoch = election.getCurrentEpoch();
-        String newLeader = election.electLeader();
-        ValidatorRole newRole = election.getRole();
-        
-        log.info("📊 Consensus network updated:");
-        log.info("   Total validators: {}", election.getAllValidators().size());
-        log.info("   Rotation order: {}", election.getAllValidators());
-        log.info("   Current epoch: {}", newEpoch);
-        log.info("   Elected leader: {}", newLeader);
-        log.info("   My role: {}", newRole);
-        
-        // Check if our role changed
-        if (newRole != currentRole) {
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("🔄 ROLE CHANGE TRIGGERED BY PEER JOIN");
-            log.info("   Old role: {}", currentRole);
-            log.info("   New role: {}", newRole);
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            
-            // Update role
-            ValidatorRole oldRole = currentRole;
-            currentRole = newRole;
-            currentLeader = newLeader;
-            currentEpoch = newEpoch;
-            
-            // Handle role transition
-            if (newRole == ValidatorRole.FOLLOWER && oldRole == ValidatorRole.LEADER) {
-                log.info("📥 TRANSITIONING TO FOLLOWER (new validator joined, no longer leader)");
-                // Stop heartbeat broadcast if we were leader
-                healthMonitor.stopHeartbeatBroadcast();
-                // Start monitoring leader
-                healthMonitor.startMonitoring();
-                
-            } else if (newRole == ValidatorRole.LEADER && oldRole == ValidatorRole.FOLLOWER) {
-                log.info("📤 TRANSITIONING TO LEADER (peer join triggered leader change)");
-                // Stop monitoring
-                healthMonitor.stopMonitoring();
-                // Start heartbeat broadcast
-                List<String> followers = election.getPeerValidators();
-                healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch);
-            }
-        } else {
-            log.info("✅ Role unchanged: {}", currentRole);
-            
-            // Update epoch and leader even if role didn't change
-            currentLeader = newLeader;
-            currentEpoch = newEpoch;
-            
-            // If we're still leader, update follower list for heartbeats
-            if (currentRole == ValidatorRole.LEADER) {
-                List<String> followers = election.getPeerValidators();
-                healthMonitor.updateFollowerList(followers);
-                log.info("💓 Updated follower list: {} followers", followers.size());
-            }
+        // If we're the leader, add this new follower to our heartbeat list
+        if (currentRole == ValidatorRole.LEADER) {
+            // Create combined list of electorate peers + non-voting followers
+            List<String> allFollowersForHeartbeat = new java.util.ArrayList<>(allFollowers);
+            int electorateSizeForQuorum = currentElectorate.size();
+            healthMonitor.updateFollowerList(allFollowersForHeartbeat);
+            healthMonitor.updateElectorateSize(electorateSizeForQuorum);
+            log.info("💓 Updated heartbeat list: {} total followers (voting + non-voting)", allFollowersForHeartbeat.size());
+            log.info("🗳️  Electorate size (for quorum): {}", electorateSizeForQuorum);
         }
         
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("✅ Peer successfully added to consensus network");
+        log.info("✅ Follower added successfully (NON-VOTING until probation ends)");
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
     
@@ -228,9 +203,12 @@ public class LeaderConsensusEngine {
             // Set up split-brain detection callback
             healthMonitor.setDemotionCallback(() -> demoteToFollowerOnQuorumLoss());
             
-            List<String> followers = election.getPeerValidators();
-            healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch);
-            log.info("💓 Started heartbeat broadcast to {} followers", followers.size());
+            // Use allFollowers (electorate + non-voting) for heartbeats
+            List<String> followers = new java.util.ArrayList<>(allFollowers);
+            int electorateSizeForQuorum = election.getAllValidators().size();
+            healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch, electorateSizeForQuorum);
+            log.info("💓 Started heartbeat broadcast to {} followers (voting + non-voting)", followers.size());
+            log.info("🗳️  Quorum based on electorate size: {}", electorateSizeForQuorum);
         } else {
             healthMonitor.startMonitoring();
             log.info("❤️  Started monitoring leader health");
@@ -318,10 +296,12 @@ public class LeaderConsensusEngine {
         // Set up split-brain detection callback
         healthMonitor.setDemotionCallback(() -> demoteToFollowerOnQuorumLoss());
         
-        // Start broadcasting heartbeats to followers
-        List<String> followers = election.getPeerValidators();
-        healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch);
-        log.info("💓 Started heartbeat broadcast to {} followers", followers.size());
+        // Start broadcasting heartbeats to ALL followers (voting + non-voting)
+        List<String> followers = new java.util.ArrayList<>(allFollowers);
+        int electorateSizeForQuorum = election.getAllValidators().size();
+        healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch, electorateSizeForQuorum);
+        log.info("💓 Started heartbeat broadcast to {} followers (voting + non-voting)", followers.size());
+        log.info("🗳️  Quorum based on electorate size: {}", electorateSizeForQuorum);
     }
     
     /**
@@ -566,6 +546,34 @@ public class LeaderConsensusEngine {
      */
     public long getLastHeartbeatTime() {
         return healthMonitor.getLastHeartbeatTime();
+    }
+    
+    /**
+     * Get all followers (voting + non-voting).
+     */
+    public List<String> getAllFollowers() {
+        return new java.util.ArrayList<>(allFollowers);
+    }
+    
+    /**
+     * Get only the electorate (voting members).
+     */
+    public List<String> getElectorate() {
+        return election.getAllValidators();
+    }
+    
+    /**
+     * Get only non-voting followers (those still on probation).
+     */
+    public List<String> getNonVotingFollowers() {
+        List<String> electorate = election.getAllValidators();
+        List<String> nonVoting = new java.util.ArrayList<>();
+        for (String follower : allFollowers) {
+            if (!electorate.contains(follower)) {
+                nonVoting.add(follower);
+            }
+        }
+        return nonVoting;
     }
 }
 

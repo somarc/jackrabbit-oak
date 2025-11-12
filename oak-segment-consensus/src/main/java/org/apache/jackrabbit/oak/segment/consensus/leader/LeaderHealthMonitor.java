@@ -58,6 +58,7 @@ public class LeaderHealthMonitor {
     // Split-brain detection: Track heartbeat responses
     private volatile int successfulHeartbeats = 0;
     private volatile int totalValidators = 1; // Start with self
+    private volatile int electorateSize = 1; // Voting members only (for quorum)
     private volatile Runnable demotionCallback;
     
     public LeaderHealthMonitor(String selfUrl) {
@@ -187,10 +188,10 @@ public class LeaderHealthMonitor {
      * @param followerUrls List of follower validator URLs
      * @param currentEpoch Current epoch for validation
      */
-    public void sendHeartbeatToFollowers(java.util.List<String> followerUrls, int currentEpoch) {
+    public void sendHeartbeatToFollowers(java.util.List<String> followerUrls, int currentEpoch, int electorateSize) {
         // Reset counter for this round (SPLIT-BRAIN DETECTION)
         successfulHeartbeats = 0;
-        totalValidators = 1 + followerUrls.size(); // self + followers
+        totalValidators = electorateSize; // ONLY voting members count for quorum!
         
         java.util.concurrent.CountDownLatch latch = 
             new java.util.concurrent.CountDownLatch(followerUrls.size());
@@ -283,21 +284,24 @@ public class LeaderHealthMonitor {
      * Leaders continuously send heartbeats to all followers.
      */
     public void startHeartbeatBroadcast(java.util.List<String> followerUrls, 
-                                       java.util.function.IntSupplier epochSupplier) {
+                                       java.util.function.IntSupplier epochSupplier,
+                                       int electorateSizeForQuorum) {
         if (running) {
             return;
         }
         
         this.followerUrls = new java.util.ArrayList<>(followerUrls);
         this.epochSupplier = epochSupplier;
+        this.electorateSize = electorateSizeForQuorum;
         running = true;
         
         heartbeatMonitorThread = new Thread(() -> {
             log.info("💓 Started heartbeat broadcast (sending to {} followers)", this.followerUrls.size());
+            log.info("🗳️  Electorate size (for quorum): {}", this.electorateSize);
             
             while (running) {
                 try {
-                    sendHeartbeatToFollowers(this.followerUrls, this.epochSupplier.getAsInt());
+                    sendHeartbeatToFollowers(this.followerUrls, this.epochSupplier.getAsInt(), this.electorateSize);
                     Thread.sleep(HEARTBEAT_INTERVAL_MS);
                     
                 } catch (InterruptedException e) {
@@ -322,6 +326,14 @@ public class LeaderHealthMonitor {
     public synchronized void updateFollowerList(java.util.List<String> newFollowerUrls) {
         this.followerUrls = new java.util.ArrayList<>(newFollowerUrls);
         log.debug("💓 Follower list updated: {} followers", newFollowerUrls.size());
+    }
+    
+    /**
+     * Update electorate size for split-brain quorum calculation.
+     */
+    public synchronized void updateElectorateSize(int newElectorateSize) {
+        this.electorateSize = newElectorateSize;
+        log.debug("🗳️  Electorate size updated: {}", newElectorateSize);
     }
     
     /**

@@ -65,6 +65,10 @@ public class GlobalStoreServer {
     private EpochListener epochListener;
     private ValidatorBootstrap bootstrap;
     
+    // Bootstrap configuration (for organic peer discovery after promotion)
+    private String bootstrapPrimaryHost;
+    private int bootstrapPrimaryPort;
+    
     public GlobalStoreServer(int port, String storeDirectory) {
         this.port = port;
         this.storeDirectory = storeDirectory;
@@ -107,8 +111,8 @@ public class GlobalStoreServer {
             // ===========================================================================
             String peersConfig = System.getProperty("consensus.peers", "");
             String bootstrapMode = System.getProperty("bootstrap.mode", "auto");  // auto, genesis, standby, primary
-            String bootstrapPrimaryHost = System.getProperty("bootstrap.primary.host", "");
-            int bootstrapPrimaryPort = Integer.parseInt(System.getProperty("bootstrap.primary.port", "8001"));
+            this.bootstrapPrimaryHost = System.getProperty("bootstrap.primary.host", "");
+            this.bootstrapPrimaryPort = Integer.parseInt(System.getProperty("bootstrap.primary.port", "8001"));
             int standbyPort = port + 1;  // Standby port = HTTP port + 1
             
             bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
@@ -123,8 +127,37 @@ public class GlobalStoreServer {
             
             // Detect mode if AUTO
             if ("auto".equalsIgnoreCase(bootstrapMode)) {
-                detectedMode = ValidatorBootstrap.detectMode(fileStore, nodeStore, peers);
-                System.out.println("🔍 AUTO MODE → " + detectedMode);
+                // Check if we have a bootstrap primary configured
+                boolean hasBootstrapPrimary = this.bootstrapPrimaryHost != null && !this.bootstrapPrimaryHost.isEmpty();
+                
+                if (hasBootstrapPrimary) {
+                    // If bootstrap primary is configured, try to reach it and use STANDBY mode
+                    String primaryUrl = "http://" + this.bootstrapPrimaryHost + ":8090";
+                    try {
+                        java.net.URL url = new java.net.URL(primaryUrl + "/health");
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("GET");
+                        conn.setConnectTimeout(3000);
+                        conn.setReadTimeout(3000);
+                        
+                        int responseCode = conn.getResponseCode();
+                        if (responseCode == 200) {
+                            System.out.println("🔍 AUTO MODE → STANDBY (bootstrap primary reachable)");
+                            System.out.println("   Primary: " + primaryUrl);
+                            detectedMode = BootstrapMode.STANDBY;
+                        } else {
+                            System.out.println("🔍 AUTO MODE → GENESIS (bootstrap primary not healthy)");
+                            detectedMode = BootstrapMode.GENESIS;
+                        }
+                    } catch (Exception e) {
+                        System.out.println("🔍 AUTO MODE → GENESIS (cannot reach bootstrap primary: " + e.getMessage() + ")");
+                        detectedMode = BootstrapMode.GENESIS;
+                    }
+                } else {
+                    // Fall back to peer-based detection
+                    detectedMode = ValidatorBootstrap.detectMode(fileStore, nodeStore, peers);
+                    System.out.println("🔍 AUTO MODE → " + detectedMode);
+                }
             } else {
                 detectedMode = BootstrapMode.valueOf(bootstrapMode.toUpperCase());
                 System.out.println("📌 EXPLICIT MODE → " + detectedMode);
@@ -397,6 +430,18 @@ public class GlobalStoreServer {
      * Creates a simple "DO IT LIVE!" node at /oak-chain/content/genesis
      * following the BYOD model (no binary data, just node structure).
      */
+    /**
+     * Initialize the IMMORTAL GENESIS NODE.
+     * 
+     * Like Ethereum's Block 0, this is the birth certificate of the network.
+     * All validators MUST sync from this genesis state to join the network.
+     * 
+     * Contains:
+     * - Network identity (chainId, genesisHash)
+     * - Consensus rules (leaderTerm, probationPeriod)
+     * - Bootstrap instructions (how to join)
+     * - Protocol parameters (ports, endpoints)
+     */
     private void initializeGenesisContent() {
         try {
             org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
@@ -406,55 +451,142 @@ public class GlobalStoreServer {
             if (oakChain.exists()) {
                 org.apache.jackrabbit.oak.spi.state.NodeState content = oakChain.getChildNode("content");
                 if (content.exists() && content.getChildNode("genesis").exists()) {
-                    System.out.println("   ℹ️  Genesis content already exists, skipping initialization");
+                    System.out.println("   ℹ️  Genesis already exists - verifying integrity...");
+                    
+                    // Verify genesis message (like Ethereum verifies Block 0 hash)
+                    org.apache.jackrabbit.oak.spi.state.NodeState genesisNode = content.getChildNode("genesis");
+                    org.apache.jackrabbit.oak.api.PropertyState msgProp = genesisNode.getProperty("protocol.message");
+                    
+                    if (msgProp == null || !"DO IT LIVE!".equals(msgProp.getValue(org.apache.jackrabbit.oak.api.Type.STRING))) {
+                        throw new IllegalStateException("❌ GENESIS CORRUPTION! This node has invalid genesis state.");
+                    }
+                    
+                    System.out.println("   ✅ Genesis integrity verified");
                     return;
                 }
             }
             
-            // Create genesis content
-            System.out.println("   🔥 Creating DO IT LIVE! genesis content...");
+            // Create IMMORTAL GENESIS
+            System.out.println("   🎂 Creating IMMORTAL GENESIS NODE...");
+            System.out.println("      The Birth Certificate of This Network");
             
             org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = root.builder();
-            
-            // Create /oak-chain/content path
             org.apache.jackrabbit.oak.spi.state.NodeBuilder oakChainBuilder = rootBuilder.child("oak-chain");
             org.apache.jackrabbit.oak.spi.state.NodeBuilder contentBuilder = oakChainBuilder.child("content");
-            
-            // Create genesis node
             org.apache.jackrabbit.oak.spi.state.NodeBuilder genesis = contentBuilder.child("genesis");
+            
+            long timestamp = System.currentTimeMillis();
+            String genesisDate = new java.util.Date(timestamp).toString();
+            String genesisValidator = System.getProperty("consensus.self.url", "http://localhost:8090");
+            String genesisHost = genesisValidator.replace("http://", "").replace("https://", "").split(":")[0];
+            
+            // JCR Standard
             genesis.setProperty("jcr:primaryType", "nt:unstructured");
-            genesis.setProperty("message", "DO IT LIVE!");
-            genesis.setProperty("description", "Blockchain AEM - Genesis block of the global TarMK chain");
-            genesis.setProperty("timestamp", System.currentTimeMillis());
-            genesis.setProperty("author", "Blockchain AEM POC");
-            genesis.setProperty("version", "1.0.0");
+            genesis.setProperty("jcr:created", timestamp);
             
-            // Add BYOD model reference (binary stored externally)
-            genesis.setProperty("imageUri", "https://participant-cdn.example.com/assets/do-it-live.jpeg");
-            genesis.setProperty("imageMimeType", "image/jpeg");
-            genesis.setProperty("imageSize", 297L);
-            genesis.setProperty("binaryDataNote", "Binaries stored in participant-owned datastore, not in global chain");
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // PROTOCOL: Network Identity (Immutable)
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            genesis.setProperty("protocol.message", "DO IT LIVE!");
+            genesis.setProperty("protocol.version", "1.0.0-POC");
+            genesis.setProperty("protocol.chainId", "oak-blockchain-aem-poc");
+            genesis.setProperty("protocol.genesisTimestamp", timestamp);
+            genesis.setProperty("protocol.genesisDate", genesisDate);
+            genesis.setProperty("protocol.description", 
+                "Decentralized content storage for Adobe Experience Manager using Oak + Blockchain consensus");
             
-            // Add metadata child node
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder metadata = genesis.child("metadata");
-            metadata.setProperty("jcr:primaryType", "nt:unstructured");
-            metadata.setProperty("poc", true);
-            metadata.setProperty("consensusProtocol", "HTTP Segment Transfer");
-            metadata.setProperty("mountPath", "/oak-chain");
-            metadata.setProperty("accessMode", "READ-ONLY (for participants)");
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // CONSENSUS: Network Rules
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            genesis.setProperty("consensus.model", "leader-based-raft");
+            genesis.setProperty("consensus.leaderTermSeconds", 300L); // 5 minutes
+            genesis.setProperty("consensus.probationSeconds", 300L); // 5 minutes
+            genesis.setProperty("consensus.heartbeatIntervalMs", 10000L); // 10 seconds
+            genesis.setProperty("consensus.quorumType", "voting-electorate-only");
+            genesis.setProperty("consensus.quorumFormula", "(totalVotingMembers / 2) + 1");
             
-            // Commit the changes
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // NETWORK: Bootstrap Configuration
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            genesis.setProperty("network.genesisValidator", genesisValidator);
+            genesis.setProperty("network.genesisHost", genesisHost);
+            genesis.setProperty("network.bootstrapPort", 8091L);
+            genesis.setProperty("network.consensusPort", 8090L);
+            genesis.setProperty("network.metricsPort", 8090L);
+            genesis.setProperty("network.metricsPath", "/metrics");
+            
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // INSTRUCTIONS: How to Join This Network
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            genesis.setProperty("join.title", "🚀 Welcome to Blockchain AEM Network");
+            genesis.setProperty("join.step1.title", "Configure Bootstrap Primary");
+            genesis.setProperty("join.step1.env", "BOOTSTRAP_PRIMARY_HOST=" + genesisHost);
+            genesis.setProperty("join.step2.title", "Set Bootstrap Port");
+            genesis.setProperty("join.step2.env", "BOOTSTRAP_PRIMARY_PORT=8091");
+            genesis.setProperty("join.step3.title", "Set Validator Mode");
+            genesis.setProperty("join.step3.env", "VALIDATOR_MODE=auto");
+            genesis.setProperty("join.step4.title", "Enable Consensus");
+            genesis.setProperty("join.step4.env", "CONSENSUS_ENABLED=true");
+            genesis.setProperty("join.step5.title", "Set Consensus Mode");
+            genesis.setProperty("join.step5.env", "CONSENSUS_MODE=leader");
+            genesis.setProperty("join.step6.title", "Set Your Validator URL");
+            genesis.setProperty("join.step6.env", "CONSENSUS_SELF_URL=http://your-validator:8090");
+            genesis.setProperty("join.step7.note", 
+                "After bootstrap, you join as NON-VOTING follower for 300s probation");
+            genesis.setProperty("join.step8.note", 
+                "After probation, you're eligible for voting and leadership");
+            
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // SECURITY: Byzantine Fault Tolerance
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            genesis.setProperty("security.proofOfReadiness", true);
+            genesis.setProperty("security.splitBrainDetection", true);
+            genesis.setProperty("security.probationaryPeriod", true);
+            genesis.setProperty("security.genesisVerification", true);
+            
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // METADATA: Project Information
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            genesis.setProperty("meta.author", "Blockchain AEM POC Team");
+            genesis.setProperty("meta.repository", "Apache Jackrabbit Oak");
+            genesis.setProperty("meta.documentation", "See /oak-chain/content/genesis");
+            genesis.setProperty("meta.license", "Apache License 2.0");
+            
+            // BYOD Model (binaries external)
+            genesis.setProperty("byod.imageUri", "https://participant-cdn.example.com/assets/do-it-live.jpeg");
+            genesis.setProperty("byod.imageMimeType", "image/jpeg");
+            genesis.setProperty("byod.note", "Binaries stored in participant-owned datastore, not in global chain");
+            
+            // Commit the IMMORTAL GENESIS
             nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
                            org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY);
             
-            System.out.println("   ✅ Genesis content created: /oak-chain/content/genesis");
-            System.out.println("      message: \"DO IT LIVE!\"");
-            System.out.println("      author: Blockchain AEM POC");
-            System.out.println("      timestamp: " + System.currentTimeMillis());
+            // Calculate genesis state ID
+            String genesisStateId = nodeStore.getRoot()
+                .getChildNode("oak-chain")
+                .getChildNode("content")
+                .getChildNode("genesis")
+                .toString();
+            
+            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            System.out.println("   ✅ IMMORTAL GENESIS NODE CREATED");
+            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            System.out.println("   📍 Path: /oak-chain/content/genesis");
+            System.out.println("   🔗 Chain ID: oak-blockchain-aem-poc");
+            System.out.println("   📅 Birth: " + genesisDate);
+            System.out.println("   🎖️  Message: \"DO IT LIVE!\"");
+            System.out.println("   🌐 Genesis Validator: " + genesisValidator);
+            System.out.println("   🔐 Genesis State: " + genesisStateId.substring(0, Math.min(40, genesisStateId.length())));
+            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            System.out.println("");
+            System.out.println("   New validators: Bootstrap from " + genesisHost + ":8091");
+            System.out.println("   Read genesis node for complete network parameters");
+            System.out.println("");
             
         } catch (Exception e) {
-            System.err.println("   ⚠️  Failed to create genesis content: " + e.getMessage());
-            // Non-fatal - server can still run without genesis content
+            System.err.println("   ❌ FATAL: Failed to create genesis: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Genesis creation failed - cannot start network", e);
         }
     }
     
@@ -472,9 +604,20 @@ public class GlobalStoreServer {
         String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
         String peersConfig = System.getProperty("consensus.peers", "");
         
-        if (!"true".equalsIgnoreCase(consensusEnabled) || peersConfig.isEmpty()) {
-            System.out.println("⚠️  Consensus disabled or no peers - running as standalone");
+        if (!"true".equalsIgnoreCase(consensusEnabled)) {
+            System.out.println("⚠️  Consensus disabled - running as standalone");
             return;
+        }
+        
+        // If peers are empty but we bootstrapped, use the bootstrap primary as initial peer
+        if (peersConfig.isEmpty() && bootstrapPrimaryHost != null && !bootstrapPrimaryHost.isEmpty()) {
+            // Derive primary's HTTP URL from bootstrap host
+            // Bootstrap uses standby port (8091), consensus uses HTTP port (8090)
+            String primaryUrl = "http://" + bootstrapPrimaryHost + ":8090";
+            peersConfig = primaryUrl;
+            System.out.println("🔗 No static peers configured, using bootstrap primary as initial peer:");
+            System.out.println("   Bootstrap host: " + bootstrapPrimaryHost);
+            System.out.println("   Consensus peer: " + primaryUrl);
         }
         
         List<String> peerUrls = parsePeerUrls(peersConfig);
