@@ -193,6 +193,11 @@ public class LeaderHealthMonitor {
         successfulHeartbeats = 0;
         totalValidators = electorateSize; // ONLY voting members count for quorum!
         
+        // Log heartbeat round (INFO level for visibility)
+        if (!followerUrls.isEmpty()) {
+            log.info("💓 Sending heartbeat to {} followers: {}", followerUrls.size(), followerUrls);
+        }
+        
         java.util.concurrent.CountDownLatch latch = 
             new java.util.concurrent.CountDownLatch(followerUrls.size());
         
@@ -325,7 +330,7 @@ public class LeaderHealthMonitor {
      */
     public synchronized void updateFollowerList(java.util.List<String> newFollowerUrls) {
         this.followerUrls = new java.util.ArrayList<>(newFollowerUrls);
-        log.debug("💓 Follower list updated: {} followers", newFollowerUrls.size());
+        log.info("💓 Follower list updated: {} followers → {}", newFollowerUrls.size(), newFollowerUrls);
     }
     
     /**

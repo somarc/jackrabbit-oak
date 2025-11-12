@@ -446,34 +446,52 @@ public class GlobalStoreServer {
         try {
             org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
             
+            // Genesis address: Ethereum zero address (0x0...0)
+            // This follows the standard pattern: /oak-chain/content/<wallet>/
+            // Makes genesis queryable via oak:index on wallet paths
+            String GENESIS_ADDRESS = "0x0000000000000000000000000000000000000000";
+            
             // Check if genesis content already exists
             org.apache.jackrabbit.oak.spi.state.NodeState oakChain = root.getChildNode("oak-chain");
             if (oakChain.exists()) {
                 org.apache.jackrabbit.oak.spi.state.NodeState content = oakChain.getChildNode("content");
-                if (content.exists() && content.getChildNode("genesis").exists()) {
-                    System.out.println("   ℹ️  Genesis already exists - verifying integrity...");
-                    
-                    // Verify genesis message (like Ethereum verifies Block 0 hash)
-                    org.apache.jackrabbit.oak.spi.state.NodeState genesisNode = content.getChildNode("genesis");
-                    org.apache.jackrabbit.oak.api.PropertyState msgProp = genesisNode.getProperty("protocol.message");
-                    
-                    if (msgProp == null || !"DO IT LIVE!".equals(msgProp.getValue(org.apache.jackrabbit.oak.api.Type.STRING))) {
-                        throw new IllegalStateException("❌ GENESIS CORRUPTION! This node has invalid genesis state.");
+                if (content.exists()) {
+                    org.apache.jackrabbit.oak.spi.state.NodeState genesisWallet = content.getChildNode(GENESIS_ADDRESS);
+                    if (genesisWallet.exists() && genesisWallet.getChildNode("genesis").exists()) {
+                        System.out.println("   ℹ️  Genesis already exists - verifying integrity...");
+                        
+                        // Verify genesis message (like Ethereum verifies Block 0 hash)
+                        org.apache.jackrabbit.oak.spi.state.NodeState genesisNode = genesisWallet.getChildNode("genesis");
+                        org.apache.jackrabbit.oak.api.PropertyState msgProp = genesisNode.getProperty("protocol.message");
+                        
+                        if (msgProp == null || !"DO IT LIVE!".equals(msgProp.getValue(org.apache.jackrabbit.oak.api.Type.STRING))) {
+                            throw new IllegalStateException("❌ GENESIS CORRUPTION! This node has invalid genesis state.");
+                        }
+                        
+                        System.out.println("   ✅ Genesis integrity verified");
+                        return;
                     }
-                    
-                    System.out.println("   ✅ Genesis integrity verified");
-                    return;
                 }
             }
             
             // Create IMMORTAL GENESIS
             System.out.println("   🎂 Creating IMMORTAL GENESIS NODE...");
             System.out.println("      The Birth Certificate of This Network");
+            System.out.println("      Address: " + GENESIS_ADDRESS + " (Zero Address)");
             
             org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = root.builder();
             org.apache.jackrabbit.oak.spi.state.NodeBuilder oakChainBuilder = rootBuilder.child("oak-chain");
             org.apache.jackrabbit.oak.spi.state.NodeBuilder contentBuilder = oakChainBuilder.child("content");
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesis = contentBuilder.child("genesis");
+            
+            // Create wallet folder for genesis (follows participant pattern)
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesisWalletBuilder = contentBuilder.child(GENESIS_ADDRESS);
+            genesisWalletBuilder.setProperty("jcr:primaryType", "nt:unstructured");
+            genesisWalletBuilder.setProperty("wallet", GENESIS_ADDRESS);
+            genesisWalletBuilder.setProperty("role", "genesis");
+            genesisWalletBuilder.setProperty("description", "Network genesis - zero address owns protocol parameters");
+            
+            // Create genesis node under wallet
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesis = genesisWalletBuilder.child("genesis");
             
             long timestamp = System.currentTimeMillis();
             String genesisDate = new java.util.Date(timestamp).toString();
@@ -565,22 +583,27 @@ public class GlobalStoreServer {
             String genesisStateId = nodeStore.getRoot()
                 .getChildNode("oak-chain")
                 .getChildNode("content")
+                .getChildNode(GENESIS_ADDRESS)
                 .getChildNode("genesis")
                 .toString();
             
             System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             System.out.println("   ✅ IMMORTAL GENESIS NODE CREATED");
             System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("   📍 Path: /oak-chain/content/genesis");
+            System.out.println("   📍 Path: /oak-chain/content/" + GENESIS_ADDRESS + "/genesis");
             System.out.println("   🔗 Chain ID: oak-blockchain-aem-poc");
             System.out.println("   📅 Birth: " + genesisDate);
             System.out.println("   🎖️  Message: \"DO IT LIVE!\"");
+            System.out.println("   👛 Genesis Address: " + GENESIS_ADDRESS + " (Zero Address)");
             System.out.println("   🌐 Genesis Validator: " + genesisValidator);
             System.out.println("   🔐 Genesis State: " + genesisStateId.substring(0, Math.min(40, genesisStateId.length())));
             System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             System.out.println("");
             System.out.println("   New validators: Bootstrap from " + genesisHost + ":8091");
-            System.out.println("   Read genesis node for complete network parameters");
+            System.out.println("   Query genesis: /api/explore?path=/oak-chain/content/" + GENESIS_ADDRESS + "/genesis");
+            System.out.println("");
+            System.out.println("   ℹ️  Genesis follows standard wallet pattern for oak:index compatibility");
+            System.out.println("   ℹ️  All content at /oak-chain/content/<0x-address>/ is indexable");
             System.out.println("");
             
         } catch (Exception e) {
