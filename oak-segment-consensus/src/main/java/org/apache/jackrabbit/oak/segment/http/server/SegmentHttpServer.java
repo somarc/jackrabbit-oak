@@ -928,6 +928,9 @@ public class SegmentHttpServer {
                 allValidators.add(selfUrl); // Add self first
                 allValidators.addAll(leaderConsensusEngine.getAllFollowers()); // Add all followers
                 
+                // Get non-voting followers (probationary validators)
+                java.util.List<String> nonVotingFollowers = leaderConsensusEngine.getNonVotingFollowers();
+                
                 html.append("<div style='margin-top: 12px; font-size: 0.75em; opacity: 0.8;'>");
                 html.append("<div style='margin-bottom: 6px; font-weight: 600;'>Validator Network:</div>");
                 
@@ -943,27 +946,36 @@ public class SegmentHttpServer {
                     String statusLabel = "";
                     
                     if (!isSelf) {
-                        // Check if we have status for this validator
-                        for (ValidatorRegistration reg : registeredValidators.values()) {
-                            if (reg.validatorUrl.equals(validatorUrl)) {
-                                status = reg.status;
-                                break;
-                            }
-                        }
+                        // CRITICAL: Check if validator is on probation (non-voting)
+                        boolean isOnProbation = nonVotingFollowers.contains(validatorUrl);
                         
-                        // Set emoji and label based on status
-                        switch (status) {
-                            case JOINING:
-                                statusEmoji = "🟡";  // Yellow
-                                statusLabel = " <span style='font-size: 10px; background: rgba(234,179,8,0.2); color: #fbbf24; padding: 2px 6px; border-radius: 3px;'>JOINING</span>";
-                                break;
-                            case SYNCING:
-                                statusEmoji = "🟠";  // Orange
-                                statusLabel = " <span style='font-size: 10px; background: rgba(249,115,22,0.2); color: #fb923c; padding: 2px 6px; border-radius: 3px;'>SYNCING</span>";
-                                break;
-                            case READY:
-                                statusEmoji = "🔵";  // Blue
-                                break;
+                        if (isOnProbation) {
+                            // Override status for probationary validators
+                            statusEmoji = "🟡";  // Yellow
+                            statusLabel = " <span style='font-size: 10px; background: rgba(234,179,8,0.2); color: #fbbf24; padding: 2px 6px; border-radius: 3px;'>PROBATION</span>";
+                        } else {
+                            // Check if we have status for this validator
+                            for (ValidatorRegistration reg : registeredValidators.values()) {
+                                if (reg.validatorUrl.equals(validatorUrl)) {
+                                    status = reg.status;
+                                    break;
+                                }
+                            }
+                            
+                            // Set emoji and label based on status
+                            switch (status) {
+                                case JOINING:
+                                    statusEmoji = "🟡";  // Yellow
+                                    statusLabel = " <span style='font-size: 10px; background: rgba(234,179,8,0.2); color: #fbbf24; padding: 2px 6px; border-radius: 3px;'>JOINING</span>";
+                                    break;
+                                case SYNCING:
+                                    statusEmoji = "🟠";  // Orange
+                                    statusLabel = " <span style='font-size: 10px; background: rgba(249,115,22,0.2); color: #fb923c; padding: 2px 6px; border-radius: 3px;'>SYNCING</span>";
+                                    break;
+                                case READY:
+                                    statusEmoji = "🔵";  // Blue
+                                    break;
+                            }
                         }
                     }
                     
