@@ -630,12 +630,7 @@ public class SegmentHttpServer {
                     return;
                 }
                 
-                // Consensus API - List peers
-                if ("/v1/peers".equals(path) && "GET".equals(method)) {
-                    handleListPeers(response);
-                    baseRequest.setHandled(true);
-                    return;
-                }
+                // Consensus API - List peers (REMOVED - duplicate of handlePeerList at line ~690)
                 
                 // Metrics API - Consensus and replication metrics (JSON format)
                 if ("/api/metrics".equals(path) && "GET".equals(method)) {
@@ -2431,16 +2426,8 @@ public class SegmentHttpServer {
             }
         }
         
-        /**
-         * Handle GET /v1/peers - List known peers
-         */
-        private void handleListPeers(HttpServletResponse response) throws IOException {
-            response.setContentType("application/json");
-            response.setStatus(HttpServletResponse.SC_OK);
-            
-            // Return empty list for now (will be populated when consensus engine is set)
-            response.getWriter().write("{\"peers\":[]}");
-        }
+        // OLD handleListPeers() REMOVED - was returning hardcoded empty list
+        // Use handlePeerList() instead which returns actual validator registry
         
         /**
          * Handle GET /api/metrics - Return consensus and replication metrics
