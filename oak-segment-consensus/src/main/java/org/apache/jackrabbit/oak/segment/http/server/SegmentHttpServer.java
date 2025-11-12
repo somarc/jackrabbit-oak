@@ -3333,6 +3333,19 @@ public class SegmentHttpServer {
                 // Record the heartbeat
                 leaderConsensusEngine.getHealthMonitor().recordHeartbeat();
                 
+                // Register the leader in our validator registry (if not already registered)
+                // This ensures followers learn about the leader via heartbeat
+                String leaderId = leaderUrl.contains("validator-") 
+                    ? leaderUrl.substring(leaderUrl.indexOf("validator-")).split(":")[0]
+                    : "leader-" + leaderUrl.hashCode();
+                
+                if (!registeredValidators.containsKey(leaderId)) {
+                    ValidatorRegistration leaderReg = new ValidatorRegistration(leaderId, leaderUrl);
+                    leaderReg.updateStatus(ValidatorRegistration.Status.READY);
+                    registeredValidators.put(leaderId, leaderReg);
+                    log.info("✅ Leader registered via heartbeat: {} ({})", leaderId, leaderUrl);
+                }
+                
                 // Return success
                 response.setContentType("application/json");
                 response.setStatus(HttpServletResponse.SC_OK);
