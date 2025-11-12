@@ -108,6 +108,9 @@ public class LeaderConsensusEngine {
         // Register self's public key from wallet
         this.claimVerifier.registerPublicKey(selfUrl, wallet.getPublicKeyHex());
         
+        // Set validator ID (wallet address) on health monitor for heartbeats
+        this.healthMonitor.setValidatorId(wallet.getWalletAddress());
+        
         // Record join times for self and all initial peers
         long now = System.currentTimeMillis();
         

@@ -48,6 +48,7 @@ public class LeaderHealthMonitor {
     private static final long FAILURE_THRESHOLD_MS = 30_000;
     
     private final String selfUrl;
+    private String selfValidatorId; // Wallet address
     private volatile long lastHeartbeatTime;
     private volatile boolean leaderAppearsDead;
     private Thread heartbeatMonitorThread;
@@ -66,6 +67,14 @@ public class LeaderHealthMonitor {
         this.lastHeartbeatTime = System.currentTimeMillis();
         this.leaderAppearsDead = false;
         this.running = false;
+    }
+    
+    /**
+     * Set the validator ID (wallet address) for this leader.
+     * This is included in heartbeats so followers can properly identify the leader.
+     */
+    public void setValidatorId(String validatorId) {
+        this.selfValidatorId = validatorId;
     }
     
     /**
@@ -214,7 +223,8 @@ public class LeaderHealthMonitor {
                     conn.setReadTimeout(2000);
                     
                     String payload = String.format(
-                        "{\"leaderUrl\":\"%s\",\"epoch\":%d,\"timestamp\":%d}",
+                        "{\"leaderId\":\"%s\",\"leaderUrl\":\"%s\",\"epoch\":%d,\"timestamp\":%d}",
+                        (selfValidatorId != null ? selfValidatorId : "unknown"),
                         selfUrl, currentEpoch, System.currentTimeMillis()
                     );
                     

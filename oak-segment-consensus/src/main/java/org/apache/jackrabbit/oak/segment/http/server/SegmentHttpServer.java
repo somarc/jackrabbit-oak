@@ -3511,9 +3511,15 @@ public class SegmentHttpServer {
                 
                 // Register the leader in our validator registry (if not already registered)
                 // This ensures followers learn about the leader via heartbeat
-                String leaderId = leaderUrl.contains("validator-") 
-                    ? leaderUrl.substring(leaderUrl.indexOf("validator-")).split(":")[0]
-                    : "leader-" + leaderUrl.hashCode();
+                // Extract leaderId (wallet address) from heartbeat payload
+                String leaderId = extractJsonField(body, "leaderId");
+                if (leaderId == null || leaderId.isEmpty()) {
+                    // Fallback: derive from URL (for backward compatibility)
+                    leaderId = leaderUrl.contains("validator-") 
+                        ? leaderUrl.substring(leaderUrl.indexOf("validator-")).split(":")[0]
+                        : "leader-" + leaderUrl.hashCode();
+                    log.warn("⚠️  No leaderId in heartbeat, using derived ID: {}", leaderId);
+                }
                 
                 if (!registeredValidators.containsKey(leaderId)) {
                     ValidatorRegistration leaderReg = new ValidatorRegistration(leaderId, leaderUrl);
