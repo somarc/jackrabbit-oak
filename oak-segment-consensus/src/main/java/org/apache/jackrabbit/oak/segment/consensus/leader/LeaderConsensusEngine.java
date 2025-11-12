@@ -519,6 +519,46 @@ public class LeaderConsensusEngine {
         return currentLeader;
     }
     
+    /**
+     * Force this validator into FOLLOWER mode.
+     * 
+     * Used when a validator joins the network after bootstrap.
+     * The validator must not immediately claim leadership based on epoch calculation.
+     * Instead, it must listen for heartbeats from the existing leader.
+     * 
+     * This prevents split-brain scenarios where a newly joined validator
+     * incorrectly thinks it's the leader for the current epoch.
+     */
+    public void forceFollowerMode() {
+        log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.warn("⚠️  FORCING FOLLOWER MODE (post-bootstrap join)");
+        log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        // Stop any leader behavior we might have started
+        if (currentRole == ValidatorRole.LEADER) {
+            healthMonitor.stopMonitoring();
+            log.info("   Stopped leader heartbeat broadcasting");
+        }
+        
+        // Set role to FOLLOWER
+        currentRole = ValidatorRole.FOLLOWER;
+        
+        // Set leader to first known peer (bootstrap primary)
+        if (!allFollowers.isEmpty()) {
+            currentLeader = allFollowers.get(0);
+            log.info("   Expected leader: {}", currentLeader);
+        } else {
+            currentLeader = "unknown";
+            log.warn("   No known leader yet - will discover via heartbeat");
+        }
+        
+        // Start listening for heartbeats
+        healthMonitor.startMonitoring();
+        
+        log.info("✅ Now in FOLLOWER mode, listening for leader heartbeats");
+        log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    }
+    
     public int getCurrentEpoch() {
         return currentEpoch;
     }

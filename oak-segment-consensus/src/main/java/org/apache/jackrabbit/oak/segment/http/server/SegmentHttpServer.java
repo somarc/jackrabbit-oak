@@ -2789,7 +2789,7 @@ public class SegmentHttpServer {
                 
                 // Navigate through sharded structure
                 // Example: /oak-chain/content/74/2d/35/0x742d35cc.../
-                String normalizedWallet = wallet.toLowerCase();
+                // (normalizedWallet already defined earlier in method)
                 String addr = normalizedWallet.replace("0x", "");
                 
                 org.apache.jackrabbit.oak.spi.state.NodeBuilder walletPath = rootBuilder

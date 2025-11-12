@@ -685,11 +685,30 @@ public class GlobalStoreServer {
                 );
             
             httpServer.setLeaderConsensusEngine(leaderEngine);
-            leaderEngine.startRotationMonitor();
+            
+            // CRITICAL FIX: After bootstrap, ALWAYS start as FOLLOWER
+            // Being PRIMARY doesn't mean we're LEADER!
+            // 
+            // The network already has a leader (the node we bootstrapped from).
+            // We must join as FOLLOWER and let heartbeats establish leadership.
+            // 
+            // If we immediately claim to be leader based on epoch calculation,
+            // we create a split-brain scenario.
             
             System.out.println("✅ Leader Consensus engine initialized");
-            System.out.println("   - Role: " + leaderEngine.getCurrentRole());
-            System.out.println("   - Leader: " + leaderEngine.getCurrentLeader());
+            System.out.println("   - Calculated role: " + leaderEngine.getCurrentRole());
+            System.out.println("   - Calculated leader: " + leaderEngine.getCurrentLeader());
+            System.out.println("");
+            System.out.println("   ⚠️  FORCING FOLLOWER MODE (just joined network)");
+            System.out.println("   - Will listen for leader heartbeats");
+            System.out.println("   - Leader will announce itself via heartbeat");
+            System.out.println("");
+            
+            // Force FOLLOWER role
+            leaderEngine.forceFollowerMode();
+            
+            // Start follower monitoring (listens for heartbeats)
+            leaderEngine.startRotationMonitor();
             
             // Broadcast presence to network (Dynamic Peer Discovery)
             String validatorId = System.getProperty("consensus.validator.id", "validator-promoted");
