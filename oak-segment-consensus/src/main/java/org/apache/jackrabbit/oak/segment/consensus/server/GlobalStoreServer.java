@@ -64,6 +64,7 @@ public class GlobalStoreServer {
     private SegmentHttpServer httpServer;
     private EpochListener epochListener;
     private ValidatorBootstrap bootstrap;
+    private org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
     
     // Bootstrap configuration (for organic peer discovery after promotion)
     private String bootstrapPrimaryHost;
@@ -83,6 +84,21 @@ public class GlobalStoreServer {
         if (!Files.exists(storePath)) {
             Files.createDirectories(storePath);
             System.out.println("Created store directory: " + storePath);
+        }
+        
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // ETHEREUM WALLET: Load or generate validator identity
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        String keystorePath = System.getProperty("wallet.keystore.path", 
+            storeDirectory + "/validator-keystore.properties");
+        
+        try {
+            this.wallet = new org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet(keystorePath);
+        } catch (Exception e) {
+            System.err.println("❌ FATAL: Failed to load/generate Ethereum wallet");
+            System.err.println("   Keystore path: " + keystorePath);
+            System.err.println("   Error: " + e.getMessage());
+            throw new IOException("Wallet initialization failed", e);
         }
         
         // Bootstrap mode (needs to be accessible throughout method)
@@ -262,7 +278,7 @@ public class GlobalStoreServer {
                 
                 org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine leaderEngine = 
                     new org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine(
-                        fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds
+                        fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds, wallet
                     );
                 
                 // Wire leader engine to HTTP server
@@ -722,7 +738,7 @@ public class GlobalStoreServer {
             // and starts directly as FOLLOWER. Scales to 1000s of validators.
             org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine leaderEngine = 
                 new org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine(
-                    fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds,
+                    fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds, wallet,
                     true  // isBootstrapJoin = true (post-genesis join)
                 );
             

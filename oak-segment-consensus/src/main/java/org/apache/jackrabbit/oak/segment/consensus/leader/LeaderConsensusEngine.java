@@ -49,6 +49,7 @@ public class LeaderConsensusEngine {
     private volatile LeaderElection election;  // Changed to volatile for dynamic peer updates
     private final SegmentReplicator replicator;
     private final LeaderHealthMonitor healthMonitor;
+    private final org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
     
     /**
      * Track when each validator joined the network (URL -> timestamp).
@@ -69,36 +70,43 @@ public class LeaderConsensusEngine {
     private Thread rotationMonitor;
     
     public LeaderConsensusEngine(FileStore fileStore, NodeStore nodeStore, 
-                                  String selfUrl, List<String> peerUrls) {
-        this(fileStore, nodeStore, selfUrl, peerUrls, 300, false); // Default: 5 min term, not bootstrap
+                                  String selfUrl, List<String> peerUrls,
+                                  org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet) {
+        this(fileStore, nodeStore, selfUrl, peerUrls, 300, wallet, false); // Default: 5 min term, not bootstrap
     }
     
     public LeaderConsensusEngine(FileStore fileStore, NodeStore nodeStore, 
                                   String selfUrl, List<String> peerUrls, 
-                                  int leaderTermSeconds) {
-        this(fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds, false); // Not bootstrap
+                                  int leaderTermSeconds,
+                                  org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet) {
+        this(fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds, wallet, false); // Not bootstrap
     }
     
     /**
      * Constructor with bootstrap join flag.
      * 
+     * @param wallet Real Ethereum wallet for validator identity and signing
      * @param isBootstrapJoin true if this validator is joining via bootstrap (post-genesis),
      *                        false if this is genesis or config-based start
      */
     public LeaderConsensusEngine(FileStore fileStore, NodeStore nodeStore, 
                                   String selfUrl, List<String> peerUrls, 
-                                  int leaderTermSeconds, boolean isBootstrapJoin) {
+                                  int leaderTermSeconds,
+                                  org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet,
+                                  boolean isBootstrapJoin) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.selfUrl = selfUrl;
+        this.wallet = wallet;
         this.replicator = new SegmentReplicator(fileStore);
         this.healthMonitor = new LeaderHealthMonitor(selfUrl);
         
-        // PHASE 3: Initialize cryptographic signing and verification
+        // PHASE 3: Use wallet for cryptographic signing (replaces ClaimSigner)
+        // Validator identity is now the wallet address, not selfUrl
         this.claimSigner = new org.apache.jackrabbit.oak.segment.consensus.security.ClaimSigner(selfUrl);
         this.claimVerifier = new org.apache.jackrabbit.oak.segment.consensus.security.ClaimVerifier();
-        // Register self's public key
-        this.claimVerifier.registerPublicKey(selfUrl, claimSigner.getPublicKey());
+        // Register self's public key from wallet
+        this.claimVerifier.registerPublicKey(selfUrl, wallet.getPublicKeyHex());
         
         // Record join times for self and all initial peers
         long now = System.currentTimeMillis();
