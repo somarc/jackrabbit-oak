@@ -3186,39 +3186,71 @@ public class SegmentHttpServer {
                 
                 final long now = System.currentTimeMillis();
                 // OFFLINE = missed 2 full epochs (2 x 300s = 600s = 10 minutes)
-                // A validator should be sending heartbeats or receiving them every epoch
                 int leaderTermSeconds = 300; // default
                 if (leaderConsensusEngine != null) {
                     leaderTermSeconds = leaderConsensusEngine.getElection().getLeaderTermSeconds();
                 }
                 final long offlineThresholdMs = leaderTermSeconds * 2 * 1000L; // 2 epochs
                 
+                // Build a comprehensive list: registeredValidators + consensus engine followers
+                // Use a Set to avoid duplicates
+                java.util.Set<String> allValidatorUrls = new java.util.HashSet<>();
+                
+                // Add from registered validators
+                for (ValidatorRegistration reg : registeredValidators.values()) {
+                    allValidatorUrls.add(reg.validatorUrl);
+                }
+                
+                // Add from consensus engine (in case some are only there)
+                if (leaderConsensusEngine != null) {
+                    allValidatorUrls.addAll(leaderConsensusEngine.getAllFollowers());
+                    // Also add self
+                    allValidatorUrls.add(selfUrl);
+                }
+                
                 StringBuilder json = new StringBuilder();
                 json.append("[\n");
                 
                 boolean first = true;
-                for (ValidatorRegistration reg : registeredValidators.values()) {
+                for (String validatorUrl : allValidatorUrls) {
                     if (!first) {
                         json.append(",\n");
                     }
                     first = false;
                     
+                    // Get registration if it exists
+                    ValidatorRegistration reg = null;
+                    for (ValidatorRegistration r : registeredValidators.values()) {
+                        if (r.validatorUrl.equals(validatorUrl)) {
+                            reg = r;
+                            break;
+                        }
+                    }
+                    
                     // Determine status
                     String status;
-                    long timeSinceLastSeen = now - reg.lastSeen;
+                    long lastSeen = reg != null ? reg.lastSeen : now;
+                    long timeSinceLastSeen = now - lastSeen;
                     
-                    if (timeSinceLastSeen > offlineThresholdMs) {
-                        status = "OFFLINE";  // Hasn't been seen in > 60s
-                    } else if (nonVotingFollowers.contains(reg.validatorUrl)) {
+                    // Check if this is self and on probation
+                    boolean isSelf = validatorUrl.equals(selfUrl);
+                    if (isSelf && nonVotingFollowers.contains(validatorUrl)) {
+                        // Self-awareness: we know we're on probation
+                        status = "PROBATION";
+                    } else if (timeSinceLastSeen > offlineThresholdMs) {
+                        status = "OFFLINE";
+                    } else if (nonVotingFollowers.contains(validatorUrl)) {
                         status = "PROBATION";  // Non-voting, waiting for probation period
                     } else {
                         status = "READY";  // Voting member, fully participating
                     }
                     
+                    String validatorId = reg != null ? reg.validatorId : extractValidatorId(validatorUrl);
+                    
                     json.append("  {");
-                    json.append("\"validatorId\":\"").append(reg.validatorId.replace("\"", "\\\"")).append("\",");
-                    json.append("\"validatorUrl\":\"").append(reg.validatorUrl.replace("\"", "\\\"")).append("\",");
-                    json.append("\"lastSeen\":").append(reg.lastSeen).append(",");
+                    json.append("\"validatorId\":\"").append(validatorId.replace("\"", "\\\"")).append("\",");
+                    json.append("\"validatorUrl\":\"").append(validatorUrl.replace("\"", "\\\"")).append("\",");
+                    json.append("\"lastSeen\":").append(lastSeen).append(",");
                     json.append("\"status\":\"").append(status).append("\"");
                     json.append("}");
                 }
@@ -3226,20 +3258,30 @@ public class SegmentHttpServer {
                 json.append("\n]");
                 response.getWriter().write(json.toString());
                 
-                log.debug("Served peer list: {} validators (READY={}, PROBATION={}, OFFLINE={})", 
-                    registeredValidators.size(),
-                    registeredValidators.values().stream().filter(r -> 
-                        (now - r.lastSeen <= offlineThresholdMs) && !nonVotingFollowers.contains(r.validatorUrl)
-                    ).count(),
-                    nonVotingFollowers.size(),
-                    registeredValidators.values().stream().filter(r -> 
-                        now - r.lastSeen > offlineThresholdMs
-                    ).count()
-                );
+                log.debug("Served peer list: {} total validators", allValidatorUrls.size());
                 
             } catch (Exception e) {
                 log.error("Failed to serve peer list", e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to get peer list: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Extract validator ID from URL when no registration exists.
+         * Format: http://validator-N:port -> validator-N
+         */
+        private String extractValidatorId(String validatorUrl) {
+            if (validatorUrl == null) return "unknown";
+            // Extract hostname from URL
+            try {
+                java.net.URL url = new java.net.URL(validatorUrl);
+                String host = url.getHost();
+                if (host.startsWith("validator-")) {
+                    return host; // e.g., "validator-1", "validator-2"
+                }
+                return host;
+            } catch (Exception e) {
+                return "unknown";
             }
         }
         
