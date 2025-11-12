@@ -334,6 +334,126 @@ public class ConsensusMetrics {
         leaderElectionsTotal.inc();
     }
     
+    // ====================================================================================
+    // LEADER CLAIM PROTOCOL METRICS (World-Class Consensus)
+    // ====================================================================================
+    
+    /**
+     * Total number of leadership claims by result.
+     * Status: accepted, stale_or_future, byzantine, duplicate, timeout_failover
+     */
+    public static final Counter leadershipClaimsTotal = Counter.build()
+            .name("oak_consensus_leadership_claims_total")
+            .help("Total number of leadership claims by result.")
+            .labelNames("status")
+            .register();
+    
+    /**
+     * Leadership claim latency (from claim broadcast to acceptance).
+     */
+    public static final Histogram leadershipClaimLatency = Histogram.build()
+            .name("oak_consensus_leadership_claim_latency_seconds")
+            .help("Leadership claim latency in seconds.")
+            .buckets(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0)
+            .register();
+    
+    /**
+     * Number of followers that accepted the claim broadcast.
+     */
+    public static final Histogram leadershipClaimBroadcastSuccess = Histogram.build()
+            .name("oak_consensus_leadership_claim_broadcast_success")
+            .help("Number of followers that accepted the claim broadcast.")
+            .buckets(1, 2, 3, 5, 10, 20, 50)
+            .register();
+    
+    /**
+     * Total number of failover elections triggered by missing claims.
+     */
+    public static final Counter failoverElectionsTotal = Counter.build()
+            .name("oak_consensus_failover_elections_total")
+            .help("Total number of failover elections triggered by missing claims.")
+            .register();
+    
+    /**
+     * Number of validators currently marked as OFFLINE.
+     */
+    public static final Gauge offlineValidatorsCount = Gauge.build()
+            .name("oak_consensus_offline_validators")
+            .help("Number of validators currently marked as OFFLINE.")
+            .register();
+    
+    // ====================================================================================
+    // PHASE 2: QUORUM-BASED ACCEPTANCE METRICS (Split-Brain Prevention)
+    // ====================================================================================
+    
+    /**
+     * Total number of claim ACKs by result.
+     * Status: accepted, invalid_signature, unknown_epoch, mismatch
+     */
+    public static final Counter claimAcksTotal = Counter.build()
+            .name("oak_consensus_claim_acks_total")
+            .help("Total claim acknowledgments by result")
+            .labelNames("result")
+            .register();
+    
+    /**
+     * Time to reach quorum for leadership claims.
+     */
+    public static final Histogram quorumWaitTime = Histogram.build()
+            .name("oak_consensus_quorum_wait_seconds")
+            .help("Time to reach quorum for claims")
+            .buckets(0.5, 1.0, 2.0, 5.0, 10.0)
+            .register();
+    
+    /**
+     * Record a leadership claim result.
+     * 
+     * @param status Result status (accepted, stale_or_future, byzantine, duplicate, timeout_failover, invalid_signature)
+     */
+    public static void recordLeadershipClaimResult(String status) {
+        leadershipClaimsTotal.labels(status).inc();
+        if ("timeout_failover".equals(status)) {
+            failoverElectionsTotal.inc();
+        }
+    }
+    
+    /**
+     * Record a claim ACK result (PHASE 2).
+     * 
+     * @param result Result status (accepted, invalid_signature, unknown_epoch, mismatch)
+     */
+    public static void recordClaimAckResult(String result) {
+        claimAcksTotal.labels(result).inc();
+    }
+    
+    /**
+     * Record quorum wait time (PHASE 2).
+     * 
+     * @param timeMs Time in milliseconds to reach quorum
+     */
+    public static void recordQuorumWaitTime(long timeMs) {
+        quorumWaitTime.observe(timeMs / 1000.0);
+    }
+    
+    /**
+     * Record leadership claim latency.
+     * 
+     * @param latencyMs Latency in milliseconds
+     */
+    public static void recordLeadershipClaimLatency(long latencyMs) {
+        leadershipClaimLatency.observe(latencyMs / 1000.0);
+    }
+    
+    /**
+     * Record leadership claim broadcast results.
+     * 
+     * @param successCount Number of followers that accepted the claim
+     * @param totalCount   Total number of followers
+     */
+    public static void recordLeadershipClaimBroadcast(int successCount, int totalCount) {
+        leadershipClaimBroadcastSuccess.observe(successCount);
+    }
+    
     /**
      * Record an HTTP request to a validator.
      * 

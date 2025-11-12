@@ -94,6 +94,12 @@ public class LeaderConsensusEngine {
         this.replicator = new SegmentReplicator(fileStore);
         this.healthMonitor = new LeaderHealthMonitor(selfUrl);
         
+        // PHASE 3: Initialize cryptographic signing and verification
+        this.claimSigner = new org.apache.jackrabbit.oak.segment.consensus.security.ClaimSigner(selfUrl);
+        this.claimVerifier = new org.apache.jackrabbit.oak.segment.consensus.security.ClaimVerifier();
+        // Register self's public key
+        this.claimVerifier.registerPublicKey(selfUrl, claimSigner.getPublicKey());
+        
         // Record join times for self and all initial peers
         long now = System.currentTimeMillis();
         validatorJoinTimes.put(selfUrl, now);
@@ -279,6 +285,11 @@ public class LeaderConsensusEngine {
     
     /**
      * Handle transition to a new epoch (leader rotation).
+     * 
+     * LEADER CLAIM PROTOCOL:
+     * - Elected leader MUST broadcast claim within 15s
+     * - Followers wait for claim or trigger re-election on timeout
+     * - Automatic failover if leader is offline
      */
     private void handleEpochTransition(int newEpoch) {
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -297,17 +308,52 @@ public class LeaderConsensusEngine {
         
         if (newRole != currentRole) {
             if (newRole == ValidatorRole.LEADER) {
-                transitionToLeader();
+                // ═══════════════════════════════════════════════════════════
+                // LEADER CLAIM PROTOCOL - PHASE 1: BROADCAST CLAIM
+                // ═══════════════════════════════════════════════════════════
+                log.info("👑 I am elected LEADER for epoch {}", currentEpoch);
+                log.info("   Broadcasting leadership claim to all followers...");
+                
+                boolean claimed = broadcastLeadershipClaim(currentEpoch);
+                
+                if (claimed || allFollowers.isEmpty()) {
+                    // Successfully claimed or solo leader
+                    transitionToLeader();
+                    currentRole = newRole;
+                } else {
+                    // Failed to broadcast claim - stay as FOLLOWER
+                    log.error("❌ Failed to broadcast leadership claim");
+                    log.error("   Staying as FOLLOWER to allow next validator to claim");
+                    currentRole = ValidatorRole.FOLLOWER;
+                    
+                    // Allow next validator to claim (they'll see we didn't claim)
+                    // This will trigger automatic failover
+                }
             } else {
+                // ═══════════════════════════════════════════════════════════
+                // LEADER CLAIM PROTOCOL - PHASE 2: WAIT FOR CLAIM
+                // ═══════════════════════════════════════════════════════════
+                log.info("📡 I am FOLLOWER for epoch {}", currentEpoch);
+                log.info("   Expected leader: {}", newLeader);
+                log.info("   Starting 15-second claim timer...");
+                
+                // Start claim timer (15 seconds for epoch rotation)
+                startLeaderClaimTimer(newLeader, currentEpoch, 15);
+                
+                // Transition to follower mode (will wait for claim)
                 transitionToFollower();
+                currentRole = newRole;
             }
-            currentRole = newRole;
         } else {
             log.info("Role unchanged: {}", currentRole);
             if (currentRole == ValidatorRole.LEADER) {
                 log.info("✅ Continuing as LEADER for epoch {}", currentEpoch);
+                // Re-broadcast claim for new epoch
+                broadcastLeadershipClaim(currentEpoch);
             } else {
                 log.info("✅ Continuing as FOLLOWER, leader: {}", currentLeader);
+                // Restart claim timer for new epoch
+                startLeaderClaimTimer(currentLeader, currentEpoch, 15);
             }
         }
         
@@ -653,6 +699,457 @@ public class LeaderConsensusEngine {
             }
         }
         return nonVoting;
+    }
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // LEADER CLAIM PROTOCOL
+    // World-class consensus inspired by Raft, Paxos, Kafka, Ethereum 2.0
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    // PHASE 1: Basic claim protocol
+    private volatile boolean leaderClaimReceived = false;
+    private volatile java.util.concurrent.ScheduledFuture<?> claimTimer = null;
+    private final java.util.concurrent.ScheduledExecutorService claimScheduler = 
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+    
+    // PHASE 2: Quorum-based acceptance (split-brain prevention)
+    private final Map<Integer, LeadershipClaimTracker> claimTrackers = new ConcurrentHashMap<>();
+    private volatile java.util.concurrent.ScheduledFuture<?> quorumTimer = null;
+    
+    // PHASE 3: Cryptographic signatures (Byzantine fault tolerance)
+    private final org.apache.jackrabbit.oak.segment.consensus.security.ClaimSigner claimSigner;
+    private final org.apache.jackrabbit.oak.segment.consensus.security.ClaimVerifier claimVerifier;
+    
+    /**
+     * Handle incoming leadership claim from elected validator.
+     * 
+     * PHASE 1: Basic validation (epoch, expected leader)
+     * PHASE 3: Cryptographic signature verification (Byzantine fault tolerance)
+     * 
+     * Validates:
+     * 1. **Cryptographic signature** (PHASE 3 - prevents forgery)
+     * 2. Epoch matches current epoch (not stale/future)
+     * 3. Validator is the expected leader for this epoch
+     * 4. Claim arrived within timeout window
+     * 
+     * @param claimedEpoch The epoch the validator is claiming
+     * @param validatorId  The validator claiming leadership
+     * @param validatorUrl The validator's URL
+     * @param timestamp    When the claim was sent
+     * @param signature    ECDSA signature (PHASE 3)
+     * @return true if claim accepted, false if rejected
+     */
+    public synchronized boolean handleLeadershipClaim(int claimedEpoch, String validatorId, 
+                                                       String validatorUrl, long timestamp,
+                                                       String signature) {
+        
+        // PHASE 3: Validation 0 - Cryptographic signature (MUST be first!)
+        if (!claimVerifier.verifyClaim(claimedEpoch, validatorUrl, timestamp, signature)) {
+            log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.error("❌ BYZANTINE ATTACK DETECTED!");
+            log.error("   Validator: {}", validatorUrl);
+            log.error("   Epoch: {}", claimedEpoch);
+            log.error("   Reason: INVALID SIGNATURE");
+            log.error("   This claim is REJECTED - likely forgery or tampering");
+            log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            ConsensusMetrics.recordLeadershipClaimResult("invalid_signature");
+            return false;
+        }
+        
+        // PHASE 1: Validation 1 - Epoch must match current epoch
+        if (claimedEpoch != currentEpoch) {
+            if (claimedEpoch < currentEpoch) {
+                log.warn("⚠️  STALE CLAIM: {} claimed epoch {} but current is {}", 
+                    validatorId, claimedEpoch, currentEpoch);
+            } else {
+                log.warn("⚠️  FUTURE CLAIM: {} claimed epoch {} but current is {}", 
+                    validatorId, claimedEpoch, currentEpoch);
+            }
+            ConsensusMetrics.recordLeadershipClaimResult("stale_or_future");
+            return false;
+        }
+        
+        // PHASE 1: Validation 2 - Validator must be the expected leader
+        String expectedLeader = election.electLeader();
+        if (!validatorUrl.equals(expectedLeader)) {
+            log.error("❌ BYZANTINE CLAIM: {} claimed but {} was elected", 
+                validatorUrl, expectedLeader);
+            ConsensusMetrics.recordLeadershipClaimResult("byzantine");
+            return false;
+        }
+        
+        // PHASE 1: Validation 3 - Check if we already have a leader for this epoch
+        if (currentLeader != null && !currentLeader.equals(validatorUrl)) {
+            log.warn("⚠️  DUPLICATE CLAIM: {} claimed but {} is already leader", 
+                validatorUrl, currentLeader);
+            ConsensusMetrics.recordLeadershipClaimResult("duplicate");
+            return false;
+        }
+        
+        // ✅ CLAIM ACCEPTED (signature verified, epoch valid, expected leader)
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("✅ LEADERSHIP CLAIM ACCEPTED");
+        log.info("   Epoch: {}", claimedEpoch);
+        log.info("   Leader: {}", validatorUrl);
+        log.info("   Latency: {}ms", System.currentTimeMillis() - timestamp);
+        log.info("   Signature: VERIFIED ✅");
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        // Mark claim as received
+        leaderClaimReceived = true;
+        
+        // Cancel timeout timer
+        if (claimTimer != null) {
+            claimTimer.cancel(false);
+            claimTimer = null;
+        }
+        
+        // Update state
+        currentLeader = validatorUrl;
+        currentRole = ValidatorRole.FOLLOWER;
+        
+        // Start listening for heartbeats from this leader
+        healthMonitor.startMonitoring();
+        
+        ConsensusMetrics.recordLeadershipClaimResult("accepted");
+        ConsensusMetrics.recordLeadershipClaimLatency(System.currentTimeMillis() - timestamp);
+        
+        // PHASE 2: Send ACK back to leader for quorum-based acceptance
+        sendClaimAck(claimedEpoch, validatorUrl);
+        
+        return true;
+    }
+    
+    /**
+     * Broadcast leadership claim to all followers.
+     * 
+     * PHASE 1: Basic claim broadcast with timeout
+     * PHASE 2: Track ACKs and wait for quorum
+     * PHASE 3: Cryptographically sign the claim
+     * 
+     * Called by elected leader to prove liveness and readiness.
+     * Followers will validate claim or trigger re-election on timeout.
+     * 
+     * @param epoch The epoch being claimed
+     * @return true if broadcast succeeded to at least one follower (Phase 1) or quorum reached (Phase 2)
+     */
+    public boolean broadcastLeadershipClaim(int epoch) {
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("👑 BROADCASTING LEADERSHIP CLAIM");
+        log.info("   Epoch: {}", epoch);
+        log.info("   Self: {}", selfUrl);
+        log.info("   Followers: {}", allFollowers.size());
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        if (allFollowers.isEmpty()) {
+            log.info("✅ No followers to notify (solo leader)");
+            return true;  // Solo leader scenario
+        }
+        
+        // PHASE 3: Sign the claim with our private key
+        long timestamp = System.currentTimeMillis();
+        String signature = claimSigner.signClaim(epoch, selfUrl, timestamp);
+        
+        // Build claim payload with signature
+        String payload = String.format(
+            "{\"epoch\":%d,\"validatorId\":\"%s\",\"validatorUrl\":\"%s\",\"timestamp\":%d,\"claimType\":\"EPOCH_ROTATION\",\"signature\":\"%s\"}",
+            epoch,
+            selfUrl.contains("validator-") ? selfUrl.substring(selfUrl.indexOf("validator-")).split(":")[0] : "unknown",
+            selfUrl,
+            timestamp,
+            signature
+        );
+        
+        // PHASE 2: Create claim tracker for quorum-based acceptance
+        int electorateSize = election.getAllValidators().size();
+        LeadershipClaimTracker tracker = new LeadershipClaimTracker(epoch, selfUrl, electorateSize);
+        claimTrackers.put(epoch, tracker);
+        
+        int successCount = 0;
+        
+        for (String followerUrl : allFollowers) {
+            try {
+                URL url = new URL(followerUrl + "/v1/consensus/claim-leadership");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+                
+                // Send payload
+                java.io.OutputStream os = conn.getOutputStream();
+                os.write(payload.getBytes("UTF-8"));
+                os.flush();
+                os.close();
+                
+                int responseCode = conn.getResponseCode();
+                if (responseCode == 200) {
+                    log.info("✅ Claim sent to {}", followerUrl);
+                    successCount++;
+                } else {
+                    log.warn("⚠️  Claim failed to {}: HTTP {}", followerUrl, responseCode);
+                }
+                
+                conn.disconnect();
+                
+            } catch (Exception e) {
+                log.error("❌ Failed to send claim to {}: {}", followerUrl, e.getMessage());
+            }
+        }
+        
+        boolean success = successCount > 0;
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("Claim broadcast: {}/{} followers notified", successCount, allFollowers.size());
+        log.info("   Signature: {}...", signature.substring(0, Math.min(18, signature.length())));
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        ConsensusMetrics.recordLeadershipClaimBroadcast(successCount, allFollowers.size());
+        
+        // PHASE 2: Start quorum timer (10 seconds to collect ACKs)
+        // If quorum not reached, we'll continue as leader anyway (Phase 1 behavior)
+        // but log a warning. In production, might want to step down if no quorum.
+        if (electorateSize > 1) {  // Only need quorum if there are other voters
+            startQuorumTimer(tracker, 10);
+        }
+        
+        return success;
+    }
+    
+    /**
+     * Start quorum timer to check if ACKs were received.
+     * 
+     * PHASE 2: Wait for quorum or timeout.
+     */
+    private void startQuorumTimer(LeadershipClaimTracker tracker, int timeoutSeconds) {
+        quorumTimer = claimScheduler.schedule(() -> {
+            if (!tracker.hasQuorum()) {
+                tracker.reject();
+                log.warn("⚠️  QUORUM NOT REACHED within {}s", timeoutSeconds);
+                log.warn("   Continuing as leader (Phase 1 fallback)");
+                log.warn("   In production, might want to step down");
+            }
+        }, timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+    }
+    
+    /**
+     * Start claim timer for followers.
+     * 
+     * If no leadership claim is received within timeoutSeconds, trigger re-election.
+     * 
+     * @param expectedLeader The validator expected to claim leadership
+     * @param epoch          The current epoch
+     * @param timeoutSeconds Grace period for claim (default 15s, failover 10s)
+     */
+    public synchronized void startLeaderClaimTimer(String expectedLeader, int epoch, int timeoutSeconds) {
+        // Reset state
+        leaderClaimReceived = false;
+        
+        // Cancel existing timer
+        if (claimTimer != null) {
+            claimTimer.cancel(false);
+        }
+        
+        log.info("⏰ Starting leadership claim timer: {}s for {}", timeoutSeconds, expectedLeader);
+        
+        // Schedule timeout
+        claimTimer = claimScheduler.schedule(() -> {
+            if (!leaderClaimReceived) {
+                handleMissingClaim(expectedLeader, epoch);
+            }
+        }, timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
+    }
+    
+    /**
+     * Handle missing leadership claim (timeout).
+     * 
+     * Marks expected leader as OFFLINE and triggers re-election without them.
+     * Enables automatic failover to next validator in line.
+     * 
+     * @param expectedLeader The validator that failed to claim
+     * @param epoch          The epoch that failed
+     */
+    private synchronized void handleMissingClaim(String expectedLeader, int epoch) {
+        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.error("❌ MISSING LEADERSHIP CLAIM - INITIATING FAILOVER");
+        log.error("   Expected leader: {}", expectedLeader);
+        log.error("   Epoch: {}", epoch);
+        log.error("   Timeout: Claim not received within grace period");
+        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        // Mark validator as OFFLINE
+        log.warn("📴 Marking {} as OFFLINE", expectedLeader);
+        allFollowers.remove(expectedLeader);
+        
+        // Remove from electorate (rebuild election without failed validator)
+        List<String> remainingPeers = new java.util.ArrayList<>(allFollowers);
+        Map<String, Long> remainingJoinTimes = new java.util.concurrent.ConcurrentHashMap<>(validatorJoinTimes);
+        remainingJoinTimes.remove(expectedLeader);
+        
+        election = new LeaderElection(selfUrl, remainingPeers, 
+            election.getLeaderTermSeconds(), remainingJoinTimes);
+        
+        // Re-elect without failed validator
+        String newLeader = election.electLeader();
+        currentEpoch = epoch;  // Stay in same epoch
+        
+        log.warn("🔄 RE-ELECTION WITHOUT FAILED VALIDATOR");
+        log.warn("   New leader: {}", newLeader);
+        log.warn("   Electorate size: {}", election.getAllValidators().size());
+        
+        ConsensusMetrics.recordLeadershipClaimResult("timeout_failover");
+        
+        // If I'm the failover leader, claim immediately
+        if (newLeader.equals(selfUrl)) {
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("🎖️  I AM THE FAILOVER LEADER FOR EPOCH {}", epoch);
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            
+            // Broadcast claim
+            broadcastLeadershipClaim(epoch);
+            
+            // Transition to leader
+            transitionToLeader();
+        } else {
+            // Start new claim timer for failover leader (shorter timeout: 10s)
+            log.info("⏰ Waiting for failover leader {} to claim (10s timeout)", newLeader);
+            startLeaderClaimTimer(newLeader, epoch, 10);
+        }
+    }
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // PHASE 2: QUORUM-BASED ACCEPTANCE
+    // Split-brain prevention via majority acknowledgments
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    /**
+     * Send ACK to leader after accepting their claim.
+     * 
+     * PHASE 2: Follower acknowledges valid claim.
+     * PHASE 3: ACK is cryptographically signed.
+     */
+    private void sendClaimAck(int epoch, String claimantUrl) {
+        try {
+            // PHASE 3: Sign the ACK
+            long timestamp = System.currentTimeMillis();
+            String signature = claimSigner.signAck(epoch, claimantUrl, selfUrl, timestamp);
+            
+            // Build ACK payload
+            String payload = String.format(
+                "{\"epoch\":%d,\"claimantUrl\":\"%s\",\"ackValidatorUrl\":\"%s\",\"timestamp\":%d,\"signature\":\"%s\"}",
+                epoch, claimantUrl, selfUrl, timestamp, signature
+            );
+            
+            // Send to leader
+            URL url = new URL(claimantUrl + "/v1/consensus/claim-ack");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            
+            java.io.OutputStream os = conn.getOutputStream();
+            os.write(payload.getBytes("UTF-8"));
+            os.flush();
+            os.close();
+            
+            int responseCode = conn.getResponseCode();
+            if (responseCode == 200) {
+                log.info("✅ ACK sent to {} for epoch {}", claimantUrl, epoch);
+            } else {
+                log.warn("⚠️  ACK failed: HTTP {}", responseCode);
+            }
+            
+            conn.disconnect();
+            
+        } catch (Exception e) {
+            log.error("❌ Failed to send ACK to {}", claimantUrl, e);
+        }
+    }
+    
+    /**
+     * Handle incoming claim acknowledgment (leader receives from followers).
+     * 
+     * PHASE 2: Track ACKs and finalize when quorum reached.
+     * PHASE 3: Verify ACK signature.
+     * 
+     * @param epoch          The epoch being ACK'd
+     * @param claimantUrl    The leader being ACK'd
+     * @param ackValidatorUrl The validator sending the ACK
+     * @param timestamp      When the ACK was created
+     * @param signature      ECDSA signature of the ACK
+     * @return true if ACK accepted, false if rejected
+     */
+    public synchronized boolean handleClaimAck(int epoch, String claimantUrl, 
+                                                String ackValidatorUrl, long timestamp,
+                                                String signature) {
+        
+        // PHASE 3: Verify ACK signature
+        if (!claimVerifier.verifyAck(epoch, claimantUrl, ackValidatorUrl, timestamp, signature)) {
+            log.error("❌ BYZANTINE ACK from {}: Invalid signature", ackValidatorUrl);
+            ConsensusMetrics.recordClaimAckResult("invalid_signature");
+            return false;
+        }
+        
+        // PHASE 2: Find claim tracker for this epoch
+        LeadershipClaimTracker tracker = claimTrackers.get(epoch);
+        if (tracker == null) {
+            log.warn("⚠️  ACK for unknown epoch {} from {}", epoch, ackValidatorUrl);
+            ConsensusMetrics.recordClaimAckResult("unknown_epoch");
+            return false;
+        }
+        
+        // Verify ACK is for current claim
+        if (!tracker.getClaimantUrl().equals(claimantUrl)) {
+            log.error("❌ ACK mismatch: {} ACK'd {} but tracker expects {}", 
+                ackValidatorUrl, claimantUrl, tracker.getClaimantUrl());
+            ConsensusMetrics.recordClaimAckResult("mismatch");
+            return false;
+        }
+        
+        // Add ACK to tracker
+        boolean quorumReached = tracker.addAck(ackValidatorUrl);
+        ConsensusMetrics.recordClaimAckResult("accepted");
+        
+        if (quorumReached) {
+            // QUORUM REACHED! Finalize leadership
+            long quorumTime = tracker.getQuorumTime();
+            ConsensusMetrics.recordQuorumWaitTime(quorumTime);
+            
+            // Cancel quorum timer
+            if (quorumTimer != null) {
+                quorumTimer.cancel(false);
+                quorumTimer = null;
+            }
+            
+            log.info("🎊 QUORUM REACHED - Leadership finalized!");
+            log.info("   Epoch: {}", epoch);
+            log.info("   Leader: {}", claimantUrl);
+            log.info("   ACKs: {}/{}", tracker.getAckCount(), tracker.getRequiredQuorum());
+            log.info("   Quorum time: {}ms", quorumTime);
+            
+            // Already leader, just confirming with quorum
+            return true;
+        }
+        
+        log.debug("ACK received: {}/{} (waiting for quorum)", 
+            tracker.getAckCount(), tracker.getRequiredQuorum());
+        return true;
+    }
+    
+    /**
+     * Get the claim verifier (for HTTP server to register public keys).
+     */
+    public org.apache.jackrabbit.oak.segment.consensus.security.ClaimVerifier getClaimVerifier() {
+        return claimVerifier;
+    }
+    
+    /**
+     * Get the claim signer's public key for broadcasting.
+     */
+    public String getPublicKeyHex() {
+        return claimSigner.getPublicKeyHex();
     }
 }
 

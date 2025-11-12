@@ -402,15 +402,20 @@ public class SegmentHttpServer {
                 // Build peer-joined endpoint URL
                 String peerJoinedUrl = peerUrl + "/v1/consensus/peer-joined";
                 
-                // Build JSON payload with proof
+                // PHASE 3: Get public key for Byzantine fault tolerance
+                String publicKeyHex = leaderConsensusEngine != null ? 
+                    leaderConsensusEngine.getPublicKeyHex() : "";
+                
+                // Build JSON payload with proof and public key (PHASE 3)
                 String jsonPayload = String.format(
-                    "{\"validatorId\":\"%s\",\"validatorUrl\":\"%s\",\"proof\":%s}",
+                    "{\"validatorId\":\"%s\",\"validatorUrl\":\"%s\",\"proof\":%s,\"publicKey\":\"%s\"}",
                     validatorId.replace("\"", "\\\""),
                     validatorUrl.replace("\"", "\\\""),
-                    proof.toJson()
+                    proof.toJson(),
+                    publicKeyHex
                 );
                 
-                log.info("   → Broadcasting to {}", peerUrl);
+                log.info("   → Broadcasting to {} (with public key)", peerUrl);
                 
                 // Send broadcast request
                 java.net.URL url = new java.net.URL(peerJoinedUrl);
@@ -724,6 +729,27 @@ public class SegmentHttpServer {
                 // PEER JOINED ENDPOINT - Validator broadcasts its presence to network
                 if ("/v1/consensus/peer-joined".equals(path) && "POST".equals(method)) {
                     handlePeerJoined(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // LEADERSHIP CLAIM ENDPOINT - Elected leader broadcasts claim to prove liveness
+                if ("/v1/consensus/claim-leadership".equals(path) && "POST".equals(method)) {
+                    handleLeadershipClaim(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // CLAIM ACK ENDPOINT - Follower acknowledges leader's claim (PHASE 2: Quorum)
+                if ("/v1/consensus/claim-ack".equals(path) && "POST".equals(method)) {
+                    handleClaimAck(request, response);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+                
+                // PUBLIC KEY REGISTRATION - Validators register their public keys (PHASE 3)
+                if ("/v1/consensus/register-public-key".equals(path) && "POST".equals(method)) {
+                    handlePublicKeyRegistration(request, response);
                     baseRequest.setHandled(true);
                     return;
                 }
@@ -3497,6 +3523,13 @@ public class SegmentHttpServer {
                 registeredValidators.putIfAbsent(validatorId, registration);
                 log.info("✅ Validator registered in HTTP server (status: READY)");
                 
+                // PHASE 3: Exchange public keys for Byzantine fault tolerance
+                String incomingPublicKey = extractJsonField(body, "publicKey");
+                if (incomingPublicKey != null && leaderConsensusEngine != null) {
+                    leaderConsensusEngine.getClaimVerifier().registerPublicKey(validatorUrl, incomingPublicKey);
+                    log.info("🔑 Registered public key from {}", validatorUrl);
+                }
+                
                 // Update consensus engine
                 if (leaderConsensusEngine != null) {
                     leaderConsensusEngine.addPeer(validatorUrl);
@@ -3507,20 +3540,243 @@ public class SegmentHttpServer {
                     log.warn("⚠️  No consensus engine to update");
                 }
                 
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                log.info("✅ Peer join processed successfully");
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                
+                // PHASE 3: Send our public key back to the joining validator
+                String ourPublicKey = leaderConsensusEngine != null ? 
+                    leaderConsensusEngine.getPublicKeyHex() : "";
+                
                 // Return success
                 response.setContentType("application/json");
                 response.setStatus(HttpServletResponse.SC_OK);
                 response.getWriter().write(String.format(
-                    "{\"success\":true,\"message\":\"Peer %s accepted into network\"}", validatorId));
-                
-                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                log.info("✅ Peer join processed successfully");
-                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    "{\"success\":true,\"message\":\"Peer %s accepted into network\",\"publicKey\":\"%s\"}", 
+                    validatorId, ourPublicKey));
                 
             } catch (Exception e) {
                 log.error("❌ Failed to process peer join", e);
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
                     "Failed to process peer join: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle POST /v1/consensus/claim-leadership
+         * 
+         * Elected leader broadcasts claim to prove liveness and readiness.
+         * Followers validate claim and accept leader or trigger re-election on timeout.
+         * 
+         * Expected JSON body:
+         * {
+         *   "epoch": 43,
+         *   "validatorId": "validator-3",
+         *   "validatorUrl": "http://validator-3:8091",
+         *   "timestamp": 1762954918989,
+         *   "claimType": "EPOCH_ROTATION" | "FAILOVER_CLAIM",
+         *   "signature": "0x..."  // Future: cryptographic proof
+         * }
+         */
+        private void handleLeadershipClaim(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            try {
+                // Read JSON body
+                StringBuilder json = new StringBuilder();
+                java.io.BufferedReader reader = request.getReader();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+                
+                String body = json.toString();
+                
+                // Extract fields (PHASE 3: Now includes signature)
+                String epochStr = extractJsonField(body, "epoch");
+                String validatorId = extractJsonField(body, "validatorId");
+                String validatorUrl = extractJsonField(body, "validatorUrl");
+                String timestampStr = extractJsonField(body, "timestamp");
+                String claimType = extractJsonField(body, "claimType");
+                String signature = extractJsonField(body, "signature");  // PHASE 3
+                
+                if (epochStr == null || validatorId == null || validatorUrl == null || timestampStr == null) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                        "Missing required fields: epoch, validatorId, validatorUrl, timestamp");
+                    return;
+                }
+                
+                // PHASE 3: Signature is required for Byzantine fault tolerance
+                if (signature == null || signature.isEmpty()) {
+                    log.error("❌ Missing signature in leadership claim from {}", validatorUrl);
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                        "Missing required field: signature (Phase 3 Byzantine fault tolerance)");
+                    return;
+                }
+                
+                int claimedEpoch = Integer.parseInt(epochStr);
+                long claimTimestamp = Long.parseLong(timestampStr);
+                
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                log.info("👑 LEADERSHIP CLAIM RECEIVED");
+                log.info("   Epoch: {}", claimedEpoch);
+                log.info("   Validator: {}", validatorId);
+                log.info("   URL: {}", validatorUrl);
+                log.info("   Claim Type: {}", claimType != null ? claimType : "EPOCH_ROTATION");
+                log.info("   Timestamp: {}", new java.util.Date(claimTimestamp));
+                log.info("   Signature: {}...", signature.substring(0, Math.min(18, signature.length())));
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                
+                // Delegate to consensus engine for validation (PHASE 3: includes signature)
+                if (leaderConsensusEngine != null) {
+                    boolean accepted = leaderConsensusEngine.handleLeadershipClaim(
+                        claimedEpoch, validatorId, validatorUrl, claimTimestamp, signature);
+                    
+                    if (accepted) {
+                        log.info("✅ Leadership claim ACCEPTED (signature verified)");
+                        response.setContentType("application/json");
+                        response.setStatus(HttpServletResponse.SC_OK);
+                        response.getWriter().write(String.format(
+                            "{\"success\":true,\"message\":\"Leadership claim accepted for epoch %d\"}", 
+                            claimedEpoch));
+                    } else {
+                        log.warn("❌ Leadership claim REJECTED");
+                        response.sendError(HttpServletResponse.SC_CONFLICT, 
+                            "Leadership claim rejected - invalid signature, epoch, or validator");
+                    }
+                } else {
+                    log.error("❌ No leader consensus engine configured");
+                    response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+                        "Leader consensus not enabled");
+                }
+                
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                
+            } catch (NumberFormatException e) {
+                log.error("❌ Invalid number format in claim", e);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Invalid number format: " + e.getMessage());
+            } catch (Exception e) {
+                log.error("❌ Failed to process leadership claim", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                    "Failed to process leadership claim: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle POST /v1/consensus/claim-ack
+         * 
+         * PHASE 2: Followers send ACK to leader after accepting claim.
+         * PHASE 3: ACK is cryptographically signed for Byzantine fault tolerance.
+         */
+        private void handleClaimAck(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            try {
+                // Read JSON body
+                StringBuilder json = new StringBuilder();
+                java.io.BufferedReader reader = request.getReader();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+                
+                String body = json.toString();
+                
+                // Extract fields
+                String epochStr = extractJsonField(body, "epoch");
+                String claimantUrl = extractJsonField(body, "claimantUrl");
+                String ackValidatorUrl = extractJsonField(body, "ackValidatorUrl");
+                String timestampStr = extractJsonField(body, "timestamp");
+                String signature = extractJsonField(body, "signature");
+                
+                if (epochStr == null || claimantUrl == null || ackValidatorUrl == null || timestampStr == null || signature == null) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                        "Missing required fields: epoch, claimantUrl, ackValidatorUrl, timestamp, signature");
+                    return;
+                }
+                
+                int epoch = Integer.parseInt(epochStr);
+                long timestamp = Long.parseLong(timestampStr);
+                
+                log.info("👍 CLAIM ACK RECEIVED");
+                log.info("   Epoch: {}", epoch);
+                log.info("   Claimant: {}", claimantUrl);
+                log.info("   From: {}", ackValidatorUrl);
+                log.info("   Signature: {}...", signature.substring(0, Math.min(18, signature.length())));
+                
+                // Delegate to consensus engine
+                if (leaderConsensusEngine != null) {
+                    boolean accepted = leaderConsensusEngine.handleClaimAck(
+                        epoch, claimantUrl, ackValidatorUrl, timestamp, signature);
+                    
+                    if (accepted) {
+                        log.info("✅ ACK accepted");
+                        response.setContentType("application/json");
+                        response.setStatus(HttpServletResponse.SC_OK);
+                        response.getWriter().write(
+                            "{\"success\":true,\"message\":\"ACK accepted\"}");
+                    } else {
+                        log.warn("❌ ACK rejected");
+                        response.sendError(HttpServletResponse.SC_CONFLICT, "ACK rejected");
+                    }
+                } else {
+                    response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+                        "Leader consensus not enabled");
+                }
+                
+            } catch (Exception e) {
+                log.error("❌ Failed to process ACK", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                    "Failed to process ACK: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Handle POST /v1/consensus/register-public-key
+         * 
+         * PHASE 3: Validators register their public keys for signature verification.
+         */
+        private void handlePublicKeyRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            try {
+                // Read JSON body
+                StringBuilder json = new StringBuilder();
+                java.io.BufferedReader reader = request.getReader();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    json.append(line);
+                }
+                
+                String body = json.toString();
+                
+                // Extract fields
+                String validatorUrl = extractJsonField(body, "validatorUrl");
+                String publicKeyHex = extractJsonField(body, "publicKey");
+                
+                if (validatorUrl == null || publicKeyHex == null) {
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                        "Missing required fields: validatorUrl, publicKey");
+                    return;
+                }
+                
+                log.info("🔑 PUBLIC KEY REGISTRATION");
+                log.info("   Validator: {}", validatorUrl);
+                log.info("   Key: {}...", publicKeyHex.substring(0, Math.min(18, publicKeyHex.length())));
+                
+                // Register with consensus engine
+                if (leaderConsensusEngine != null) {
+                    leaderConsensusEngine.getClaimVerifier().registerPublicKey(validatorUrl, publicKeyHex);
+                    
+                    log.info("✅ Public key registered");
+                    response.setContentType("application/json");
+                    response.setStatus(HttpServletResponse.SC_OK);
+                    response.getWriter().write(
+                        "{\"success\":true,\"message\":\"Public key registered\"}");
+                } else {
+                    response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+                        "Leader consensus not enabled");
+                }
+                
+            } catch (Exception e) {
+                log.error("❌ Failed to register public key", e);
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                    "Failed to register public key: " + e.getMessage());
             }
         }
         
