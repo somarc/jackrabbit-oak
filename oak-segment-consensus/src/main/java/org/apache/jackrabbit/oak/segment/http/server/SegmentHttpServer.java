@@ -3293,6 +3293,30 @@ public class SegmentHttpServer {
                     json.append("\"validatorUrl\":\"").append(validatorUrl.replace("\"", "\\\"")).append("\",");
                     json.append("\"lastSeen\":").append(lastSeen).append(",");
                     json.append("\"status\":\"").append(status).append("\"");
+                    
+                    // Add epoch information for probation status
+                    if ("PROBATION".equals(status) && leaderConsensusEngine != null) {
+                        java.util.Map<String, Long> joinTimes = leaderConsensusEngine.getValidatorJoinTimes();
+                        Long joinTime = joinTimes.get(validatorUrl);
+                        
+                        if (joinTime != null) {
+                            // Reuse leaderTermSeconds from above (declared at line 3210)
+                            long probationPeriod = leaderTermSeconds * 1000L;
+                            long timeSinceJoin = now - joinTime;
+                            
+                            // Calculate epochs
+                            int joinEpoch = (int) (joinTime / (leaderTermSeconds * 1000L));
+                            int currentEpoch = leaderConsensusEngine.getCurrentEpoch();
+                            int eligibleEpoch = joinEpoch + 1; // Must wait 1 full epoch
+                            
+                            json.append(",");
+                            json.append("\"joinEpoch\":").append(joinEpoch).append(",");
+                            json.append("\"eligibleEpoch\":").append(eligibleEpoch).append(",");
+                            json.append("\"currentEpoch\":").append(currentEpoch).append(",");
+                            json.append("\"secondsRemaining\":").append((probationPeriod - timeSinceJoin) / 1000L);
+                        }
+                    }
+                    
                     json.append("}");
                 }
                 
@@ -3497,6 +3521,7 @@ public class SegmentHttpServer {
                 
                 // Parse heartbeat
                 String leaderUrl = extractJsonField(body, "leaderUrl");
+                String epochStr = extractJsonField(body, "epoch");
                 
                 // Verify this is from the legitimate leader
                 if (!leaderUrl.equals(leaderConsensusEngine.getCurrentLeader())) {
@@ -3504,6 +3529,17 @@ public class SegmentHttpServer {
                         leaderUrl, leaderConsensusEngine.getCurrentLeader());
                     response.sendError(HttpServletResponse.SC_FORBIDDEN, "Not current leader");
                     return;
+                }
+                
+                // CRITICAL FIX: Synchronize epoch from leader's heartbeat
+                // This prevents followers from being stuck at their initial epoch
+                if (epochStr != null) {
+                    try {
+                        int leaderEpoch = Integer.parseInt(epochStr);
+                        leaderConsensusEngine.updateCurrentEpoch(leaderEpoch);
+                    } catch (NumberFormatException e) {
+                        log.warn("⚠️  Invalid epoch in heartbeat: {}", epochStr);
+                    }
                 }
                 
                 // Record the heartbeat

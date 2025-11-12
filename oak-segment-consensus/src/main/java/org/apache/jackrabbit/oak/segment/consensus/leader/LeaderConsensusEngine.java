@@ -329,8 +329,17 @@ public class LeaderConsensusEngine {
         
         java.util.List<String> graduatingValidators = new java.util.ArrayList<>();
         
+        // Get current electorate (voting members)
+        List<String> currentElectorate = election.getAllValidators();
+        
         // Find validators who have been in network for >= probation period
+        // and are NOT yet in the electorate (i.e., non-voting)
         for (String validatorUrl : allFollowers) {
+            // Skip if already in electorate (already graduated)
+            if (currentElectorate.contains(validatorUrl)) {
+                continue;
+            }
+            
             Long joinTime = validatorJoinTimes.get(validatorUrl);
             if (joinTime == null) {
                 continue; // Skip if no join time recorded
@@ -338,20 +347,11 @@ public class LeaderConsensusEngine {
             
             long timeSinceJoin = now - joinTime;
             
-            // Check if they're still on probation but have completed it
+            // Check if they've completed probation period
             if (timeSinceJoin >= probationPeriod) {
-                // Check if they're still in non-voting list
-                boolean isStillNonVoting = false;
-                for (String nv : election.getValidatorsOnProbation()) {
-                    if (nv.equals(validatorUrl)) {
-                        isStillNonVoting = true;
-                        break;
-                    }
-                }
-                
-                if (isStillNonVoting) {
-                    graduatingValidators.add(validatorUrl);
-                }
+                graduatingValidators.add(validatorUrl);
+                log.debug("   Validator {} ready to graduate ({}s in network)", 
+                    validatorUrl, timeSinceJoin / 1000);
             }
         }
         
@@ -747,6 +747,35 @@ public class LeaderConsensusEngine {
     
     public int getCurrentEpoch() {
         return currentEpoch;
+    }
+    
+    /**
+     * Update current epoch from leader's heartbeat.
+     * 
+     * CRITICAL FIX: Followers must adopt leader's epoch to stay synchronized.
+     * Without this, followers get stuck at their initial epoch and reject all
+     * leadership claims as "FUTURE CLAIM", causing network failure.
+     * 
+     * Called by followers when receiving heartbeats from the leader.
+     * 
+     * @param leaderEpoch The current epoch from the leader's heartbeat
+     */
+    public synchronized void updateCurrentEpoch(int leaderEpoch) {
+        if (leaderEpoch > currentEpoch) {
+            int oldEpoch = currentEpoch;
+            currentEpoch = leaderEpoch;
+            
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("📅 EPOCH SYNCHRONIZED FROM LEADER");
+            log.info("   Old epoch: {}", oldEpoch);
+            log.info("   New epoch: {}", leaderEpoch);
+            log.info("   Source: Leader heartbeat");
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        } else if (leaderEpoch < currentEpoch) {
+            log.warn("⚠️  Leader epoch {} is behind our epoch {} - possible clock skew or leader restart", 
+                leaderEpoch, currentEpoch);
+        }
+        // If equal, no action needed (already in sync)
     }
     
     public LeaderElection getElection() {
