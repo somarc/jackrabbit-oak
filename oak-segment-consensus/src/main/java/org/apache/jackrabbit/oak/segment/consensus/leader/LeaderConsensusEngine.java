@@ -102,7 +102,23 @@ public class LeaderConsensusEngine {
         
         // Record join times for self and all initial peers
         long now = System.currentTimeMillis();
-        validatorJoinTimes.put(selfUrl, now);
+        
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // GENESIS VALIDATOR EXEMPTION
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // The genesis validator (first node, no bootstrap, no peers) is the
+        // founding member of the network. It should be READY immediately, not
+        // subject to probation. Set its join time to "ancient" (epoch 0).
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        boolean isGenesisValidator = !isBootstrapJoin && peerUrls.isEmpty();
+        long selfJoinTime = isGenesisValidator ? 0L : now;  // Genesis = epoch 0, proven and ready
+        
+        validatorJoinTimes.put(selfUrl, selfJoinTime);
+        
+        if (isGenesisValidator) {
+            log.info("🌟 GENESIS VALIDATOR detected - probation EXEMPT (join time: epoch 0)");
+        }
+        
         for (String peerUrl : peerUrls) {
             // Initial peers are assumed to have joined at the same time (genesis or config)
             validatorJoinTimes.put(peerUrl, now);
