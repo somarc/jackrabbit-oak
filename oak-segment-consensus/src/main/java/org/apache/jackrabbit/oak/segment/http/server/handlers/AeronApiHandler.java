@@ -93,11 +93,12 @@ public class AeronApiHandler {
             state.put("validatorIdentity", validatorIdentity);
         }
         
-        // Enrich members list with wallet addresses (query peers for their addresses)
+        // Enrich members list with wallet addresses (only self - fast, no network calls)
+        // Peer wallet addresses are optional and can be fetched via separate endpoint if needed
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> members = (List<Map<String, Object>>) state.get("members");
         if (members != null) {
-            enrichMembersWithWalletAddresses(members);
+            enrichSelfWalletAddress(members);
         }
         
         // Add MediaDriver health status
@@ -472,11 +473,12 @@ public class AeronApiHandler {
     }
 
     /**
-     * Enrich members list with wallet addresses by querying peers' cluster-state API.
-     * This allows us to show all validators' Ethereum addresses in the cluster state.
+     * Enrich self member with wallet address (fast, no network calls).
+     * Peer wallet addresses are not included to keep API response fast (<100ms).
+     * Use /v1/aeron/node-status?url=<peer-url> to get peer wallet addresses if needed.
      */
-    private void enrichMembersWithWalletAddresses(List<Map<String, Object>> members) {
-        // Add self wallet address to self member
+    private void enrichSelfWalletAddress(List<Map<String, Object>> members) {
+        // Only enrich self wallet address (fast, no network calls)
         for (Map<String, Object> member : members) {
             String memberUrl = (String) member.get("url");
             if (memberUrl != null && memberUrl.equals(context.selfUrl)) {
@@ -491,51 +493,7 @@ public class AeronApiHandler {
                         member.put("publicKey", publicKey);
                     }
                 }
-            } else {
-                // Query peer for their wallet address (with timeout to avoid blocking)
-                try {
-                    String queryUrl = resolveUrlToIP(memberUrl);
-                    java.net.URL apiUrl = new java.net.URL(queryUrl + "/v1/aeron/cluster-state");
-                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
-                    conn.setRequestMethod("GET");
-                    conn.setConnectTimeout(1000); // Short timeout - don't block
-                    conn.setReadTimeout(1000);
-                    
-                    int responseCode = conn.getResponseCode();
-                    if (responseCode == 200) {
-                        java.io.BufferedReader reader = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(conn.getInputStream())
-                        );
-                        String response = reader.lines().collect(java.util.stream.Collectors.joining());
-                        reader.close();
-                        
-                        // Parse wallet address from response
-                        // Look for "walletAddress":"0x..." in validatorIdentity or members array
-                        int walletIndex = response.indexOf("\"walletAddress\":\"");
-                        if (walletIndex != -1) {
-                            int start = walletIndex + 17; // Skip past "walletAddress":"
-                            int end = response.indexOf("\"", start);
-                            if (end != -1) {
-                                String walletAddress = response.substring(start, end);
-                                member.put("walletAddress", walletAddress);
-                            }
-                        }
-                        
-                        // Parse public key
-                        int publicKeyIndex = response.indexOf("\"publicKey\":\"");
-                        if (publicKeyIndex != -1) {
-                            int start = publicKeyIndex + 13; // Skip past "publicKey":"
-                            int end = response.indexOf("\"", start);
-                            if (end != -1) {
-                                String publicKey = response.substring(start, end);
-                                member.put("publicKey", publicKey);
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    // Peer might be unavailable - that's OK, just skip wallet enrichment
-                    log.debug("Could not fetch wallet address from peer {}: {}", memberUrl, e.getMessage());
-                }
+                break; // Found self, no need to continue
             }
         }
     }
