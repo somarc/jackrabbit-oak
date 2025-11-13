@@ -17,9 +17,9 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
-import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
-import org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,9 +41,7 @@ public class HealthHandler {
     private final FileStore fileStore;
     private final NodeStore nodeStore;
     private final Path storeDirectory;
-    private final ConsensusEngine consensusEngine;
-    private final DagConsensusEngine dagConsensusEngine;
-    private final EpochLeaderEngine epochLeaderEngine;
+    private final ServerContext context;
     private final Map<String, ?> registeredClients;
     private final Map<String, ?> registeredValidators;
     
@@ -51,17 +49,15 @@ public class HealthHandler {
             FileStore fileStore,
             NodeStore nodeStore,
             Path storeDirectory,
-            ConsensusEngine consensusEngine,
-            DagConsensusEngine dagConsensusEngine,
             EpochLeaderEngine epochLeaderEngine,
+            AeronConsensusEngine aeronConsensusEngine,
             Map<String, ?> registeredClients,
-            Map<String, ?> registeredValidators) {
+            Map<String, ?> registeredValidators,
+            ServerContext context) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.storeDirectory = storeDirectory;
-        this.consensusEngine = consensusEngine;
-        this.dagConsensusEngine = dagConsensusEngine;
-        this.epochLeaderEngine = epochLeaderEngine;
+        this.context = context;
         this.registeredClients = registeredClients;
         this.registeredValidators = registeredValidators;
     }
@@ -148,35 +144,42 @@ public class HealthHandler {
         }
         json.append("  },\n");
         
-        // 4. Check consensus engine (if configured)
-        if (epochLeaderEngine != null) {
+        // 4. Check consensus engine (if configured) - check Aeron first, then Leader
+        // Use context fields directly (volatile) to get current state, not constructor snapshot
+        AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
+        EpochLeaderEngine leaderEngine = (context != null) ? context.epochLeaderEngine : null;
+        
+        if (aeronEngine != null) {
             json.append("  \"consensus\": {\n");
             try {
                 json.append("    \"status\": \"UP\",\n");
-                json.append("    \"mode\": \"leader\",\n");
-                json.append("    \"role\": \"").append(epochLeaderEngine.getCurrentRole()).append("\",\n");
-                json.append("    \"isLeader\": ").append(epochLeaderEngine.isLeader()).append(",\n");
-                json.append("    \"epoch\": ").append(epochLeaderEngine.getCurrentEpoch()).append(",\n");
-                json.append("    \"reachableValidators\": ").append(epochLeaderEngine.getReachableValidatorCount()).append("\n");
+                json.append("    \"mode\": \"aeron-cluster\",\n");
+                json.append("    \"role\": \"").append(aeronEngine.getCurrentRole()).append("\",\n");
+                json.append("    \"isLeader\": ").append(aeronEngine.isLeader()).append(",\n");
+                json.append("    \"epoch\": ").append(aeronEngine.getCurrentEpoch()).append(",\n");
+                json.append("    \"term\": ").append(aeronEngine.getCurrentTerm()).append(",\n");
+                json.append("    \"reachableValidators\": ").append(aeronEngine.getReachableValidatorCount()).append(",\n");
+                json.append("    \"currentLeader\": \"").append(aeronEngine.getCurrentLeader() != null ? aeronEngine.getCurrentLeader() : "none").append("\"\n");
             } catch (Exception e) {
                 json.append("    \"status\": \"DOWN\",\n");
                 json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
                 allHealthy = false;
             }
             json.append("  },\n");
-        } else if (dagConsensusEngine != null) {
+        } else if (leaderEngine != null) {
             json.append("  \"consensus\": {\n");
-            json.append("    \"status\": \"UP\",\n");
-            json.append("    \"mode\": \"dag\",\n");
-            json.append("    \"chainHeight\": ").append(dagConsensusEngine.getChainHeight()).append(",\n");
-            json.append("    \"pendingTransactions\": ").append(dagConsensusEngine.getPendingTransactionCount()).append("\n");
-            json.append("  },\n");
-        } else if (consensusEngine != null) {
-            json.append("  \"consensus\": {\n");
-            json.append("    \"status\": \"UP\",\n");
-            json.append("    \"mode\": \"blockchain\",\n");
-            json.append("    \"totalProposals\": ").append(consensusEngine.getTotalProposals()).append(",\n");
-            json.append("    \"successfulProposals\": ").append(consensusEngine.getSuccessfulProposals()).append("\n");
+            try {
+                json.append("    \"status\": \"UP\",\n");
+                json.append("    \"mode\": \"leader\",\n");
+                json.append("    \"role\": \"").append(leaderEngine.getCurrentRole()).append("\",\n");
+                json.append("    \"isLeader\": ").append(leaderEngine.isLeader()).append(",\n");
+                json.append("    \"epoch\": ").append(leaderEngine.getCurrentEpoch()).append(",\n");
+                json.append("    \"reachableValidators\": ").append(leaderEngine.getReachableValidatorCount()).append("\n");
+            } catch (Exception e) {
+                json.append("    \"status\": \"DOWN\",\n");
+                json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+                allHealthy = false;
+            }
             json.append("  },\n");
         }
         

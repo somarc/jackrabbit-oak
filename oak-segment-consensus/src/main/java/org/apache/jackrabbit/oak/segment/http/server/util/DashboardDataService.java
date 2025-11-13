@@ -137,36 +137,6 @@ public class DashboardDataService {
                 .build();
         }
         
-        // Check for DAG consensus (deprecated)
-        if (context.dagConsensusEngine != null) {
-            java.util.List<String> allValidators = new java.util.ArrayList<>();
-            allValidators.add(context.selfUrl);
-            
-            return new ConsensusState.Builder()
-                .consensusType("dag")
-                .currentRole("STANDALONE")
-                .totalValidators(allValidators.size())
-                .allValidators(allValidators)
-                .electorate(allValidators)
-                .selfUrl(context.selfUrl)
-                .build();
-        }
-        
-        // Check for Blockchain PoA consensus (deprecated)
-        if (context.consensusEngine != null) {
-            java.util.List<String> allValidators = new java.util.ArrayList<>();
-            allValidators.add(context.selfUrl);
-            
-            return new ConsensusState.Builder()
-                .consensusType("blockchain-poa")
-                .currentRole("STANDALONE")
-                .totalValidators(allValidators.size())
-                .allValidators(allValidators)
-                .electorate(allValidators)
-                .selfUrl(context.selfUrl)
-                .build();
-        }
-        
         return null;
     }
     

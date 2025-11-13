@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
-import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.eclipse.jetty.server.Request;
@@ -93,24 +92,6 @@ public class SegmentHttpServer {
         log.info("   - Port: {}", port);
         log.info("   - Store: {}", this.storeDirectory);
         log.info("   - Prometheus metrics enabled at /metrics");
-    }
-    
-    /**
-     * Set the consensus engine for coordinating writes (linear blockchain mode).
-     * Must be called before start() if consensus is needed.
-     */
-    public void setConsensusEngine(ConsensusEngine engine) {
-        context.setConsensusEngine(engine);
-        log.info("Linear Blockchain consensus engine configured");
-    }
-    
-    /**
-     * Set the DAG consensus engine (distributed DAG mode).
-     * Must be called before start() if DAG consensus is needed.
-     */
-    public void setDagConsensusEngine(org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine engine) {
-        context.setDagConsensusEngine(engine);
-        log.info("🌳 DAG consensus engine configured");
     }
     
     /**

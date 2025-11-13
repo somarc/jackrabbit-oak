@@ -24,7 +24,6 @@ import java.nio.file.Paths;
 
 import org.apache.jackrabbit.oak.segment.SegmentNodeStore;
 import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
-import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
 import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
@@ -308,47 +307,6 @@ public class GlobalStoreServer {
                 String validatorId = wallet.getWalletAddress();
                 httpServer.registerWithPeers(validatorId, peerUrls);
                 
-            } else if ("dag".equalsIgnoreCase(consensusMode)) {
-                // DISTRIBUTED DAG CONSENSUS (like Git)
-                System.out.println("   🌳 Using Distributed DAG Consensus");
-                System.out.println("      - Multiple parallel HEADs allowed");
-                System.out.println("      - Non-conflicting writes proceed in parallel");
-                System.out.println("      - Periodic merge consensus");
-                
-                org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine dagEngine = 
-                    new org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine(
-                        fileStore, nodeStore, selfUrl, peerUrls
-                    );
-                
-                // Wire DAG engine to HTTP server
-                httpServer.setDagConsensusEngine(dagEngine);
-                
-                // Start automatic merge monitor
-                dagEngine.startAutoMerge();
-                
-                System.out.println("✅ DAG Consensus engine initialized");
-                System.out.println("   - Model: Git-like distributed DAG");
-                System.out.println("   - Total validators: " + (1 + peerUrls.size()));
-                System.out.println("   - Each validator maintains own HEAD");
-                System.out.println("   - Merges require 2/3+ vote");
-                System.out.println("   - Auto-merge: Monitors every 30s for divergence");
-                
-                // Register with peer validators
-                // Try to get validator ID from system property, then HOSTNAME env, then derive from selfUrl
-                String validatorId = System.getProperty("consensus.validator.id");
-                if (validatorId == null || validatorId.isEmpty()) {
-                    validatorId = System.getenv("HOSTNAME");
-                    if (validatorId == null || validatorId.isEmpty()) {
-                        // Derive from selfUrl (e.g., "http://validator-1:8090" -> "validator-1")
-                        if (selfUrl.contains("validator-")) {
-                            validatorId = selfUrl.substring(selfUrl.indexOf("validator-")).split(":")[0];
-                        } else {
-                            validatorId = "validator-unknown";
-                        }
-                    }
-                }
-                httpServer.registerWithPeers(validatorId, peerUrls);
-                
             } else if ("aeron".equalsIgnoreCase(consensusMode)) {
                 // AERON CLUSTER CONSENSUS (Raft-based)
                 System.out.println("   ✈️  Using Aeron Cluster Consensus (Raft)");
@@ -419,34 +377,11 @@ public class GlobalStoreServer {
                 httpServer.registerWithPeers(validatorId, peerUrls);
                 
             } else {
-                // LINEAR BLOCKCHAIN CONSENSUS (traditional)
-                System.out.println("   ⛓️  Using Linear Blockchain Consensus");
-                
-                // BLOCKCHAIN GENESIS: Sync with genesis node if configured
-                if (!genesisNode.isEmpty() && !genesisNode.equals(selfUrl)) {
-                    System.out.println("   🔄 Syncing genesis state from: " + genesisNode);
-                    try {
-                        syncGenesisFromPeer(genesisNode);
-                        System.out.println("   ✅ Genesis state synchronized");
-                    } catch (Exception e) {
-                        System.err.println("   ⚠️  Genesis sync failed: " + e.getMessage());
-                        System.err.println("   Continuing with local genesis...");
-                    }
-                }
-                
-                ConsensusEngine consensusEngine = new ConsensusEngine(fileStore, selfUrl, peerUrls);
-                
-                // Wire consensus engine to HTTP server
-                httpServer.setConsensusEngine(consensusEngine);
-                
-                System.out.println("✅ Blockchain Consensus engine initialized");
-                System.out.println("   - Consensus: Proof-of-Authority");
-                System.out.println("   - Threshold: 2/3+ majority");
-                System.out.println("   - Total validators: " + (1 + peerUrls.size()));
-                
-                // Register with peer validators using wallet address as ID
-                String validatorId = wallet.getWalletAddress();
-                httpServer.registerWithPeers(validatorId, peerUrls);
+                // Unknown consensus mode
+                System.err.println("   ❌ ERROR: Unknown consensus mode: " + consensusMode);
+                System.err.println("   ⚠️  Supported modes: 'leader' or 'aeron'");
+                System.err.println("   ⚠️  Default mode is 'leader'");
+                throw new IllegalArgumentException("Unsupported consensus mode: " + consensusMode + ". Use 'leader' or 'aeron'.");
             }
         } else if (!isStandbyMode) {
             // Only print this if NOT in standby mode (standby will init via callback)
@@ -809,22 +744,6 @@ public class GlobalStoreServer {
             System.out.println("   - Expected leader: " + epochEngine.getCurrentLeader());
             System.out.println("   - Will learn actual leader from heartbeat");
             System.out.println("");
-            
-            // Broadcast presence to network (Dynamic Peer Discovery)
-            // Use wallet address as permanent validator identity
-            String validatorId = wallet.getWalletAddress();
-            httpServer.broadcastPresenceToNetwork(validatorId, selfUrl, peerUrls);
-            
-        } else if ("dag".equalsIgnoreCase(consensusMode)) {
-            org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine dagEngine = 
-                new org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine(
-                    fileStore, nodeStore, selfUrl, peerUrls
-                );
-            
-            httpServer.setDagConsensusEngine(dagEngine);
-            dagEngine.startAutoMerge();
-            
-            System.out.println("✅ DAG Consensus engine initialized");
             
             // Broadcast presence to network (Dynamic Peer Discovery)
             // Use wallet address as permanent validator identity

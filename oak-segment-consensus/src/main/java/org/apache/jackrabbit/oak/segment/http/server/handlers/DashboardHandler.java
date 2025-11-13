@@ -161,10 +161,6 @@ public class DashboardHandler {
             } else {
                 roleColor = "#3b82f6"; // blue
             }
-        } else if (context.consensusEngine != null) {
-            // Fallback to deprecated consensus engine
-            validatorCount = 1 + context.consensusEngine.getPeerCount();
-            consensusType = "Blockchain PoA";
         }
         
         html.append("<div class='card'>\n");

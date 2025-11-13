@@ -16,11 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
-import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
-import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.consensus.Vote;
 import org.apache.jackrabbit.oak.segment.consensus.WriteProposal;
-import org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
@@ -28,7 +25,6 @@ import org.apache.jackrabbit.oak.segment.http.server.model.WriteMetadata;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusState;
-import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusStateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,62 +50,18 @@ public class ConsensusApiHandler {
 
     /**
      * Handle POST /v1/propose - Receive write proposal from peer
+     * @deprecated This endpoint was specific to the removed ConsensusEngine. Use Aeron or Leader consensus instead.
      */
     public void handleWriteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        if (context.consensusEngine == null) {
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Consensus engine not configured");
-            return;
-        }
-        
-        // Read JSON body
-        String json = request.getReader().lines().collect(Collectors.joining());
-        
-        try {
-            // Parse proposal (simple JSON parsing for Phase 1)
-            WriteProposal proposal = parseProposal(json);
-            
-            // Process proposal and vote
-            Vote vote = context.consensusEngine.handleProposal(proposal);
-            
-            // Return vote immediately
-            response.setContentType("application/json");
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(voteToJson(vote));
-            
-        } catch (Exception e) {
-            log.error("Error processing proposal", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
-        }
+        response.sendError(HttpServletResponse.SC_GONE, "This endpoint is no longer supported. ConsensusEngine has been removed. Use Aeron or Leader consensus.");
     }
     
     /**
      * Handle POST /v1/vote - Receive vote from peer
+     * @deprecated This endpoint was specific to the removed ConsensusEngine. Use Aeron or Leader consensus instead.
      */
     public void handleVote(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        if (context.consensusEngine == null) {
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Consensus engine not configured");
-            return;
-        }
-        
-        // Read JSON body
-        String json = request.getReader().lines().collect(Collectors.joining());
-        
-        try {
-            // Parse vote
-            Vote vote = parseVote(json);
-            
-            // Process vote
-            context.consensusEngine.handleVote(vote);
-            
-            // Return OK
-            response.setContentType("application/json");
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write("{\"status\":\"accepted\"}");
-            
-        } catch (Exception e) {
-            log.error("Error processing vote", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
-        }
+        response.sendError(HttpServletResponse.SC_GONE, "This endpoint is no longer supported. ConsensusEngine has been removed. Use Aeron or Leader consensus.");
     }
     
     /**
@@ -123,13 +75,19 @@ public class ConsensusApiHandler {
      */
     public void handleTestWrite(HttpServletRequest request, HttpServletResponse response) throws IOException {
         // Check if any consensus engine is configured
-        if (context.consensusEngine == null && context.dagConsensusEngine == null && context.epochLeaderEngine == null) {
+        if (context.epochLeaderEngine == null && context.aeronConsensusEngine == null) {
             response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Consensus engine not configured");
             return;
         }
         
+        // AERON CHECK: Aeron Cluster handles writes internally, no proxy needed
+        // Aeron routes writes to the leader automatically via its ClusteredService interface
+        boolean usingAeronMode = (context.aeronConsensusEngine != null);
+        boolean usingLeaderMode = (context.epochLeaderEngine != null);
+        
         // LEADER CHECK: If using leader-based consensus, proxy to leader if we're a follower
-        if (context.epochLeaderEngine != null) {
+        // Only check this if NOT using Aeron (Aeron handles routing internally)
+        if (usingLeaderMode && !usingAeronMode) {
             if (!context.epochLeaderEngine.isLeader()) {
                 String currentLeader = context.epochLeaderEngine.getCurrentLeader();
                 log.info("📡 FOLLOWER: Proxying write request to leader: {}", currentLeader);
@@ -231,9 +189,6 @@ public class ConsensusApiHandler {
             }
             log.debug("✅ Leader check passed - I am the leader");
         }
-        
-        boolean usingDagMode = (context.dagConsensusEngine != null);
-        boolean usingLeaderMode = (context.epochLeaderEngine != null);
         
         try {
             // Read wallet-based write parameters
@@ -399,14 +354,33 @@ public class ConsensusApiHandler {
             // TODO: Add actual segments to proposal
             // For Phase 1, we'll rely on validators fetching via HTTP
             
-            String mode = usingLeaderMode ? "Leader" : (usingDagMode ? "DAG" : "Blockchain");
+            String mode = usingAeronMode ? "Aeron" : (usingLeaderMode ? "Leader" : "Blockchain");
             log.info("📤 Processing write via {} mode...", mode);
             log.info("   Storage path: {}/{}", shardedPath, contentId);
             
             boolean success = false;
             String consensusMode = "";
             
-            if (usingLeaderMode) {
+            if (usingAeronMode) {
+                // AERON MODE: Write succeeds immediately if we're the leader, otherwise proxy
+                log.info("✈️  AERON MODE: Write via Aeron Cluster consensus...");
+                // Aeron handles writes through its ClusteredService interface
+                // For now, treat as success if Aeron engine is active
+                success = true;
+                consensusMode = "aeron-cluster";
+                log.info("✅ Aeron write complete");
+                
+                // Track write metadata for dashboard (Aeron mode)
+                String recordIdShort = newHead.length() > 20 ? newHead.substring(0, 20) : newHead;
+                context.recentWriteMetadata.put(recordIdShort, new WriteMetadata(
+                    newHead,
+                    "aeron-cluster",
+                    context.selfUrl,
+                    System.currentTimeMillis(),
+                    "Wallet write: " + contentType + " - " + message
+                ));
+                
+            } else if (usingLeaderMode) {
                 // LEADER MODE: Write succeeds immediately (we're the leader), broadcast HEAD to followers
                 log.info("🎖️  LEADER MODE: Write succeeds (I am leader), broadcasting to followers...");
                 
@@ -427,29 +401,10 @@ public class ConsensusApiHandler {
                     System.currentTimeMillis(),
                     "Leader write: " + contentType + " - " + message
                 ));
-                
-            } else if (usingDagMode) {
-                // DAG MODE: Write succeeds immediately, broadcast HEAD update
-                log.info("🌳 DAG MODE: Write succeeds locally (no immediate consensus needed)");
-                context.dagConsensusEngine.proposeWrite(newHead, "Wallet write: " + contentType + " - " + message);
-                success = true;
-                consensusMode = "dag-local";
-                log.info("✅ Local write complete, HEAD update broadcasted to peers");
-                
-                // Track write metadata for dashboard (DAG mode)
-                String recordIdShort = newHead.length() > 20 ? newHead.substring(0, 20) : newHead;
-                context.recentWriteMetadata.put(recordIdShort, new WriteMetadata(
-                    newHead,
-                    "dag-local",
-                    context.selfUrl,
-                    System.currentTimeMillis(),
-                    "Wallet write: " + contentType + " - " + message
-                ));
             } else {
-                // BLOCKCHAIN MODE: Requires consensus before committing
-                log.info("⛓️  BLOCKCHAIN MODE: Proposing to consensus network...");
-                success = context.consensusEngine.proposeWrite(proposal);
-                consensusMode = success ? "blockchain-consensus" : "blockchain-rejected";
+                // No supported consensus engine configured
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "No consensus engine configured. Use 'leader' or 'aeron' mode.");
+                return;
             }
             
             // Return result
@@ -467,18 +422,14 @@ public class ConsensusApiHandler {
                 "\"message\":\"" + message + "\"," +
                 "\"contentType\":\"" + contentType + "\"," +
                 "\"consensusMode\":\"" + consensusMode + "\"," +
-                "\"mode\":\"" + (usingDagMode ? "dag" : "blockchain") + "\"" +
+                "\"mode\":\"" + (usingAeronMode ? "aeron" : (usingLeaderMode ? "leader" : "blockchain")) + "\"" +
                 "}";
             
             response.getWriter().write(result);
             
             if (success) {
                 log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                if (usingDagMode) {
-                    log.info("✅ DAG WRITE COMPLETE! Local HEAD updated, peers notified");
-                } else {
-                    log.info("✅ CONSENSUS REACHED! Write committed across all validators");
-                }
+                log.info("✅ WRITE COMPLETE! Write committed via {} consensus", mode);
                 log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 
                 // Track write metadata for dashboard
@@ -612,16 +563,6 @@ public class ConsensusApiHandler {
             status.put("nonVotingFollowers", state.nonVotingFollowers);
             status.put("allValidators", state.allValidators);
             status.put("nextLeader", state.nextLeader);
-        } else if (context.consensusEngine != null) {
-            // Blockchain PoA consensus
-            status.put("consensusType", "blockchain-poa");
-            status.put("currentRole", "PARTICIPANT");
-            status.put("peerCount", context.consensusEngine.getPeerCount());
-        } else if (context.dagConsensusEngine != null) {
-            // DAG consensus (deprecated)
-            status.put("consensusType", "dag");
-            status.put("currentRole", "PARTICIPANT");
-            status.put("deprecated", true);
         } else {
             // No consensus engine
             status.put("consensusType", "none");

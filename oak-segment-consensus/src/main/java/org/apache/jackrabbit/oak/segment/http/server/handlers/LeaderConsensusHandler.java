@@ -200,8 +200,6 @@ public class LeaderConsensusHandler {
             if (context.epochLeaderEngine != null) {
                 context.epochLeaderEngine.addPeer(validatorUrl);
                 log.info("✅ Peer added to leader consensus engine");
-            } else if (context.dagConsensusEngine != null) {
-                log.warn("⚠️  DAG consensus doesn't support dynamic peers yet");
             } else {
                 log.warn("⚠️  No consensus engine to update");
             }

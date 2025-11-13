@@ -16,9 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
-import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
-import org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,23 +40,20 @@ import java.util.Map;
 public class MetricsHandler {
     private static final Logger log = LoggerFactory.getLogger(MetricsHandler.class);
     
-    private final ConsensusEngine consensusEngine;
-    private final DagConsensusEngine dagConsensusEngine;
     private final EpochLeaderEngine epochLeaderEngine;
+    private final AeronConsensusEngine aeronConsensusEngine;
     private final Path storeDirectory;
     private final Map<String, ?> registeredClients;
     private final Map<String, ?> registeredValidators;
     
     public MetricsHandler(
-            ConsensusEngine consensusEngine,
-            DagConsensusEngine dagConsensusEngine,
             EpochLeaderEngine epochLeaderEngine,
+            AeronConsensusEngine aeronConsensusEngine,
             Path storeDirectory,
             Map<String, ?> registeredClients,
             Map<String, ?> registeredValidators) {
-        this.consensusEngine = consensusEngine;
-        this.dagConsensusEngine = dagConsensusEngine;
         this.epochLeaderEngine = epochLeaderEngine;
+        this.aeronConsensusEngine = aeronConsensusEngine;
         this.storeDirectory = storeDirectory;
         this.registeredClients = registeredClients;
         this.registeredValidators = registeredValidators;
@@ -72,34 +68,9 @@ public class MetricsHandler {
         
         StringBuilder json = new StringBuilder();
         json.append("{\n");
-        
-        // Consensus metrics
-        if (consensusEngine != null) {
-            json.append("  \"consensus\": {\n");
-            json.append("    \"totalProposals\": ").append(consensusEngine.getTotalProposals()).append(",\n");
-            json.append("    \"successfulProposals\": ").append(consensusEngine.getSuccessfulProposals()).append(",\n");
-            json.append("    \"failedProposals\": ").append(consensusEngine.getFailedProposals()).append(",\n");
-            json.append("    \"successRate\": ").append(String.format("%.1f", consensusEngine.getConsensusSuccessRate())).append(",\n");
-            json.append("    \"averageConsensusTimeMs\": ").append(consensusEngine.getAverageConsensusTimeMs()).append(",\n");
-            json.append("    \"totalVotesReceived\": ").append(consensusEngine.getTotalVotesReceived()).append("\n");
-            json.append("  },\n");
-            
-            json.append("  \"replication\": {\n");
-            json.append("    \"totalSegments\": ").append(consensusEngine.getTotalSegmentsReplicated()).append(",\n");
-            json.append("    \"totalBytes\": ").append(consensusEngine.getTotalBytesReplicated()).append(",\n");
-            json.append("    \"totalMb\": ").append(String.format("%.2f", consensusEngine.getTotalBytesReplicated() / (1024.0 * 1024.0))).append("\n");
-            json.append("  },\n");
-            
-            json.append("  \"validator\": {\n");
-            json.append("    \"url\": \"").append(consensusEngine.getSelfUrl()).append("\",\n");
-            json.append("    \"peers\": ").append(consensusEngine.getPeerCount()).append("\n");
-            json.append("  }\n");
-        } else {
-            json.append("  \"consensus\": null,\n");
-            json.append("  \"replication\": null,\n");
-            json.append("  \"validator\": null\n");
-        }
-        
+        json.append("  \"consensus\": null,\n");
+        json.append("  \"replication\": null,\n");
+        json.append("  \"validator\": null\n");
         json.append("}\n");
         
         response.getWriter().write(json.toString());
@@ -131,14 +102,17 @@ public class MetricsHandler {
      * Called before each metrics scrape to reflect current state.
      */
     private void updateDynamicMetrics() {
-        // Update DAG chain height
-        if (dagConsensusEngine != null) {
-            ConsensusMetrics.dagChainHeight.set(dagConsensusEngine.getChainHeight());
-            ConsensusMetrics.dagPendingTransactions.set(dagConsensusEngine.getPendingTransactionCount());
-        }
-        
-        // Update leader status
-        if (epochLeaderEngine != null) {
+        // Update leader status - check Aeron first, then Leader
+        if (aeronConsensusEngine != null) {
+            ConsensusMetrics.updateLeaderStatus(
+                aeronConsensusEngine.isLeader(),
+                aeronConsensusEngine.getCurrentEpoch()
+            );
+            ConsensusMetrics.validatorsReachable.set(aeronConsensusEngine.getReachableValidatorCount());
+            ConsensusMetrics.timeSinceLastHeartbeat.set(
+                (System.currentTimeMillis() - aeronConsensusEngine.getLastHeartbeatTime()) / 1000.0
+            );
+        } else if (epochLeaderEngine != null) {
             ConsensusMetrics.updateLeaderStatus(
                 epochLeaderEngine.isLeader(),
                 epochLeaderEngine.getCurrentEpoch()

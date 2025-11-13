@@ -55,16 +55,15 @@ public class RequestRouter {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            context.consensusEngine,
-            context.dagConsensusEngine,
             context.epochLeaderEngine,
+            context.aeronConsensusEngine,
             context.registeredClients,
-            context.registeredValidators
+            context.registeredValidators,
+            context
         );
         this.metricsHandler = new MetricsHandler(
-            context.consensusEngine,
-            context.dagConsensusEngine,
             context.epochLeaderEngine,
+            context.aeronConsensusEngine,
             context.storeDirectory,
             context.registeredClients,
             context.registeredValidators

@@ -17,9 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
-import org.apache.jackrabbit.oak.segment.consensus.ConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
-import org.apache.jackrabbit.oak.segment.consensus.dag.DagConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusStateService;
@@ -43,8 +41,6 @@ public class ServerContext {
     public final FileStore fileStore;
     public final NodeStore nodeStore;
     public final Path storeDirectory;
-    public volatile ConsensusEngine consensusEngine;
-    public volatile DagConsensusEngine dagConsensusEngine;
     public volatile EpochLeaderEngine epochLeaderEngine;
     public volatile AeronConsensusEngine aeronConsensusEngine;
     public volatile ProofVerifier proofVerifier;
@@ -80,14 +76,6 @@ public class ServerContext {
     }
     
     // Setters for consensus engines (can be set after construction)
-    public void setConsensusEngine(ConsensusEngine consensusEngine) {
-        this.consensusEngine = consensusEngine;
-    }
-    
-    public void setDagConsensusEngine(DagConsensusEngine dagConsensusEngine) {
-        this.dagConsensusEngine = dagConsensusEngine;
-    }
-    
     public void setEpochLeaderEngine(EpochLeaderEngine epochLeaderEngine) {
         this.epochLeaderEngine = epochLeaderEngine;
         // Create ConsensusStateService when epochLeaderEngine is set
