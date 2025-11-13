@@ -507,20 +507,20 @@ public class DashboardHandler {
         html.append("<div class='endpoint'><code>GET /metrics</code> - Prometheus metrics (text)</div>\n");
         
         html.append("<div style='margin-top: 12px; font-weight: 600; color: #f59e0b;'>🔄 Consensus APIs</div>\n");
-        html.append("<div class='endpoint'><code>POST /v1/propose</code> - Propose write to consensus</div>\n");
-        html.append("<div class='endpoint'><code>POST /v1/vote</code> - Submit vote for proposal</div>\n");
-        html.append("<div class='endpoint'><code>POST /v1/test-write</code> - Test write with consensus</div>\n");
+        html.append("<div class='endpoint'><code>GET /v1/consensus/status</code> - Get consensus state (Aeron-aware)</div>\n");
+        html.append("<div class='endpoint'><code>POST /v1/test-write</code> - Test write with wallet signature</div>\n");
         html.append("<div class='endpoint'><code>GET /v1/head</code> - Current HEAD record ID (text)</div>\n");
+        
+        html.append("<div style='margin-top: 12px; font-weight: 600; color: #06b6d4;'>✈️ Aeron Cluster APIs</div>\n");
+        html.append("<div class='endpoint'><code>GET /v1/aeron/cluster-state</code> - Complete Aeron Cluster state (JSON)</div>\n");
+        html.append("<div class='endpoint'><code>GET /v1/aeron/raft-metrics</code> - Raft-specific metrics (JSON)</div>\n");
+        html.append("<div class='endpoint'><code>GET /v1/aeron/node-status</code> - Status of specific cluster node (JSON)</div>\n");
+        html.append("<div class='endpoint'><code>GET /v1/aeron/leadership-history</code> - Recent leadership changes (JSON)</div>\n");
         
         html.append("<div style='margin-top: 12px; font-weight: 600; color: #8b5cf6;'>🌐 Registration & Discovery</div>\n");
         html.append("<div class='endpoint'><code>POST /v1/register-client</code> - Register Sling author</div>\n");
-        html.append("<div class='endpoint'><code>POST /v1/register-validator</code> - Register validator node</div>\n");
         html.append("<div class='endpoint'><code>GET /v1/peers</code> - List all known validators (JSON)</div>\n");
         html.append("<div class='endpoint'><code>GET /v1/ngrok-url</code> - Get public ngrok URL (text)</div>\n");
-        
-        html.append("<div style='margin-top: 12px; font-weight: 600; color: #ec4899;'>👑 Leader Consensus</div>\n");
-        html.append("<div class='endpoint'><code>POST /v1/follower/head-update</code> - Leader broadcasts HEAD</div>\n");
-        html.append("<div class='endpoint'><code>POST /v1/heartbeat</code> - Leader heartbeat</div>\n");
         
         html.append("<div style='margin-top: 12px; font-weight: 600; color: #6b7280;'>📄 Oak Files</div>\n");
         html.append("<div class='endpoint'><code>GET /journal.log</code> - Journal file (text)</div>\n");
@@ -830,24 +830,24 @@ public class DashboardHandler {
         
         html.append("<div class='category'>\n");
         html.append("<h2>🔄 Consensus APIs</h2>\n");
-        addApiEndpoint(html, "POST", "/v1/propose", "Propose write to consensus network", "propose");
-        addApiEndpoint(html, "POST", "/v1/vote", "Submit vote for a proposal", "vote");
-        addApiEndpoint(html, "POST", "/v1/test-write", "Test write with consensus (demo)", "test_write");
+        addApiEndpoint(html, "GET", "/v1/consensus/status", "Get consensus state (Aeron-aware)", "consensus_status");
+        addApiEndpoint(html, "POST", "/v1/test-write", "Test write with wallet signature (demo)", "test_write");
         addApiEndpoint(html, "GET", "/v1/head", "Get current HEAD record ID (text)", "head");
+        html.append("</div>\n");
+        
+        html.append("<div class='category'>\n");
+        html.append("<h2>✈️ Aeron Cluster APIs</h2>\n");
+        addApiEndpoint(html, "GET", "/v1/aeron/cluster-state", "Complete Aeron Cluster state (JSON)", "aeron_cluster_state");
+        addApiEndpoint(html, "GET", "/v1/aeron/raft-metrics", "Raft-specific metrics (JSON)", "aeron_raft_metrics");
+        addApiEndpoint(html, "GET", "/v1/aeron/node-status?nodeId=0", "Status of specific cluster node (JSON)", "aeron_node_status");
+        addApiEndpoint(html, "GET", "/v1/aeron/leadership-history?limit=10", "Recent leadership changes (JSON)", "aeron_leadership_history");
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");
         html.append("<h2>🌐 Registration & Discovery</h2>\n");
         addApiEndpoint(html, "POST", "/v1/register-client", "Register a Sling author client", "register_client");
-        addApiEndpoint(html, "POST", "/v1/register-validator", "Register a validator node", "register_validator");
         addApiEndpoint(html, "GET", "/v1/peers", "List all known validators (JSON)", "peers");
         addApiEndpoint(html, "GET", "/v1/ngrok-url", "Get public ngrok URL (text)", "ngrok");
-        html.append("</div>\n");
-        
-        html.append("<div class='category'>\n");
-        html.append("<h2>👑 Leader Consensus</h2>\n");
-        addApiEndpoint(html, "POST", "/v1/follower/head-update", "Leader broadcasts HEAD to follower", "follower_update");
-        addApiEndpoint(html, "POST", "/v1/heartbeat", "Leader heartbeat signal", "heartbeat");
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");
@@ -903,12 +903,8 @@ public class DashboardHandler {
         html.append("\n");
         html.append("function getExampleBody(id) {\n");
         html.append("  const examples = {\n");
-        html.append("    'propose': JSON.stringify({proposalId: 'proposal-' + Date.now(), data: 'test content'}, null, 2),\n");
-        html.append("    'vote': JSON.stringify({proposalId: 'proposal-123', vote: 'ACCEPT'}, null, 2),\n");
-        html.append("    'test_write': JSON.stringify({walletAddress: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0', message: 'Hello Blockchain!'}, null, 2),\n");
-        html.append("    'register_client': JSON.stringify({clientId: 'sling-author-1', clientUrl: 'http://localhost:8080', walletAddress: '0xabc...def'}, null, 2),\n");
-        html.append("    'register_validator': JSON.stringify({validatorId: 'validator-4', validatorUrl: 'http://validator-4:8090'}, null, 2),\n");
-        html.append("    'dag_head': JSON.stringify({validatorId: 'validator-2', headRecordId: 'abc123...xyz'}, null, 2)\n");
+        html.append("    'test_write': JSON.stringify({wallet: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb', message: 'Hello Blockchain!', contentType: 'page', signature: '0x...', clientId: 'test-client'}, null, 2),\n");
+        html.append("    'register_client': JSON.stringify({clientId: 'sling-author-1', clientUrl: 'http://localhost:8080', walletAddress: '0xabc...def'}, null, 2)\n");
         html.append("  };\n");
         html.append("  return examples[id] || '{}';\n");
         html.append("}\n");

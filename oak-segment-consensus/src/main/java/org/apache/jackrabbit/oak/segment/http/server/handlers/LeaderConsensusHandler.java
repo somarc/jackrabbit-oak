@@ -43,14 +43,44 @@ public class LeaderConsensusHandler {
     }
 
     /**
+     * Check if endpoint is deprecated due to Aeron Cluster being active.
+     * Returns true if Aeron is active (endpoint should return deprecation error).
+     */
+    private boolean isDeprecatedDueToAeron() {
+        return context.aeronConsensusEngine != null;
+    }
+
+    /**
+     * Send deprecation error response for EpochLeaderEngine-specific endpoints.
+     */
+    private void sendDeprecationError(HttpServletResponse response, String alternativeEndpoint) throws IOException {
+        response.setContentType("application/json");
+        response.setStatus(HttpServletResponse.SC_GONE);
+        String json = String.format(
+            "{\"success\":false,\"error\":{\"code\":\"ENDPOINT_DEPRECATED\",\"message\":\"This endpoint is only available with EpochLeaderEngine consensus\",\"details\":\"Use %s instead\"},\"timestamp\":%d}",
+            alternativeEndpoint != null ? alternativeEndpoint : "/v1/aeron/cluster-state",
+            System.currentTimeMillis()
+        );
+        response.getWriter().write(json);
+    }
+
+    /**
      * Handle POST /v1/follower/head-update - Follower receives HEAD update from leader
      * 
      * Parameters (JSON body):
      *   - head: The new HEAD RecordId from leader
      *   - epoch: Current epoch number
      *   - leaderUrl: URL of the current leader
+     * 
+     * @deprecated This endpoint is only available with EpochLeaderEngine consensus.
+     *             When using Aeron Cluster, use /v1/aeron/cluster-state instead.
      */
     public void handleFollowerHeadUpdate(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (isDeprecatedDueToAeron()) {
+            sendDeprecationError(response, "/v1/aeron/cluster-state");
+            return;
+        }
+        
         if (context.epochLeaderEngine == null) {
             response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Leader consensus not configured");
             return;
@@ -124,6 +154,11 @@ public class LeaderConsensusHandler {
      * The receiving validator adds the new peer to its consensus engine.
      */
     public void handlePeerJoined(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (isDeprecatedDueToAeron()) {
+            sendDeprecationError(response, "/v1/aeron/cluster-state");
+            return;
+        }
+        
         try {
             // Read JSON body
             StringBuilder json = new StringBuilder();
@@ -243,6 +278,11 @@ public class LeaderConsensusHandler {
      * }
      */
     public void handleLeadershipClaim(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (isDeprecatedDueToAeron()) {
+            sendDeprecationError(response, "/v1/aeron/cluster-state");
+            return;
+        }
+        
         try {
             // Read JSON body
             StringBuilder json = new StringBuilder();
@@ -348,6 +388,11 @@ public class LeaderConsensusHandler {
      * PHASE 3: ACK is cryptographically signed for Byzantine fault tolerance.
      */
     public void handleClaimAck(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (isDeprecatedDueToAeron()) {
+            sendDeprecationError(response, "/v1/aeron/cluster-state");
+            return;
+        }
+        
         try {
             // Read JSON body
             StringBuilder json = new StringBuilder();
@@ -414,6 +459,11 @@ public class LeaderConsensusHandler {
      * PHASE 3: Validators register their public keys for signature verification.
      */
     public void handlePublicKeyRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (isDeprecatedDueToAeron()) {
+            sendDeprecationError(response, "/v1/aeron/cluster-state");
+            return;
+        }
+        
         try {
             // Read JSON body
             StringBuilder json = new StringBuilder();

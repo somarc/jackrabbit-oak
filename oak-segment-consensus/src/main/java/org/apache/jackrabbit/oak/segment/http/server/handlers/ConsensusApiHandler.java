@@ -543,6 +543,7 @@ public class ConsensusApiHandler {
             // Aeron Cluster (Raft-based consensus)
             status.put("consensusType", "aeron-cluster");
             status.put("currentRole", context.aeronConsensusEngine.getCurrentRole().name());
+            status.put("isLeader", context.aeronConsensusEngine.isLeader());
             status.put("currentLeader", context.aeronConsensusEngine.getCurrentLeader());
             status.put("currentEpoch", context.aeronConsensusEngine.getCurrentEpoch());
             status.put("currentTerm", context.aeronConsensusEngine.getCurrentTerm());

@@ -16,23 +16,21 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
-import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusState;
-import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusStateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
-
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Set;
 
 /**
@@ -79,22 +77,24 @@ public class PeerDiscoveryHandler {
             if (context.aeronConsensusEngine != null) {
                 // Aeron Cluster consensus - use registered validators + Aeron peers
                 nonVotingFollowers = context.aeronConsensusEngine.getNonVotingFollowers();
-                allValidatorUrls = new ArrayList<>();
-                allValidatorUrls.add(context.selfUrl);
-                allValidatorUrls.addAll(context.aeronConsensusEngine.getAllFollowers());
-                Collections.sort(allValidatorUrls); // Deterministic ordering
-                // For Aeron, use registered validators from context as source of truth
-                // Aeron Cluster manages peers internally, but we expose via HTTP registration
-                Set<String> registeredUrls = new HashSet<>();
-                for (ValidatorRegistration reg : context.registeredValidators.values()) {
-                    registeredUrls.add(reg.validatorUrl);
+                // Use Set to deduplicate URLs - LinkedHashSet preserves insertion order
+                Set<String> validatorUrlSet = new LinkedHashSet<>();
+                if (context.selfUrl != null) {
+                    validatorUrlSet.add(context.selfUrl);
                 }
-                // Merge Aeron peers with registered validators
-                for (String peerUrl : context.aeronConsensusEngine.getAllFollowers()) {
-                    if (!registeredUrls.contains(peerUrl)) {
-                        allValidatorUrls.add(peerUrl);
+                // Add all Aeron followers (these are already deduplicated by Aeron)
+                List<String> aeronFollowers = context.aeronConsensusEngine.getAllFollowers();
+                if (aeronFollowers != null) {
+                    validatorUrlSet.addAll(aeronFollowers);
+                }
+                // Add any registered validators (deduplicated by Set)
+                for (ValidatorRegistration reg : context.registeredValidators.values()) {
+                    if (reg != null && reg.validatorUrl != null) {
+                        validatorUrlSet.add(reg.validatorUrl);
                     }
                 }
+                // Convert to sorted list (ensures deterministic ordering)
+                allValidatorUrls = new ArrayList<>(validatorUrlSet);
                 Collections.sort(allValidatorUrls);
             } else if (context.consensusStateService != null) {
                 // Use ConsensusStateService for normalized, deterministic state
@@ -130,14 +130,23 @@ public class PeerDiscoveryHandler {
             StringBuilder json = new StringBuilder();
             json.append("[\n");
             
+            // Use Set to track processed URLs to avoid duplicates
+            Set<String> processedUrls = new HashSet<>();
+            
             boolean first = true;
             for (String validatorUrl : allValidatorUrls) {
+                // Skip if we've already processed this URL
+                if (processedUrls.contains(validatorUrl)) {
+                    continue;
+                }
+                processedUrls.add(validatorUrl);
+                
                 if (!first) {
                     json.append(",\n");
                 }
                 first = false;
                 
-                // Get registration if it exists
+                // Get registration if it exists (find by URL, not ID)
                 ValidatorRegistration reg = null;
                 for (ValidatorRegistration r : context.registeredValidators.values()) {
                     if (r.validatorUrl.equals(validatorUrl)) {
@@ -154,37 +163,77 @@ public class PeerDiscoveryHandler {
                 // Check if this is self
                 boolean isSelf = validatorUrl.equals(context.selfUrl);
                 
-                // Determine status with self-awareness for probation
-                if (timeSinceLastSeen > offlineThresholdMs) {
-                    status = "OFFLINE";
-                } else if (nonVotingFollowers.contains(validatorUrl)) {
-                    // Leader knows this validator is on probation
-                    status = "PROBATION";
-                } else if (isSelf && context.epochLeaderEngine != null) {
-                    // Self-check: Are WE still on probation?
-                    // Even if leader doesn't have us in nonVotingFollowers yet,
-                    // we know our own join time
-                    Map<String, Long> joinTimes = context.epochLeaderEngine.getValidatorJoinTimes();
-                    Long myJoinTime = joinTimes.get(context.selfUrl);
+                // For Aeron Cluster consensus, use Aeron's own status instead of lastSeen
+                if (context.aeronConsensusEngine != null) {
+                    // Aeron Cluster: Check if validator is in cluster
+                    String currentLeader = context.aeronConsensusEngine.getCurrentLeader();
+                    List<String> allFollowers = context.aeronConsensusEngine.getAllFollowers();
                     
-                    if (myJoinTime != null) {
-                        long timeSinceJoin = now - myJoinTime;
-                        long probationPeriod = leaderTermSeconds * 1000L; // 300 seconds (1 epoch)
-                        
-                        if (timeSinceJoin < probationPeriod) {
-                            status = "PROBATION";  // Still within probationary period
-                        } else {
-                            status = "READY";  // Probation ended, fully participating
-                        }
-                    } else {
-                        // No join time recorded (shouldn't happen), assume READY
+                    if (validatorUrl.equals(currentLeader) || allFollowers.contains(validatorUrl)) {
+                        // Validator is part of Aeron cluster - mark as READY
                         status = "READY";
+                        // Update lastSeen to now since we know it's active
+                        lastSeen = now;
+                    } else if (isSelf) {
+                        // Self is always READY if Aeron is active
+                        status = "READY";
+                        lastSeen = now;
+                    } else {
+                        // Not in Aeron cluster - check lastSeen as fallback
+                        if (timeSinceLastSeen > offlineThresholdMs) {
+                            status = "OFFLINE";
+                        } else {
+                            status = "READY";
+                        }
                     }
                 } else {
-                    status = "READY";  // Voting member, fully participating
+                    // EpochLeaderEngine or other consensus modes - use original logic
+                    if (timeSinceLastSeen > offlineThresholdMs) {
+                        status = "OFFLINE";
+                    } else if (nonVotingFollowers.contains(validatorUrl)) {
+                        // Leader knows this validator is on probation
+                        status = "PROBATION";
+                    } else if (isSelf && context.epochLeaderEngine != null) {
+                        // Self-check: Are WE still on probation?
+                        // Even if leader doesn't have us in nonVotingFollowers yet,
+                        // we know our own join time
+                        Map<String, Long> joinTimes = context.epochLeaderEngine.getValidatorJoinTimes();
+                        Long myJoinTime = joinTimes.get(context.selfUrl);
+                        
+                        if (myJoinTime != null) {
+                            long timeSinceJoin = now - myJoinTime;
+                            long probationPeriod = leaderTermSeconds * 1000L; // 300 seconds (1 epoch)
+                            
+                            if (timeSinceJoin < probationPeriod) {
+                                status = "PROBATION";  // Still within probationary period
+                            } else {
+                                status = "READY";  // Probation ended, fully participating
+                            }
+                        } else {
+                            // No join time recorded (shouldn't happen), assume READY
+                            status = "READY";
+                        }
+                    } else {
+                        status = "READY";  // Voting member, fully participating
+                    }
                 }
                 
-                String validatorId = reg != null ? reg.validatorId : extractValidatorId(validatorUrl);
+                // Get validator ID - ALWAYS use 0x address format
+                // Priority: 1) Self wallet address, 2) Deterministic from URL (always use this for consistency)
+                String validatorId;
+                if (isSelf && context.myValidatorId != null && context.myValidatorId.startsWith("0x") && context.myValidatorId.length() == 42) {
+                    // For self, prefer stored validator ID (from wallet) if valid
+                    validatorId = context.myValidatorId;
+                } else {
+                    // Always generate deterministic 0x address from URL (ensures 0x format and consistency)
+                    // This ensures all validators have deterministic, consistent 0x addresses
+                    validatorId = generateDeterministicAddress(validatorUrl);
+                }
+                
+                // Final safety check - ensure validator ID is always 0x format
+                if (validatorId == null || !validatorId.startsWith("0x") || validatorId.length() != 42) {
+                    validatorId = generateDeterministicAddress(validatorUrl);
+                }
                 
                 json.append("  {");
                 json.append("\"validatorId\":\"").append(validatorId.replace("\"", "\\\"")).append("\",");
@@ -240,21 +289,27 @@ public class PeerDiscoveryHandler {
     }
     
     /**
-     * Extract validator ID from URL when no registration exists.
-     * Format: http://validator-N:port -> validator-N
+     * Generate a deterministic 0x address from validator URL.
+     * This ensures all validators have 0x address format even without registration.
+     * Uses SHA-256 hash of URL to generate a deterministic address.
      */
-    private String extractValidatorId(String validatorUrl) {
-        if (validatorUrl == null) return "unknown";
-        // Extract hostname from URL
+    private String generateDeterministicAddress(String validatorUrl) {
+        if (validatorUrl == null) {
+            return "0x0000000000000000000000000000000000000000";
+        }
         try {
-            URL url = new URL(validatorUrl);
-            String host = url.getHost();
-            if (host.startsWith("validator-")) {
-                return host; // e.g., "validator-1", "validator-2"
+            // Use SHA-256 hash of URL to generate deterministic address
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(validatorUrl.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            // Take first 20 bytes (40 hex chars) for Ethereum address format
+            StringBuilder address = new StringBuilder("0x");
+            for (int i = 0; i < 20; i++) {
+                address.append(String.format("%02x", hash[i]));
             }
-            return host;
+            return address.toString();
         } catch (Exception e) {
-            return "unknown";
+            log.warn("Failed to generate deterministic address for {}, using zero address", validatorUrl, e);
+            return "0x0000000000000000000000000000000000000000";
         }
     }
 }

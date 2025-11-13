@@ -43,7 +43,7 @@ public class RequestRouter {
     private final ConsensusApiHandler consensusApiHandler;
     private final RegistrationHandler registrationHandler;
     private final PeerDiscoveryHandler peerDiscoveryHandler;
-    private final LeaderConsensusHandler leaderConsensusHandler;
+    private final AeronApiHandler aeronApiHandler;
     
     private final ServerContext context;
 
@@ -81,7 +81,7 @@ public class RequestRouter {
         this.consensusApiHandler = new ConsensusApiHandler(context);
         this.registrationHandler = new RegistrationHandler(context);
         this.peerDiscoveryHandler = new PeerDiscoveryHandler(context);
-        this.leaderConsensusHandler = new LeaderConsensusHandler(context);
+        this.aeronApiHandler = new AeronApiHandler(context);
     }
 
     /**
@@ -198,18 +198,6 @@ public class RequestRouter {
             }
             
             // Consensus API
-            if ("/v1/propose".equals(path) && "POST".equals(method)) {
-                consensusApiHandler.handleWriteProposal(request, response);
-                baseRequest.setHandled(true);
-                return;
-            }
-            
-            if ("/v1/vote".equals(path) && "POST".equals(method)) {
-                consensusApiHandler.handleVote(request, response);
-                baseRequest.setHandled(true);
-                return;
-            }
-            
             if ("/v1/test-write".equals(path) && "POST".equals(method)) {
                 consensusApiHandler.handleTestWrite(request, response);
                 baseRequest.setHandled(true);
@@ -239,18 +227,6 @@ public class RequestRouter {
                 return;
             }
             
-            if ("/v1/register-validator".equals(path) && ("POST".equals(method) || "PUT".equals(method))) {
-                registrationHandler.handleValidatorRegistration(request, response);
-                baseRequest.setHandled(true);
-                return;
-            }
-            
-            if ("/v1/heartbeat".equals(path) && "POST".equals(method)) {
-                registrationHandler.handleHeartbeat(request, response);
-                baseRequest.setHandled(true);
-                return;
-            }
-            
             // Peer discovery
             if ("/v1/peers".equals(path) && "GET".equals(method)) {
                 peerDiscoveryHandler.handlePeerList(response);
@@ -264,43 +240,27 @@ public class RequestRouter {
                 return;
             }
             
-            // Leader consensus
-            if ("/v1/follower/head-update".equals(path) && "POST".equals(method)) {
-                leaderConsensusHandler.handleFollowerHeadUpdate(request, response);
+            // Aeron Cluster-specific endpoints
+            if ("/v1/aeron/cluster-state".equals(path) && "GET".equals(method)) {
+                aeronApiHandler.handleClusterState(response);
                 baseRequest.setHandled(true);
                 return;
             }
             
-            if ("/v1/consensus/peer-joined".equals(path) && "POST".equals(method)) {
-                leaderConsensusHandler.handlePeerJoined(request, response);
+            if ("/v1/aeron/raft-metrics".equals(path) && "GET".equals(method)) {
+                aeronApiHandler.handleRaftMetrics(response);
                 baseRequest.setHandled(true);
                 return;
             }
             
-            if ("/v1/consensus/claim-leadership".equals(path) && "POST".equals(method)) {
-                leaderConsensusHandler.handleLeadershipClaim(request, response);
+            if ("/v1/aeron/node-status".equals(path) && "GET".equals(method)) {
+                aeronApiHandler.handleNodeStatus(request, response);
                 baseRequest.setHandled(true);
                 return;
             }
             
-            if ("/v1/consensus/claim-ack".equals(path) && "POST".equals(method)) {
-                leaderConsensusHandler.handleClaimAck(request, response);
-                baseRequest.setHandled(true);
-                return;
-            }
-            
-            if ("/v1/consensus/register-public-key".equals(path) && "POST".equals(method)) {
-                leaderConsensusHandler.handlePublicKeyRegistration(request, response);
-                baseRequest.setHandled(true);
-                return;
-            }
-            
-            // DAG endpoints (deprecated - kept for backward compatibility)
-            if ("/v1/dag/head".equals(path) && "POST".equals(method)) {
-                // DAG consensus is deprecated technical debt
-                // This endpoint can remain in main handler or be removed
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                    "DAG consensus is deprecated");
+            if ("/v1/aeron/leadership-history".equals(path) && "GET".equals(method)) {
+                aeronApiHandler.handleLeadershipHistory(request, response);
                 baseRequest.setHandled(true);
                 return;
             }

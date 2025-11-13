@@ -211,7 +211,24 @@ public class RegistrationHandler {
      * Handle heartbeat from leader.
      * Followers receive these periodically to confirm leader is alive.
      */
+    /**
+     * Handle POST /v1/heartbeat - Receive heartbeat from leader
+     * 
+     * @deprecated This endpoint is only available with EpochLeaderEngine consensus.
+     *             When using Aeron Cluster, heartbeats are handled internally by Aeron.
+     */
     public void handleHeartbeat(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        // Check if Aeron is active - if so, this endpoint is not applicable
+        if (context.aeronConsensusEngine != null) {
+            response.setContentType("application/json");
+            response.setStatus(HttpServletResponse.SC_GONE);
+            response.getWriter().write(String.format(
+                "{\"success\":false,\"error\":{\"code\":\"ENDPOINT_DEPRECATED\",\"message\":\"This endpoint is only available with EpochLeaderEngine consensus\",\"details\":\"Aeron Cluster handles heartbeats internally\"},\"timestamp\":%d}",
+                System.currentTimeMillis()
+            ));
+            return;
+        }
+        
         if (context.epochLeaderEngine == null) {
             response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Leader consensus not configured");
             return;
