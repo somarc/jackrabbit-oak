@@ -124,6 +124,18 @@ public class SegmentHttpServer {
         log.info("✈️  Aeron Cluster consensus engine configured");
     }
     
+    public void setAeronWriteClient(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient aeronWriteClient) {
+        context.setAeronWriteClient(aeronWriteClient);
+        log.info("✈️  AeronWriteClient configured");
+    }
+    
+    /**
+     * Get the ConsensusApiHandler instance (for setting up write callbacks).
+     */
+    public org.apache.jackrabbit.oak.segment.http.server.handlers.ConsensusApiHandler getConsensusApiHandler() {
+        return router.getConsensusApiHandler();
+    }
+    
     /**
      * Set the self URL for this validator (used for correct display in dashboard).
      */

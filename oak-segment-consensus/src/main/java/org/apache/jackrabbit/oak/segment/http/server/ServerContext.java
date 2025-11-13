@@ -25,6 +25,8 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.WriteMetadata;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.util.Map;
@@ -38,11 +40,14 @@ import java.util.concurrent.ConcurrentHashMap;
  * This avoids passing many individual parameters to each handler.</p>
  */
 public class ServerContext {
+    private static final Logger log = LoggerFactory.getLogger(ServerContext.class);
+    
     public final FileStore fileStore;
     public final NodeStore nodeStore;
     public final Path storeDirectory;
     public volatile EpochLeaderEngine epochLeaderEngine;
     public volatile AeronConsensusEngine aeronConsensusEngine;
+    public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient aeronWriteClient;
     public volatile ProofVerifier proofVerifier;
     public volatile String selfUrl;
     public volatile ConsensusStateService consensusStateService;
@@ -102,6 +107,12 @@ public class ServerContext {
     
     public void setAeronConsensusEngine(AeronConsensusEngine aeronConsensusEngine) {
         this.aeronConsensusEngine = aeronConsensusEngine;
+    }
+    
+    public void setAeronWriteClient(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient aeronWriteClient) {
+        log.info("🔧 ServerContext.setAeronWriteClient() called - client: {}", aeronWriteClient != null ? "present" : "NULL");
+        this.aeronWriteClient = aeronWriteClient;
+        log.info("✅ ServerContext.aeronWriteClient field set - value: {}", this.aeronWriteClient != null ? "present" : "NULL");
     }
 }
 

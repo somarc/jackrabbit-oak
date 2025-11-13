@@ -76,19 +76,24 @@ public class LeaderConsensusHandler {
      *             When using Aeron Cluster, use /v1/aeron/cluster-state instead.
      */
     public void handleFollowerHeadUpdate(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        if (isDeprecatedDueToAeron()) {
-            sendDeprecationError(response, "/v1/aeron/cluster-state");
-            return;
-        }
+        // Support both Leader Mode and Aeron Mode
+        boolean usingAeronMode = (context.aeronConsensusEngine != null);
+        boolean usingLeaderMode = (context.epochLeaderEngine != null);
         
-        if (context.epochLeaderEngine == null) {
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Leader consensus not configured");
-            return;
-        }
-        
-        // Only followers should receive HEAD updates
-        if (context.epochLeaderEngine.isLeader()) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "I am the leader, not a follower");
+        if (usingAeronMode) {
+            // AERON MODE: Handle HEAD update via AeronConsensusEngine
+            if (context.aeronConsensusEngine.isLeader()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "I am the leader, not a follower");
+                return;
+            }
+        } else if (usingLeaderMode) {
+            // LEADER MODE: Handle HEAD update via EpochLeaderEngine
+            if (context.epochLeaderEngine.isLeader()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "I am the leader, not a follower");
+                return;
+            }
+        } else {
+            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "No consensus engine configured");
             return;
         }
         
@@ -110,21 +115,39 @@ public class LeaderConsensusHandler {
             
             int epoch = Integer.parseInt(epochStr);
             
-            // Verify this is from the legitimate leader
-            if (!leaderUrl.equals(context.epochLeaderEngine.getCurrentLeader())) {
-                log.warn("🚫 HEAD update from non-leader: {} (expected: {})", 
-                    leaderUrl, context.epochLeaderEngine.getCurrentLeader());
-                response.sendError(HttpServletResponse.SC_FORBIDDEN, "Not current leader");
-                return;
-            }
-            
             log.info("📥 Received HEAD update from leader: {}", leaderUrl);
             log.info("   HEAD: {}...", head.substring(0, Math.min(16, head.length())));
             log.info("   Epoch: {}", epoch);
             
             // Pull segments for this HEAD from leader
             try {
-                int segmentCount = context.epochLeaderEngine.pullSegmentsForHead(head, leaderUrl);
+                int segmentCount;
+                
+                if (usingAeronMode) {
+                    // Verify this is from the legitimate leader
+                    String currentLeader = context.aeronConsensusEngine.getCurrentLeader();
+                    if (currentLeader != null && !leaderUrl.equals(currentLeader)) {
+                        log.warn("🚫 HEAD update from non-leader: {} (expected: {})", 
+                            leaderUrl, currentLeader);
+                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "Not current leader");
+                        return;
+                    }
+                    
+                    // Use AeronConsensusEngine to pull segments
+                    segmentCount = context.aeronConsensusEngine.pullSegmentsForHead(head, leaderUrl);
+                } else {
+                    // Verify this is from the legitimate leader
+                    if (!leaderUrl.equals(context.epochLeaderEngine.getCurrentLeader())) {
+                        log.warn("🚫 HEAD update from non-leader: {} (expected: {})", 
+                            leaderUrl, context.epochLeaderEngine.getCurrentLeader());
+                        response.sendError(HttpServletResponse.SC_FORBIDDEN, "Not current leader");
+                        return;
+                    }
+                    
+                    // Use EpochLeaderEngine to pull segments
+                    segmentCount = context.epochLeaderEngine.pullSegmentsForHead(head, leaderUrl);
+                }
+                
                 log.info("✅ HEAD update complete - replicated {} segments", segmentCount);
                 
                 // Return success

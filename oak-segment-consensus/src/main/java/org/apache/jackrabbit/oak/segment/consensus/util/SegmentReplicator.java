@@ -181,6 +181,10 @@ public class SegmentReplicator {
         URL url = new URL(segmentUrl);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
+        // Bypass ngrok warning page (free tier requirement)
+        if (sourceUrl.contains("ngrok")) {
+            conn.setRequestProperty("ngrok-skip-browser-warning", "true");
+        }
         conn.setConnectTimeout(5000);
         conn.setReadTimeout(10000);
         

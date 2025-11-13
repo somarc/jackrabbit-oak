@@ -85,6 +85,13 @@ public class RequestRouter {
     }
 
     /**
+     * Get the ConsensusApiHandler instance.
+     */
+    public ConsensusApiHandler getConsensusApiHandler() {
+        return consensusApiHandler;
+    }
+    
+    /**
      * Route a request to the appropriate handler based on path and method.
      * 
      * @param baseRequest Jetty base request
@@ -271,7 +278,21 @@ public class RequestRouter {
                 return;
             }
             
-            // Not found
+            // Not found - log with context
+            String remoteAddr = request.getRemoteAddr();
+            String userAgent = request.getHeader("User-Agent");
+            
+            // Filter out known invalid requests (Composum Browser, etc.) - log at debug level
+            if (path != null && (path.startsWith("/bin/") || path.startsWith("/system/") || path.startsWith("/content/"))) {
+                // These are Sling/AEM endpoints, not validator endpoints - suppress noise
+                log.debug("⚠️  Invalid request (Sling/AEM endpoint on validator): {} {} FROM {} [UA: {}]", 
+                    method, path, remoteAddr, userAgent != null ? userAgent : "unknown");
+            } else {
+                // Unknown endpoint - log at info level
+                log.info("⚠️  404 Not Found: {} {} FROM {} [UA: {}]", 
+                    method, path, remoteAddr, userAgent != null ? userAgent : "unknown");
+            }
+            
             response.sendError(HttpServletResponse.SC_NOT_FOUND);
             baseRequest.setHandled(true);
             

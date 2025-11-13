@@ -72,6 +72,7 @@ public class AeronClusterLauncher {
     private ClusteredMediaDriver clusteredMediaDriver;
     private ClusteredServiceContainer container;
     private ShutdownSignalBarrier barrier;
+    private String aeronDirectoryName;
     
     public AeronClusterLauncher(int nodeId, List<String> hostnames, File baseDir, ClusteredService clusteredService) {
         this.nodeId = nodeId;
@@ -130,16 +131,20 @@ public class AeronClusterLauncher {
         }
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
-        // 🌐 P2P-ORGANIC: Resolve hostnames to IP addresses with resilient retry logic
+        // 🌐 P2P-ORGANIC: Get our IP address FIRST (before resolving peers)
+        // This ensures we use the correct validator-network IP, not client-network IP
+        String myIPAddress = getMyIPAddress();
+        
+        // Now resolve hostnames to IP addresses with resilient retry logic
         // Peers that aren't ready yet will use placeholder IPs - Aeron will retry DNS resolution
         // Reference: oak-repository-service uses IPs to avoid DNS caching issues
-        List<String> ipAddresses = resolveHostnamesToIPs();
-        String myIPAddress = getMyIPAddress();
+        List<String> ipAddresses = resolveHostnamesToIPs(myIPAddress);
         log.info("   Using IP addresses for Aeron Cluster channels (P2P-organic mode)");
         log.info("   My IP: {} (hostname: {})", myIPAddress, getHostname());
         log.info("   Note: Unavailable peers use placeholder IPs - Aeron will retry DNS when peers come online");
         
-        String aeronDirName = CommonContext.getAeronDirectoryName() + "-" + nodeId + "-driver";
+        this.aeronDirectoryName = CommonContext.getAeronDirectoryName() + "-" + nodeId + "-driver";
+        String aeronDirName = this.aeronDirectoryName;
         barrier = new ShutdownSignalBarrier();
         
         // Media Driver Context
@@ -197,6 +202,19 @@ public class AeronClusterLauncher {
         
         container = ClusteredServiceContainer.launch(clusteredServiceContext);
         
+        // ✈️ AERON NATIVE: Set ingress channel URI and aeron directory for client connections
+        // For same-process communication, use IPC (more efficient than UDP)
+        // The ingress channel configured in ConsensusModule is for cluster-internal use
+        // For client connections from within the same process, IPC is recommended
+        String clientIngressChannel = "aeron:ipc?term-length=64k";
+        if (clusteredService instanceof AeronConsensusEngine) {
+            AeronConsensusEngine engine = (AeronConsensusEngine) clusteredService;
+            engine.setIngressChannelUri(clientIngressChannel);
+            engine.setAeronDirectoryName(aeronDirName);
+            log.info("✈️  Client ingress channel configured: {} (IPC for same-process communication)", clientIngressChannel);
+            log.info("✈️  Aeron directory configured: {}", aeronDirName);
+        }
+        
         log.info("✅ Aeron Cluster launched successfully");
         log.info("   Node {} started on {}", nodeId, getHostname());
     }
@@ -227,6 +245,21 @@ public class AeronClusterLauncher {
         if (barrier != null) {
             barrier.await();
         }
+    }
+    
+    /**
+     * Get the Aeron directory name used by this cluster node.
+     * This is needed for creating Aeron clients that connect to the cluster.
+     */
+    public String getAeronDirectoryName() {
+        return aeronDirectoryName;
+    }
+    
+    /**
+     * Get the cluster base port.
+     */
+    public static int getPortBase() {
+        return PORT_BASE;
     }
     
     private String getHostname() {
@@ -291,27 +324,40 @@ public class AeronClusterLauncher {
      * DNS resolution might return the wrong IP. We need the IP from the validator-network for Aeron Cluster.
      * 
      * Strategy:
-     * 1. Try to resolve hostname (works for peers)
-     * 2. If that fails or returns wrong network, enumerate network interfaces
-     * 3. Prefer IPs on common Docker network subnets (172.x.x.x)
+     * 1. First, try to resolve a peer hostname to see what subnet they're on
+     * 2. Enumerate network interfaces and prefer IPs from the same subnet as peers
+     * 3. If no peer subnet match, prefer IPs on common Docker network subnets (172.x.x.x)
      * 4. Fallback to hostname resolution
      */
     private String getMyIPAddress() {
-        // First, try hostname resolution (works for peers, might work for self)
-        try {
-            String ip = getIPAddress(getHostname());
-            // If we got an IP, check if it's on a reasonable network (Docker networks are usually 172.x.x.x)
-            if (ip != null && ip.startsWith("172.")) {
-                return ip;
+        // First, try to determine the validator-network subnet by resolving a peer
+        String peerSubnet = null;
+        if (hostnames.size() > 1) {
+            // Find a peer hostname (not self)
+            for (int i = 0; i < hostnames.size(); i++) {
+                if (i != nodeId) {
+                    try {
+                        String peerIP = getIPAddress(hostnames.get(i));
+                        if (peerIP != null && peerIP.startsWith("172.")) {
+                            // Extract subnet (first 3 octets)
+                            String[] parts = peerIP.split("\\.");
+                            if (parts.length >= 3) {
+                                peerSubnet = parts[0] + "." + parts[1] + "." + parts[2];
+                                log.info("   Detected validator-network subnet: {}.x (from peer {})", peerSubnet, hostnames.get(i));
+                                break;
+                            }
+                        }
+                    } catch (Exception e) {
+                        // Peer not resolvable yet - continue
+                    }
+                }
             }
-            // If not on 172.x.x.x, might be wrong interface - try network interface enumeration
-        } catch (Exception e) {
-            log.debug("Hostname resolution failed, trying network interface enumeration: {}", e.getMessage());
         }
         
         // Enumerate network interfaces to find the IP on validator-network
-        // Docker networks typically use 172.x.x.x subnets
+        // Prefer IPs from the same subnet as peers (validator-network)
         try {
+            java.util.List<String> candidateIPs = new java.util.ArrayList<>();
             java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
             while (interfaces.hasMoreElements()) {
                 java.net.NetworkInterface iface = interfaces.nextElement();
@@ -323,20 +369,37 @@ public class AeronClusterLauncher {
                     java.net.InetAddress addr = addresses.nextElement();
                     if (addr instanceof java.net.Inet4Address && !addr.isLoopbackAddress()) {
                         String ip = addr.getHostAddress();
-                        // Prefer Docker network IPs (172.x.x.x)
                         if (ip.startsWith("172.")) {
-                            log.info("   Found network interface IP: {} (interface: {})", ip, iface.getName());
-                            return ip;
+                            // If we know the peer subnet, prefer IPs from that subnet
+                            if (peerSubnet != null && ip.startsWith(peerSubnet + ".")) {
+                                log.info("   ✅ Found validator-network IP: {} (interface: {}, matches peer subnet)", ip, iface.getName());
+                                return ip; // Perfect match - return immediately
+                            }
+                            candidateIPs.add(ip);
+                            log.debug("   Found candidate IP: {} (interface: {})", ip, iface.getName());
                         }
                     }
                 }
+            }
+            
+            // If we found candidates but no perfect match, return the first one
+            if (!candidateIPs.isEmpty()) {
+                String selectedIP = candidateIPs.get(0);
+                log.info("   Using network interface IP: {} (interface: {}, {} candidates found)", 
+                    selectedIP, "unknown", candidateIPs.size());
+                return selectedIP;
             }
         } catch (Exception e) {
             log.warn("Failed to enumerate network interfaces: {}", e.getMessage());
         }
         
         // Fallback: Use hostname resolution (might work)
-        return getIPAddress(getHostname());
+        try {
+            return getIPAddress(getHostname());
+        } catch (Exception e) {
+            log.error("❌ CRITICAL: Failed to determine IP address for Aeron Cluster", e);
+            throw new RuntimeException("Cannot determine IP address for Aeron Cluster", e);
+        }
     }
     
     /**
@@ -351,9 +414,10 @@ public class AeronClusterLauncher {
      * - Peers to join dynamically as they become available
      * - Quorum to form organically as nodes come online
      * 
+     * @param myIPAddress The IP address for self (already determined via getMyIPAddress())
      * @return List of IP addresses corresponding to hostnames (may include hostnames if resolution fails)
      */
-    private List<String> resolveHostnamesToIPs() {
+    private List<String> resolveHostnamesToIPs(String myIPAddress) {
         List<String> ipAddresses = new ArrayList<>();
         log.info("🌐 Resolving {} hostnames to IP addresses (P2P-organic, retry logic)...", hostnames.size());
         
@@ -365,16 +429,11 @@ public class AeronClusterLauncher {
             boolean isSelf = (i == nodeId);
             
             if (isSelf) {
-                // Always resolve self immediately (should always work)
-                try {
-                    String ip = getIPAddress(hostname);
-                    ipAddresses.add(ip);
-                    resolved++;
-                    log.info("   ✅ Self (node {}): {} → {}", i, hostname, ip);
-                } catch (RuntimeException e) {
-                    log.error("   ❌ CRITICAL: Failed to resolve self hostname: {}", hostname);
-                    throw new RuntimeException("Cannot resolve self hostname: " + hostname, e);
-                }
+                // Use the IP we already determined (from getMyIPAddress())
+                // This ensures we use the validator-network IP, not client-network IP
+                ipAddresses.add(myIPAddress);
+                resolved++;
+                log.info("   ✅ Self (node {}): {} → {} (validator-network IP)", i, hostname, myIPAddress);
             } else {
                 // For peers: Try to resolve, but don't fail if peer isn't ready yet
                 // Aeron Cluster can handle unavailable peers and will connect when they come online

@@ -429,7 +429,24 @@ public class GlobalStoreServer {
                 }
                 aeronEngine.setNodeIdMapping(nodeIdToUrl);
                 
+                // ✈️ CRITICAL: Set write application callback BEFORE launching cluster
+                // This ensures the callback is ready when messages start arriving after launch
+                // Production pattern: Callbacks are set before ClusteredServiceContainer.launch()
+                aeronEngine.setWriteApplicationCallback((walletAddress, path, contentType, message, signature) -> {
+                    httpServer.getConsensusApiHandler().applyReplicatedWrite(
+                        walletAddress, path, contentType, message, signature
+                    );
+                });
+                System.out.println("   ✅ Write application callback configured (before cluster launch)");
+                
+                // Wire Aeron engine to HTTP server context (needed for callback to access ConsensusApiHandler)
+                // This must be done before setting callback so callback can access httpServer
+                httpServer.setEpochLeaderEngine(null); // Clear epoch leader engine
+                httpServer.setAeronConsensusEngine(aeronEngine);
+                
                 // Launch Aeron Cluster
+                // After launch, the ClusteredServiceContainer will start calling onSessionMessage()
+                // which needs the callback to be already set
                 aeronClusterLauncher = new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher(
                     nodeId, hostnamesList, clusterBaseDir, aeronEngine
                 );
@@ -440,10 +457,45 @@ public class GlobalStoreServer {
                     throw new IOException("Failed to launch Aeron Cluster", e);
                 }
                 
-                // Wire Aeron engine to HTTP server context FIRST (before registerWithPeers)
-                // This allows registerWithPeers to detect Aeron mode and skip peer registration
-                httpServer.setEpochLeaderEngine(null); // Clear epoch leader engine
-                httpServer.setAeronConsensusEngine(aeronEngine);
+                // ✈️ REPOSITORY-SERVICE PATTERN: Create AeronWriteClient (separate from ClusteredService)
+                // This matches production architecture where AeronClient is created separately and injected
+                // Both use the same MediaDriver directory (shared process)
+                // NOTE: aeronDirectoryName is set by launcher.launch() - get it after launch
+                String aeronDirectoryName = aeronClusterLauncher.getAeronDirectoryName();
+                int clusterBasePort = org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher.getPortBase();
+                
+                // Extract hostname from selfUrl for client hostname
+                String clientHostname;
+                try {
+                    java.net.URL selfUrlParsed = new java.net.URL(selfUrl);
+                    clientHostname = selfUrlParsed.getHost();
+                } catch (Exception e) {
+                    clientHostname = "localhost"; // Fallback
+                }
+                
+                // Create AeronWriteClient (matches production pattern)
+                // NOTE: This is the external UDP client - we're now using internal client in ConsensusApiHandler
+                // Keeping this for backward compatibility, but ConsensusApiHandler uses internal client
+                org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient aeronWriteClient = 
+                    new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient(
+                        0, // clientId
+                        aeronDirectoryName,
+                        hostnamesList,
+                        clusterBasePort,
+                        clientHostname
+                    );
+                
+                // Connect the client (will retry with backoff)
+                try {
+                    aeronWriteClient.connect();
+                } catch (Exception e) {
+                    System.err.println("   ⚠️  WARNING: Failed to connect AeronWriteClient: " + e.getMessage());
+                    System.err.println("   → Client will retry on first write attempt");
+                }
+                
+                // Inject into ServerContext (matches production dependency injection pattern)
+                // NOTE: ConsensusApiHandler now uses internal client, but keeping this for API compatibility
+                httpServer.setAeronWriteClient(aeronWriteClient);
                 
                 System.out.println("✅ Aeron Cluster Consensus engine initialized");
                 System.out.println("   - Model: Raft-based consensus (Aeron Cluster)");
