@@ -238,6 +238,32 @@ public class ConsensusMetrics {
             .buckets(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
             .register();
     
+    // ========== MediaDriver Health Metrics ==========
+    
+    /**
+     * Number of MediaDriver crashes detected (resets on successful startup).
+     */
+    public static final Gauge mediaDriverCrashCount = Gauge.build()
+            .name("oak_mediadriver_crash_count")
+            .help("Number of MediaDriver crashes detected (resets on successful startup)")
+            .register();
+    
+    /**
+     * Whether MediaDriver has crashed (1=crashed, 0=healthy).
+     */
+    public static final Gauge mediaDriverHasCrashed = Gauge.build()
+            .name("oak_mediadriver_has_crashed")
+            .help("Whether MediaDriver has crashed (1=crashed, 0=healthy)")
+            .register();
+    
+    /**
+     * Whether force bootstrap is required (1=required, 0=not required).
+     */
+    public static final Gauge mediaDriverForceBootstrap = Gauge.build()
+            .name("oak_mediadriver_force_bootstrap")
+            .help("Whether force bootstrap is required after multiple crashes (1=required, 0=not required)")
+            .register();
+    
     // ========== System Resource Metrics ==========
     
     /**

@@ -18,7 +18,9 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
+import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,18 +47,21 @@ public class MetricsHandler {
     private final Path storeDirectory;
     private final Map<String, ?> registeredClients;
     private final Map<String, ?> registeredValidators;
+    private final ServerContext context;
     
     public MetricsHandler(
             EpochLeaderEngine epochLeaderEngine,
             AeronConsensusEngine aeronConsensusEngine,
             Path storeDirectory,
             Map<String, ?> registeredClients,
-            Map<String, ?> registeredValidators) {
+            Map<String, ?> registeredValidators,
+            ServerContext context) {
         this.epochLeaderEngine = epochLeaderEngine;
         this.aeronConsensusEngine = aeronConsensusEngine;
         this.storeDirectory = storeDirectory;
         this.registeredClients = registeredClients;
         this.registeredValidators = registeredValidators;
+        this.context = context;
     }
     
     /**
@@ -150,6 +155,43 @@ public class MetricsHandler {
         
         // Update active connections (approximation via registered clients)
         ConsensusMetrics.activeConnections.set(registeredClients.size() + registeredValidators.size());
+        
+        // Update MediaDriver crash metrics
+        if (context != null && context.aeronClusterLauncher != null) {
+            try {
+                CrashHandler crashHandler = context.aeronClusterLauncher.getCrashHandler();
+                if (crashHandler != null) {
+                    int crashCount = crashHandler.getCrashCount();
+                    boolean hasCrashed = crashHandler.hasCrashed();
+                    boolean shouldBootstrap = crashHandler.shouldForceBootstrap();
+                    
+                    ConsensusMetrics.mediaDriverCrashCount.set(crashCount);
+                    ConsensusMetrics.mediaDriverHasCrashed.set(hasCrashed ? 1 : 0);
+                    ConsensusMetrics.mediaDriverForceBootstrap.set(shouldBootstrap ? 1 : 0);
+                } else {
+                    // CrashHandler not initialized - assume healthy
+                    ConsensusMetrics.mediaDriverCrashCount.set(0);
+                    ConsensusMetrics.mediaDriverHasCrashed.set(0);
+                    ConsensusMetrics.mediaDriverForceBootstrap.set(0);
+                }
+            } catch (Exception e) {
+                log.debug("Failed to update MediaDriver crash metrics: {}", e.getMessage());
+            }
+        } else {
+            // No Aeron Cluster - reset metrics
+            ConsensusMetrics.mediaDriverCrashCount.set(0);
+            ConsensusMetrics.mediaDriverHasCrashed.set(0);
+            ConsensusMetrics.mediaDriverForceBootstrap.set(0);
+        }
+        
+        // Update Aeron metrics (system counters and stream counters)
+        if (context != null && context.aeronPrometheusMetrics != null) {
+            try {
+                context.aeronPrometheusMetrics.updateGaugeValues();
+            } catch (Exception e) {
+                log.debug("Failed to update Aeron Prometheus metrics: {}", e.getMessage());
+            }
+        }
     }
 }
 

@@ -77,6 +77,65 @@ public class AeronApiHandler {
         state.put("clusterId", "oak-consensus-cluster");
         state.put("nodeId", getNodeIdFromUrl(context.selfUrl));
         
+        // Add validator identity (wallet address and public key)
+        Map<String, Object> validatorIdentity = new HashMap<>();
+        if (context.aeronConsensusEngine != null) {
+            String walletAddress = context.aeronConsensusEngine.getWalletAddress();
+            String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
+            if (walletAddress != null) {
+                validatorIdentity.put("walletAddress", walletAddress);
+            }
+            if (publicKey != null) {
+                validatorIdentity.put("publicKey", publicKey);
+            }
+        }
+        if (!validatorIdentity.isEmpty()) {
+            state.put("validatorIdentity", validatorIdentity);
+        }
+        
+        // Enrich members list with wallet addresses (query peers for their addresses)
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> members = (List<Map<String, Object>>) state.get("members");
+        if (members != null) {
+            enrichMembersWithWalletAddresses(members);
+        }
+        
+        // Add MediaDriver health status
+        Map<String, Object> mediaDriver = new HashMap<>();
+        if (context.aeronClusterLauncher != null) {
+            org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler crashHandler = 
+                context.aeronClusterLauncher.getCrashHandler();
+            if (crashHandler != null) {
+                mediaDriver.put("status", crashHandler.hasCrashed() ? "UNHEALTHY" : "HEALTHY");
+                mediaDriver.put("crashCount", crashHandler.getCrashCount());
+                mediaDriver.put("hasCrashed", crashHandler.hasCrashed());
+                mediaDriver.put("forceBootstrap", crashHandler.shouldForceBootstrap());
+            } else {
+                mediaDriver.put("status", "UNKNOWN");
+            }
+        } else {
+            mediaDriver.put("status", "NOT_CONFIGURED");
+        }
+        state.put("mediaDriver", mediaDriver);
+        
+        // Add quorum information
+        Integer memberCount = (Integer) state.get("memberCount");
+        if (memberCount == null) {
+            Object clusterMemberCount = state.get("clusterMemberCount");
+            if (clusterMemberCount instanceof Number) {
+                memberCount = ((Number) clusterMemberCount).intValue();
+            }
+        }
+        if (memberCount != null) {
+            Map<String, Object> quorum = new HashMap<>();
+            int quorumSize = (memberCount / 2) + 1; // Majority
+            quorum.put("required", quorumSize);
+            quorum.put("current", context.aeronConsensusEngine.getReachableValidatorCount());
+            quorum.put("totalMembers", memberCount);
+            quorum.put("hasQuorum", context.aeronConsensusEngine.getReachableValidatorCount() >= quorumSize);
+            state.put("quorum", quorum);
+        }
+        
         // Add reachable count (if available from native state, otherwise use fallback)
         if (!state.containsKey("reachableCount")) {
             state.put("reachableCount", context.aeronConsensusEngine.getReachableValidatorCount());
@@ -88,7 +147,28 @@ public class AeronApiHandler {
             state.containsKey("reachableCount") ? state.get("reachableCount") : 
             context.aeronConsensusEngine.getReachableValidatorCount());
         consensus.put("totalMembers", state.get("clusterMemberCount"));
+        consensus.put("lastHeartbeat", context.aeronConsensusEngine.getLastHeartbeatTime());
         state.put("consensus", consensus);
+        
+        // Add Aeron metrics summary (if available)
+        if (context.aeronPrometheusMetrics != null) {
+            Map<String, Object> aeronMetrics = new HashMap<>();
+            aeronMetrics.put("available", true);
+            aeronMetrics.put("note", "Detailed metrics available at /metrics endpoint");
+            state.put("aeronMetrics", aeronMetrics);
+        }
+        
+        // Add cluster health summary
+        Map<String, Object> health = new HashMap<>();
+        boolean hasQuorum = false;
+        if (memberCount != null) {
+            int quorumSize = (memberCount / 2) + 1;
+            hasQuorum = context.aeronConsensusEngine.getReachableValidatorCount() >= quorumSize;
+        }
+        health.put("status", hasQuorum ? "HEALTHY" : "DEGRADED");
+        health.put("hasQuorum", hasQuorum);
+        health.put("mediaDriverHealthy", mediaDriver.get("status").equals("HEALTHY"));
+        state.put("health", health);
         
         return state;
     }
@@ -391,6 +471,75 @@ public class AeronApiHandler {
         writeJsonResponse(response, history);
     }
 
+    /**
+     * Enrich members list with wallet addresses by querying peers' cluster-state API.
+     * This allows us to show all validators' Ethereum addresses in the cluster state.
+     */
+    private void enrichMembersWithWalletAddresses(List<Map<String, Object>> members) {
+        // Add self wallet address to self member
+        for (Map<String, Object> member : members) {
+            String memberUrl = (String) member.get("url");
+            if (memberUrl != null && memberUrl.equals(context.selfUrl)) {
+                // This is us - add our wallet info
+                if (context.aeronConsensusEngine != null) {
+                    String walletAddress = context.aeronConsensusEngine.getWalletAddress();
+                    String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
+                    if (walletAddress != null) {
+                        member.put("walletAddress", walletAddress);
+                    }
+                    if (publicKey != null) {
+                        member.put("publicKey", publicKey);
+                    }
+                }
+            } else {
+                // Query peer for their wallet address (with timeout to avoid blocking)
+                try {
+                    String queryUrl = resolveUrlToIP(memberUrl);
+                    java.net.URL apiUrl = new java.net.URL(queryUrl + "/v1/aeron/cluster-state");
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setConnectTimeout(1000); // Short timeout - don't block
+                    conn.setReadTimeout(1000);
+                    
+                    int responseCode = conn.getResponseCode();
+                    if (responseCode == 200) {
+                        java.io.BufferedReader reader = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(conn.getInputStream())
+                        );
+                        String response = reader.lines().collect(java.util.stream.Collectors.joining());
+                        reader.close();
+                        
+                        // Parse wallet address from response
+                        // Look for "walletAddress":"0x..." in validatorIdentity or members array
+                        int walletIndex = response.indexOf("\"walletAddress\":\"");
+                        if (walletIndex != -1) {
+                            int start = walletIndex + 17; // Skip past "walletAddress":"
+                            int end = response.indexOf("\"", start);
+                            if (end != -1) {
+                                String walletAddress = response.substring(start, end);
+                                member.put("walletAddress", walletAddress);
+                            }
+                        }
+                        
+                        // Parse public key
+                        int publicKeyIndex = response.indexOf("\"publicKey\":\"");
+                        if (publicKeyIndex != -1) {
+                            int start = publicKeyIndex + 13; // Skip past "publicKey":"
+                            int end = response.indexOf("\"", start);
+                            if (end != -1) {
+                                String publicKey = response.substring(start, end);
+                                member.put("publicKey", publicKey);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    // Peer might be unavailable - that's OK, just skip wallet enrichment
+                    log.debug("Could not fetch wallet address from peer {}: {}", memberUrl, e.getMessage());
+                }
+            }
+        }
+    }
+    
     /**
      * Extract node ID from validator URL.
      * Assumes format: http://validator-N:port

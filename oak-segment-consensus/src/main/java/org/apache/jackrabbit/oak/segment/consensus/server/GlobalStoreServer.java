@@ -451,6 +451,15 @@ public class GlobalStoreServer {
                     nodeId, hostnamesList, clusterBaseDir, aeronEngine
                 );
                 
+                // Set shutdown callback to exit JVM on FATAL MediaDriver errors
+                // This allows graceful shutdown and restart (Kubernetes/systemd will restart)
+                aeronClusterLauncher.setShutdownCallback(() -> {
+                    System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    System.err.println("🚨 FATAL MediaDriver error - exiting JVM for restart");
+                    System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    System.exit(1); // Exit with error code (triggers container restart)
+                });
+                
                 try {
                     aeronClusterLauncher.launch();
                 } catch (Exception e) {
@@ -484,6 +493,32 @@ public class GlobalStoreServer {
                         clusterBasePort,
                         clientHostname
                     );
+                
+                // Set AeronClusterLauncher in ServerContext for health checks and metrics
+                // This will also initialize AeronPrometheusMetrics if Aeron is available
+                httpServer.setAeronClusterLauncher(aeronClusterLauncher);
+                
+                // If Aeron wasn't available immediately, try to initialize metrics after a delay
+                // (container might not be fully initialized yet)
+                if (httpServer.getContext().aeronPrometheusMetrics == null) {
+                    java.util.concurrent.ScheduledExecutorService delayedInit = 
+                        java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+                    delayedInit.schedule(() -> {
+                        try {
+                            io.aeron.Aeron aeron = aeronClusterLauncher.getAeron();
+                            if (aeron != null && httpServer.getContext().aeronPrometheusMetrics == null) {
+                                org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics metrics =
+                                    new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics(aeron);
+                                httpServer.getContext().setAeronPrometheusMetrics(metrics);
+                                System.out.println("✅ Aeron Prometheus metrics initialized (delayed)");
+                            }
+                        } catch (Exception e) {
+                            System.err.println("⚠️  Failed to initialize Aeron Prometheus metrics (delayed): " + e.getMessage());
+                        } finally {
+                            delayedInit.shutdown();
+                        }
+                    }, 5, java.util.concurrent.TimeUnit.SECONDS);
+                }
                 
                 // Connect the client (will retry with backoff)
                 try {

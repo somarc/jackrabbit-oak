@@ -129,11 +129,23 @@ public class SegmentHttpServer {
         log.info("✈️  AeronWriteClient configured");
     }
     
+    public void setAeronClusterLauncher(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher) {
+        context.setAeronClusterLauncher(aeronClusterLauncher);
+        log.info("✈️  AeronClusterLauncher configured (for health checks and metrics)");
+    }
+    
     /**
      * Get the ConsensusApiHandler instance (for setting up write callbacks).
      */
     public org.apache.jackrabbit.oak.segment.http.server.handlers.ConsensusApiHandler getConsensusApiHandler() {
         return router.getConsensusApiHandler();
+    }
+    
+    /**
+     * Get the ServerContext instance (for accessing shared state).
+     */
+    public ServerContext getContext() {
+        return context;
     }
     
     /**

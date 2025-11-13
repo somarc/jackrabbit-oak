@@ -48,6 +48,8 @@ public class ServerContext {
     public volatile EpochLeaderEngine epochLeaderEngine;
     public volatile AeronConsensusEngine aeronConsensusEngine;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient aeronWriteClient;
+    public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
+    public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics aeronPrometheusMetrics;
     public volatile ProofVerifier proofVerifier;
     public volatile String selfUrl;
     public volatile ConsensusStateService consensusStateService;
@@ -113,6 +115,30 @@ public class ServerContext {
         log.info("🔧 ServerContext.setAeronWriteClient() called - client: {}", aeronWriteClient != null ? "present" : "NULL");
         this.aeronWriteClient = aeronWriteClient;
         log.info("✅ ServerContext.aeronWriteClient field set - value: {}", this.aeronWriteClient != null ? "present" : "NULL");
+    }
+    
+    public void setAeronClusterLauncher(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher) {
+        this.aeronClusterLauncher = aeronClusterLauncher;
+        log.info("✅ ServerContext.aeronClusterLauncher field set");
+        
+        // Initialize Aeron Prometheus metrics if Aeron is available
+        if (aeronClusterLauncher != null) {
+            try {
+                io.aeron.Aeron aeron = aeronClusterLauncher.getAeron();
+                if (aeron != null) {
+                    this.aeronPrometheusMetrics = new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics(aeron);
+                    log.info("✅ Aeron Prometheus metrics initialized");
+                } else {
+                    log.debug("Aeron instance not yet available - metrics will be initialized later");
+                }
+            } catch (Exception e) {
+                log.warn("Failed to initialize Aeron Prometheus metrics", e);
+            }
+        }
+    }
+    
+    public void setAeronPrometheusMetrics(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics aeronPrometheusMetrics) {
+        this.aeronPrometheusMetrics = aeronPrometheusMetrics;
     }
 }
 

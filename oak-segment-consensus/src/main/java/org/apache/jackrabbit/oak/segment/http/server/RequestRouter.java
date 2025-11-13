@@ -66,7 +66,8 @@ public class RequestRouter {
             context.aeronConsensusEngine,
             context.storeDirectory,
             context.registeredClients,
-            context.registeredValidators
+            context.registeredValidators,
+            context
         );
         this.fileHandler = new FileHandler(
             context.fileStore,

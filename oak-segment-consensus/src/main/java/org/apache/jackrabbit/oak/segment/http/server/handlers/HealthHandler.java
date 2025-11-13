@@ -19,6 +19,8 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
@@ -144,7 +146,38 @@ public class HealthHandler {
         }
         json.append("  },\n");
         
-        // 4. Check consensus engine (if configured) - check Aeron first, then Leader
+        // 4. Check MediaDriver health (if Aeron Cluster is configured)
+        AeronClusterLauncher aeronLauncher = (context != null) ? context.aeronClusterLauncher : null;
+        if (aeronLauncher != null) {
+            json.append("  \"mediaDriver\": {\n");
+            try {
+                CrashHandler crashHandler = aeronLauncher.getCrashHandler();
+                if (crashHandler != null) {
+                    String crashState = crashHandler.getState();
+                    boolean hasCrashed = crashHandler.hasCrashed();
+                    boolean shouldBootstrap = crashHandler.shouldForceBootstrap();
+                    
+                    json.append("    \"status\": \"").append(hasCrashed ? "DEGRADED" : "UP").append("\",\n");
+                    json.append("    \"crashState\": \"").append(crashState).append("\",\n");
+                    json.append("    \"hasCrashed\": ").append(hasCrashed).append(",\n");
+                    json.append("    \"forceBootstrap\": ").append(shouldBootstrap).append("\n");
+                    
+                    if (hasCrashed) {
+                        allHealthy = false;
+                    }
+                } else {
+                    json.append("    \"status\": \"UP\",\n");
+                    json.append("    \"crashHandler\": \"not_initialized\"\n");
+                }
+            } catch (Exception e) {
+                json.append("    \"status\": \"DOWN\",\n");
+                json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+                allHealthy = false;
+            }
+            json.append("  },\n");
+        }
+        
+        // 5. Check consensus engine (if configured) - check Aeron first, then Leader
         // Use context fields directly (volatile) to get current state, not constructor snapshot
         AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
         EpochLeaderEngine leaderEngine = (context != null) ? context.epochLeaderEngine : null;
@@ -183,14 +216,14 @@ public class HealthHandler {
             json.append("  },\n");
         }
         
-        // 5. Check connected clients
+        // 6. Check connected clients
         json.append("  \"clients\": {\n");
         json.append("    \"status\": \"UP\",\n");
         json.append("    \"registeredClients\": ").append(registeredClients.size()).append(",\n");
         json.append("    \"registeredValidators\": ").append(registeredValidators.size()).append("\n");
         json.append("  },\n");
         
-        // 6. Overall health
+        // 7. Overall health
         json.append("  \"overall\": {\n");
         json.append("    \"status\": \"").append(allHealthy ? "UP" : "DEGRADED").append("\",\n");
         json.append("    \"timestamp\": \"").append(new java.util.Date()).append("\"\n");

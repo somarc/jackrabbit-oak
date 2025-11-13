@@ -1162,6 +1162,24 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
+     * Get this validator's wallet address (Ethereum address).
+     * 
+     * @return Wallet address (0x... format) or null if wallet not initialized
+     */
+    public String getWalletAddress() {
+        return wallet != null ? wallet.getWalletAddress() : null;
+    }
+    
+    /**
+     * Get this validator's public key (hex-encoded).
+     * 
+     * @return Public key (0x... format) or null if wallet not initialized
+     */
+    public String getPublicKeyHex() {
+        return wallet != null ? wallet.getPublicKeyHex() : null;
+    }
+    
+    /**
      * ✈️ AERON NATIVE: Get native Aeron Cluster state.
      * 
      * This exposes Aeron's internal cluster state directly using available native APIs.
