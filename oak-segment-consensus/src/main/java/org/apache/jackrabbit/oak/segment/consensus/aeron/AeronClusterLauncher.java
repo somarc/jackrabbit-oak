@@ -286,9 +286,56 @@ public class AeronClusterLauncher {
     
     /**
      * Get IP address for this node's hostname.
-     * This should always succeed since we're resolving our own hostname.
+     * 
+     * CRITICAL: When a container has multiple network interfaces (e.g., validator-network + client-network),
+     * DNS resolution might return the wrong IP. We need the IP from the validator-network for Aeron Cluster.
+     * 
+     * Strategy:
+     * 1. Try to resolve hostname (works for peers)
+     * 2. If that fails or returns wrong network, enumerate network interfaces
+     * 3. Prefer IPs on common Docker network subnets (172.x.x.x)
+     * 4. Fallback to hostname resolution
      */
     private String getMyIPAddress() {
+        // First, try hostname resolution (works for peers, might work for self)
+        try {
+            String ip = getIPAddress(getHostname());
+            // If we got an IP, check if it's on a reasonable network (Docker networks are usually 172.x.x.x)
+            if (ip != null && ip.startsWith("172.")) {
+                return ip;
+            }
+            // If not on 172.x.x.x, might be wrong interface - try network interface enumeration
+        } catch (Exception e) {
+            log.debug("Hostname resolution failed, trying network interface enumeration: {}", e.getMessage());
+        }
+        
+        // Enumerate network interfaces to find the IP on validator-network
+        // Docker networks typically use 172.x.x.x subnets
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                java.net.NetworkInterface iface = interfaces.nextElement();
+                if (iface.isLoopback() || !iface.isUp()) {
+                    continue;
+                }
+                java.util.Enumeration<java.net.InetAddress> addresses = iface.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    java.net.InetAddress addr = addresses.nextElement();
+                    if (addr instanceof java.net.Inet4Address && !addr.isLoopbackAddress()) {
+                        String ip = addr.getHostAddress();
+                        // Prefer Docker network IPs (172.x.x.x)
+                        if (ip.startsWith("172.")) {
+                            log.info("   Found network interface IP: {} (interface: {})", ip, iface.getName());
+                            return ip;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to enumerate network interfaces: {}", e.getMessage());
+        }
+        
+        // Fallback: Use hostname resolution (might work)
         return getIPAddress(getHostname());
     }
     

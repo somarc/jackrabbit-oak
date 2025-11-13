@@ -157,9 +157,17 @@ public class HttpSegmentStoreSync implements Runnable {
         log.info("   ✅ Direct access to ReadOnlyFileStore internals");
         
         // Register with validator after successful activation
-        log.info("📞 Calling registerWithValidator()...");
-        registerWithValidator();
-        log.info("📞 registerWithValidator() call completed");
+        // Registration is now handled by SlingAuthorRegistrationService
+        // Only register here if wallet address is available (for backward compatibility)
+        // Otherwise, SlingAuthorRegistrationService will register once wallet is ready
+        if (walletAddress != null && !walletAddress.isEmpty()) {
+            log.info("📞 Calling registerWithValidator()...");
+            registerWithValidator();
+            log.info("📞 registerWithValidator() call completed");
+        } else {
+            log.info("📞 Skipping registration - wallet address not available");
+            log.info("   Registration will be handled by SlingAuthorRegistrationService when wallet is ready");
+        }
     }
     
     @Deactivate
@@ -267,24 +275,15 @@ public class HttpSegmentStoreSync implements Runnable {
             String registrationUrl = globalStoreUrl + "/v1/register-client";
             log.info("   Registration URL: {}", registrationUrl);
             
-            // Build JSON payload (include wallet address if available)
-            String jsonPayload;
-            if (walletAddress != null && !walletAddress.isEmpty()) {
-                jsonPayload = String.format(
-                    "{\"clientId\":\"%s\",\"clientUrl\":\"%s\",\"walletAddress\":\"%s\"}",
-                    clientId.replace("\"", "\\\""),
-                    clientUrl.replace("\"", "\\\""),
-                    walletAddress.replace("\"", "\\\"")
-                );
-                log.info("   Wallet Address: {}", walletAddress);
-            } else {
-                jsonPayload = String.format(
-                    "{\"clientId\":\"%s\",\"clientUrl\":\"%s\"}",
-                    clientId.replace("\"", "\\\""),
-                    clientUrl.replace("\"", "\\\"")
-                );
-                log.info("   Wallet Address: (not provided)");
-            }
+            // Build JSON payload with wallet address (required)
+            // This method is only called if walletAddress is available (see activate())
+            String jsonPayload = String.format(
+                "{\"clientId\":\"%s\",\"clientUrl\":\"%s\",\"walletAddress\":\"%s\"}",
+                clientId.replace("\"", "\\\""),
+                clientUrl.replace("\"", "\\\""),
+                walletAddress.replace("\"", "\\\"")
+            );
+            log.info("   Wallet Address: {}", walletAddress);
             
             // Send registration request
             URL url = new URL(registrationUrl);

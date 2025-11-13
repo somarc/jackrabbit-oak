@@ -54,7 +54,10 @@ import java.nio.charset.StandardCharsets;
 @Component(
     service = SlingAuthorRegistrationService.class,
     configurationPolicy = ConfigurationPolicy.OPTIONAL,
-    immediate = true
+    immediate = true,
+    property = {
+        "service.ranking:Integer=100"  // Lower priority - activate AFTER wallet service
+    }
 )
 @Designate(ocd = SlingAuthorRegistrationService.Configuration.class)
 public class SlingAuthorRegistrationService {
@@ -91,7 +94,12 @@ public class SlingAuthorRegistrationService {
         boolean enabled() default true;
     }
     
-    @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC)
+    @Reference(
+        cardinality = ReferenceCardinality.MANDATORY,  // REQUIRED - don't activate without wallet
+        policy = ReferencePolicy.DYNAMIC,
+        bind = "bindWalletService",
+        unbind = "unbindWalletService"
+    )
     private volatile SlingAuthorWalletService walletService;
     
     @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC, 
@@ -153,8 +161,13 @@ public class SlingAuthorRegistrationService {
         log.info("   Client URL: {}", clientUrl);
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
-        // Attempt registration (will retry when wallet service becomes available)
-        attemptRegistration();
+        // Registration will happen when wallet service binds (MANDATORY reference)
+        // Wallet service activates FIRST (service.ranking=1000), then this service activates
+        if (walletService != null && walletService.isAvailable()) {
+            attemptRegistration();
+        } else {
+            log.info("⏳ Waiting for wallet service to become available...");
+        }
     }
     
     /**

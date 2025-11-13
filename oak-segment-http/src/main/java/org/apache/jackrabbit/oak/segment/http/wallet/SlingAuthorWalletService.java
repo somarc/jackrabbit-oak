@@ -42,7 +42,10 @@ import java.io.File;
 @Component(
     service = SlingAuthorWalletService.class,
     configurationPolicy = ConfigurationPolicy.OPTIONAL,
-    immediate = true
+    immediate = true,
+    property = {
+        "service.ranking:Integer=1000"  // High priority - activate FIRST before other services
+    }
 )
 @Designate(ocd = SlingAuthorWalletService.Configuration.class)
 public class SlingAuthorWalletService {
