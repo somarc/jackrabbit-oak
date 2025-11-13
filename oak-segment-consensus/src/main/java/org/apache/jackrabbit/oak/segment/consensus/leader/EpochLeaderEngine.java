@@ -248,21 +248,53 @@ public class EpochLeaderEngine {
         log.info("   - Can vote for leader ❌");
         log.info("   - Can become leader ❌");
         
-        // DO NOT rebuild election - electorate stays the same!
-        // The leader does NOT change just because a follower joined
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // BLOCKCHAIN CONSENSUS: Deterministic election rebuild
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // CRITICAL: Rebuild election to include new peer in allValidators for
+        // deterministic leader calculation. The election MUST know about ALL validators
+        // (voting + non-voting) so all validators calculate the same leader.
+        // 
+        // SECURITY: Only voting members (past probation) can be elected as leader.
+        // New peers join as non-voting followers and cannot become leader until
+        // probation ends (enforced by getEligibleValidators()).
+        // 
+        // EPOCH STABILITY: Current epoch's leader is PRESERVED. Election rebuild
+        // only affects NEXT epoch's leader calculation, not current epoch.
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        List<String> allPeersForElection = new java.util.ArrayList<>(allFollowers);
+        String previousLeader = currentLeader; // Preserve current epoch leader
+        this.election = new LeaderElection(selfUrl, allPeersForElection, 
+            election.getLeaderTermSeconds(), validatorJoinTimes);
+        
+        // Verify current epoch leader is preserved (should not change mid-epoch)
+        String recalculatedLeader = election.electLeader();
+        if (!recalculatedLeader.equals(previousLeader)) {
+            log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.error("❌ CRITICAL: Leader changed mid-epoch!");
+            log.error("   Previous: {}", previousLeader);
+            log.error("   Recalculated: {}", recalculatedLeader);
+            log.error("   Current epoch: {}", currentEpoch);
+            log.error("   This should NEVER happen - current epoch leader must be stable");
+            log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            // Restore previous leader for current epoch (epoch stability)
+            currentLeader = previousLeader;
+        } else {
+            log.debug("✅ Election rebuild verified: current epoch leader unchanged ({})", currentLeader);
+        }
         
         log.info("📊 Network status:");
-        log.info("   Voting members (electorate): {}", currentElectorate.size());
-        log.info("   Non-voting followers: {}", allFollowers.size() - currentElectorate.size() + 1);
+        log.info("   Voting members (electorate): {}", election.getAllValidators().size());
+        log.info("   Non-voting followers: {}", allFollowers.size() - election.getAllValidators().size() + 1);
         log.info("   Total validators: {}", allFollowers.size() + 1);
-        log.info("   Current leader: {} (UNCHANGED)", currentLeader);
-        log.info("   My role: {} (UNCHANGED)", currentRole);
+        log.info("   Current epoch leader: {} (PRESERVED for epoch {})", currentLeader, currentEpoch);
+        log.info("   My role: {} (unchanged)", currentRole);
         
-        // If we're the leader, add this new follower to our heartbeat list
+        // If we're the leader, update heartbeat list with all followers
         if (currentRole == ValidatorRole.LEADER) {
-            // Create combined list of electorate peers + non-voting followers
+            // Use normalized list from allFollowers (voting + non-voting)
             List<String> allFollowersForHeartbeat = new java.util.ArrayList<>(allFollowers);
-            int electorateSizeForQuorum = currentElectorate.size();
+            int electorateSizeForQuorum = election.getAllValidators().size();
             healthMonitor.updateFollowerList(allFollowersForHeartbeat);
             healthMonitor.updateElectorateSize(electorateSizeForQuorum);
             log.info("💓 Updated heartbeat list: {} total followers (voting + non-voting)", allFollowersForHeartbeat.size());
@@ -284,12 +316,14 @@ public class EpochLeaderEngine {
             // Set up split-brain detection callback
             healthMonitor.setDemotionCallback(() -> demoteToFollowerOnQuorumLoss());
             
-            // Use allFollowers (electorate + non-voting) for heartbeats
+            // Use normalized follower list (electorate + non-voting) for heartbeats
+            // BLOCKCHAIN CONSENSUS: All followers receive heartbeats, but only electorate counts for quorum
             List<String> followers = new java.util.ArrayList<>(allFollowers);
+            java.util.Collections.sort(followers); // Deterministic ordering
             int electorateSizeForQuorum = election.getAllValidators().size();
             healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch, electorateSizeForQuorum);
             log.info("💓 Started heartbeat broadcast to {} followers (voting + non-voting)", followers.size());
-            log.info("🗳️  Quorum based on electorate size: {}", electorateSizeForQuorum);
+            log.info("🗳️  Quorum based on electorate size: {} (voting members only)", electorateSizeForQuorum);
         } else {
             healthMonitor.startMonitoring();
             log.info("❤️  Started monitoring leader health");
@@ -302,9 +336,9 @@ public class EpochLeaderEngine {
                 try {
                     Thread.sleep(10000); // Check every 10 seconds
                     
-                    // Check if any validators have completed probation and should graduate
+                    // Check if any validators have completed probation (deferred until epoch boundary)
                     if (currentRole == ValidatorRole.LEADER) {
-                        graduateValidatorsFromProbation();
+                        checkProbationGraduation(); // Only checks, doesn't graduate
                     }
                     
                     int newEpoch = election.getCurrentEpoch();
@@ -325,12 +359,53 @@ public class EpochLeaderEngine {
     }
     
     /**
-     * Check if any validators have completed their probationary period
-     * and graduate them to full voting members (electorate).
+     * Check if any validators have completed their probationary period.
      * 
-     * Called periodically by the leader (every 10s) to ensure validators
-     * who have proven themselves by following for 300 seconds can now
-     * participate in leader elections.
+     * BLOCKCHAIN CONSENSUS: Graduation is deferred until epoch boundary to ensure
+     * electorate size changes only happen at epoch transitions. This prevents
+     * mid-epoch leader calculation changes that cause BYZANTINE CLAIM rejections.
+     * 
+     * Called periodically by the leader (every 10s) to identify validators ready
+     * to graduate. Actual graduation happens at epoch boundary in handleEpochTransition().
+     */
+    private synchronized void checkProbationGraduation() {
+        long now = System.currentTimeMillis();
+        long probationPeriod = election.getLeaderTermSeconds() * 1000L; // 300 seconds
+        
+        // Get current electorate (voting members)
+        List<String> currentElectorate = election.getAllValidators();
+        
+        // Find validators who have been in network for >= probation period
+        // and are NOT yet in the electorate (i.e., non-voting)
+        for (String validatorUrl : allFollowers) {
+            // Skip if already in electorate (already graduated)
+            if (currentElectorate.contains(validatorUrl)) {
+                continue;
+            }
+            
+            Long joinTime = validatorJoinTimes.get(validatorUrl);
+            if (joinTime == null) {
+                continue; // Skip if no join time recorded
+            }
+            
+            long timeSinceJoin = now - joinTime;
+            
+            // Check if they've completed probation period
+            if (timeSinceJoin >= probationPeriod) {
+                log.debug("   Validator {} ready to graduate ({}s in network) - will graduate at epoch boundary", 
+                    validatorUrl, timeSinceJoin / 1000);
+            }
+        }
+    }
+    
+    /**
+     * Graduate validators from probation at epoch boundary.
+     * 
+     * BLOCKCHAIN CONSENSUS: Graduation happens ONLY at epoch boundaries to ensure
+     * electorate size changes don't affect current epoch's leader calculation.
+     * This prevents BYZANTINE CLAIM rejections caused by mid-epoch electorate changes.
+     * 
+     * Called from handleEpochTransition() BEFORE calculating the new epoch's leader.
      */
     private synchronized void graduateValidatorsFromProbation() {
         long now = System.currentTimeMillis();
@@ -359,8 +434,6 @@ public class EpochLeaderEngine {
             // Check if they've completed probation period
             if (timeSinceJoin >= probationPeriod) {
                 graduatingValidators.add(validatorUrl);
-                log.debug("   Validator {} ready to graduate ({}s in network)", 
-                    validatorUrl, timeSinceJoin / 1000);
             }
         }
         
@@ -376,25 +449,45 @@ public class EpochLeaderEngine {
                     graduatingUrl, timeSinceJoin / 1000);
             }
             
-            // Rebuild election with all followers (graduated validators included)
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // BLOCKCHAIN CONSENSUS: Probation graduation at epoch boundary
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // CRITICAL: Graduation happens ONLY at epoch boundaries. This ensures:
+            // 1. Electorate size changes only happen at epoch transitions
+            // 2. All validators use the same electorate size for leader calculation
+            // 3. No mid-epoch leader calculation changes (prevents BYZANTINE CLAIM rejections)
+            // 
+            // This method is called from handleEpochTransition() BEFORE calculating
+            // the new epoch's leader, so the new electorate size is used for the new epoch.
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             java.util.List<String> allPeers = new java.util.ArrayList<>(allFollowers);
+            int previousElectorateSize = election.getAllValidators().size();
+            
+            // Rebuild election with graduated validators now in electorate
             this.election = new LeaderElection(selfUrl, allPeers, election.getLeaderTermSeconds(), validatorJoinTimes);
             
-            // Update health monitor's quorum calculation
             int newElectorateSize = election.getAllValidators().size();
+            
+            // Update health monitor's quorum calculation
             healthMonitor.updateElectorateSize(newElectorateSize);
             
-            // Update follower list for heartbeats (no change, but refresh)
+            // Update follower list for heartbeats (all followers, voting + non-voting)
             healthMonitor.updateFollowerList(allPeers);
             
-            log.info("   📊 New electorate size: {}", newElectorateSize);
+            log.info("   📊 Electorate size: {} → {} (graduated validators now voting)", 
+                previousElectorateSize, newElectorateSize);
             log.info("   🗳️  Voting members: {}", election.getAllValidators());
+            log.info("   ✅ Graduation complete - new electorate size will be used for epoch {}", currentEpoch);
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         }
     }
     
     /**
      * Handle transition to a new epoch (leader rotation).
+     * 
+     * BLOCKCHAIN CONSENSUS: Epoch transitions are natural synchronization points.
+     * Graduation happens BEFORE leader calculation to ensure new electorate size
+     * is used for the new epoch's leader election.
      * 
      * LEADER CLAIM PROTOCOL:
      * - Elected leader MUST broadcast claim within 15s
@@ -405,6 +498,33 @@ public class EpochLeaderEngine {
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         log.info("🔄 EPOCH TRANSITION: {} → {}", currentEpoch, newEpoch);
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // BLOCKCHAIN CONSENSUS: Graduate validators BEFORE epoch transition
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // CRITICAL: Graduation happens at epoch boundary, BEFORE calculating new leader.
+        // This ensures:
+        // 1. Electorate size changes only at epoch boundaries
+        // 2. New epoch uses new electorate size for leader calculation
+        // 3. All validators have same electorate size when calculating leader
+        // 4. No mid-epoch leader calculation changes (prevents BYZANTINE CLAIM rejections)
+        // 
+        // NOTE: Both leader and followers rebuild elections during epoch transitions.
+        // Leader graduates validators (has join times), followers rebuild to match.
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // Leader graduates validators (has join times for all validators)
+        if (currentRole == ValidatorRole.LEADER) {
+            graduateValidatorsFromProbation(); // Graduate at epoch boundary
+        } else {
+            // Followers rebuild election to match leader's electorate size
+            // They'll learn the correct electorate size from leader's heartbeats/claims
+            // For now, rebuild election with current allFollowers list
+            // (This ensures followers have same electorate as leader after graduation)
+            java.util.List<String> allPeers = new java.util.ArrayList<>(allFollowers);
+            this.election = new LeaderElection(selfUrl, allPeers, election.getLeaderTermSeconds(), validatorJoinTimes);
+            log.debug("🔄 Follower rebuilt election at epoch boundary (electorate size: {})", 
+                election.getAllValidators().size());
+        }
         
         currentEpoch = newEpoch;
         String newLeader = election.electLeader();
@@ -491,12 +611,14 @@ public class EpochLeaderEngine {
         // Set up split-brain detection callback
         healthMonitor.setDemotionCallback(() -> demoteToFollowerOnQuorumLoss());
         
-        // Start broadcasting heartbeats to ALL followers (voting + non-voting)
+        // BLOCKCHAIN CONSENSUS: Start broadcasting heartbeats to ALL followers
+        // All followers (voting + non-voting) receive heartbeats, but only electorate counts for quorum
         List<String> followers = new java.util.ArrayList<>(allFollowers);
+        java.util.Collections.sort(followers); // Deterministic ordering
         int electorateSizeForQuorum = election.getAllValidators().size();
         healthMonitor.startHeartbeatBroadcast(followers, () -> currentEpoch, electorateSizeForQuorum);
         log.info("💓 Started heartbeat broadcast to {} followers (voting + non-voting)", followers.size());
-        log.info("🗳️  Quorum based on electorate size: {}", electorateSizeForQuorum);
+        log.info("🗳️  Quorum based on electorate size: {} (voting members only)", electorateSizeForQuorum);
     }
     
     /**

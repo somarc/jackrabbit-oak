@@ -65,6 +65,7 @@ public class GlobalStoreServer {
     private EpochListener epochListener;
     private ValidatorBootstrap bootstrap;
     private org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
+    private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     
     // Bootstrap configuration (for organic peer discovery after promotion)
     private String bootstrapPrimaryHost;
@@ -141,8 +142,17 @@ public class GlobalStoreServer {
             httpServer.setSelfUrl(selfUrl);
             System.out.println("✅ HTTP server initialized (not yet started)");
             
-            // Detect mode if AUTO
-            if ("auto".equalsIgnoreCase(bootstrapMode)) {
+            // OPTIMAL SOLUTION: Skip ValidatorBootstrap for Aeron Cluster mode
+            // Aeron Cluster handles its own bootstrap via AeronBackup.restore()
+            String consensusMode = System.getProperty("consensus.mode", "leader");
+            boolean isAeronMode = "aeron".equalsIgnoreCase(consensusMode);
+            
+            if (isAeronMode) {
+                // Aeron Cluster handles bootstrap internally via AeronBackup
+                // Force PRIMARY mode - Aeron will bootstrap if needed via its own mechanism
+                System.out.println("✈️  AERON MODE: Skipping ValidatorBootstrap (Aeron Cluster handles bootstrap)");
+                detectedMode = BootstrapMode.PRIMARY;
+            } else if ("auto".equalsIgnoreCase(bootstrapMode)) {
                 // Check if we have a bootstrap primary configured
                 boolean hasBootstrapPrimary = this.bootstrapPrimaryHost != null && !this.bootstrapPrimaryHost.isEmpty();
                 
@@ -244,7 +254,7 @@ public class GlobalStoreServer {
         // Initialize Consensus Engine (Multi-Validator)
         // CRITICAL: Skip this if we're in STANDBY mode (bootstrap will initialize via callback)
         String consensusEnabled = System.getProperty("consensus.enabled", "false");
-        String consensusMode = System.getProperty("consensus.mode", "leader"); // leader, dag, or blockchain
+        String consensusMode = System.getProperty("consensus.mode", "leader"); // leader, dag, blockchain, or aeron
         String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
         String peersConfig = System.getProperty("consensus.peers", "");
         String genesisNode = System.getProperty("consensus.genesis.node", "");  // Boot node for genesis sync
@@ -276,23 +286,23 @@ public class GlobalStoreServer {
                     System.getProperty("consensus.leader.term.seconds", "300")
                 );
                 
-                org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine leaderEngine = 
-                    new org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine(
+                org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine epochEngine = 
+                    new org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine(
                         fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds, wallet
                     );
                 
-                // Wire leader engine to HTTP server
-                httpServer.setLeaderConsensusEngine(leaderEngine);
+                // Wire epoch leader engine to HTTP server
+                httpServer.setEpochLeaderEngine(epochEngine);
                 
-                // Start leader rotation monitor
-                leaderEngine.startRotationMonitor();
+                // Start epoch rotation monitor
+                epochEngine.startRotationMonitor();
                 
-                System.out.println("✅ Leader Consensus engine initialized");
-                System.out.println("   - Model: Leader/Follower (Raft-style)");
+                System.out.println("✅ Epoch Leader Consensus engine initialized");
+                System.out.println("   - Model: Epoch-based Leader/Follower (Raft-style)");
                 System.out.println("   - Total validators: " + (1 + peerUrls.size()));
                 System.out.println("   - Leader term: " + leaderTermSeconds + " seconds");
-                System.out.println("   - Current role: " + leaderEngine.getCurrentRole());
-                System.out.println("   - Current leader: " + leaderEngine.getCurrentLeader());
+                System.out.println("   - Current role: " + epochEngine.getCurrentRole());
+                System.out.println("   - Current leader: " + epochEngine.getCurrentLeader());
                 
                 // Register with peer validators using wallet address as ID
                 String validatorId = wallet.getWalletAddress();
@@ -337,6 +347,75 @@ public class GlobalStoreServer {
                         }
                     }
                 }
+                httpServer.registerWithPeers(validatorId, peerUrls);
+                
+            } else if ("aeron".equalsIgnoreCase(consensusMode)) {
+                // AERON CLUSTER CONSENSUS (Raft-based)
+                System.out.println("   ✈️  Using Aeron Cluster Consensus (Raft)");
+                System.out.println("      - Proven Raft consensus algorithm");
+                System.out.println("      - Election safety guarantees");
+                System.out.println("      - Majority quorum requirements");
+                System.out.println("      - High performance, low latency");
+                
+                // Get node ID from system property (default: 0)
+                int nodeId = Integer.parseInt(System.getProperty("aeron.cluster.nodeId", "0"));
+                
+                // Parse hostnames (comma-separated)
+                String hostnamesConfig = System.getProperty("aeron.cluster.hostnames", "");
+                List<String> hostnamesList;
+                if (hostnamesConfig.isEmpty()) {
+                    // Derive from peer URLs if not explicitly set
+                    hostnamesList = new java.util.ArrayList<>();
+                    hostnamesList.add(extractHostname(selfUrl));
+                    for (String peerUrl : peerUrls) {
+                        String hostname = extractHostname(peerUrl);
+                        if (!hostnamesList.contains(hostname)) {
+                            hostnamesList.add(hostname);
+                        }
+                    }
+                } else {
+                    hostnamesList = Arrays.asList(hostnamesConfig.split(","));
+                }
+                
+                // Create Aeron Consensus Engine
+                org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = 
+                    new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine(
+                        fileStore, nodeStore, selfUrl, peerUrls, wallet
+                    );
+                
+                // Initialize Ethereum integration if configured
+                String beaconApiUrl = System.getProperty("ethereum.beacon.api.url", "https://beaconcha.in/api");
+                aeronEngine.initializeEthereumIntegration(beaconApiUrl);
+                
+                // Create cluster base directory
+                File clusterBaseDir = new File(storeDirectory, "aeron-cluster-node-" + nodeId);
+                clusterBaseDir.mkdirs();
+                
+                // Launch Aeron Cluster
+                aeronClusterLauncher = new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher(
+                    nodeId, hostnamesList, clusterBaseDir, aeronEngine
+                );
+                
+                try {
+                    aeronClusterLauncher.launch();
+                } catch (Exception e) {
+                    throw new IOException("Failed to launch Aeron Cluster", e);
+                }
+                
+                // Wire Aeron engine to HTTP server context (for API endpoints)
+                httpServer.setEpochLeaderEngine(null); // Clear epoch leader engine
+                httpServer.setAeronConsensusEngine(aeronEngine);
+                
+                System.out.println("✅ Aeron Cluster Consensus engine initialized");
+                System.out.println("   - Model: Raft-based consensus (Aeron Cluster)");
+                System.out.println("   - Node ID: " + nodeId);
+                System.out.println("   - Total validators: " + hostnamesList.size());
+                System.out.println("   - Current role: " + aeronEngine.getCurrentRole());
+                System.out.println("   - Current leader: " + aeronEngine.getCurrentLeader());
+                System.out.println("   - Ethereum epoch: " + aeronEngine.getCurrentEthereumEpoch());
+                
+                // Register with peer validators
+                String validatorId = wallet.getWalletAddress();
                 httpServer.registerWithPeers(validatorId, peerUrls);
                 
             } else {
@@ -716,18 +795,18 @@ public class GlobalStoreServer {
             // SCALABLE BOOTSTRAP JOIN
             // Pass isBootstrapJoin=true so constructor skips election math
             // and starts directly as FOLLOWER. Scales to 1000s of validators.
-            org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine leaderEngine = 
-                new org.apache.jackrabbit.oak.segment.consensus.leader.LeaderConsensusEngine(
+            org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine epochEngine = 
+                new org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine(
                     fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds, wallet,
                     true  // isBootstrapJoin = true (post-genesis join)
                 );
             
-            httpServer.setLeaderConsensusEngine(leaderEngine);
+            httpServer.setEpochLeaderEngine(epochEngine);
             
-            System.out.println("✅ Leader Consensus engine initialized");
+            System.out.println("✅ Epoch Leader Consensus engine initialized");
             System.out.println("   - Join type: BOOTSTRAP (post-genesis)");
-            System.out.println("   - Initial role: " + leaderEngine.getCurrentRole() + " (no election math)");
-            System.out.println("   - Expected leader: " + leaderEngine.getCurrentLeader());
+            System.out.println("   - Initial role: " + epochEngine.getCurrentRole() + " (no election math)");
+            System.out.println("   - Expected leader: " + epochEngine.getCurrentLeader());
             System.out.println("   - Will learn actual leader from heartbeat");
             System.out.println("");
             
@@ -781,6 +860,16 @@ public class GlobalStoreServer {
                 System.out.println("✅ Bootstrap services stopped");
             } catch (Exception e) {
                 System.err.println("Error stopping bootstrap: " + e.getMessage());
+            }
+        }
+        
+        // Stop Aeron Cluster launcher
+        if (aeronClusterLauncher != null) {
+            try {
+                aeronClusterLauncher.shutdown();
+                System.out.println("✅ Aeron Cluster stopped");
+            } catch (Exception e) {
+                System.err.println("Error stopping Aeron Cluster: " + e.getMessage());
             }
         }
         
@@ -845,6 +934,26 @@ public class GlobalStoreServer {
             }
         }
         return peers;
+    }
+    
+    /**
+     * Extract hostname from URL (e.g., "http://validator-1:8090" -> "validator-1").
+     */
+    private String extractHostname(String url) {
+        try {
+            java.net.URL parsedUrl = new java.net.URL(url);
+            return parsedUrl.getHost();
+        } catch (Exception e) {
+            // Fallback: try to extract from URL string
+            if (url.contains("://")) {
+                String withoutProtocol = url.substring(url.indexOf("://") + 3);
+                if (withoutProtocol.contains(":")) {
+                    return withoutProtocol.substring(0, withoutProtocol.indexOf(":"));
+                }
+                return withoutProtocol;
+            }
+            return "localhost";
+        }
     }
     
     /**

@@ -48,7 +48,18 @@ import java.util.concurrent.atomic.AtomicLong;
  * - 2/3+ majority required for writes
  * - Segment-level replication via HTTP
  * - Mock payment verification (Phase 1)
+ * 
+ * @deprecated This linear blockchain consensus model has been superseded by
+ * {@link org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine}.
+ * Use epoch-based leader consensus instead. This class is retained for
+ * backward compatibility but should not be used for new deployments.
+ * 
+ * <p><strong>Replacement:</strong> Use {@code EpochLeaderEngine} with
+ * {@code consensus.mode=leader} for production deployments. The epoch-based
+ * model provides better scalability, clock synchronization, and alignment with
+ * blockchain architecture (future Ethereum epoch integration).
  */
+@Deprecated
 public class ConsensusEngine {
     
     private static final Logger log = LoggerFactory.getLogger(ConsensusEngine.class);
