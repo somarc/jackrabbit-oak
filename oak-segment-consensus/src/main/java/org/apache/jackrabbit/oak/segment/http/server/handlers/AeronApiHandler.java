@@ -47,6 +47,53 @@ public class AeronApiHandler {
     }
 
     /**
+     * ✈️ AERON NATIVE: Get Aeron Cluster state using native Aeron APIs.
+     * 
+     * This uses Aeron's internal cluster state directly - no HTTP API calls or custom discovery.
+     * Returns complete Aeron Cluster state including:
+     * - role: Current role (LEADER/FOLLOWER) from cluster.role()
+     * - memberId: This node's member ID from cluster.memberId()
+     * - leadershipTermId: Current Raft term from cluster.leadershipTermId()
+     * - clusterMemberCount: Total members from cluster.clusterMemberCount()
+     * - clusterTime: Cluster time from cluster.time()
+     * - logPosition: Log position from cluster.logPosition()
+     * - members: List of all cluster members from cluster.clusterMembers()
+     * 
+     * @return Cluster state map, or null if Aeron Cluster not configured
+     */
+    public Map<String, Object> getClusterStateData() {
+        if (context.aeronConsensusEngine == null) {
+            return null;
+        }
+
+        // ✈️ AERON NATIVE: Use Aeron's native cluster state API
+        Map<String, Object> nativeState = context.aeronConsensusEngine.getNativeClusterState();
+        if (nativeState == null) {
+            return null;
+        }
+        
+        // Add our cluster identifier and enrich with additional info
+        Map<String, Object> state = new HashMap<>(nativeState);
+        state.put("clusterId", "oak-consensus-cluster");
+        state.put("nodeId", getNodeIdFromUrl(context.selfUrl));
+        
+        // Add reachable count (if available from native state, otherwise use fallback)
+        if (!state.containsKey("reachableCount")) {
+            state.put("reachableCount", context.aeronConsensusEngine.getReachableValidatorCount());
+        }
+        
+        // Ensure consensus metrics are present
+        Map<String, Object> consensus = new HashMap<>();
+        consensus.put("reachableValidators", 
+            state.containsKey("reachableCount") ? state.get("reachableCount") : 
+            context.aeronConsensusEngine.getReachableValidatorCount());
+        consensus.put("totalMembers", state.get("clusterMemberCount"));
+        state.put("consensus", consensus);
+        
+        return state;
+    }
+    
+    /**
      * Handle GET /v1/aeron/cluster-state - Returns complete Aeron Cluster state
      * 
      * Response includes:
@@ -58,7 +105,8 @@ public class AeronApiHandler {
      * - consensus: Raft consensus metrics
      */
     public void handleClusterState(HttpServletResponse response) throws IOException {
-        if (context.aeronConsensusEngine == null) {
+        Map<String, Object> state = getClusterStateData();
+        if (state == null) {
             sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "Aeron Cluster consensus not configured");
             return;
@@ -66,57 +114,122 @@ public class AeronApiHandler {
 
         response.setContentType("application/json");
         response.setStatus(HttpServletResponse.SC_OK);
-
-        Map<String, Object> state = new HashMap<>();
-        
-        // Basic cluster info
-        state.put("clusterId", "oak-consensus-cluster");
-        state.put("nodeId", getNodeIdFromUrl(context.selfUrl));
-        state.put("role", context.aeronConsensusEngine.getCurrentRole().name());
-        state.put("isLeader", context.aeronConsensusEngine.isLeader());
-        state.put("term", context.aeronConsensusEngine.getCurrentTerm());
-        state.put("epoch", context.aeronConsensusEngine.getCurrentEpoch());
-        state.put("ethereumEpoch", context.aeronConsensusEngine.getCurrentEthereumEpoch());
-        
-        // Cluster members
-        List<Map<String, Object>> members = new ArrayList<>();
-        String currentLeader = context.aeronConsensusEngine.getCurrentLeader();
-        List<String> allFollowers = context.aeronConsensusEngine.getAllFollowers();
-        
-        // Add leader
-        if (currentLeader != null) {
-            Map<String, Object> leader = new HashMap<>();
-            leader.put("nodeId", getNodeIdFromUrl(currentLeader));
-            leader.put("url", currentLeader);
-            leader.put("role", "LEADER");
-            leader.put("status", "ACTIVE");
-            leader.put("lastHeartbeat", context.aeronConsensusEngine.getLastHeartbeatTime());
-            members.add(leader);
-        }
-        
-        // Add followers
-        for (String followerUrl : allFollowers) {
-            Map<String, Object> follower = new HashMap<>();
-            follower.put("nodeId", getNodeIdFromUrl(followerUrl));
-            follower.put("url", followerUrl);
-            follower.put("role", "FOLLOWER");
-            follower.put("status", "ACTIVE");
-            follower.put("lastHeartbeat", context.aeronConsensusEngine.getLastHeartbeatTime());
-            members.add(follower);
-        }
-        
-        state.put("members", members);
-        state.put("memberCount", members.size());
-        state.put("reachableCount", context.aeronConsensusEngine.getReachableValidatorCount());
-        
-        // Consensus metrics
-        Map<String, Object> consensus = new HashMap<>();
-        consensus.put("reachableValidators", context.aeronConsensusEngine.getReachableValidatorCount());
-        consensus.put("totalMembers", members.size());
-        state.put("consensus", consensus);
         
         // Write JSON response
         writeJsonResponse(response, state);
+    }
+    
+    /**
+     * ✈️ AERON CLUSTER SOURCE OF TRUTH: Discover leader by querying peers' /v1/aeron/cluster-state.
+     * 
+     * This method queries peers' Aeron Cluster state API directly, which reflects Aeron's
+     * internal Raft consensus state. This is the authoritative source for leader information.
+     * 
+     * @return Leader URL if found, null otherwise
+     */
+    private String discoverLeaderFromPeerClusterState() {
+        if (context.aeronConsensusEngine == null) {
+            return null;
+        }
+        
+        // Get all peer URLs (including self)
+        List<String> allUrls = new ArrayList<>();
+        allUrls.add(context.selfUrl);
+        allUrls.addAll(context.aeronConsensusEngine.getAllFollowers());
+        
+        log.debug("🔍 Querying {} peers' Aeron Cluster state to find leader", allUrls.size());
+        
+        for (String url : allUrls) {
+            try {
+                // Resolve hostname to IP for reliable networking
+                String queryUrl = resolveUrlToIP(url);
+                java.net.URL apiUrl = new java.net.URL(queryUrl + "/v1/aeron/cluster-state");
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(2000);
+                conn.setReadTimeout(3000);
+                
+                int responseCode = conn.getResponseCode();
+                if (responseCode == 200) {
+                    java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(conn.getInputStream())
+                    );
+                    String response = reader.lines().collect(java.util.stream.Collectors.joining());
+                    reader.close();
+                    
+                    // ✈️ AERON CLUSTER SOURCE OF TRUTH: Parse Aeron Cluster state JSON
+                    // Priority 1: Check top-level "isLeader":true (this node is the leader)
+                    if (response.contains("\"isLeader\":true")) {
+                        log.info("✅ Found leader (top-level isLeader:true): {} (from {})", url, url);
+                        return url;
+                    }
+                    
+                    // Priority 2: Check top-level "role":"LEADER"
+                    if (response.contains("\"role\":\"LEADER\"")) {
+                        log.info("✅ Found leader (top-level role:LEADER): {} (from {})", url, url);
+                        return url;
+                    }
+                    
+                    // Priority 3: Parse members array to find leader
+                    // Look for member with "role":"LEADER"
+                    int leaderRoleIndex = response.indexOf("\"role\":\"LEADER\"");
+                    if (leaderRoleIndex != -1) {
+                        // Find the URL field in the same member object (search backwards from role)
+                        // Look for "url":"..." before the role field
+                        int urlStart = response.lastIndexOf("\"url\":\"", leaderRoleIndex);
+                        if (urlStart == -1) {
+                            // Try forward search
+                            urlStart = response.indexOf("\"url\":\"", leaderRoleIndex);
+                        }
+                        if (urlStart != -1) {
+                            urlStart += 7; // Skip past "url":"
+                            int urlEnd = response.indexOf("\"", urlStart);
+                            if (urlEnd != -1 && urlEnd < leaderRoleIndex + 200) { // Ensure URL is near role field
+                                String leaderUrl = response.substring(urlStart, urlEnd);
+                                log.info("✅ Found leader via members array: {} (from {})", leaderUrl, url);
+                                return leaderUrl;
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Failed to query Aeron Cluster state from {}: {}", url, e.getMessage());
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Resolve hostname-based URL to IP-based URL for reliable networking.
+     */
+    private String resolveUrlToIP(String url) {
+        try {
+            java.net.URL parsedUrl = new java.net.URL(url);
+            String hostname = parsedUrl.getHost();
+            int port = parsedUrl.getPort();
+            String protocol = parsedUrl.getProtocol();
+            String path = parsedUrl.getPath();
+            
+            // If already an IP address, return as-is
+            if (hostname.matches("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) {
+                return url;
+            }
+            
+            // Resolve hostname to IP
+            try {
+                String ip = java.net.InetAddress.getByName(hostname).getHostAddress();
+                return String.format("%s://%s%s%s",
+                    protocol,
+                    ip,
+                    port != -1 ? ":" + port : "",
+                    path != null ? path : "");
+            } catch (java.net.UnknownHostException e) {
+                // If resolution fails, return original URL (may be ngrok/Ethos URL)
+                return url;
+            }
+        } catch (Exception e) {
+            return url;
+        }
     }
 
     /**
@@ -219,7 +332,9 @@ public class AeronApiHandler {
     }
 
     /**
-     * Handle GET /v1/aeron/leadership-history - Returns recent leadership changes
+     * ✈️ AERON NATIVE: Handle GET /v1/aeron/leadership-history - Returns recent leadership rotations
+     * 
+     * This uses Aeron's onRoleChange() callback history to show when leaders rotated.
      * 
      * Query params:
      * - limit: Number of entries to return (default: 10)
@@ -234,29 +349,43 @@ public class AeronApiHandler {
         response.setContentType("application/json");
         response.setStatus(HttpServletResponse.SC_OK);
 
+        // Parse limit parameter
+        int limit = 10; // Default
         String limitParam = request.getParameter("limit");
         if (limitParam != null && !limitParam.isEmpty()) {
             try {
-                Integer.parseInt(limitParam); // Validate format (limit not yet used)
+                limit = Integer.parseInt(limitParam);
+                if (limit < 1) limit = 10;
+                if (limit > 100) limit = 100; // Cap at 100
             } catch (NumberFormatException e) {
                 // Use default
             }
         }
         
+        // ✈️ AERON NATIVE: Get leadership history from onRoleChange() callbacks
+        java.util.List<org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.LeadershipChange> changes = 
+            context.aeronConsensusEngine.getLeadershipHistory(limit);
+        
         Map<String, Object> history = new HashMap<>();
         List<Map<String, Object>> entries = new ArrayList<>();
         
-        // For now, return current leadership info
-        // TODO: Implement actual history tracking with limit parameter
-        Map<String, Object> currentEntry = new HashMap<>();
-        currentEntry.put("term", context.aeronConsensusEngine.getCurrentTerm());
-        currentEntry.put("leaderNodeId", getNodeIdFromUrl(context.aeronConsensusEngine.getCurrentLeader()));
-        currentEntry.put("leaderUrl", context.aeronConsensusEngine.getCurrentLeader());
-        currentEntry.put("timestamp", System.currentTimeMillis());
-        entries.add(currentEntry);
+        for (org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.LeadershipChange change : changes) {
+            Map<String, Object> entry = new HashMap<>();
+            entry.put("timestamp", change.timestamp);
+            entry.put("clusterTime", change.timestamp); // Aeron cluster time
+            entry.put("term", change.term);
+            entry.put("memberId", change.memberId);
+            entry.put("memberUrl", change.memberUrl);
+            entry.put("previousRole", change.previousRole != null ? change.previousRole.name() : "UNKNOWN");
+            entry.put("newRole", change.newRole.name());
+            entry.put("isLeaderRotation", change.newRole == io.aeron.cluster.service.Cluster.Role.LEADER && 
+                change.previousRole != io.aeron.cluster.service.Cluster.Role.LEADER);
+            entries.add(entry);
+        }
         
         history.put("history", entries);
         history.put("totalEntries", entries.size());
+        history.put("limit", limit);
         
         // Write JSON response
         writeJsonResponse(response, history);

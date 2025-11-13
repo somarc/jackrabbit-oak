@@ -49,7 +49,7 @@ public class RegistrationHandler {
      * Parameters (JSON body or query params):
      *   - clientId: Unique identifier (e.g., container name "sling-author-1a")
      *   - clientUrl: Client's URL/address (e.g., "http://sling-author-1a:8080")
-     *   - walletAddress: Optional wallet address
+     *   - walletAddress: REQUIRED Ethereum wallet address (0x...)
      *   - signature: Optional signed message (for future verification)
      */
     public void handleClientRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -86,7 +86,7 @@ public class RegistrationHandler {
                 walletAddress = request.getParameter("walletAddress");
             }
             
-            // Use remote address as fallback
+            // Use remote address as fallback for clientId/clientUrl
             if (clientId == null || clientId.isEmpty()) {
                 String remoteAddr = request.getRemoteAddr();
                 int remotePort = request.getRemotePort();
@@ -98,25 +98,47 @@ public class RegistrationHandler {
                 clientUrl = "http://" + remoteAddr + ":" + remotePort;
             }
             
+            // REQUIRE Ethereum wallet address
+            if (walletAddress == null || walletAddress.isEmpty()) {
+                log.warn("🚫 Registration rejected: Missing walletAddress for client {}", clientId);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Registration requires an Ethereum wallet address (0x...). Please provide walletAddress parameter.");
+                return;
+            }
+            
+            // Validate Ethereum address format
+            walletAddress = walletAddress.trim();
+            if (!walletAddress.startsWith("0x") || walletAddress.length() < 10) {
+                log.warn("🚫 Registration rejected: Invalid Ethereum address format for client {}", clientId);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Invalid Ethereum address format. Must start with '0x' and be at least 10 characters.");
+                return;
+            }
+            
             // Register or update client
             ClientRegistration registration = context.registeredClients.get(clientId);
             if (registration == null) {
                 registration = new ClientRegistration(clientId, clientUrl, walletAddress);
                 context.registeredClients.put(clientId, registration);
-                log.info("✅ New client registered: {} ({})", clientId, clientUrl);
+                log.info("✅ New client registered: {} ({}) with wallet {}", clientId, clientUrl, walletAddress);
             } else {
                 registration.updateLastSeen();
-                if (walletAddress != null && !walletAddress.isEmpty()) {
-                    // Note: walletAddress is final in ClientRegistration, so we can't update it
-                    // This is expected behavior - wallet is set at registration time
+                // Note: walletAddress is final in ClientRegistration, so we can't update it
+                // This is expected behavior - wallet is set at registration time
+                if (registration.walletAddress != null && !registration.walletAddress.equalsIgnoreCase(walletAddress)) {
+                    log.warn("⚠️  Client {} already registered with different wallet: {} (new: {})", 
+                        clientId, registration.walletAddress, walletAddress);
                 }
-                log.debug("Client heartbeat: {} ({})", clientId, clientUrl);
+                log.debug("Client heartbeat: {} ({}) wallet: {}", clientId, clientUrl, walletAddress);
             }
             
             // Return success
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write("{\"success\":true,\"clientId\":\"" + clientId + "\",\"message\":\"Client registered\"}");
+            response.getWriter().write(String.format(
+                "{\"success\":true,\"clientId\":\"%s\",\"walletAddress\":\"%s\",\"message\":\"Client registered\"}",
+                clientId, walletAddress
+            ));
             
         } catch (Exception e) {
             log.error("Failed to register client", e);

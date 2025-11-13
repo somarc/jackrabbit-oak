@@ -102,6 +102,12 @@ public class HttpSegmentStoreSync implements Runnable {
             description = "If true, only sync epochs marked as finalized (deprecated, kept for compatibility)"
         )
         boolean onlyFinalized() default false;
+        
+        @AttributeDefinition(
+            name = "Wallet Address",
+            description = "Ethereum wallet address for write proposals (0x...). If provided, will be included in registration."
+        )
+        String walletAddress() default "";
     }
     
     /**
@@ -117,6 +123,7 @@ public class HttpSegmentStoreSync implements Runnable {
     private String globalStoreUrl;
     private boolean enabled;
     private boolean onlyFinalized;
+    private String walletAddress;
     private String lastKnownRevision;
     private long syncCount = 0;
     private long updateCount = 0;
@@ -129,6 +136,7 @@ public class HttpSegmentStoreSync implements Runnable {
         this.globalStoreUrl = config.globalStoreUrl();
         this.enabled = config.enabled();
         this.onlyFinalized = config.onlyFinalized();
+        this.walletAddress = config.walletAddress();
         
         log.info("🔄 HTTP Segment Store Sync activated (DAG Consensus Mode)");
         log.info("   Global Store: {}", globalStoreUrl);
@@ -259,12 +267,24 @@ public class HttpSegmentStoreSync implements Runnable {
             String registrationUrl = globalStoreUrl + "/v1/register-client";
             log.info("   Registration URL: {}", registrationUrl);
             
-            // Build JSON payload
-            String jsonPayload = String.format(
-                "{\"clientId\":\"%s\",\"clientUrl\":\"%s\"}",
-                clientId.replace("\"", "\\\""),
-                clientUrl.replace("\"", "\\\"")
-            );
+            // Build JSON payload (include wallet address if available)
+            String jsonPayload;
+            if (walletAddress != null && !walletAddress.isEmpty()) {
+                jsonPayload = String.format(
+                    "{\"clientId\":\"%s\",\"clientUrl\":\"%s\",\"walletAddress\":\"%s\"}",
+                    clientId.replace("\"", "\\\""),
+                    clientUrl.replace("\"", "\\\""),
+                    walletAddress.replace("\"", "\\\"")
+                );
+                log.info("   Wallet Address: {}", walletAddress);
+            } else {
+                jsonPayload = String.format(
+                    "{\"clientId\":\"%s\",\"clientUrl\":\"%s\"}",
+                    clientId.replace("\"", "\\\""),
+                    clientUrl.replace("\"", "\\\"")
+                );
+                log.info("   Wallet Address: (not provided)");
+            }
             
             // Send registration request
             URL url = new URL(registrationUrl);

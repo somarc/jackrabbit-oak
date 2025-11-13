@@ -138,8 +138,14 @@ public class RequestRouter {
                 return;
             }
             
-            if ("/manifest".equals(path) && "GET".equals(method)) {
-                fileHandler.handleFile(request, response, "manifest", "text/plain");
+            if ("/manifest".equals(path)) {
+                if ("HEAD".equals(method)) {
+                    fileHandler.handleFileHead(response, "manifest", "text/plain");
+                } else if ("GET".equals(method)) {
+                    fileHandler.handleFile(request, response, "manifest", "text/plain");
+                } else {
+                    response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+                }
                 baseRequest.setHandled(true);
                 return;
             }
@@ -198,8 +204,8 @@ public class RequestRouter {
             }
             
             // Consensus API
-            if ("/v1/test-write".equals(path) && "POST".equals(method)) {
-                consensusApiHandler.handleTestWrite(request, response);
+            if ("/v1/propose-write".equals(path) && "POST".equals(method)) {
+                consensusApiHandler.handleProposeWrite(request, response);
                 baseRequest.setHandled(true);
                 return;
             }

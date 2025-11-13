@@ -32,6 +32,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.file.Path;
 
 /**
@@ -194,11 +196,78 @@ public class SegmentHttpServer {
     }
     
     /**
+     * Convert hostname-based URL to IP-based URL for reliable Docker networking.
+     * 
+     * <p>DNS resolution can be unreliable in Docker Compose, especially during startup.
+     * This method resolves hostnames to IP addresses to ensure peer registration succeeds.
+     * 
+     * @param url URL with hostname (e.g., "http://validator-2:8090")
+     * @return URL with IP address (e.g., "http://172.18.0.3:8090")
+     */
+    private String convertUrlToIP(String url) {
+        try {
+            java.net.URL parsedUrl = new java.net.URL(url);
+            String hostname = parsedUrl.getHost();
+            int port = parsedUrl.getPort();
+            String protocol = parsedUrl.getProtocol();
+            String path = parsedUrl.getPath();
+            
+            // If already an IP address, return as-is
+            if (hostname.matches("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) {
+                return url;
+            }
+            
+            // Resolve hostname to IP with retry logic
+            final int maxRetries = 10;
+            int retryDelayMs = 1000;
+            
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    String ip = InetAddress.getByName(hostname).getHostAddress();
+                    String ipUrl = String.format("%s://%s%s%s", 
+                        protocol, 
+                        ip, 
+                        port != -1 ? ":" + port : "", 
+                        path != null ? path : "");
+                    if (attempt > 1) {
+                        log.debug("✅ Resolved {} → {} (attempt {})", url, ipUrl, attempt);
+                    }
+                    return ipUrl;
+                } catch (UnknownHostException e) {
+                    if (attempt < maxRetries) {
+                        if (attempt <= 3 || attempt % 5 == 0) {
+                            log.debug("⚠️  DNS resolution failed for {} (attempt {}/{}), retrying...", 
+                                hostname, attempt, maxRetries);
+                        }
+                        try {
+                            Thread.sleep(retryDelayMs);
+                            retryDelayMs = Math.min(retryDelayMs * 2, 5000); // Cap at 5s
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            log.warn("⚠️  DNS resolution interrupted for {}", hostname);
+                            return url; // Fallback to original URL
+                        }
+                    } else {
+                        log.warn("⚠️  Failed to resolve {} after {} attempts, using hostname", hostname, maxRetries);
+                        return url; // Fallback to original URL
+                    }
+                }
+            }
+            return url; // Fallback
+        } catch (Exception e) {
+            log.warn("⚠️  Failed to parse URL {}: {}, using original", url, e.getMessage());
+            return url; // Fallback to original URL
+        }
+    }
+    
+    /**
      * Register this validator with peer validators.
      * Called during startup to announce this validator's presence to the network.
      * 
      * <p>Uses retry logic with exponential backoff to handle timing issues when
      * peers aren't ready yet (common in Docker Compose startup scenarios).
+     * 
+     * <p>Uses IP-based URLs for reliable Docker networking (DNS can be unreliable).
      * 
      * @param validatorId Unique identifier for this validator (e.g., "validator-1")
      * @param peerUrls List of peer validator URLs to register with
@@ -215,6 +284,14 @@ public class SegmentHttpServer {
             return;
         }
         
+        // ✈️ AERON MODE: Skip peer registration entirely - Aeron Cluster handles membership via Raft
+        // This HTTP registration is legacy from EpochLeaderEngine and not needed for Aeron
+        // Check if Aeron consensus engine is active (if so, skip peer registration)
+        if (context.aeronConsensusEngine != null) {
+            log.debug("✈️  Skipping HTTP peer registration (Aeron Cluster handles membership via Raft)");
+            return;
+        }
+        
         log.info("📡 Registering with {} peer validators (with retry logic)...", peerUrls.size());
         
         // Retry configuration
@@ -228,11 +305,14 @@ public class SegmentHttpServer {
                 continue;
             }
             
+            // Convert hostname URL to IP-based URL for reliable Docker networking
+            String peerUrlIP = convertUrlToIP(peerUrl);
+            
             boolean registered = false;
             for (int attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
-                    // Build registration URL
-                    String registrationUrl = peerUrl + "/v1/register-validator";
+                    // Build registration URL (using IP-based URL)
+                    String registrationUrl = peerUrlIP + "/v1/register-validator";
                     
                     // Build JSON payload
                     String jsonPayload = String.format(
@@ -258,22 +338,22 @@ public class SegmentHttpServer {
                     
                     int responseCode = conn.getResponseCode();
                     if (responseCode == 200) {
-                        log.info("✅ Registered with peer validator: {} (attempt {}/{})", peerUrl, attempt, maxRetries);
+                        log.info("✅ Registered with peer validator: {} → {} (attempt {}/{})", peerUrl, peerUrlIP, attempt, maxRetries);
                         registered = true;
                         break; // Success - exit retry loop
                     } else {
-                        log.debug("⚠️  Registration attempt {}/{} failed for {}: HTTP {}", attempt, maxRetries, peerUrl, responseCode);
+                        log.debug("⚠️  Registration attempt {}/{} failed for {}: HTTP {}", attempt, maxRetries, peerUrlIP, responseCode);
                     }
                     
                 } catch (Exception e) {
-                    log.debug("⚠️  Registration attempt {}/{} failed for {}: {}", attempt, maxRetries, peerUrl, e.getMessage());
+                    log.debug("⚠️  Registration attempt {}/{} failed for {}: {}", attempt, maxRetries, peerUrlIP, e.getMessage());
                 }
                 
                 // Exponential backoff: 2s, 4s, 8s, 16s, 16s
                 if (attempt < maxRetries) {
                     int delayMs = Math.min(initialDelayMs * (1 << (attempt - 1)), maxDelayMs);
                     try {
-                        log.debug("⏳ Retrying registration with {} in {}ms...", peerUrl, delayMs);
+                        log.debug("⏳ Retrying registration with {} in {}ms...", peerUrlIP, delayMs);
                         Thread.sleep(delayMs);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
@@ -284,7 +364,10 @@ public class SegmentHttpServer {
             }
             
             if (!registered) {
-                log.warn("⚠️  Failed to register with peer validator {} after {} attempts", peerUrl, maxRetries);
+                // Note: Registration failure is non-critical - Aeron Cluster handles consensus independently
+                // This is mainly for HTTP segment transfer coordination, which can retry later
+                log.debug("⚠️  Failed to register with peer validator {} ({} → {}) after {} attempts (non-critical - Aeron Cluster handles consensus)", 
+                    peerUrl, peerUrlIP, peerUrlIP, maxRetries);
             }
         }
         
@@ -331,8 +414,11 @@ public class SegmentHttpServer {
                     continue;
                 }
                 
-                // Build peer-joined endpoint URL
-                String peerJoinedUrl = peerUrl + "/v1/consensus/peer-joined";
+                // Convert hostname URL to IP-based URL for reliable Docker networking
+                String peerUrlIP = convertUrlToIP(peerUrl);
+                
+                // Build peer-joined endpoint URL (using IP-based URL)
+                String peerJoinedUrl = peerUrlIP + "/v1/consensus/peer-joined";
                 
                 // PHASE 3: Get public key for Byzantine fault tolerance
                 String publicKeyHex = context.epochLeaderEngine != null ? 
@@ -347,7 +433,7 @@ public class SegmentHttpServer {
                     publicKeyHex
                 );
                 
-                log.info("   → Broadcasting to {} (with public key)", peerUrl);
+                log.info("   → Broadcasting to {} → {} (with public key)", peerUrl, peerUrlIP);
                 
                 // Send broadcast request
                 java.net.URL url = new java.net.URL(peerJoinedUrl);
@@ -374,7 +460,7 @@ public class SegmentHttpServer {
                     String response = reader.lines().collect(java.util.stream.Collectors.joining());
                     reader.close();
                     
-                    log.info("   ✅ Accepted by peer: {}", peerUrl);
+                    log.info("   ✅ Accepted by peer: {} → {}", peerUrl, peerUrlIP);
                     log.debug("      Response: {}", response);
                     
                     // CRITICAL: Extract peer's public key from response and register it

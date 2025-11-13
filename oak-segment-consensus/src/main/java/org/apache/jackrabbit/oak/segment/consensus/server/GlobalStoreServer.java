@@ -123,109 +123,134 @@ public class GlobalStoreServer {
             System.out.println("   - Segments: " + storeDir.getAbsolutePath());
             
             // ===========================================================================
-            // BOOTSTRAP: Check if we need to sync from existing validator
-            // ===========================================================================
-            String peersConfig = System.getProperty("consensus.peers", "");
-            String bootstrapMode = System.getProperty("bootstrap.mode", "auto");  // auto, genesis, standby, primary
-            this.bootstrapPrimaryHost = System.getProperty("bootstrap.primary.host", "");
-            this.bootstrapPrimaryPort = Integer.parseInt(System.getProperty("bootstrap.primary.port", "8001"));
-            int standbyPort = port + 1;  // Standby port = HTTP port + 1
-            
-            bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
-            List<String> peers = parsePeerUrls(peersConfig);
-            
             // Initialize HTTP server FIRST (needed for startConsensusPrimary callback)
             System.out.println("Initializing HTTP server on port " + port + "...");
             httpServer = new SegmentHttpServer(storeDir, port, fileStore, nodeStore);
-            String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
+            // Get self URL from system property, or resolve localhost to IP
+            String selfUrlConfig = System.getProperty("consensus.self.url");
+            String selfUrl;
+            if (selfUrlConfig != null && !selfUrlConfig.isEmpty()) {
+                // Use configured URL (can be ngrok/Ethos URL, IP, or hostname)
+                selfUrl = selfUrlConfig;
+                System.out.println("   Using configured self URL: " + selfUrl);
+            } else {
+                // Default: resolve localhost to IP for reliable networking
+                selfUrl = resolveUrlToIP("http://localhost:" + port);
+                System.out.println("   Resolved self URL to IP: " + selfUrl);
+            }
             httpServer.setSelfUrl(selfUrl);
             System.out.println("✅ HTTP server initialized (not yet started)");
             
-            // OPTIMAL SOLUTION: Skip ValidatorBootstrap for Aeron Cluster mode
-            // Aeron Cluster handles its own bootstrap via AeronBackup.restore()
+            // Check consensus mode FIRST to determine if bootstrap is needed
             String consensusMode = System.getProperty("consensus.mode", "leader");
             boolean isAeronMode = "aeron".equalsIgnoreCase(consensusMode);
             
+            // Declare variables for bootstrap logic (needed for EpochLeaderEngine mode)
+            List<String> peers = new java.util.ArrayList<>();
+            int standbyPort = port + 1;
+            
+            // BOOTSTRAP: Only needed for EpochLeaderEngine, NOT for Aeron Cluster
+            // ===========================================================================
             if (isAeronMode) {
-                // Aeron Cluster handles bootstrap internally via AeronBackup
-                // Force PRIMARY mode - Aeron will bootstrap if needed via its own mechanism
-                System.out.println("✈️  AERON MODE: Skipping ValidatorBootstrap (Aeron Cluster handles bootstrap)");
+                // ✈️ AERON MODE: Skip ValidatorBootstrap entirely
+                // Aeron Cluster handles its own bootstrap via AeronBackup.restore()
+                // and its own membership via Raft consensus
+                System.out.println("✈️  AERON MODE: Skipping ValidatorBootstrap (Aeron Cluster handles bootstrap & membership)");
                 detectedMode = BootstrapMode.PRIMARY;
-            } else if ("auto".equalsIgnoreCase(bootstrapMode)) {
-                // Check if we have a bootstrap primary configured
-                boolean hasBootstrapPrimary = this.bootstrapPrimaryHost != null && !this.bootstrapPrimaryHost.isEmpty();
+                bootstrap = null; // Don't initialize bootstrap for Aeron
+            } else {
+                // EpochLeaderEngine mode: Initialize bootstrap
+                String peersConfig = System.getProperty("consensus.peers", "");
+                String bootstrapMode = System.getProperty("bootstrap.mode", "auto");  // auto, genesis, standby, primary
+                this.bootstrapPrimaryHost = System.getProperty("bootstrap.primary.host", "");
+                this.bootstrapPrimaryPort = Integer.parseInt(System.getProperty("bootstrap.primary.port", "8001"));
+                standbyPort = port + 1;  // Standby port = HTTP port + 1
                 
-                if (hasBootstrapPrimary) {
-                    // If bootstrap primary is configured, try to reach it and use STANDBY mode
-                    String primaryUrl = "http://" + this.bootstrapPrimaryHost + ":8090";
-                    try {
-                        java.net.URL url = new java.net.URL(primaryUrl + "/health");
-                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                        conn.setRequestMethod("GET");
-                        conn.setConnectTimeout(3000);
-                        conn.setReadTimeout(3000);
-                        
-                        int responseCode = conn.getResponseCode();
-                        if (responseCode == 200) {
-                            System.out.println("🔍 AUTO MODE → STANDBY (bootstrap primary reachable)");
-                            System.out.println("   Primary: " + primaryUrl);
-                            detectedMode = BootstrapMode.STANDBY;
-                        } else {
-                            System.out.println("🔍 AUTO MODE → GENESIS (bootstrap primary not healthy)");
+                bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
+                peers = parsePeerUrls(peersConfig);
+                
+                if ("auto".equalsIgnoreCase(bootstrapMode)) {
+                    // Check if we have a bootstrap primary configured
+                    boolean hasBootstrapPrimary = this.bootstrapPrimaryHost != null && !this.bootstrapPrimaryHost.isEmpty();
+                    
+                    if (hasBootstrapPrimary) {
+                        // If bootstrap primary is configured, try to reach it and use STANDBY mode
+                        String primaryUrl = "http://" + this.bootstrapPrimaryHost + ":8090";
+                        try {
+                            java.net.URL url = new java.net.URL(primaryUrl + "/health");
+                            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                            conn.setRequestMethod("GET");
+                            conn.setConnectTimeout(3000);
+                            conn.setReadTimeout(3000);
+                            
+                            int responseCode = conn.getResponseCode();
+                            if (responseCode == 200) {
+                                System.out.println("🔍 AUTO MODE → STANDBY (bootstrap primary reachable)");
+                                System.out.println("   Primary: " + primaryUrl);
+                                detectedMode = BootstrapMode.STANDBY;
+                            } else {
+                                System.out.println("🔍 AUTO MODE → GENESIS (bootstrap primary not healthy)");
+                                detectedMode = BootstrapMode.GENESIS;
+                            }
+                        } catch (Exception e) {
+                            System.out.println("🔍 AUTO MODE → GENESIS (cannot reach bootstrap primary: " + e.getMessage() + ")");
                             detectedMode = BootstrapMode.GENESIS;
                         }
-                    } catch (Exception e) {
-                        System.out.println("🔍 AUTO MODE → GENESIS (cannot reach bootstrap primary: " + e.getMessage() + ")");
-                        detectedMode = BootstrapMode.GENESIS;
+                    } else {
+                        // Fall back to peer-based detection
+                        detectedMode = ValidatorBootstrap.detectMode(fileStore, nodeStore, peers);
+                        System.out.println("🔍 AUTO MODE → " + detectedMode);
                     }
                 } else {
-                    // Fall back to peer-based detection
-                    detectedMode = ValidatorBootstrap.detectMode(fileStore, nodeStore, peers);
-                    System.out.println("🔍 AUTO MODE → " + detectedMode);
+                    detectedMode = BootstrapMode.valueOf(bootstrapMode.toUpperCase());
+                    System.out.println("📌 EXPLICIT MODE → " + detectedMode);
                 }
-            } else {
-                detectedMode = BootstrapMode.valueOf(bootstrapMode.toUpperCase());
-                System.out.println("📌 EXPLICIT MODE → " + detectedMode);
             }
             
-            if (detectedMode == BootstrapMode.STANDBY) {
-                // STANDBY MODE: Bootstrap from existing validator
-                
-                // Determine which peer to bootstrap from
-                String primaryHost = bootstrapPrimaryHost;
-                int primaryPort = bootstrapPrimaryPort;
-                
-                if (primaryHost.isEmpty() && !peers.isEmpty()) {
-                    // Use first peer as primary
-                    String firstPeer = peers.get(0);
-                    // Parse URL (e.g., "http://validator-1:8090")
-                    primaryHost = firstPeer.replace("http://", "").replace("https://", "").split(":")[0];
-                    primaryPort = standbyPort;  // Assume same standby port offset
-                    System.out.println("🔍 Using first peer as primary: " + primaryHost + ":" + primaryPort);
-                }
-                
-                if (primaryHost.isEmpty()) {
-                    throw new IOException("STANDBY mode requires bootstrap.primary.host or consensus.peers");
-                }
-                
-                // Bootstrap from primary (this will block until initial sync, then schedule periodic sync)
-                bootstrap.bootstrapFromPrimary(primaryHost, primaryPort, () -> {
-                    System.out.println("🎖️  PROMOTED TO PRIMARY - starting consensus...");
-                    try {
-                        startConsensusPrimary();
-                    } catch (Exception e) {
-                        System.err.println("❌ Failed to start consensus after promotion: " + e.getMessage());
-                        e.printStackTrace();
+            if (!isAeronMode) {
+                // Only run bootstrap logic for EpochLeaderEngine mode
+                if (detectedMode == BootstrapMode.STANDBY) {
+                    // STANDBY MODE: Bootstrap from existing validator
+                    
+                    // Determine which peer to bootstrap from
+                    String primaryHost = bootstrapPrimaryHost;
+                    int primaryPort = bootstrapPrimaryPort;
+                    
+                    if (primaryHost.isEmpty() && !peers.isEmpty()) {
+                        // Use first peer as primary
+                        String firstPeer = peers.get(0);
+                        // Parse URL (e.g., "http://validator-1:8090")
+                        primaryHost = firstPeer.replace("http://", "").replace("https://", "").split(":")[0];
+                        primaryPort = standbyPort;  // Assume same standby port offset
+                        System.out.println("🔍 Using first peer as primary: " + primaryHost + ":" + primaryPort);
                     }
-                });
-                
-            } else if (detectedMode == BootstrapMode.GENESIS) {
-                // GENESIS MODE: Create deterministic genesis state
-                System.out.println("🌍 GENESIS MODE: Creating network genesis state");
-                initializeGenesisContent();
-                
+                    
+                    if (primaryHost.isEmpty()) {
+                        throw new IOException("STANDBY mode requires bootstrap.primary.host or consensus.peers");
+                    }
+                    
+                    // Bootstrap from primary (this will block until initial sync, then schedule periodic sync)
+                    bootstrap.bootstrapFromPrimary(primaryHost, primaryPort, () -> {
+                        System.out.println("🎖️  PROMOTED TO PRIMARY - starting consensus...");
+                        try {
+                            startConsensusPrimary();
+                        } catch (Exception e) {
+                            System.err.println("❌ Failed to start consensus after promotion: " + e.getMessage());
+                            e.printStackTrace();
+                        }
+                    });
+                    
+                } else if (detectedMode == BootstrapMode.GENESIS) {
+                    // GENESIS MODE: Create deterministic genesis state
+                    System.out.println("🌍 GENESIS MODE: Creating network genesis state");
+                    initializeGenesisContent();
+                    
+                } else {
+                    // PRIMARY MODE: Already has data, just init genesis if needed
+                    initializeGenesisContent();
+                }
             } else {
-                // PRIMARY MODE: Already has data, just init genesis if needed
+                // Aeron mode: Just initialize genesis content (if needed)
                 initializeGenesisContent();
             }
             
@@ -254,7 +279,14 @@ public class GlobalStoreServer {
         // CRITICAL: Skip this if we're in STANDBY mode (bootstrap will initialize via callback)
         String consensusEnabled = System.getProperty("consensus.enabled", "false");
         String consensusMode = System.getProperty("consensus.mode", "leader"); // leader, dag, blockchain, or aeron
-        String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
+        // Get self URL from system property, or resolve localhost to IP
+        String selfUrlConfig = System.getProperty("consensus.self.url");
+        String selfUrl;
+        if (selfUrlConfig != null && !selfUrlConfig.isEmpty()) {
+            selfUrl = selfUrlConfig; // Use configured URL (can be ngrok/Ethos URL, IP, or hostname)
+        } else {
+            selfUrl = resolveUrlToIP("http://localhost:" + port); // Default: resolve to IP
+        }
         String peersConfig = System.getProperty("consensus.peers", "");
         String genesisNode = System.getProperty("consensus.genesis.node", "");  // Boot node for genesis sync
         
@@ -318,11 +350,28 @@ public class GlobalStoreServer {
                 // Get node ID from system property (default: 0)
                 int nodeId = Integer.parseInt(System.getProperty("aeron.cluster.nodeId", "0"));
                 
-                // Parse hostnames (comma-separated)
+                // 🌐 DYNAMIC CLUSTER SIZE: Start with just self, discover peers organically
+                // This allows single-node startup (quorum = 1) and dynamic peer discovery
                 String hostnamesConfig = System.getProperty("aeron.cluster.hostnames", "");
                 List<String> hostnamesList;
-                if (hostnamesConfig.isEmpty()) {
-                    // Derive from peer URLs if not explicitly set
+                
+                // Check if cluster state already exists (discover existing cluster members)
+                // Note: clusterBaseDir is created later, but we check for existing cluster state here
+                File clusterStateCheckDir = new File(storeDirectory, "aeron-cluster-node-" + nodeId);
+                File clusterDir = new File(clusterStateCheckDir, "cluster");
+                boolean hasExistingCluster = clusterDir.exists() && clusterDir.listFiles() != null && clusterDir.listFiles().length > 0;
+                
+                System.out.println("🔍 DEBUG: Cluster state check:");
+                System.out.println("   - Cluster dir exists: " + clusterDir.exists());
+                System.out.println("   - Cluster dir path: " + clusterDir.getAbsolutePath());
+                if (clusterDir.exists()) {
+                    System.out.println("   - Cluster dir files: " + (clusterDir.listFiles() != null ? clusterDir.listFiles().length : "null"));
+                }
+                System.out.println("   - hasExistingCluster: " + hasExistingCluster);
+                
+                if (hasExistingCluster) {
+                    // Existing cluster: Use self + discovered peers (cluster state will have member info)
+                    // Include all known peers to join existing cluster
                     hostnamesList = new java.util.ArrayList<>();
                     hostnamesList.add(extractHostname(selfUrl));
                     for (String peerUrl : peerUrls) {
@@ -331,8 +380,26 @@ public class GlobalStoreServer {
                             hostnamesList.add(hostname);
                         }
                     }
+                    // If hostnames were explicitly configured, use those instead (they may include more nodes)
+                    if (!hostnamesConfig.isEmpty()) {
+                        hostnamesList = new java.util.ArrayList<>(Arrays.asList(hostnamesConfig.split(",")));
+                    }
+                    System.out.println("🌐 Existing cluster detected - will join with " + hostnamesList.size() + " members");
                 } else {
-                    hostnamesList = Arrays.asList(hostnamesConfig.split(","));
+                    // 🛡️ FRESH START: Use all configured hostnames (needed for correct nodeId indexing)
+                    // Even though we start with just self, we need the full hostnames list for Aeron Cluster
+                    // to correctly map nodeId to hostname
+                    if (!hostnamesConfig.isEmpty()) {
+                        hostnamesList = new java.util.ArrayList<>(Arrays.asList(hostnamesConfig.split(",")));
+                        System.out.println("🌐 Fresh cluster start - using configured hostnames (" + hostnamesList.size() + " members)");
+                        System.out.println("   → Starting with self only (quorum = 1), peers will join dynamically");
+                    } else {
+                        // Fallback: if no hostnames configured, use just self
+                        hostnamesList = new java.util.ArrayList<>();
+                        hostnamesList.add(extractHostname(selfUrl));
+                        System.out.println("🌐 Fresh cluster start - starting with self only (quorum = 1)");
+                        System.out.println("   → Peers can join dynamically as they come online");
+                    }
                 }
                 
                 // Create Aeron Consensus Engine
@@ -349,6 +416,19 @@ public class GlobalStoreServer {
                 File clusterBaseDir = new File(storeDirectory, "aeron-cluster-node-" + nodeId);
                 clusterBaseDir.mkdirs();
                 
+                // Build node ID to URL mapping for leader lookup
+                java.util.Map<Integer, String> nodeIdToUrl = new java.util.HashMap<>();
+                // Build sorted list of all URLs (self + peers)
+                java.util.List<String> allUrls = new java.util.ArrayList<>();
+                allUrls.add(selfUrl);
+                allUrls.addAll(peerUrls);
+                java.util.Collections.sort(allUrls);
+                // Map node IDs (0-based) to URLs
+                for (int i = 0; i < allUrls.size(); i++) {
+                    nodeIdToUrl.put(i, allUrls.get(i));
+                }
+                aeronEngine.setNodeIdMapping(nodeIdToUrl);
+                
                 // Launch Aeron Cluster
                 aeronClusterLauncher = new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher(
                     nodeId, hostnamesList, clusterBaseDir, aeronEngine
@@ -360,7 +440,8 @@ public class GlobalStoreServer {
                     throw new IOException("Failed to launch Aeron Cluster", e);
                 }
                 
-                // Wire Aeron engine to HTTP server context (for API endpoints)
+                // Wire Aeron engine to HTTP server context FIRST (before registerWithPeers)
+                // This allows registerWithPeers to detect Aeron mode and skip peer registration
                 httpServer.setEpochLeaderEngine(null); // Clear epoch leader engine
                 httpServer.setAeronConsensusEngine(aeronEngine);
                 
@@ -372,9 +453,14 @@ public class GlobalStoreServer {
                 System.out.println("   - Current leader: " + aeronEngine.getCurrentLeader());
                 System.out.println("   - Ethereum epoch: " + aeronEngine.getCurrentEthereumEpoch());
                 
-                // Register with peer validators
+                // ✈️ AERON MODE: Skip HTTP peer registration
+                // Aeron Cluster handles membership via Raft consensus - HTTP registration is legacy
+                // Only register self for /v1/peers API visibility (Aeron membership is source of truth)
+                // Note: registerWithPeers will detect aeronConsensusEngine and skip peer registration
                 String validatorId = wallet.getWalletAddress();
-                httpServer.registerWithPeers(validatorId, peerUrls);
+                // Pass empty list - registerWithPeers will detect Aeron and skip peer registration
+                httpServer.registerWithPeers(validatorId, java.util.Collections.emptyList());
+                System.out.println("   - Self registered: " + validatorId + " (Aeron Cluster handles peer membership via Raft)");
                 
             } else {
                 // Unknown consensus mode
@@ -410,11 +496,11 @@ public class GlobalStoreServer {
         //   - WriteProposed(address indexed wallet, bytes32 indexed writeId, uint256 payment)
         //   - WriteFinalized(bytes32 indexed writeId, bool approved)
         // 
-        // For now, we use the /v1/test-write API with mock wallet signatures.
+        // Use the /v1/propose-write API for signed write transactions.
         System.out.println();
         System.out.println("📝 Smart Contract Listener: NOT IMPLEMENTED");
         System.out.println("   Future: Listen to OakNetwork.sol events");
-        System.out.println("   Current: Use /v1/test-write API for testing");
+        System.out.println("   Current: Use /v1/propose-write API for signed write transactions");
         System.out.println("   Write Pattern: Wallet-based storage at /oak-chain/content/<address>/");
         
         running = true;
@@ -700,7 +786,14 @@ public class GlobalStoreServer {
         
         String consensusEnabled = System.getProperty("consensus.enabled", "false");
         String consensusMode = System.getProperty("consensus.mode", "leader");
-        String selfUrl = System.getProperty("consensus.self.url", "http://localhost:" + port);
+        // Get self URL from system property, or resolve localhost to IP
+        String selfUrlConfig = System.getProperty("consensus.self.url");
+        String selfUrl;
+        if (selfUrlConfig != null && !selfUrlConfig.isEmpty()) {
+            selfUrl = selfUrlConfig; // Use configured URL (can be ngrok/Ethos URL, IP, or hostname)
+        } else {
+            selfUrl = resolveUrlToIP("http://localhost:" + port); // Default: resolve to IP
+        }
         String peersConfig = System.getProperty("consensus.peers", "");
         
         if (!"true".equalsIgnoreCase(consensusEnabled)) {
@@ -752,12 +845,15 @@ public class GlobalStoreServer {
         }
         
         // Start StandbyServerSync (now a primary, serve other standbys)
-        if (bootstrap != null) {
+        // ✈️ AERON MODE: Skip StandbyServerSync - Aeron Cluster handles replication
+        if (bootstrap != null && !"aeron".equalsIgnoreCase(consensusMode)) {
             try {
                 bootstrap.startStandbyServer();
             } catch (Exception e) {
                 System.err.println("⚠️  Failed to start StandbyServerSync: " + e.getMessage());
             }
+        } else if ("aeron".equalsIgnoreCase(consensusMode)) {
+            System.out.println("✈️  AERON MODE: Skipping StandbyServerSync (Aeron Cluster handles replication)");
         }
         
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -838,8 +934,55 @@ public class GlobalStoreServer {
     }
     
     /**
-     * Parse peer URLs from comma-separated string.
-     * Format: "http://validator1:8090,http://validator2:8090,http://validator3:8090"
+     * Resolve hostname-based URL to IP-based URL for reliable networking.
+     * 
+     * <p>If the URL contains a hostname (not an IP), resolves it to an IP address.
+     * This ensures reliable networking in Docker environments where DNS can be unreliable.
+     * 
+     * <p>For production deployments (ngrok, Adobe Ethos), set `consensus.self.url` 
+     * system property to override this behavior.
+     * 
+     * @param url URL with hostname (e.g., "http://localhost:8090" or "http://validator-1:8090")
+     * @return URL with IP address (e.g., "http://127.0.0.1:8090" or "http://172.18.0.2:8090")
+     */
+    private String resolveUrlToIP(String url) {
+        try {
+            java.net.URL parsedUrl = new java.net.URL(url);
+            String hostname = parsedUrl.getHost();
+            int port = parsedUrl.getPort();
+            String protocol = parsedUrl.getProtocol();
+            String path = parsedUrl.getPath();
+            
+            // If already an IP address, return as-is
+            if (hostname.matches("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) {
+                return url;
+            }
+            
+            // Resolve hostname to IP
+            try {
+                String ip = java.net.InetAddress.getByName(hostname).getHostAddress();
+                String ipUrl = String.format("%s://%s%s%s", 
+                    protocol, 
+                    ip, 
+                    port != -1 ? ":" + port : "", 
+                    path != null ? path : "");
+                return ipUrl;
+            } catch (java.net.UnknownHostException e) {
+                // If resolution fails, return original URL (may be ngrok/Ethos URL)
+                System.out.println("⚠️  Could not resolve hostname " + hostname + " to IP, using original URL");
+                return url;
+            }
+        } catch (Exception e) {
+            System.out.println("⚠️  Failed to parse URL " + url + ": " + e.getMessage() + ", using original");
+            return url;
+        }
+    }
+    
+    /**
+     * Parse comma-separated peer URLs from configuration string.
+     * 
+     * <p>Peer URLs are resolved to IPs for reliable networking, unless they're
+     * explicitly configured as public URLs (ngrok/Ethos).
      */
     private List<String> parsePeerUrls(String peersConfig) {
         List<String> peers = new ArrayList<>();
@@ -848,7 +991,10 @@ public class GlobalStoreServer {
             for (String url : urls) {
                 String trimmed = url.trim();
                 if (!trimmed.isEmpty()) {
-                    peers.add(trimmed);
+                    // Resolve hostname to IP for reliable networking
+                    // Note: If peer URL is a public URL (ngrok/Ethos), it will be preserved as-is
+                    String resolvedUrl = resolveUrlToIP(trimmed);
+                    peers.add(resolvedUrl);
                 }
             }
         }

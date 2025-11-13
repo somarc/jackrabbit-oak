@@ -22,6 +22,8 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.jackrabbit.oak.segment.spi.persistence.ManifestFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -32,6 +34,8 @@ import java.util.Properties;
  * HTTP-based manifest file for read-only access.
  */
 public class HttpManifestFile implements ManifestFile {
+    
+    private static final Logger log = LoggerFactory.getLogger(HttpManifestFile.class);
     
     private final String baseUrl;
     private final HttpClientPool httpClientPool;
@@ -45,13 +49,19 @@ public class HttpManifestFile implements ManifestFile {
     
     @Override
     public boolean exists() {
+        String manifestUrl = baseUrl + "/manifest";
+        log.debug("🔍 Checking if manifest exists at: {}", manifestUrl);
         try {
             org.apache.http.client.methods.HttpHead request = 
-                new org.apache.http.client.methods.HttpHead(baseUrl + "/manifest");
+                new org.apache.http.client.methods.HttpHead(manifestUrl);
             try (CloseableHttpResponse response = httpClient.execute(request)) {
-                return response.getStatusLine().getStatusCode() == HttpStatus.SC_OK;
+                int statusCode = response.getStatusLine().getStatusCode();
+                boolean exists = (statusCode == HttpStatus.SC_OK);
+                log.debug("🔍 Manifest HEAD request: {} -> {} (exists: {})", manifestUrl, statusCode, exists);
+                return exists;
             }
         } catch (IOException e) {
+            log.warn("⚠️ Failed to check manifest existence at {}: {}", manifestUrl, e.getMessage());
             return false;
         }
     }

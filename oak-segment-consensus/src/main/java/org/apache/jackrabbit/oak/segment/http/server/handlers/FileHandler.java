@@ -52,6 +52,24 @@ public class FileHandler {
     }
     
     /**
+     * Handle HEAD request for a file (returns headers only, no body).
+     */
+    public void handleFileHead(HttpServletResponse response, String filename, String contentType) throws IOException {
+        Path filePath = storeDirectory.resolve(filename);
+        
+        if (!Files.exists(filePath)) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "File not found: " + filename);
+            return;
+        }
+        
+        long fileSize = Files.size(filePath);
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType(contentType);
+        response.setContentLengthLong(fileSize);
+        // HEAD request - don't write body
+    }
+    
+    /**
      * Handle serving a file from the segment store directory.
      */
     public void handleFile(HttpServletRequest request, HttpServletResponse response, 

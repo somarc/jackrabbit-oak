@@ -34,8 +34,8 @@ import java.io.IOException;
 import java.util.stream.Collectors;
 
 /**
- * Handler for consensus API endpoints (`/v1/propose`, `/v1/vote`, `/v1/test-write`).
- * This class encapsulates the logic for handling write proposals, votes, and test writes
+ * Handler for consensus API endpoints (`/v1/propose`, `/v1/vote`, `/v1/propose-write`, `/v1/propose-delete`).
+ * This class encapsulates the logic for handling write proposals, votes, and signed write/delete transactions
  * in the consensus network.
  */
 public class ConsensusApiHandler {
@@ -65,15 +65,20 @@ public class ConsensusApiHandler {
     }
     
     /**
-     * Handle POST /v1/test-write - Write endpoint with wallet-based storage
+     * Handle POST /v1/propose-write - Signed write transaction endpoint
+     * 
+     * <p>Accepts signed write transactions from Sling authors. The transaction is signed
+     * with the Sling author's Ethereum wallet and verified before processing.</p>
      * 
      * Parameters:
      *   - wallet: Ethereum address (e.g., 0x1234...)
-     *   - signature: Message signature (mock for now, real Web3j verification later)
+     *   - signature: Signed transaction (walletAddress:timestamp:contentType:message)
      *   - message: Content to write
      *   - contentType: Type of content (default: "page")
+     *   - clientId: Client identifier (from X-Client-Id header or parameter)
+     *   - timestamp: Transaction timestamp
      */
-    public void handleTestWrite(HttpServletRequest request, HttpServletResponse response) throws IOException {
+    public void handleProposeWrite(HttpServletRequest request, HttpServletResponse response) throws IOException {
         // Check if any consensus engine is configured
         if (context.epochLeaderEngine == null && context.aeronConsensusEngine == null) {
             response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Consensus engine not configured");
@@ -100,7 +105,7 @@ public class ConsensusApiHandler {
                     try {
                         // Build the full URL with query parameters
                         StringBuilder targetUrl = new StringBuilder(proxyTarget);
-                        targetUrl.append("/v1/test-write");
+                        targetUrl.append("/v1/propose-write");
                         String queryString = request.getQueryString();
                         if (queryString != null && !queryString.isEmpty()) {
                             targetUrl.append("?").append(queryString);
@@ -454,6 +459,130 @@ public class ConsensusApiHandler {
     }
     
     /**
+     * Handle POST /v1/propose-delete - Delete proposal endpoint
+     * 
+     * <p>Allows Sling authors to propose deletion of content they own.
+     * Ownership is verified by checking that the content path is under
+     * /oak-chain/content/{wallet}/ and that the wallet matches the registered client.</p>
+     * 
+     * <p>Parameters:
+     *   - wallet: Ethereum wallet address (must match registered client)
+     *   - signature: Signed message (wallet:deleteId:contentPath)
+     *   - contentPath: Path to content to delete (must be under /oak-chain/content/{wallet}/)
+     *   - clientId: Client identifier (from X-Client-Id header or parameter)</p>
+     */
+    public void handleDeleteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        
+        try {
+            // Read parameters
+            String wallet = request.getParameter("wallet");
+            String signature = request.getParameter("signature");
+            String contentPath = request.getParameter("contentPath");
+            String clientId = request.getHeader("X-Client-Id");
+            if (clientId == null || clientId.isEmpty()) {
+                clientId = request.getParameter("clientId");
+            }
+            
+            // Fallback to remote address if no client ID provided
+            if (clientId == null || clientId.isEmpty()) {
+                String remoteAddr = request.getRemoteAddr();
+                int remotePort = request.getRemotePort();
+                clientId = remoteAddr + ":" + remotePort;
+            }
+            
+            // Validate required parameters
+            if (wallet == null || wallet.isEmpty()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Missing wallet parameter");
+                return;
+            }
+            if (signature == null || signature.isEmpty()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Missing signature parameter");
+                return;
+            }
+            if (contentPath == null || contentPath.isEmpty()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Missing contentPath parameter");
+                return;
+            }
+            
+            // Validate Ethereum address format
+            if (!wallet.startsWith("0x") || wallet.length() < 10) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid Ethereum address format");
+                return;
+            }
+            
+            // PATH ENFORCEMENT: Verify client is registered and wallet matches
+            String normalizedWallet = wallet.toLowerCase();
+            org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration clientReg = 
+                context.registeredClients.get(clientId);
+            
+            if (clientReg == null) {
+                log.warn("🚫 Delete proposal rejected: Client {} not registered", clientId);
+                response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                    "Client not registered. Please register via /v1/register-client before proposing deletes.");
+                return;
+            }
+            
+            // Verify wallet matches registered client's wallet
+            if (clientReg.walletAddress != null && !clientReg.walletAddress.isEmpty()) {
+                String registeredWallet = clientReg.walletAddress.toLowerCase();
+                if (!normalizedWallet.equals(registeredWallet)) {
+                    log.warn("🚫 Delete proposal rejected: Wallet mismatch for client {}", clientId);
+                    response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                        String.format("Wallet mismatch: Client %s registered with wallet %s, but proposal uses %s",
+                                     clientId, registeredWallet, normalizedWallet));
+                    return;
+                }
+            }
+            
+            // Verify path ownership: must be under /oak-chain/content/{wallet}/
+            String expectedPrefix = "/oak-chain/content/" + normalizedWallet + "/";
+            if (!contentPath.toLowerCase().startsWith(expectedPrefix)) {
+                log.warn("🚫 Delete proposal rejected: Path ownership violation");
+                log.warn("   Content path: {}", contentPath);
+                log.warn("   Expected prefix: {}", expectedPrefix);
+                response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                    String.format("Path ownership violation: Content at %s does not belong to wallet %s. " +
+                                 "Only content under /oak-chain/content/%s/ can be deleted.",
+                                 contentPath, wallet, wallet));
+                return;
+            }
+            
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("🗑️  DELETE PROPOSAL RECEIVED");
+            log.info("   Client: {} (registered)", clientId);
+            log.info("   Wallet: {} (verified)", wallet);
+            log.info("   Content Path: {}", contentPath);
+            log.info("   Signature: {}...{}", signature.substring(0, Math.min(10, signature.length())), 
+                     signature.length() > 10 ? signature.substring(signature.length() - 4) : "");
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            
+            // TODO: Verify signature matches wallet address
+            // TODO: Check if content actually exists at the path
+            // TODO: Verify content was created by this wallet (check node properties)
+            // TODO: Propose delete to Aeron Cluster consensus
+            
+            // For now, return success (delete proposal accepted, will be processed)
+            // In future: This will create a delete proposal and submit to Aeron Cluster
+            String result = String.format(
+                "{\"success\":true,\"message\":\"Delete proposal accepted\",\"contentPath\":\"%s\",\"wallet\":\"%s\",\"clientId\":\"%s\"}",
+                contentPath.replace("\"", "\\\""),
+                wallet.replace("\"", "\\\""),
+                clientId.replace("\"", "\\\"")
+            );
+            
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(result);
+            
+            log.info("✅ Delete proposal accepted (implementation pending)");
+            
+        } catch (Exception e) {
+            log.error("❌ Delete proposal failed", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Delete proposal failed: " + e.getMessage());
+        }
+    }
+    
+    /**
      * Parse a WriteProposal from JSON.
      */
     private WriteProposal parseProposal(String json) {
@@ -540,11 +669,18 @@ public class ConsensusApiHandler {
         
         // Check for Aeron Cluster consensus first (newest, preferred)
         if (context.aeronConsensusEngine != null) {
-            // Aeron Cluster (Raft-based consensus)
+            // ✈️ AERON NATIVE: Use Aeron's native cluster state APIs
             status.put("consensusType", "aeron-cluster");
             status.put("currentRole", context.aeronConsensusEngine.getCurrentRole().name());
             status.put("isLeader", context.aeronConsensusEngine.isLeader());
-            status.put("currentLeader", context.aeronConsensusEngine.getCurrentLeader());
+            
+            // ✈️ AERON NATIVE: Get leader from native cluster state (no HTTP API calls)
+            String currentLeader = context.aeronConsensusEngine.getCurrentLeader();
+            if (currentLeader != null) {
+                status.put("currentLeader", currentLeader);
+            }
+            // If currentLeader is null, omit the field (may be during election)
+
             status.put("currentEpoch", context.aeronConsensusEngine.getCurrentEpoch());
             status.put("currentTerm", context.aeronConsensusEngine.getCurrentTerm());
             status.put("reachableValidators", context.aeronConsensusEngine.getReachableValidatorCount());
@@ -571,13 +707,18 @@ public class ConsensusApiHandler {
         }
         
         // Convert to JSON manually (no Gson dependency)
+        // CRITICAL: Omit null values - null means discovery failed, not that there's no leader
         StringBuilder json = new StringBuilder("{");
         boolean first = true;
         for (java.util.Map.Entry<String, Object> entry : status.entrySet()) {
+            Object value = entry.getValue();
+            // Skip null values - they indicate discovery failure, not absence of data
+            if (value == null) {
+                continue;
+            }
             if (!first) json.append(",");
             first = false;
             json.append("\"").append(entry.getKey()).append("\":");
-            Object value = entry.getValue();
             if (value instanceof String) {
                 json.append("\"").append(FormatUtils.escapeJson((String) value)).append("\"");
             } else if (value instanceof java.util.List) {
@@ -599,6 +740,109 @@ public class ConsensusApiHandler {
         }
         json.append("}");
         response.getWriter().write(json.toString());
+    }
+    
+    /**
+     * ✈️ AERON CLUSTER SOURCE OF TRUTH: Discover leader by querying peers' /v1/aeron/cluster-state.
+     * 
+     * This method queries peers' Aeron Cluster state API directly, which reflects Aeron's
+     * internal Raft consensus state. This is the authoritative source for leader information.
+     * 
+     * @return Leader URL if found, null otherwise
+     */
+    private String discoverLeaderFromPeerClusterState() {
+        if (context.aeronConsensusEngine == null) {
+            return null;
+        }
+        
+        // Get all peer URLs (including self)
+        java.util.List<String> allUrls = new java.util.ArrayList<>();
+        allUrls.add(context.selfUrl);
+        allUrls.addAll(context.aeronConsensusEngine.getAllFollowers());
+        
+        log.info("🔍 Querying {} peers' Aeron Cluster state to find leader", allUrls.size());
+        
+        for (String url : allUrls) {
+            try {
+                // Resolve hostname to IP for reliable networking
+                String queryUrl = resolveUrlToIP(url);
+                log.debug("   Querying: {}", queryUrl + "/v1/aeron/cluster-state");
+                java.net.URL apiUrl = new java.net.URL(queryUrl + "/v1/aeron/cluster-state");
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(2000);
+                conn.setReadTimeout(3000);
+                
+                int responseCode = conn.getResponseCode();
+                log.debug("   Response code from {}: {}", url, responseCode);
+                if (responseCode == 200) {
+                    java.io.BufferedReader reader = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(conn.getInputStream())
+                    );
+                    String response = reader.lines().collect(java.util.stream.Collectors.joining());
+                    reader.close();
+                    
+                    // ✈️ AERON CLUSTER SOURCE OF TRUTH: Parse Aeron Cluster state JSON
+                    // Priority 1: Check top-level "isLeader":true (this node is the leader)
+                    if (response.contains("\"isLeader\":true")) {
+                        log.info("✅ Found leader (top-level isLeader:true): {}", url);
+                        return url;
+                    }
+                    
+                    // Priority 2: Check top-level "role":"LEADER"
+                    if (response.contains("\"role\":\"LEADER\"")) {
+                        log.info("✅ Found leader (top-level role:LEADER): {}", url);
+                        return url;
+                    }
+                    
+                    // Priority 3: Parse members array to find leader
+                    // Look for member with "role":"LEADER"
+                    int leaderRoleIndex = response.indexOf("\"role\":\"LEADER\"");
+                    if (leaderRoleIndex != -1) {
+                        // Find the URL field in the same member object (search backwards from role)
+                        int urlStart = response.lastIndexOf("\"url\":\"", leaderRoleIndex);
+                        if (urlStart != -1) {
+                            urlStart += 6; // Skip past "url":"
+                            int urlEnd = response.indexOf("\"", urlStart);
+                            if (urlEnd != -1) {
+                                String leaderUrl = response.substring(urlStart, urlEnd);
+                                log.info("✅ Found leader in members array: {}", leaderUrl);
+                                return leaderUrl;
+                            }
+                        }
+                    }
+                } else {
+                    log.debug("   Non-200 response from {}: {}", url, responseCode);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to query {} for cluster state: {}", url, e.getMessage());
+            }
+        }
+        
+        log.warn("⚠️  Could not discover leader from any peer");
+        
+        return null;
+    }
+    
+    /**
+     * Resolve URL hostname to IP address for reliable networking.
+     */
+    private String resolveUrlToIP(String url) {
+        try {
+            java.net.URL urlObj = new java.net.URL(url);
+            String host = urlObj.getHost();
+            int port = urlObj.getPort() != -1 ? urlObj.getPort() : urlObj.getDefaultPort();
+            String protocol = urlObj.getProtocol();
+            
+            // Try to resolve hostname to IP
+            java.net.InetAddress addr = java.net.InetAddress.getByName(host);
+            String ip = addr.getHostAddress();
+            
+            return protocol + "://" + ip + ":" + port + urlObj.getPath();
+        } catch (Exception e) {
+            log.debug("Failed to resolve {} to IP, using original: {}", url, e.getMessage());
+            return url;
+        }
     }
     
     /**

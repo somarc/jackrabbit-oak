@@ -16,20 +16,19 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
-import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
-import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
-import org.apache.jackrabbit.oak.segment.http.server.model.WriteMetadata;
-import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.DashboardDataService;
-import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusState;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.net.URL;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Handler for UI rendering endpoints (dashboard, explorer, API browser).
@@ -37,8 +36,6 @@ import java.util.List;
  * <p>Extracted from SegmentHttpServer for better separation of concerns.</p>
  */
 public class DashboardHandler {
-    
-    private static final Logger log = LoggerFactory.getLogger(DashboardHandler.class);
     
     private final ServerContext context;
     private final DashboardDataService dataService;
@@ -54,533 +51,362 @@ public class DashboardHandler {
     public void handleDashboard(HttpServletResponse response) throws IOException {
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType("text/html; charset=UTF-8");
-        
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // BLOCKCHAIN CONSENSUS: API-Driven Dashboard Data Fetching
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // All dashboard data is fetched from the same sources as API endpoints:
-        // - FileStore stats: DashboardDataService.getFileStoreStats() (same as /health/deep)
-        // - Consensus state: DashboardDataService.getConsensusState() (same as /v1/consensus/status)
-        // - Recent segments: DashboardDataService.getRecentSegments() (same as /api/segments/recent)
-        // This ensures single source of truth and consistent data across dashboard and APIs.
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        
-        // Get FileStore statistics (same as /health/deep API)
+
+        Map<String, Object> clusterState = dataService.getAeronClusterState();
+        List<AeronConsensusEngine.LeadershipChange> leadershipHistory = dataService.getLeadershipHistory(10);
         DashboardDataService.FileStoreStats fileStoreStats = dataService.getFileStoreStats();
-        long storeSize = fileStoreStats.size;
-        int segmentCount = fileStoreStats.segmentCount;
-        
-        // Get recent segment writes (same as /api/segments/recent API)
-        List<String> recentWrites = dataService.getRecentSegments();
-        
-        // Get consensus state (same as /v1/consensus/status API)
-        ConsensusState consensusState = dataService.getConsensusState();
-        
+        int clientCount = context.registeredClients.size();
+
         StringBuilder html = new StringBuilder();
         html.append("<!DOCTYPE html>\n");
         html.append("<html>\n<head>\n");
         html.append("<meta charset='UTF-8'>\n");
         html.append("<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n");
         html.append("<title>🔗 Oak Segment Consensus - Global Store</title>\n");
-        html.append("<script src='https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js'></script>\n");
-        html.append("<script>mermaid.initialize({ startOnLoad: true, theme: 'dark' });</script>\n");
         html.append("<style>\n");
-        html.append("* { margin: 0; padding: 0; box-sizing: border-box; }\n");
-        html.append("body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; ");
-        html.append("background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; min-height: 100vh; padding: 20px; }\n");
-        html.append(".container { max-width: 1200px; margin: 0 auto; }\n");
-        html.append("header { text-align: center; padding: 40px 0; }\n");
-        html.append("h1 { font-size: 3em; margin-bottom: 10px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }\n");
-        html.append(".subtitle { font-size: 1.2em; opacity: 0.9; }\n");
-        html.append(".grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin: 30px 0; max-width: 1400px; }\n");
-        html.append(".card { background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); border-radius: 15px; ");
-        html.append("padding: 25px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); border: 1px solid rgba(255,255,255,0.2); }\n");
-        html.append(".card h2 { font-size: 1.5em; margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }\n");
-        html.append(".stat { font-size: 2.5em; font-weight: bold; margin: 10px 0; }\n");
-        html.append(".label { font-size: 0.9em; opacity: 0.8; text-transform: uppercase; letter-spacing: 1px; }\n");
-        html.append(".journal-entry { background: rgba(0,0,0,0.2); padding: 10px; margin: 8px 0; border-radius: 5px; ");
-        html.append("font-family: 'Courier New', monospace; font-size: 0.85em; word-break: break-all; }\n");
-        html.append(".pulse { animation: pulse 2s ease-in-out infinite; }\n");
-        html.append("@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }\n");
-        html.append(".status { display: inline-block; width: 12px; height: 12px; background: #4ade80; border-radius: 50%; ");
-        html.append("animation: pulse 2s ease-in-out infinite; margin-right: 8px; }\n");
-        html.append(".endpoints { display: grid; gap: 10px; margin-top: 15px; }\n");
-        html.append(".endpoint { background: rgba(0,0,0,0.2); padding: 10px; border-radius: 5px; font-size: 0.9em; }\n");
-        html.append(".endpoint code { background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 3px; }\n");
+        html.append("body { margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #020617; color: #e2e8f0; }\n");
+        html.append(".container { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }\n");
+        html.append("h1 { font-size: 2.6em; margin-bottom: 8px; }\n");
+        html.append(".subtitle { color: #94a3b8; margin-bottom: 32px; }\n");
+        html.append(".summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 32px; }\n");
+        html.append(".card { background: rgba(15,23,42,0.85); border: 1px solid rgba(148,163,184,0.15); border-radius: 12px; padding: 20px; }\n");
+        html.append(".card h2 { margin-top: 0; margin-bottom: 12px; font-size: 1.3em; }\n");
+        html.append(".card-label { font-size: 0.75em; letter-spacing: 0.08em; text-transform: uppercase; color: #94a3b8; margin-bottom: 8px; }\n");
+        html.append(".card-value { font-size: 1.7em; font-weight: 600; color: #f8fafc; word-break: break-word; }\n");
+        html.append(".card-caption { margin-top: 6px; font-size: 0.85em; color: #94a3b8; }\n");
+        html.append(".table-card table { width: 100%; border-collapse: collapse; margin-top: 4px; }\n");
+        html.append(".table-card th { text-align: left; padding: 12px; font-size: 0.75em; letter-spacing: 0.08em; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid rgba(148,163,184,0.2); }\n");
+        html.append(".table-card td { padding: 12px; border-bottom: 1px solid rgba(148,163,184,0.08); }\n");
+        html.append(".table-card tr:hover { background: rgba(148,163,184,0.08); }\n");
+        html.append(".badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; font-size: 0.75em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }\n");
+        html.append(".badge-leader { background: rgba(250,204,21,0.15); color: #facc15; }\n");
+        html.append(".badge-follower { background: rgba(59,130,246,0.15); color: #60a5fa; }\n");
+        html.append(".badge-self { background: rgba(52,211,153,0.18); color: #34d399; }\n");
+        html.append(".empty-state { padding: 32px; border-radius: 12px; border: 1px dashed rgba(148,163,184,0.25); background: rgba(15,23,42,0.6); color: #94a3b8; margin-top: 24px; }\n");
+        html.append(".api-links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }\n");
+        html.append(".api-links a { padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(148,163,184,0.2); color: #38bdf8; text-decoration: none; font-size: 0.85em; transition: background 0.2s, color 0.2s; }\n");
+        html.append(".api-links a:hover { background: rgba(56,189,248,0.15); color: #0ea5e9; }\n");
+        html.append(".action-card { text-align: center; padding: 40px 20px; }\n");
+        html.append(".action-card a { display: inline-block; padding: 15px 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 1.1em; box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); transition: transform 0.2s; }\n");
+        html.append(".action-card a:hover { transform: scale(1.05); }\n");
+        html.append(".client-list { margin-top: 12px; font-size: 0.85em; }\n");
+        html.append(".client-item { padding: 6px 0; color: #cbd5e1; }\n");
         html.append("</style>\n");
-        html.append("<script>\n");
-        html.append("// Auto-refresh every 10 seconds\n");
-        html.append("setTimeout(() => window.location.reload(), 10000);\n");
-        html.append("</script>\n");
         html.append("</head>\n<body>\n");
         html.append("<div class='container'>\n");
-        
-        // Header
-        html.append("<header>\n");
         html.append("<h1>🔗 Oak Segment Consensus</h1>\n");
         html.append("<div class='subtitle'>Global P2P Oak Repository</div>\n");
-        html.append("</header>\n");
-        
-        // Stats Grid
-        html.append("<div class='grid'>\n");
-        
-        // Status Card
-        html.append("<div class='card'>\n");
-        html.append("<h2><span class='status'></span>Server Status</h2>\n");
-        html.append("<div class='stat pulse'>LIVE</div>\n");
-        html.append("<div class='label'>HTTP Segment Transfer Active</div>\n");
-        html.append("</div>\n");
-        
-        // Store Size Card
-        html.append("<div class='card'>\n");
-        html.append("<h2>📦 Store Size</h2>\n");
-        html.append("<div class='stat'>").append(FormatUtils.formatBytes(storeSize)).append("</div>\n");
-        html.append("<div class='label'>").append(segmentCount).append(" Segments</div>\n");
-        html.append("</div>\n");
-        
-        // Validator Network Card
-        // BLOCKCHAIN CONSENSUS: Use consensus state from API (same as /v1/consensus/status)
-        int validatorCount = 1; // Self
-        String consensusType = "Single";
-        String myRole = "STANDALONE";
-        String roleColor = "#94a3b8"; // slate
-        String currentLeader = null;
-        
-        if (consensusState != null) {
-            // Use consensus state from API (single source of truth)
-            validatorCount = consensusState.totalValidators;
-            consensusType = consensusState.consensusType.equals("leader-based") ? "Leader-Based" : consensusState.consensusType;
-            myRole = consensusState.currentRole.toString();
-            currentLeader = consensusState.currentLeader;
-            
-            // Set role color based on role
-            if ("LEADER".equals(myRole)) {
-                roleColor = "#fbbf24"; // gold
-            } else if (myRole.contains("PROBATION")) {
-                roleColor = "#eab308"; // yellow (probation)
-            } else {
-                roleColor = "#3b82f6"; // blue
-            }
-        }
-        
-        html.append("<div class='card'>\n");
-        html.append("<h2>🗳️  Validator Network</h2>\n");
-        html.append("<div class='stat'>").append(validatorCount).append("</div>\n");
-        html.append("<div class='label'>").append(consensusType).append("</div>\n");
-        
-        // Leader mode: Show role prominently
-        // BLOCKCHAIN CONSENSUS: Use consensus state from API
-        // Show role for both leader-based and aeron-cluster consensus
-        if (consensusState != null && 
-            ("leader-based".equals(consensusState.consensusType) || "aeron-cluster".equals(consensusState.consensusType))) {
-            html.append("<div style='margin-top: 12px; padding: 10px; background: ").append(roleColor).append("; border-radius: 8px; text-align: center;'>\n");
-            html.append("<div style='font-size: 1.2em; font-weight: 700; color: #fff;'>");
-            if ("LEADER".equals(myRole)) {
-                html.append("👑 ").append(myRole).append(" 👑");
-            } else {
-                html.append("📡 ").append(myRole);
-            }
-            html.append("</div>\n");
+
+        if (clusterState == null) {
+            html.append("<div class='empty-state'>");
+            html.append("Aeron Cluster is not initialised yet. Check validator logs and ensure the consensus engine is running.");
             html.append("</div>\n");
             
-            // Show current leader if we're a follower
-            if (!"LEADER".equals(myRole) && currentLeader != null) {
-                String leaderName = currentLeader.contains("validator-") 
-                    ? currentLeader.substring(currentLeader.indexOf("validator-")).split(":")[0]
-                    : "unknown";
-                html.append("<div style='margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 0.8em; text-align: center;'>\n");
-                html.append("<div style='opacity: 0.8;'>Current Leader:</div>\n");
-                html.append("<div style='font-weight: 600; color: #fbbf24; margin-top: 4px;'>👑 ").append(leaderName).append("</div>\n");
-                html.append("</div>\n");
-            }
-            
-            // Leader rewards note
-            if ("LEADER".equals(myRole)) {
-                html.append("<div style='margin-top: 8px; padding: 8px; background: rgba(251,191,36,0.15); border-radius: 6px; font-size: 0.75em; border-left: 3px solid #fbbf24;'>\n");
-                html.append("<div style='font-weight: 600; margin-bottom: 4px;'>💰 Leader Rewards:</div>\n");
-                html.append("<div style='opacity: 0.9; line-height: 1.4;'>Earning all transaction fees during leadership term</div>\n");
-                html.append("</div>\n");
-            }
-        } else if (context.epochLeaderEngine != null) {
-            // Fallback to direct engine access (shouldn't happen if ConsensusStateService is set)
-            html.append("<div style='margin-top: 12px; padding: 10px; background: ").append(roleColor).append("; border-radius: 8px; text-align: center;'>\n");
-            html.append("<div style='font-size: 1.2em; font-weight: 700; color: #fff;'>");
-            if (context.epochLeaderEngine.isLeader()) {
-                html.append("👑 ").append(myRole).append(" 👑");
-            } else {
-                html.append("📡 ").append(myRole);
-            }
+            // Still show Oak stats and Connected Peers even if Aeron isn't initialized
+            html.append("<div class='summary-grid'>");
+            appendSummaryCard(html, "Store Size", FormatUtils.formatBytes(fileStoreStats.size), fileStoreStats.segmentCount + " segments");
+            appendSummaryCard(html, "Connected Peers", String.valueOf(clientCount), "AEM/Sling author instances");
             html.append("</div>\n");
-            html.append("</div>\n");
-        }
-        
-        // Show all validators in network (voting + non-voting)
-        // BLOCKCHAIN CONSENSUS: Use consensus state from API (same as /v1/peers API)
-        List<String> allValidators = new ArrayList<>();
-        List<String> nonVotingFollowers = new ArrayList<>();
-        
-        if (consensusState != null) {
-            // Use consensus state from API (single source of truth)
-            allValidators = consensusState.allValidators;
-            nonVotingFollowers = consensusState.nonVotingFollowers;
-        } else if (context.epochLeaderEngine != null) {
-            // Fallback to direct engine access (shouldn't happen if ConsensusStateService is set)
-            allValidators.add(context.selfUrl);
-            allValidators.addAll(context.epochLeaderEngine.getAllFollowers());
-            nonVotingFollowers = context.epochLeaderEngine.getNonVotingFollowers();
-        }
-        
-        if (!allValidators.isEmpty()) {
             
-            html.append("<div style='margin-top: 12px; font-size: 0.75em; opacity: 0.8;'>");
-            html.append("<div style='margin-bottom: 6px; font-weight: 600;'>Validator Network:</div>");
-            
-            for (String validatorUrl : allValidators) {
-                boolean isSelf = validatorUrl.equals(context.selfUrl);
-                String validatorName = validatorUrl.contains("validator-") 
-                    ? validatorUrl.substring(validatorUrl.indexOf("validator-")).split(":")[0]
-                    : validatorUrl;
-                
-                // Use same status logic as /v1/peers API
-                String statusEmoji = "🟢";
-                String statusLabel = "";
-                
-                if (!isSelf) {
-                    boolean isOnProbation = nonVotingFollowers.contains(validatorUrl);
-                    
-                    if (isOnProbation) {
-                        statusEmoji = "🟡";
-                        statusLabel = " <span style='font-size: 10px; background: rgba(234,179,8,0.2); color: #fbbf24; padding: 2px 6px; border-radius: 3px;'>PROBATION</span>";
+            // Connected Peers Card
+            html.append("<div class='card'>\n");
+            html.append("<h2>🌐 Connected Peers</h2>\n");
+            html.append("<div class='card-value'>").append(clientCount).append("</div>\n");
+            html.append("<div class='card-caption'>AEM/Sling author instances</div>\n");
+            if (!context.registeredClients.isEmpty()) {
+                html.append("<div class='client-list'>");
+                int shown = 0;
+                for (org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration reg : context.registeredClients.values()) {
+                    if (shown >= 5) {
+                        html.append("<div class='client-item'>... and ").append(context.registeredClients.size() - 5).append(" more</div>");
+                        break;
+                    }
+                    // Display wallet address as primary identifier
+                    if (reg.walletAddress != null && !reg.walletAddress.isEmpty()) {
+                        String walletDisplay = reg.walletAddress;
+                        if (walletDisplay.length() > 42) {
+                            walletDisplay = walletDisplay.substring(0, 42);
+                        }
+                        html.append("<div class='client-item'>• ").append(FormatUtils.escapeHtml(walletDisplay));
+                        if (reg.clientId != null && !reg.clientId.isEmpty()) {
+                            html.append(" <span style='color: #64748b; font-size: 0.85em;'>(ID: ").append(FormatUtils.escapeHtml(reg.clientId.length() > 20 ? reg.clientId.substring(0, 17) + "..." : reg.clientId)).append(")</span>");
+                        }
+                        html.append("</div>");
                     } else {
-                        // Check lastSeen to determine if OFFLINE
-                        // Use same logic as PeerDiscoveryHandler
-                        long now = System.currentTimeMillis();
-                        int leaderTermSeconds = consensusState != null ? consensusState.leaderTermSeconds : 300;
-                        long offlineThresholdMs = leaderTermSeconds * 2 * 1000L; // 2 epochs
-                        
-                        long lastSeen = now; // Default to now
-                        for (ValidatorRegistration reg : context.registeredValidators.values()) {
-                            if (reg.validatorUrl.equals(validatorUrl)) {
-                                lastSeen = reg.lastSeen;
-                                break;
-                            }
+                        // Fallback to client ID if no wallet
+                        String displayName = reg.clientId;
+                        if (displayName.length() > 30) {
+                            displayName = displayName.substring(0, 27) + "...";
                         }
-                        
-                        long timeSinceLastSeen = now - lastSeen;
-                        if (timeSinceLastSeen > offlineThresholdMs) {
-                            statusEmoji = "🔴";
-                            statusLabel = " <span style='font-size: 10px; background: rgba(239,68,68,0.2); color: #ef4444; padding: 2px 6px; border-radius: 3px;'>OFFLINE</span>";
-                        } else {
-                            statusEmoji = "🟢";
-                        }
+                        html.append("<div class='client-item'>• ").append(FormatUtils.escapeHtml(displayName)).append("</div>");
                     }
+                    shown++;
                 }
-                
-                html.append("<div style='margin-top: 4px; padding: 4px 8px; background: rgba(255,255,255,0.05); border-radius: 4px; display: flex; justify-content: space-between; align-items: center;'>");
-                html.append("<span>");
-                if (isSelf) {
-                    html.append("🟢 <strong>").append(FormatUtils.escapeHtml(validatorName)).append("</strong> (YOU)");
-                } else {
-                    html.append(statusEmoji).append(" ").append(FormatUtils.escapeHtml(validatorName)).append(statusLabel);
-                }
-                html.append("</span>");
                 html.append("</div>");
             }
-            html.append("</div>");
-        }
-        html.append("</div>\n");
-        
-        // Connected Peers Card
-        // BLOCKCHAIN CONSENSUS: Show validator peers (not just Sling clients)
-        int peerCount = context.registeredClients.size();
-        int validatorPeerCount = 0;
-        if (consensusState != null && consensusState.allValidators != null) {
-            // Count validators excluding self
-            validatorPeerCount = consensusState.allValidators.size() - 1;
-        }
-        
-        html.append("<div class='card'>\n");
-        html.append("<h2>🌐 Connected Peers</h2>\n");
-        if (validatorPeerCount > 0) {
-            html.append("<div class='stat'>").append(validatorPeerCount).append("</div>\n");
-            html.append("<div class='label'>Validator Peers</div>\n");
+            html.append("</div>\n");
+            
+            // Content Explorer and API Explorer Cards
+            html.append("<div class='summary-grid' style='grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 32px;'>");
+            html.append("<div class='card action-card'>\n");
+            html.append("<h2>🔍 Content Explorer</h2>\n");
+            html.append("<p style='margin: 20px 0; opacity: 0.9;'>Browse the global repository content tree and inspect segments</p>\n");
+            html.append("<a href='/explorer'>Launch Explorer →</a>\n");
+            html.append("</div>\n");
+            html.append("<div class='card action-card'>\n");
+            html.append("<h2>🧪 API Browser</h2>\n");
+            html.append("<p style='margin: 20px 0; opacity: 0.9;'>Interactive API explorer and testing interface</p>\n");
+            html.append("<a href='/api-browser'>Launch API Browser →</a>\n");
+            html.append("</div>\n");
+            html.append("</div>\n");
         } else {
-            html.append("<div class='stat'>").append(peerCount).append("</div>\n");
-            html.append("<div class='label'>Registered Sling Authors</div>\n");
-        }
-        
-        if (!context.registeredClients.isEmpty()) {
-            html.append("<div style='margin-top: 12px; font-size: 0.75em; opacity: 0.8;'>");
-            html.append("<div style='margin-bottom: 4px;'>Registered Clients:</div>");
-            int shown = 0;
-            for (ClientRegistration reg : context.registeredClients.values()) {
-                if (shown >= 5) {
-                    html.append("<div style='margin-top: 4px;'>... and ").append(context.registeredClients.size() - 5).append(" more</div>");
-                    break;
+            String role = safeString(clusterState.get("role"), "UNKNOWN");
+            boolean isLeader = Boolean.TRUE.equals(clusterState.get("isLeader"));
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> members = (List<Map<String, Object>>) clusterState.get("members");
+            if (members == null) {
+                members = Collections.emptyList();
+            }
+
+            String leaderUrl = (String) clusterState.get("currentLeader");
+            if (leaderUrl == null && isLeader) {
+                leaderUrl = context.selfUrl;
+            }
+
+            int memberCount = asInt(clusterState.get("memberCount"), members.size());
+            int memberId = asInt(clusterState.get("memberId"), -1);
+            int term = asInt(clusterState.get("term"), -1);
+            long clusterTime = asLong(clusterState.get("clusterTime"), -1L);
+            long logPosition = asLong(clusterState.get("logPosition"), -1L);
+
+            html.append("<div class='summary-grid'>");
+            appendSummaryCard(html, "Role", role, isLeader ? "This validator currently owns leadership" : "Following elected leader");
+            appendSummaryCard(html, "Leader", formatLeaderLabel(leaderUrl), leaderUrl == null ? "Leader discovery pending" : (leaderUrl.equals(context.selfUrl) ? "This node is the leader" : "Tracking elected leader"));
+            appendSummaryCard(html, "Term", term >= 0 ? String.valueOf(term) : "Not available", "Leadership term reported by Aeron");
+            appendSummaryCard(html, "Member ID", memberId >= 0 ? "#" + memberId : "Unknown", "Aeron-assigned member identifier");
+            appendSummaryCard(html, "Cluster Time", clusterTime > 0 ? formatTimestamp(clusterTime) : "Not available", clusterTime > 0 ? formatRelativeTime(clusterTime) : "-");
+            appendSummaryCard(html, "Log Position", logPosition >= 0 ? String.format("%,d", logPosition) : "Not available", "Current replicated log index");
+            appendSummaryCard(html, "Members", String.valueOf(memberCount), "Validators participating in this cluster");
+            appendSummaryCard(html, "Store Size", FormatUtils.formatBytes(fileStoreStats.size), fileStoreStats.segmentCount + " segments");
+            appendSummaryCard(html, "Connected Peers", String.valueOf(clientCount), "AEM/Sling author instances");
+            html.append("</div>\n");
+
+            html.append("<div class='card table-card'>\n");
+            html.append("<h2>Cluster Members</h2>\n");
+            if (members.isEmpty()) {
+                html.append("<div class='card-caption'>No members reported by Aeron yet.</div>\n");
+            } else {
+                html.append("<table>\n<thead><tr><th>Node</th><th>Role</th><th>Status</th><th>URL</th></tr></thead><tbody>\n");
+                for (Map<String, Object> member : members) {
+                    String memberUrl = (String) member.get("url");
+                    String memberRole = safeString(member.get("role"), "UNKNOWN");
+                    String status = safeString(member.get("status"), "ACTIVE");
+                    int nodeId = asInt(member.get("memberId"), -1);
+                    boolean isMemberLeader = "LEADER".equalsIgnoreCase(memberRole) || (memberUrl != null && memberUrl.equals(leaderUrl));
+                    boolean isMemberSelf = memberUrl != null && memberUrl.equals(context.selfUrl);
+
+                    html.append("<tr>");
+                    html.append("<td>");
+                    html.append(FormatUtils.escapeHtml(describeNode(memberUrl, nodeId)));
+                    if (isMemberSelf) {
+                        html.append(" <span class='badge badge-self'>SELF</span>");
+                    }
+                    html.append("</td>");
+
+                    html.append("<td>");
+                    String badgeClass = isMemberLeader ? "badge badge-leader" : "badge badge-follower";
+                    html.append("<span class='").append(badgeClass).append("'>");
+                    html.append(FormatUtils.escapeHtml(memberRole));
+                    html.append("</span>");
+                    html.append("</td>");
+
+                    html.append("<td>").append(FormatUtils.escapeHtml(status)).append("</td>");
+                    html.append("<td>").append(FormatUtils.escapeHtml(safeUrl(memberUrl))).append("</td>");
+                    html.append("</tr>\n");
                 }
-                String displayName = reg.clientId;
-                if (displayName.length() > 20) {
-                    displayName = displayName.substring(0, 17) + "...";
+                html.append("</tbody></table>\n");
+            }
+            html.append("</div>\n");
+
+            html.append("<div class='card table-card'>\n");
+            html.append("<h2>Leadership History</h2>\n");
+            if (leadershipHistory.isEmpty()) {
+                html.append("<div class='card-caption'>No leadership rotations have been recorded yet.</div>\n");
+            } else {
+                html.append("<table class='history-table'>\n<thead><tr><th>Time</th><th>Relative</th><th>Change</th><th>Term</th><th>Node</th></tr></thead><tbody>\n");
+                for (AeronConsensusEngine.LeadershipChange change : leadershipHistory) {
+                    String previousRole = change.previousRole != null ? change.previousRole.name() : "UNKNOWN";
+                    String newRole = change.newRole != null ? change.newRole.name() : "UNKNOWN";
+                    html.append("<tr>");
+                    html.append("<td>").append(FormatUtils.escapeHtml(formatTimestamp(change.timestamp))).append("</td>");
+                    html.append("<td>").append(FormatUtils.escapeHtml(formatRelativeTime(change.timestamp))).append("</td>");
+                    html.append("<td>").append(FormatUtils.escapeHtml(previousRole + " → " + newRole)).append("</td>");
+                    html.append("<td>").append(change.term >= 0 ? String.valueOf(change.term) : "-").append("</td>");
+                    html.append("<td>").append(FormatUtils.escapeHtml(describeNode(change.memberUrl, change.memberId))).append("</td>");
+                    html.append("</tr>\n");
                 }
-                html.append("<div style='margin-top: 2px;'>• ").append(FormatUtils.escapeHtml(displayName));
-                if (reg.walletAddress != null && !reg.walletAddress.isEmpty()) {
-                    html.append(" (").append(FormatUtils.escapeHtml(reg.walletAddress.substring(0, Math.min(10, reg.walletAddress.length())))).append("...)");
+                html.append("</tbody></table>\n");
+            }
+            html.append("</div>\n");
+
+            // Connected Peers Card
+            html.append("<div class='card'>\n");
+            html.append("<h2>🌐 Connected Peers</h2>\n");
+            html.append("<div class='card-value'>").append(clientCount).append("</div>\n");
+            html.append("<div class='card-caption'>AEM/Sling author instances</div>\n");
+            if (!context.registeredClients.isEmpty()) {
+                html.append("<div class='client-list'>");
+                int shown = 0;
+                for (org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration reg : context.registeredClients.values()) {
+                    if (shown >= 5) {
+                        html.append("<div class='client-item'>... and ").append(context.registeredClients.size() - 5).append(" more</div>");
+                        break;
+                    }
+                    // Display wallet address as primary identifier
+                    if (reg.walletAddress != null && !reg.walletAddress.isEmpty()) {
+                        String walletDisplay = reg.walletAddress;
+                        if (walletDisplay.length() > 42) {
+                            walletDisplay = walletDisplay.substring(0, 42);
+                        }
+                        html.append("<div class='client-item'>• ").append(FormatUtils.escapeHtml(walletDisplay));
+                        if (reg.clientId != null && !reg.clientId.isEmpty()) {
+                            html.append(" <span style='color: #64748b; font-size: 0.85em;'>(ID: ").append(FormatUtils.escapeHtml(reg.clientId.length() > 20 ? reg.clientId.substring(0, 17) + "..." : reg.clientId)).append(")</span>");
+                        }
+                        html.append("</div>");
+                    } else {
+                        // Fallback to client ID if no wallet
+                        String displayName = reg.clientId;
+                        if (displayName.length() > 30) {
+                            displayName = displayName.substring(0, 27) + "...";
+                        }
+                        html.append("<div class='client-item'>• ").append(FormatUtils.escapeHtml(displayName)).append("</div>");
+                    }
+                    shown++;
                 }
                 html.append("</div>");
-                shown++;
             }
-            html.append("</div>");
-        }
-        html.append("</div>\n");
-        
-        // Next Leader Election Card (only in Leader mode)
-        // BLOCKCHAIN CONSENSUS: Use consensus state from API
-        if (consensusState != null && "leader-based".equals(consensusState.consensusType)) {
-            int currentEpoch = consensusState.currentEpoch;
-            int leaderTermSeconds = consensusState.leaderTermSeconds;
-            int secondsUntilRotation = consensusState.secondsUntilRotation;
-            
-            String timeRemaining = "0s";
-            if (secondsUntilRotation > 0) {
-                long minutes = secondsUntilRotation / 60;
-                long seconds = secondsUntilRotation % 60;
-                if (minutes > 0) {
-                    timeRemaining = minutes + "m " + seconds + "s";
-                } else {
-                    timeRemaining = seconds + "s";
-                }
-            }
-            
-            html.append("<div class='card'>\n");
-            html.append("<h2>⏱️  Next Leader Election</h2>\n");
-            html.append("<div class='stat' style='font-size: 2em;'>").append(timeRemaining).append("</div>\n");
-            html.append("<div class='label'>").append(leaderTermSeconds).append("s Term Duration</div>\n");
-            
-            html.append("<div style='margin-top: 12px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 0.8em;'>\n");
-            html.append("<div style='opacity: 0.7; margin-bottom: 4px;'>Current Epoch:</div>\n");
-            html.append("<div style='font-weight: 600; color: #3b82f6;'>").append(currentEpoch).append("</div>\n");
             html.append("</div>\n");
-            
-            // Use nextLeader from consensus state (from API)
-            if (consensusState.nextLeader != null && !consensusState.nextLeader.isEmpty()) {
-                String nextLeaderUrl = consensusState.nextLeader;
-                String nextLeaderName = nextLeaderUrl.contains("validator-") 
-                    ? nextLeaderUrl.substring(nextLeaderUrl.indexOf("validator-")).split(":")[0]
-                    : "unknown";
-                boolean willBeMe = nextLeaderUrl.equals(context.selfUrl);
-                
-                html.append("<div style='margin-top: 8px; padding: 8px; background: rgba(59,130,246,0.15); border-radius: 6px; font-size: 0.75em; border-left: 3px solid #3b82f6;'>\n");
-                html.append("<div style='font-weight: 600; margin-bottom: 4px;'>Next Leader:</div>\n");
-                html.append("<div style='opacity: 0.9; line-height: 1.4;'>");
-                if (willBeMe) {
-                    html.append("👑 <strong style='color: #fbbf24;'>YOU</strong> will be the next leader!");
-                } else {
-                    html.append("👑 ").append(FormatUtils.escapeHtml(nextLeaderName));
-                }
-                html.append("</div>\n");
-                html.append("</div>\n");
-            }
-            
+
+            // Content Explorer and API Explorer Cards
+            html.append("<div class='summary-grid' style='grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 32px;'>");
+            html.append("<div class='card action-card'>\n");
+            html.append("<h2>🔍 Content Explorer</h2>\n");
+            html.append("<p style='margin: 20px 0; opacity: 0.9;'>Browse the global repository content tree and inspect segments</p>\n");
+            html.append("<a href='/explorer'>Launch Explorer →</a>\n");
             html.append("</div>\n");
-        } else if (context.epochLeaderEngine != null) {
-            // Fallback to direct engine access (shouldn't happen if ConsensusStateService is set)
-            int currentEpoch = context.epochLeaderEngine.getCurrentEpoch();
-            int leaderTermSeconds = context.epochLeaderEngine.getElection().getLeaderTermSeconds();
-            
-            long epochStartTime = (long) currentEpoch * leaderTermSeconds * 1000L;
-            long currentTime = System.currentTimeMillis();
-            long nextElectionTime = epochStartTime + (leaderTermSeconds * 1000L);
-            long secondsUntilElection = (nextElectionTime - currentTime) / 1000;
-            
-            String timeRemaining = "0s";
-            if (secondsUntilElection > 0) {
-                long minutes = secondsUntilElection / 60;
-                long seconds = secondsUntilElection % 60;
-                if (minutes > 0) {
-                    timeRemaining = minutes + "m " + seconds + "s";
-                } else {
-                    timeRemaining = seconds + "s";
-                }
-            }
-            
-            html.append("<div class='card'>\n");
-            html.append("<h2>⏱️  Next Leader Election</h2>\n");
-            html.append("<div class='stat' style='font-size: 2em;'>").append(timeRemaining).append("</div>\n");
-            html.append("<div class='label'>").append(leaderTermSeconds).append("s Term Duration</div>\n");
+            html.append("<div class='card action-card'>\n");
+            html.append("<h2>🧪 API Browser</h2>\n");
+            html.append("<p style='margin: 20px 0; opacity: 0.9;'>Interactive API explorer and testing interface</p>\n");
+            html.append("<a href='/api-browser'>Launch API Browser →</a>\n");
+            html.append("</div>\n");
+            html.append("</div>\n");
+
+            html.append("<div class='api-links'>\n");
+            html.append("<a href='/v1/aeron/cluster-state' target='_blank'>View cluster-state JSON</a>\n");
+            html.append("<a href='/v1/aeron/leadership-history' target='_blank'>View leadership history JSON</a>\n");
+            html.append("<a href='/v1/consensus/status' target='_blank'>View consensus status JSON</a>\n");
             html.append("</div>\n");
         }
-        
-        // Add dynamic metrics cards via JavaScript
-        html.append("<div id='dynamic-metrics'></div>\n");
-        
-        html.append("</div>\n"); // End grid
-        
-        // Recent Writes
-        html.append("<div class='card'>\n");
-        html.append("<h2>📝 Recent Segment Writes</h2>\n");
-        if (recentWrites.isEmpty()) {
-            html.append("<div class='journal-entry'>No recent writes</div>\n");
-        } else {
-            for (String entry : recentWrites) {
-                String recordIdShort = entry.split(":")[0];
-                if (recordIdShort.length() > 20) {
-                    recordIdShort = recordIdShort.substring(0, 20);
-                }
-                
-                WriteMetadata meta = context.recentWriteMetadata.get(recordIdShort);
-                
-                if (meta != null) {
-                    String badge = "";
-                    String badgeColor = "";
-                    if ("consensus".equals(meta.source)) {
-                        badge = "CONSENSUS";
-                        badgeColor = "#10b981";
-                    } else if ("dag-local".equals(meta.source)) {
-                        badge = "DAG";
-                        badgeColor = "#fbbf24";
-                    } else if ("leader-accepted".equals(meta.source)) {
-                        badge = "CONSENSUS";
-                        badgeColor = "#fbbf24";
-                    } else if ("epoch-sync".equals(meta.source)) {
-                        badge = "EPOCH";
-                        badgeColor = "#3b82f6";
-                    }
-                    
-                    String validatorName = meta.validator;
-                    if (validatorName.contains("validator-")) {
-                        validatorName = validatorName.substring(validatorName.indexOf("validator-"));
-                        validatorName = validatorName.split(":")[0];
-                    }
-                    
-                    html.append("<div class='journal-entry' style='border-left: 4px solid " + badgeColor + ";'>");
-                    html.append("<div style='display: flex; justify-content: space-between; align-items: center;'>");
-                    html.append("<code style='flex: 1;'>").append(FormatUtils.escapeHtml(entry)).append("</code>");
-                    html.append("<div style='display: flex; gap: 8px; margin-left: 12px;'>");
-                    html.append("<span style='background: " + badgeColor + "; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;'>");
-                    html.append(badge).append("</span>");
-                    html.append("<span style='background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 4px; font-size: 0.75em;'>");
-                    html.append("🗳️ ").append(FormatUtils.escapeHtml(validatorName)).append("</span>");
-                    html.append("</div></div>");
-                    if (meta.message != null && !meta.message.isEmpty()) {
-                        html.append("<div style='margin-top: 4px; font-size: 0.85em; opacity: 0.8;'>💬 ").append(FormatUtils.escapeHtml(meta.message)).append("</div>");
-                    }
-                    html.append("</div>\n");
-                } else {
-                    html.append("<div class='journal-entry'>").append(FormatUtils.escapeHtml(entry)).append("</div>\n");
-                }
-            }
-        }
-        html.append("</div>\n");
-        
-        // Explorer Link
-        html.append("<div class='card' style='text-align: center; padding: 40px;'>\n");
-        html.append("<h2>🔍 Content Explorer</h2>\n");
-        html.append("<p style='margin: 20px 0; opacity: 0.9;'>Browse the global repository content tree and inspect segments</p>\n");
-        html.append("<a href='/explorer' style='display: inline-block; padding: 15px 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); ");
-        html.append("color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 1.1em; ");
-        html.append("box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); transition: transform 0.2s;' ");
-        html.append("onmouseover='this.style.transform=\"scale(1.05)\"' onmouseout='this.style.transform=\"scale(1)\"'>");
-        html.append("Launch Explorer →</a>\n");
-        html.append("</div>\n");
-        
-        // API Endpoints - Comprehensive List
-        html.append("<div class='card'>\n");
-        html.append("<h2>🔌 API Endpoints</h2>\n");
-        
-        html.append("<div style='margin-bottom: 16px; padding: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px;'>\n");
-        html.append("<a href='/api-browser' style='color: white; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 8px;'>\n");
-        html.append("🧪 Interactive API Browser →</a>\n");
-        html.append("</div>\n");
-        
-        html.append("<div class='endpoints'>\n");
-        
-        html.append("<div style='margin-top: 12px; font-weight: 600; color: #3b82f6;'>📊 Explorer APIs</div>\n");
-        html.append("<div class='endpoint'><code>GET /explorer</code> - Blockchain content explorer UI</div>\n");
-        html.append("<div class='endpoint'><code>GET /api/explore?path={path}</code> - Browse node tree (JSON)</div>\n");
-        html.append("<div class='endpoint'><code>GET /api/segments/tars</code> - TAR files and storage (JSON)</div>\n");
-        html.append("<div class='endpoint'><code>GET /api/segments/recent</code> - Recent segment writes (JSON)</div>\n");
-        
-        html.append("<div style='margin-top: 12px; font-weight: 600; color: #10b981;'>💚 Health & Monitoring</div>\n");
-        html.append("<div class='endpoint'><code>GET /health</code> - Basic health check (JSON)</div>\n");
-        html.append("<div class='endpoint'><code>GET /health/deep</code> - Comprehensive health validation (JSON)</div>\n");
-        html.append("<div class='endpoint'><code>GET /api/metrics</code> - Consensus & replication metrics (JSON)</div>\n");
-        html.append("<div class='endpoint'><code>GET /metrics</code> - Prometheus metrics (text)</div>\n");
-        
-        html.append("<div style='margin-top: 12px; font-weight: 600; color: #f59e0b;'>🔄 Consensus APIs</div>\n");
-        html.append("<div class='endpoint'><code>GET /v1/consensus/status</code> - Get consensus state (Aeron-aware)</div>\n");
-        html.append("<div class='endpoint'><code>POST /v1/test-write</code> - Test write with wallet signature</div>\n");
-        html.append("<div class='endpoint'><code>GET /v1/head</code> - Current HEAD record ID (text)</div>\n");
-        
-        html.append("<div style='margin-top: 12px; font-weight: 600; color: #06b6d4;'>✈️ Aeron Cluster APIs</div>\n");
-        html.append("<div class='endpoint'><code>GET /v1/aeron/cluster-state</code> - Complete Aeron Cluster state (JSON)</div>\n");
-        html.append("<div class='endpoint'><code>GET /v1/aeron/raft-metrics</code> - Raft-specific metrics (JSON)</div>\n");
-        html.append("<div class='endpoint'><code>GET /v1/aeron/node-status</code> - Status of specific cluster node (JSON)</div>\n");
-        html.append("<div class='endpoint'><code>GET /v1/aeron/leadership-history</code> - Recent leadership changes (JSON)</div>\n");
-        
-        html.append("<div style='margin-top: 12px; font-weight: 600; color: #8b5cf6;'>🌐 Registration & Discovery</div>\n");
-        html.append("<div class='endpoint'><code>POST /v1/register-client</code> - Register Sling author</div>\n");
-        html.append("<div class='endpoint'><code>GET /v1/peers</code> - List all known validators (JSON)</div>\n");
-        html.append("<div class='endpoint'><code>GET /v1/ngrok-url</code> - Get public ngrok URL (text)</div>\n");
-        
-        html.append("<div style='margin-top: 12px; font-weight: 600; color: #6b7280;'>📄 Oak Files</div>\n");
-        html.append("<div class='endpoint'><code>GET /journal.log</code> - Journal file (text)</div>\n");
-        html.append("<div class='endpoint'><code>GET /manifest</code> - Manifest file (text)</div>\n");
-        html.append("<div class='endpoint'><code>GET /gc.log</code> - Garbage collection log (text)</div>\n");
-        html.append("<div class='endpoint'><code>GET /segments/{id}</code> - Fetch segment by ID (binary)</div>\n");
-        html.append("<div class='endpoint'><code>HEAD /segments/{id}</code> - Check segment existence</div>\n");
-        
-        html.append("</div>\n");
-        html.append("</div>\n");
-        
-        html.append("</div>\n"); // End container
-        
-        // Add JavaScript for dynamic metrics
-        html.append("<script>\n");
-        html.append("async function loadMetrics() {\n");
-        html.append("  try {\n");
-        html.append("    const response = await fetch('/api/metrics');\n");
-        html.append("    const data = await response.json();\n");
-        html.append("    \n");
-        html.append("    let html = '';\n");
-        html.append("    \n");
-        html.append("    if (data.consensus) {\n");
-        html.append("      html += '<div class=\"card\">';\n");
-        html.append("      html += '<h2>🎯 Consensus Performance</h2>';\n");
-        html.append("      html += '<div class=\"stat\">' + data.consensus.successRate.toFixed(1) + '%</div>';\n");
-        html.append("      html += '<div class=\"label\">Success Rate (' + data.consensus.successfulProposals + '/' + data.consensus.totalProposals + ')</div>';\n");
-        html.append("      html += '<div style=\"margin-top: 10px; font-size: 0.9em; opacity: 0.8;\">⏱️  Avg Consensus: ' + data.consensus.averageConsensusTimeMs + 'ms</div>';\n");
-        html.append("      html += '</div>';\n");
-        html.append("    }\n");
-        html.append("    \n");
-        html.append("    if (data.replication) {\n");
-        html.append("      html += '<div class=\"card\">';\n");
-        html.append("      html += '<h2>🔄 Replication</h2>';\n");
-        html.append("      html += '<div class=\"stat\">' + data.replication.totalSegments + '</div>';\n");
-        html.append("      html += '<div class=\"label\">Segments Replicated (' + data.replication.totalMb + ' MB)</div>';\n");
-        html.append("      html += '</div>';\n");
-        html.append("    }\n");
-        html.append("    \n");
-        html.append("    if (data.validator) {\n");
-        html.append("      html += '<div class=\"card\">';\n");
-        html.append("      html += '<h2>🪪 Validator Identity</h2>';\n");
-        html.append("      html += '<div style=\"font-family: monospace; font-size: 0.85em; word-break: break-all; margin: 10px 0;\">' + data.validator.url + '</div>';\n");
-        html.append("      html += '<div class=\"label\">My Address</div>';\n");
-        html.append("      html += '</div>';\n");
-        html.append("    }\n");
-        html.append("    \n");
-        html.append("    document.getElementById('dynamic-metrics').innerHTML = html;\n");
-        html.append("  } catch (e) {\n");
-        html.append("    console.error('Failed to load metrics:', e);\n");
-        html.append("  }\n");
-        html.append("}\n");
-        html.append("\n");
-        html.append("loadMetrics();\n");
-        html.append("setInterval(loadMetrics, 5000);\n");
-        html.append("</script>\n");
-        
-        html.append("</body>\n</html>");
-        
+
+        html.append("</div>\n</body>\n</html>");
+
         response.getWriter().write(html.toString());
+    }
+
+    private void appendSummaryCard(StringBuilder html, String label, String value, String caption) {
+        html.append("<div class='card'>");
+        html.append("<div class='card-label'>").append(FormatUtils.escapeHtml(label)).append("</div>");
+        html.append("<div class='card-value'>").append(FormatUtils.escapeHtml(value)).append("</div>");
+        if (caption != null && !caption.isEmpty()) {
+            html.append("<div class='card-caption'>").append(FormatUtils.escapeHtml(caption)).append("</div>");
+        }
+        html.append("</div>");
+    }
+
+    private String formatTimestamp(long epochMillis) {
+        if (epochMillis <= 0) {
+            return "-";
+        }
+        return DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                .withZone(ZoneId.systemDefault())
+                .format(Instant.ofEpochMilli(epochMillis));
+    }
+
+    private String formatRelativeTime(long epochMillis) {
+        if (epochMillis <= 0) {
+            return "-";
+        }
+        long diffMillis = System.currentTimeMillis() - epochMillis;
+        if (diffMillis < 1000) {
+            return "just now";
+        }
+        long seconds = diffMillis / 1000;
+        if (seconds < 60) {
+            return seconds + "s ago";
+        }
+        long minutes = seconds / 60;
+        if (minutes < 60) {
+            return minutes + "m ago";
+        }
+        long hours = minutes / 60;
+        if (hours < 24) {
+            return hours + "h ago";
+        }
+        long days = hours / 24;
+        return days + "d ago";
+    }
+
+    private long asLong(Object value, long fallback) {
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        return fallback;
+    }
+
+    private int asInt(Object value, int fallback) {
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        return fallback;
+    }
+
+    private String safeString(Object value, String fallback) {
+        return value != null ? value.toString() : fallback;
+    }
+
+    private String safeUrl(String url) {
+        return url != null ? url : "-";
+    }
+
+    private String describeNode(String url, int memberId) {
+        String name = shortName(url);
+        if (memberId >= 0) {
+            return name + " (#" + memberId + ")";
+        }
+        return name;
+    }
+
+    private String shortName(String url) {
+        if (url == null || url.isEmpty()) {
+            return "Unknown";
+        }
+        try {
+            URL parsed = new URL(url);
+            return parsed.getHost();
+        } catch (Exception e) {
+            return url;
+        }
+    }
+
+    private String formatLeaderLabel(String leaderUrl) {
+        if (leaderUrl == null || leaderUrl.isEmpty()) {
+            return "Unknown";
+        }
+        String name = shortName(leaderUrl);
+        if (leaderUrl.equals(context.selfUrl)) {
+            return name + " (self)";
+        }
+        return name;
     }
     
     /**
@@ -831,7 +657,7 @@ public class DashboardHandler {
         html.append("<div class='category'>\n");
         html.append("<h2>🔄 Consensus APIs</h2>\n");
         addApiEndpoint(html, "GET", "/v1/consensus/status", "Get consensus state (Aeron-aware)", "consensus_status");
-        addApiEndpoint(html, "POST", "/v1/test-write", "Test write with wallet signature (demo)", "test_write");
+        addApiEndpoint(html, "POST", "/v1/propose-write", "Propose signed write transaction", "propose_write");
         addApiEndpoint(html, "GET", "/v1/head", "Get current HEAD record ID (text)", "head");
         html.append("</div>\n");
         
@@ -979,5 +805,6 @@ public class DashboardHandler {
         html.append("<div class='endpoint-desc'>").append(FormatUtils.escapeHtml(description)).append("</div>\n");
         html.append("</div>\n");
     }
+    
 }
 
