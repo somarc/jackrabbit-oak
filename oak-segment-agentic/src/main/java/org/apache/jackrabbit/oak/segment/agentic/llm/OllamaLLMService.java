@@ -18,16 +18,18 @@ package org.apache.jackrabbit.oak.segment.agentic.llm;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.util.EntityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.concurrent.TimeUnit;
 
 /**
  * LLM service implementation using Ollama (local LLM server).
@@ -43,23 +45,75 @@ import java.util.concurrent.TimeUnit;
 public class OllamaLLMService implements LLMService {
     private static final Logger log = LoggerFactory.getLogger(OllamaLLMService.class);
     
-    private final OkHttpClient httpClient;
     private final String ollamaUrl;
     private final String modelName;
     private final Gson gson = new Gson();
+    private final CloseableHttpClient httpClient;
     private volatile boolean available = false;
     
     public OllamaLLMService() {
-        this("http://localhost:11434", "phi3");
+        this(getOllamaUrlFromConfig(), getModelNameFromConfig());
+    }
+    
+    /**
+     * Get Ollama URL from environment variable or system property, with fallback.
+     * Supports Docker environments by checking for host.docker.internal.
+     */
+    private static String getOllamaUrlFromConfig() {
+        // Check environment variable first
+        String url = System.getenv("OLLAMA_URL");
+        if (url != null && !url.isEmpty()) {
+            return url;
+        }
+        
+        // Check system property
+        url = System.getProperty("ollama.url");
+        if (url != null && !url.isEmpty()) {
+            return url;
+        }
+        
+        // Default: detect if running in Docker (check for common Docker indicators)
+        // If in Docker, use host.docker.internal to reach Ollama on host machine
+        // Otherwise, use localhost for direct host execution
+        boolean isDocker = System.getenv("container") != null || 
+                          System.getProperty("java.class.path", "").contains("/opt/sling") ||
+                          System.getProperty("user.name", "").equals("sling");
+        
+        if (isDocker) {
+            return "http://host.docker.internal:11434";
+        } else {
+            return "http://localhost:11434";
+        }
+    }
+    
+    /**
+     * Get model name from environment variable or system property, with fallback.
+     */
+    private static String getModelNameFromConfig() {
+        String model = System.getenv("OLLAMA_MODEL");
+        if (model != null && !model.isEmpty()) {
+            return model;
+        }
+        
+        model = System.getProperty("ollama.model");
+        if (model != null && !model.isEmpty()) {
+            return model;
+        }
+        
+        return "phi3"; // Default model
     }
     
     public OllamaLLMService(String ollamaUrl, String modelName) {
         this.ollamaUrl = ollamaUrl;
         this.modelName = modelName;
-        this.httpClient = new OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(120, TimeUnit.SECONDS)  // Increased for LLM inference
-            .writeTimeout(60, TimeUnit.SECONDS)
+        
+        // Create HTTP client with longer timeouts for LLM inference
+        RequestConfig requestConfig = RequestConfig.custom()
+            .setConnectTimeout(10000)
+            .setSocketTimeout(120000)  // 2 minutes for LLM inference
+            .build();
+        this.httpClient = HttpClients.custom()
+            .setDefaultRequestConfig(requestConfig)
             .build();
         
         // Check availability on construction
@@ -69,17 +123,14 @@ public class OllamaLLMService implements LLMService {
     private void checkAvailability() {
         try {
             // Try to list models to verify Ollama is running
-            Request request = new Request.Builder()
-                .url(ollamaUrl + "/api/tags")
-                .get()
-                .build();
-            
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (response.isSuccessful()) {
+            HttpGet request = new HttpGet(ollamaUrl + "/api/tags");
+            try (CloseableHttpResponse response = httpClient.execute(request)) {
+                int statusCode = response.getStatusLine().getStatusCode();
+                if (statusCode >= 200 && statusCode < 300) {
                     available = true;
                     log.info("✅ Ollama LLM service available at {} with model {}", ollamaUrl, modelName);
                 } else {
-                    log.warn("⚠️  Ollama service not available: HTTP {}", response.code());
+                    log.warn("⚠️  Ollama service not available: HTTP {}", statusCode);
                     available = false;
                 }
             }
@@ -125,32 +176,29 @@ public class OllamaLLMService implements LLMService {
             requestJson.addProperty("stream", false);
             // Options can be added here if needed (e.g., temperature, top_p)
             
-            RequestBody body = RequestBody.create(
-                gson.toJson(requestJson),
-                MediaType.get("application/json")
-            );
-            
-            Request request = new Request.Builder()
-                .url(ollamaUrl + "/api/generate")
-                .post(body)
-                .build();
+            String jsonPayload = gson.toJson(requestJson);
             
             // Execute request
-            try (Response response = httpClient.newCall(request).execute()) {
-                if (!response.isSuccessful()) {
-                    String errorBody = response.body() != null ? response.body().string() : "Unknown error";
-                    log.error("Ollama API error: HTTP {} - {}", response.code(), errorBody);
-                    return "Error calling LLM service: HTTP " + response.code();
-                }
+            HttpPost request = new HttpPost(ollamaUrl + "/api/generate");
+            request.setEntity(new StringEntity(jsonPayload, "UTF-8"));
+            request.setHeader("Content-Type", "application/json");
+            
+            try (CloseableHttpResponse response = httpClient.execute(request)) {
+                int statusCode = response.getStatusLine().getStatusCode();
+                String responseBody = EntityUtils.toString(response.getEntity());
                 
-                String responseBody = response.body().string();
-                JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
-                
-                if (jsonResponse.has("response")) {
-                    return jsonResponse.get("response").getAsString();
+                if (statusCode >= 200 && statusCode < 300) {
+                    JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
+                    
+                    if (jsonResponse.has("response")) {
+                        return jsonResponse.get("response").getAsString();
+                    } else {
+                        log.error("Unexpected Ollama response format: {}", responseBody);
+                        return "Error: Unexpected response format from LLM service";
+                    }
                 } else {
-                    log.error("Unexpected Ollama response format: {}", responseBody);
-                    return "Error: Unexpected response format from LLM service";
+                    log.error("Ollama API error: HTTP {} - {}", statusCode, responseBody);
+                    return "Error calling LLM service: HTTP " + statusCode;
                 }
             }
         } catch (IOException e) {
