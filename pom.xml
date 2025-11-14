@@ -78,6 +78,7 @@
     <module>oak-segment-azure</module>
     <module>oak-segment-consensus</module>
     <module>oak-segment-http</module>
+    <module>oak-segment-agentic</module>
     <module>oak-benchmarks</module>
     <module>oak-search-elastic</module>
     <module>oak-benchmarks-lucene</module>

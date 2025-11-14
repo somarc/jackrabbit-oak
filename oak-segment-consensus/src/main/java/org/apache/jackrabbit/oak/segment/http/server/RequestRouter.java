@@ -44,6 +44,7 @@ public class RequestRouter {
     private final RegistrationHandler registrationHandler;
     private final PeerDiscoveryHandler peerDiscoveryHandler;
     private final AeronApiHandler aeronApiHandler;
+    private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     
     private final ServerContext context;
 
@@ -83,6 +84,57 @@ public class RequestRouter {
         this.registrationHandler = new RegistrationHandler(context);
         this.peerDiscoveryHandler = new PeerDiscoveryHandler(context);
         this.aeronApiHandler = new AeronApiHandler(context);
+        
+        // Chat handler will be initialized lazily on first use (after selfUrl is set)
+        this.chatHandler = null;
+    }
+    
+    /**
+     * Initialize chat handler if oak-segment-agentic module is available.
+     * Returns null if module is not available (graceful degradation).
+     */
+    private Object initializeChatHandler(ServerContext context) {
+        try {
+            // Use reflection to avoid hard dependency on oak-segment-agentic
+            Class<?> llmServiceImplClass = Class.forName("org.apache.jackrabbit.oak.segment.agentic.llm.OllamaLLMService");
+            Class<?> ragServiceClass = Class.forName("org.apache.jackrabbit.oak.segment.agentic.rag.RAGService");
+            Class<?> chatHandlerClass = Class.forName("org.apache.jackrabbit.oak.segment.agentic.chat.ChatHandler");
+            
+            // Get the LLMService interface (parent of OllamaLLMService)
+            Class<?> llmServiceInterface = Class.forName("org.apache.jackrabbit.oak.segment.agentic.llm.LLMService");
+            
+            // Create LLM service instance
+            Object llmService = llmServiceImplClass.getDeclaredConstructor().newInstance();
+            
+            // Create RAG service instance
+            Object ragService = ragServiceClass.getDeclaredConstructor().newInstance();
+            
+            // Create chat handler - use interface type for constructor lookup
+            // Try to get selfUrl from context, or infer from system properties
+            String baseUrl = context.selfUrl;
+            if (baseUrl == null || baseUrl.isEmpty()) {
+                // Try to get from system property (set by validator startup script)
+                baseUrl = System.getProperty("consensus.self.url");
+                if (baseUrl == null || baseUrl.isEmpty()) {
+                    // Last resort: default to localhost:8090
+                    baseUrl = "http://localhost:8090";
+                }
+            }
+            Object chatHandler = chatHandlerClass.getConstructor(
+                llmServiceInterface,
+                ragServiceClass,
+                String.class
+            ).newInstance(llmService, ragService, baseUrl);
+            
+            log.info("✅ LLM Chat handler initialized (oak-segment-agentic module available) with baseUrl: {}", baseUrl);
+            return chatHandler;
+        } catch (ClassNotFoundException e) {
+            log.debug("oak-segment-agentic module not available - chat endpoint disabled");
+            return null;
+        } catch (Exception e) {
+            log.warn("Failed to initialize chat handler", e);
+            return null;
+        }
     }
 
     /**
@@ -135,6 +187,12 @@ public class RequestRouter {
             
             if ("/api-browser".equals(path) && "GET".equals(method)) {
                 dashboardHandler.handleApiBrowserUI(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/chat".equals(path) && "GET".equals(method)) {
+                dashboardHandler.handleChatUI(response);
                 baseRequest.setHandled(true);
                 return;
             }
@@ -277,6 +335,40 @@ public class RequestRouter {
                 aeronApiHandler.handleLeadershipHistory(request, response);
                 baseRequest.setHandled(true);
                 return;
+            }
+            
+            // LLM Chat endpoint (optional - requires oak-segment-agentic module)
+            if ("/v1/chat".equals(path) && "POST".equals(method)) {
+                // Lazy initialization - chat handler is created on first use (after selfUrl is set)
+                if (chatHandler == null) {
+                    synchronized (this) {
+                        if (chatHandler == null) {
+                            chatHandler = initializeChatHandler(context);
+                        }
+                    }
+                }
+                
+                if (chatHandler != null) {
+                    try {
+                        // Use reflection to call handleChat method
+                        java.lang.reflect.Method handleMethod = chatHandler.getClass()
+                            .getMethod("handleChat", HttpServletRequest.class, HttpServletResponse.class);
+                        handleMethod.invoke(chatHandler, request, response);
+                        baseRequest.setHandled(true);
+                        return;
+                    } catch (Exception e) {
+                        log.error("Error invoking chat handler", e);
+                        response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Chat handler error: " + e.getMessage());
+                        baseRequest.setHandled(true);
+                        return;
+                    }
+                } else {
+                    response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"error\":\"Chat endpoint not available. Install oak-segment-agentic module.\"}");
+                    baseRequest.setHandled(true);
+                    return;
+                }
             }
             
             // Not found - log with context

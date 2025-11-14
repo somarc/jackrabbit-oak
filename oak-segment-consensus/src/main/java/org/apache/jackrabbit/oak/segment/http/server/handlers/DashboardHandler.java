@@ -146,7 +146,7 @@ public class DashboardHandler {
             }
             html.append("</div>\n");
             
-            // Content Explorer and API Explorer Cards
+            // Content Explorer, API Explorer, and Chat Cards
             html.append("<div class='summary-grid' style='grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 32px;'>");
             html.append("<div class='card action-card'>\n");
             html.append("<h2>🔍 Content Explorer</h2>\n");
@@ -157,6 +157,11 @@ public class DashboardHandler {
             html.append("<h2>🧪 API Browser</h2>\n");
             html.append("<p style='margin: 20px 0; opacity: 0.9;'>Interactive API explorer and testing interface</p>\n");
             html.append("<a href='/api-browser'>Launch API Browser →</a>\n");
+            html.append("</div>\n");
+            html.append("<div class='card action-card'>\n");
+            html.append("<h2>💬 LLM Chat</h2>\n");
+            html.append("<p style='margin: 20px 0; opacity: 0.9;'>Ask questions about Oak internals and query validator state</p>\n");
+            html.append("<a href='/chat'>Launch Chat →</a>\n");
             html.append("</div>\n");
             html.append("</div>\n");
         } else {
@@ -287,7 +292,7 @@ public class DashboardHandler {
             }
             html.append("</div>\n");
 
-            // Content Explorer and API Explorer Cards
+            // Content Explorer, API Explorer, and Chat Cards
             html.append("<div class='summary-grid' style='grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 32px;'>");
             html.append("<div class='card action-card'>\n");
             html.append("<h2>🔍 Content Explorer</h2>\n");
@@ -298,6 +303,11 @@ public class DashboardHandler {
             html.append("<h2>🧪 API Browser</h2>\n");
             html.append("<p style='margin: 20px 0; opacity: 0.9;'>Interactive API explorer and testing interface</p>\n");
             html.append("<a href='/api-browser'>Launch API Browser →</a>\n");
+            html.append("</div>\n");
+            html.append("<div class='card action-card'>\n");
+            html.append("<h2>💬 LLM Chat</h2>\n");
+            html.append("<p style='margin: 20px 0; opacity: 0.9;'>Ask questions about Oak internals and query validator state</p>\n");
+            html.append("<a href='/chat'>Launch Chat →</a>\n");
             html.append("</div>\n");
             html.append("</div>\n");
 
@@ -790,6 +800,225 @@ public class DashboardHandler {
         html.append("</script>\n");
         
         html.append("</div>\n");
+        html.append("</body>\n</html>\n");
+        
+        response.getWriter().write(html.toString());
+    }
+    
+    /**
+     * Handle LLM Chat UI interface.
+     */
+    public void handleChatUI(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType("text/html; charset=UTF-8");
+        
+        StringBuilder html = new StringBuilder();
+        html.append("<!DOCTYPE html>\n<html>\n<head>\n");
+        html.append("<meta charset='UTF-8'>\n");
+        html.append("<title>💬 Oak LLM Chat</title>\n");
+        html.append("<style>\n");
+        html.append("* { margin: 0; padding: 0; box-sizing: border-box; }\n");
+        html.append("body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; ");
+        html.append("background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; flex-direction: column; }\n");
+        html.append(".header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; ");
+        html.append("box-shadow: 0 4px 6px rgba(0,0,0,0.3); }\n");
+        html.append(".header h1 { font-size: 2em; margin-bottom: 5px; }\n");
+        html.append(".header p { opacity: 0.9; }\n");
+        html.append(".container { max-width: 1200px; margin: 0 auto; padding: 20px; flex: 1; display: flex; flex-direction: column; }\n");
+        html.append(".back-link { display: inline-block; margin-bottom: 20px; color: #60a5fa; text-decoration: none; }\n");
+        html.append(".back-link:hover { text-decoration: underline; }\n");
+        html.append(".chat-container { flex: 1; display: flex; flex-direction: column; background: #1e293b; ");
+        html.append("border-radius: 10px; border: 1px solid #334155; overflow: hidden; }\n");
+        html.append(".chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }\n");
+        html.append(".message { padding: 12px 16px; border-radius: 8px; max-width: 85%; word-wrap: break-word; }\n");
+        html.append(".message.user { background: #334155; align-self: flex-end; border-left: 3px solid #60a5fa; }\n");
+        html.append(".message.assistant { background: #0f172a; align-self: flex-start; border-left: 3px solid #a78bfa; }\n");
+        html.append(".message-header { font-size: 0.85em; color: #94a3b8; margin-bottom: 8px; font-weight: 600; }\n");
+        html.append(".message-content { line-height: 1.6; color: #e2e8f0; }\n");
+        html.append(".message-sources { margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155; }\n");
+        html.append(".source { background: #0f172a; padding: 8px 12px; margin-top: 8px; border-radius: 6px; ");
+        html.append("border-left: 2px solid #8b5cf6; font-size: 0.85em; }\n");
+        html.append(".source-type { color: #a78bfa; font-weight: 600; margin-right: 8px; }\n");
+        html.append(".source-data { color: #94a3b8; font-family: monospace; font-size: 0.9em; margin-top: 4px; ");
+        html.append("white-space: pre-wrap; word-wrap: break-word; max-height: 200px; overflow-y: auto; }\n");
+        html.append(".chat-input-container { padding: 20px; background: #0f172a; border-top: 1px solid #334155; }\n");
+        html.append(".input-group { display: flex; gap: 12px; }\n");
+        html.append("textarea { flex: 1; padding: 12px; background: #1e293b; border: 1px solid #334155; ");
+        html.append("border-radius: 8px; color: #e2e8f0; font-family: inherit; font-size: 0.95em; ");
+        html.append("resize: vertical; min-height: 60px; max-height: 200px; }\n");
+        html.append("textarea:focus { outline: none; border-color: #667eea; }\n");
+        html.append("button { padding: 12px 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); ");
+        html.append("color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; ");
+        html.append("font-size: 0.95em; transition: transform 0.2s; }\n");
+        html.append("button:hover:not(:disabled) { transform: scale(1.05); }\n");
+        html.append("button:disabled { opacity: 0.5; cursor: not-allowed; }\n");
+        html.append(".loading { display: inline-block; width: 16px; height: 16px; border: 2px solid #667eea; ");
+        html.append("border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }\n");
+        html.append("@keyframes spin { to { transform: rotate(360deg); } }\n");
+        html.append(".examples { margin-top: 20px; padding: 16px; background: #1e293b; border-radius: 8px; ");
+        html.append("border: 1px solid #334155; }\n");
+        html.append(".examples h3 { color: #a78bfa; margin-bottom: 12px; font-size: 0.95em; }\n");
+        html.append(".example-chip { display: inline-block; padding: 6px 12px; margin: 4px; background: #0f172a; ");
+        html.append("border: 1px solid #334155; border-radius: 6px; color: #94a3b8; font-size: 0.85em; ");
+        html.append("cursor: pointer; transition: all 0.2s; }\n");
+        html.append(".example-chip:hover { background: #334155; color: #e2e8f0; border-color: #667eea; }\n");
+        html.append(".empty-state { text-align: center; padding: 60px 20px; color: #94a3b8; }\n");
+        html.append(".empty-state h2 { color: #a78bfa; margin-bottom: 12px; }\n");
+        html.append("</style>\n");
+        html.append("</head>\n");
+        html.append("<body>\n");
+        
+        html.append("<div class='header'>\n");
+        html.append("<h1>💬 LLM Chat Assistant</h1>\n");
+        html.append("<p>Ask questions about Oak internals, query validator state, and get AI-powered answers</p>\n");
+        html.append("</div>\n");
+        
+        html.append("<div class='container'>\n");
+        html.append("<a href='/' class='back-link'>← Back to Dashboard</a>\n");
+        
+        html.append("<div class='chat-container'>\n");
+        html.append("<div class='chat-messages' id='chat-messages'>\n");
+        html.append("<div class='empty-state'>\n");
+        html.append("<h2>💬 Start a conversation</h2>\n");
+        html.append("<p>Ask me anything about Oak validators, cluster state, or consensus mechanisms</p>\n");
+        html.append("</div>\n");
+        html.append("</div>\n");
+        
+        html.append("<div class='chat-input-container'>\n");
+        html.append("<div class='examples'>\n");
+        html.append("<h3>💡 Example questions:</h3>\n");
+        html.append("<span class='example-chip' onclick=\"setQuery('What is the current cluster status?')\">What is the current cluster status?</span>\n");
+        html.append("<span class='example-chip' onclick=\"setQuery('How many validators are active?')\">How many validators are active?</span>\n");
+        html.append("<span class='example-chip' onclick=\"setQuery('What is the current leader?')\">What is the current leader?</span>\n");
+        html.append("<span class='example-chip' onclick=\"setQuery('Explain how FileStore works in Oak')\">Explain how FileStore works in Oak</span>\n");
+        html.append("<span class='example-chip' onclick=\"setQuery('What is the consensus status?')\">What is the consensus status?</span>\n");
+        html.append("</div>\n");
+        html.append("<div class='input-group'>\n");
+        html.append("<textarea id='query-input' placeholder='Ask a question about Oak validators, cluster state, or consensus...' ");
+        html.append("rows='2'></textarea>\n");
+        html.append("<button id='send-button' onclick='sendMessage()'>Send</button>\n");
+        html.append("</div>\n");
+        html.append("</div>\n");
+        
+        html.append("</div>\n");
+        html.append("</div>\n");
+        
+        html.append("<script>\n");
+        html.append("const chatMessages = document.getElementById('chat-messages');\n");
+        html.append("const queryInput = document.getElementById('query-input');\n");
+        html.append("const sendButton = document.getElementById('send-button');\n");
+        html.append("\n");
+        html.append("function setQuery(text) {\n");
+        html.append("  queryInput.value = text;\n");
+        html.append("  queryInput.focus();\n");
+        html.append("}\n");
+        html.append("\n");
+        html.append("function addMessage(role, content, sources) {\n");
+        html.append("  const emptyState = chatMessages.querySelector('.empty-state');\n");
+        html.append("  if (emptyState) emptyState.remove();\n");
+        html.append("  \n");
+        html.append("  const messageDiv = document.createElement('div');\n");
+        html.append("  messageDiv.className = 'message ' + role;\n");
+        html.append("  \n");
+        html.append("  let html = '<div class=\"message-header\">' + (role === 'user' ? '👤 You' : '🤖 Assistant') + '</div>';\n");
+        html.append("  html += '<div class=\"message-content\">' + escapeHtml(content) + '</div>';\n");
+        html.append("  \n");
+        html.append("  if (sources && sources.length > 0) {\n");
+        html.append("    html += '<div class=\"message-sources\">';\n");
+        html.append("    html += '<div style=\"color: #94a3b8; font-size: 0.85em; margin-bottom: 8px;\">📚 Sources:</div>';\n");
+        html.append("    sources.forEach(source => {\n");
+        html.append("      html += '<div class=\"source\">';\n");
+        html.append("      html += '<span class=\"source-type\">' + escapeHtml(source.type || 'unknown') + '</span>';\n");
+        html.append("      if (source.endpoint) {\n");
+        html.append("        html += '<span style=\"color: #60a5fa;\">' + escapeHtml(source.endpoint) + '</span>';\n");
+        html.append("      }\n");
+        html.append("      if (source.data) {\n");
+        html.append("        const dataStr = typeof source.data === 'string' ? source.data : JSON.stringify(source.data, null, 2);\n");
+        html.append("        html += '<div class=\"source-data\">' + escapeHtml(dataStr.substring(0, 500)) + (dataStr.length > 500 ? '...' : '') + '</div>';\n");
+        html.append("      }\n");
+        html.append("      html += '</div>';\n");
+        html.append("    });\n");
+        html.append("    html += '</div>';\n");
+        html.append("  }\n");
+        html.append("  \n");
+        html.append("  messageDiv.innerHTML = html;\n");
+        html.append("  chatMessages.appendChild(messageDiv);\n");
+        html.append("  chatMessages.scrollTop = chatMessages.scrollHeight;\n");
+        html.append("}\n");
+        html.append("\n");
+        html.append("function escapeHtml(text) {\n");
+        html.append("  const div = document.createElement('div');\n");
+        html.append("  div.textContent = text;\n");
+        html.append("  return div.innerHTML;\n");
+        html.append("}\n");
+        html.append("\n");
+        html.append("async function sendMessage() {\n");
+        html.append("  const query = queryInput.value.trim();\n");
+        html.append("  if (!query) return;\n");
+        html.append("  \n");
+        html.append("  // Add user message\n");
+        html.append("  addMessage('user', query);\n");
+        html.append("  \n");
+        html.append("  // Clear input and disable button\n");
+        html.append("  queryInput.value = '';\n");
+        html.append("  sendButton.disabled = true;\n");
+        html.append("  sendButton.innerHTML = '<span class=\"loading\"></span> Thinking...';\n");
+        html.append("  \n");
+        html.append("  // Add loading message\n");
+        html.append("  const loadingDiv = document.createElement('div');\n");
+        html.append("  loadingDiv.className = 'message assistant';\n");
+        html.append("  loadingDiv.id = 'loading-message';\n");
+        html.append("  loadingDiv.innerHTML = '<div class=\"message-header\">🤖 Assistant</div><div class=\"message-content\"><span class=\"loading\"></span> Processing your question...</div>';\n");
+        html.append("  chatMessages.appendChild(loadingDiv);\n");
+        html.append("  chatMessages.scrollTop = chatMessages.scrollHeight;\n");
+        html.append("  \n");
+        html.append("  try {\n");
+        html.append("    const response = await fetch('/v1/chat', {\n");
+        html.append("      method: 'POST',\n");
+        html.append("      headers: { 'Content-Type': 'application/json' },\n");
+        html.append("      body: JSON.stringify({ query: query })\n");
+        html.append("    });\n");
+        html.append("    \n");
+        html.append("    if (!response.ok) {\n");
+        html.append("      const errorText = await response.text();\n");
+        html.append("      throw new Error('HTTP ' + response.status + ': ' + errorText);\n");
+        html.append("    }\n");
+        html.append("    \n");
+        html.append("    const data = await response.json();\n");
+        html.append("    \n");
+        html.append("    // Remove loading message\n");
+        html.append("    const loadingMsg = document.getElementById('loading-message');\n");
+        html.append("    if (loadingMsg) loadingMsg.remove();\n");
+        html.append("    \n");
+        html.append("    // Add assistant response\n");
+        html.append("    addMessage('assistant', data.answer || 'No answer provided', data.sources || []);\n");
+        html.append("    \n");
+        html.append("  } catch (error) {\n");
+        html.append("    // Remove loading message\n");
+        html.append("    const loadingMsg = document.getElementById('loading-message');\n");
+        html.append("    if (loadingMsg) loadingMsg.remove();\n");
+        html.append("    \n");
+        html.append("    // Add error message\n");
+        html.append("    addMessage('assistant', '❌ Error: ' + error.message + '\\n\\nMake sure Ollama is running and the phi3 model is installed:\\n\\n' + \n");
+        html.append("      '```\\n' +\n");
+        html.append("      'ollama pull phi3\\n' +\n");
+        html.append("      '```', []);\n");
+        html.append("  } finally {\n");
+        html.append("    sendButton.disabled = false;\n");
+        html.append("    sendButton.innerHTML = 'Send';\n");
+        html.append("    queryInput.focus();\n");
+        html.append("  }\n");
+        html.append("}\n");
+        html.append("\n");
+        html.append("// Allow Enter to send (Shift+Enter for new line)\n");
+        html.append("queryInput.addEventListener('keydown', (e) => {\n");
+        html.append("  if (e.key === 'Enter' && !e.shiftKey) {\n");
+        html.append("    e.preventDefault();\n");
+        html.append("    sendMessage();\n");
+        html.append("  }\n");
+        html.append("});\n");
+        html.append("</script>\n");
+        
         html.append("</body>\n</html>\n");
         
         response.getWriter().write(html.toString());
