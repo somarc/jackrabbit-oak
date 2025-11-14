@@ -103,8 +103,10 @@ public class SlingAuthorRegistrationService {
     private volatile SlingAuthorWalletService walletService;
     
     @Reference(cardinality = ReferenceCardinality.OPTIONAL, policy = ReferencePolicy.DYNAMIC, 
-               target = "(component.name=org.apache.jackrabbit.oak.segment.http.HttpPersistenceService)")
-    private volatile org.apache.jackrabbit.oak.segment.spi.persistence.SegmentNodeStorePersistence httpPersistence;
+               target = "(component.name=org.apache.jackrabbit.oak.segment.http.HttpPersistenceService)",
+               bind = "bindHttpPersistenceService",
+               unbind = "unbindHttpPersistenceService")
+    private volatile org.apache.jackrabbit.oak.segment.http.HttpPersistenceService httpPersistenceService;
     
     private String validatorUrl;
     private String clientId;
@@ -145,28 +147,31 @@ public class SlingAuthorRegistrationService {
         }
         
         // Try to get validator URL from HttpPersistenceService if not configured
-        // Since HttpPersistenceService uses globalStoreUrl config, we can use the same default
+        // Since HttpPersistenceService uses globalStoreUrl config, we can use the same URL
         if (validatorUrl == null || validatorUrl.isEmpty()) {
-            // Default: Use oak-global-store alias (configured in docker-compose)
-            // This works because Sling authors connect via validator-X-clients networks
-            // which have the oak-global-store alias pointing to their validator
-            validatorUrl = "http://oak-global-store:8090";
-            log.info("   Using default validator URL: {}", validatorUrl);
+            if (httpPersistenceService != null && httpPersistenceService.getGlobalStoreUrl() != null) {
+                validatorUrl = httpPersistenceService.getGlobalStoreUrl();
+                log.info("   Using validator URL from HttpPersistenceService: {}", validatorUrl);
+            } else {
+                // Default: Use oak-global-store alias (configured in docker-compose)
+                // This works because Sling authors connect via validator-X-clients networks
+                // which have the oak-global-store alias pointing to their validator
+                validatorUrl = "http://oak-global-store:8090";
+                log.info("   Using default validator URL: {}", validatorUrl);
+            }
         }
         
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("✅ SLING AUTHOR REGISTRATION SERVICE ACTIVATED");
-        log.info("   Validator URL: {}", validatorUrl != null && !validatorUrl.isEmpty() ? validatorUrl : "(not configured)");
-        log.info("   Client ID: {}", clientId);
-        log.info("   Client URL: {}", clientUrl);
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("Sling Author Registration Service activated");
+        log.info("  Validator URL: {}", validatorUrl != null && !validatorUrl.isEmpty() ? validatorUrl : "(not configured)");
+        log.info("  Client ID: {}", clientId);
+        log.info("  Client URL: {}", clientUrl);
         
         // Registration will happen when wallet service binds (MANDATORY reference)
         // Wallet service activates FIRST (service.ranking=1000), then this service activates
         if (walletService != null && walletService.isAvailable()) {
             attemptRegistration();
         } else {
-            log.info("⏳ Waiting for wallet service to become available...");
+            log.debug("Waiting for wallet service to become available");
         }
     }
     
@@ -175,7 +180,7 @@ public class SlingAuthorRegistrationService {
      */
     protected void bindWalletService(SlingAuthorWalletService walletService) {
         this.walletService = walletService;
-        log.info("🔗 Wallet service bound - attempting registration");
+        log.debug("Wallet service bound - attempting registration");
         attemptRegistration();
     }
     
@@ -185,19 +190,22 @@ public class SlingAuthorRegistrationService {
     protected void unbindWalletService(SlingAuthorWalletService walletService) {
         if (this.walletService == walletService) {
             this.walletService = null;
-            log.info("🔗 Wallet service unbound");
+            log.debug("Wallet service unbound");
         }
     }
     
     /**
      * Called when HttpPersistenceService becomes available.
      */
-    protected void bindHttpPersistence(org.apache.jackrabbit.oak.segment.spi.persistence.SegmentNodeStorePersistence persistence) {
-        this.httpPersistence = persistence;
-        // Try to get validator URL if not already set
-        if (validatorUrl == null || validatorUrl.isEmpty()) {
-            validatorUrl = "http://oak-global-store:8090"; // Default alias
-            log.info("🔗 HttpPersistence service bound - attempting registration");
+    protected void bindHttpPersistenceService(org.apache.jackrabbit.oak.segment.http.HttpPersistenceService service) {
+        this.httpPersistenceService = service;
+        // Update validator URL from HttpPersistenceService if not already configured
+        if ((validatorUrl == null || validatorUrl.isEmpty()) && service != null && service.getGlobalStoreUrl() != null) {
+            validatorUrl = service.getGlobalStoreUrl();
+            log.info("Updated validator URL from HttpPersistenceService: {}", validatorUrl);
+            attemptRegistration();
+        } else {
+            log.debug("HttpPersistenceService bound - attempting registration");
             attemptRegistration();
         }
     }
@@ -205,9 +213,9 @@ public class SlingAuthorRegistrationService {
     /**
      * Called when HttpPersistenceService becomes unavailable.
      */
-    protected void unbindHttpPersistence(org.apache.jackrabbit.oak.segment.spi.persistence.SegmentNodeStorePersistence persistence) {
-        if (this.httpPersistence == persistence) {
-            this.httpPersistence = null;
+    protected void unbindHttpPersistenceService(org.apache.jackrabbit.oak.segment.http.HttpPersistenceService service) {
+        if (this.httpPersistenceService == service) {
+            this.httpPersistenceService = null;
         }
     }
     
@@ -247,10 +255,10 @@ public class SlingAuthorRegistrationService {
         }
         
         try {
-            log.info("📝 Registering Sling author with validator...");
-            log.info("   Client ID: {}", clientId);
-            log.info("   Client URL: {}", clientUrl);
-            log.info("   Wallet Address: {}", walletAddress);
+            log.info("Registering Sling author with validator");
+            log.debug("  Client ID: {}", clientId);
+            log.debug("  Client URL: {}", clientUrl);
+            log.debug("  Wallet Address: {}", walletAddress);
             
             String registrationUrl = validatorUrl + "/v1/register-client";
             URL url = new URL(registrationUrl);
@@ -295,18 +303,16 @@ public class SlingAuthorRegistrationService {
             
             if (responseCode == 200) {
                 registered = true;
-                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                log.info("✅ SLING AUTHOR REGISTERED WITH VALIDATOR");
-                log.info("   Client ID: {}", clientId);
-                log.info("   Wallet Address: {}", walletAddress);
-                log.info("   Validator: {}", validatorUrl);
-                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                log.info("Sling author registered with validator");
+                log.info("  Client ID: {}", clientId);
+                log.info("  Wallet Address: {}", walletAddress);
+                log.info("  Validator: {}", validatorUrl);
             } else {
-                log.warn("⚠️  Registration failed: HTTP {} - {}", responseCode, responseBody);
+                log.warn("Registration failed: HTTP {} - {}", responseCode, responseBody);
             }
             
         } catch (Exception e) {
-            log.warn("⚠️  Failed to register with validator (will retry): {}", e.getMessage());
+            log.warn("Failed to register with validator (will retry): {}", e.getMessage());
             // Schedule retry
             new Thread(() -> {
                 try {

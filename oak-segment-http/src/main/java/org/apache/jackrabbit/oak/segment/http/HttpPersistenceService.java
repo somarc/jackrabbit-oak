@@ -39,7 +39,7 @@ import org.slf4j.LoggerFactory;
  * </ul>
  */
 @Component(
-    service = {SegmentNodeStorePersistence.class},
+    service = {SegmentNodeStorePersistence.class, HttpPersistenceService.class},
     configurationPolicy = ConfigurationPolicy.REQUIRE
 )
 @Designate(ocd = HttpPersistenceService.Configuration.class)
@@ -60,15 +60,25 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
     private static final Logger log = LoggerFactory.getLogger(HttpPersistenceService.class);
 
     private HttpPersistence delegate;
+    private String globalStoreUrl;
 
     @Activate
     protected void activate(Configuration config) {
         log.info("Activating HTTP Segment Persistence");
         log.info("  Global Store URL: {}", config.globalStoreUrl());
 
-        this.delegate = new HttpPersistence(config.globalStoreUrl());
+        this.globalStoreUrl = config.globalStoreUrl();
+        this.delegate = new HttpPersistence(globalStoreUrl);
 
-        log.info("✅ HTTP Segment Persistence activated successfully");
+        log.info("HTTP Segment Persistence activated successfully");
+    }
+    
+    /**
+     * Get the global store URL configured for this service.
+     * @return The global store URL (e.g., http://oak-global-store:8090)
+     */
+    public String getGlobalStoreUrl() {
+        return globalStoreUrl;
     }
 
     @Deactivate
