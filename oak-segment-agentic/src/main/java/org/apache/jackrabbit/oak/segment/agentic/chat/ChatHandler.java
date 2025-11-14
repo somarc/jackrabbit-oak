@@ -20,6 +20,7 @@ import com.google.gson.Gson;
 import org.apache.jackrabbit.oak.segment.agentic.llm.LLMService;
 import org.apache.jackrabbit.oak.segment.agentic.rag.RAGService;
 import org.apache.jackrabbit.oak.segment.agentic.tools.AgenticTool;
+import org.apache.jackrabbit.oak.segment.agentic.tools.LogAccessTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.ToolResult;
 import org.apache.jackrabbit.oak.segment.agentic.tools.ValidatorApiTool;
 import org.slf4j.Logger;
@@ -54,7 +55,8 @@ public class ChatHandler {
         
         // Initialize tools
         this.tools.add(new ValidatorApiTool(baseUrl));
-        // Future: Add LogAccessTool, MetricsTool
+        this.tools.add(new LogAccessTool());
+        // Future: Add MetricsTool
     }
     
     /**
