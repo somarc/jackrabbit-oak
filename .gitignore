@@ -13,3 +13,6 @@ derby.log
 .java-version
 oak-shaded-guava/dependency-reduced-pom.xml
 .DS_Store
+# Built artifacts (JARs should not be committed)
+*.jar
+!**/src/**/*.jar
