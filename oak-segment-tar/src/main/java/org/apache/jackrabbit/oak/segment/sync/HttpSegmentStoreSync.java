@@ -66,7 +66,7 @@ import java.nio.charset.StandardCharsets;
     immediate = true,
     property = {
         "scheduler.concurrent:Boolean=false",
-        "scheduler.period:Long=60"  // Default: sync every 60 seconds (1 min, aligned with DAG auto-merge)
+        "scheduler.period:Long=60"  // Default: sync every 60 seconds
     }
 )
 @Designate(ocd = HttpSegmentStoreSync.Configuration.class)
@@ -75,8 +75,8 @@ public class HttpSegmentStoreSync implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(HttpSegmentStoreSync.class);
     
     @ObjectClassDefinition(
-        name = "HTTP Segment Store Background Sync (Cold Standby Pattern, DAG Consensus)",
-        description = "Periodically syncs composite mount from HTTP global store - Aligned with DAG auto-merge interval"
+        name = "HTTP Segment Store Background Sync (Cold Standby Pattern)",
+        description = "Periodically syncs composite mount from HTTP global store"
     )
     @interface Configuration {
         @AttributeDefinition(
@@ -87,7 +87,7 @@ public class HttpSegmentStoreSync implements Runnable {
         
         @AttributeDefinition(
             name = "Sync Interval",
-            description = "How often to poll for updates, in seconds. Default 60s (1 min) aligns with DAG auto-merge (30s) for responsive updates"
+            description = "How often to poll for updates, in seconds. Default 60s"
         )
         long syncInterval() default 60;
         
@@ -138,48 +138,36 @@ public class HttpSegmentStoreSync implements Runnable {
         this.onlyFinalized = config.onlyFinalized();
         this.walletAddress = config.walletAddress();
         
-        log.info("🔄 HTTP Segment Store Sync activated (DAG Consensus Mode)");
-        log.info("   Global Store: {}", globalStoreUrl);
-        log.info("   Sync Interval: {}s (~{} seconds)", config.syncInterval(), config.syncInterval());
-        log.info("   Enabled: {}", enabled);
-        log.info("   ");
-        log.info("   📊 DAG Consensus Timing Alignment:");
-        log.info("      Auto-Merge:  30s (validators detect divergence)");
-        log.info("      Replication: <5s (full segment sync during merge)");
-        log.info("      Sync Poll:   {}s ← Catches updates quickly!", config.syncInterval());
-        log.info("   ");
-        log.info("   🎯 Expected Latency:");
-        log.info("      Write → Validator consensus: ~30-60s");
-        log.info("      Validator → Sling mount:    ~{}s", config.syncInterval());
-        log.info("      Total end-to-end:           ~{}s", 30 + config.syncInterval());
-        log.info("   ");
-        log.info("   📍 Running from oak-segment-tar (Cold Standby pattern)");
-        log.info("   ✅ Direct access to ReadOnlyFileStore internals");
+        log.info("HTTP Segment Store Sync activated");
+        log.info("  Global Store: {}", globalStoreUrl);
+        log.info("  Sync Interval: {}s", config.syncInterval());
+        log.info("  Enabled: {}", enabled);
+        log.info("  Running from oak-segment-tar (Cold Standby pattern)");
+        log.info("  Direct access to ReadOnlyFileStore internals");
         
         // Register with validator after successful activation
         // Registration is now handled by SlingAuthorRegistrationService
         // Only register here if wallet address is available (for backward compatibility)
         // Otherwise, SlingAuthorRegistrationService will register once wallet is ready
         if (walletAddress != null && !walletAddress.isEmpty()) {
-            log.info("📞 Calling registerWithValidator()...");
+            log.debug("Calling registerWithValidator()");
             registerWithValidator();
-            log.info("📞 registerWithValidator() call completed");
         } else {
-            log.info("📞 Skipping registration - wallet address not available");
-            log.info("   Registration will be handled by SlingAuthorRegistrationService when wallet is ready");
+            log.debug("Skipping registration - wallet address not available");
+            log.debug("Registration will be handled by SlingAuthorRegistrationService when wallet is ready");
         }
     }
     
     @Deactivate
     protected void deactivate() {
-        log.info("🔄 HTTP Segment Store Sync deactivated");
-        log.info("   Total syncs: {}", syncCount);
-        log.info("   Updates detected: {}", updateCount);
-        log.info("   Skipped (finality): {}", skipCount);
-        log.info("   Refresh success: {}", refreshSuccessCount);
-        log.info("   Refresh failures: {}", refreshFailureCount);
+        log.info("HTTP Segment Store Sync deactivated");
+        log.info("  Total syncs: {}", syncCount);
+        log.info("  Updates detected: {}", updateCount);
+        log.info("  Skipped (finality): {}", skipCount);
+        log.info("  Refresh success: {}", refreshSuccessCount);
+        log.info("  Refresh failures: {}", refreshFailureCount);
         if (syncCount > 0) {
-            log.info("   Efficiency: {}%", (updateCount * 100) / syncCount);
+            log.info("  Efficiency: {}%", (updateCount * 100) / syncCount);
         }
     }
     
@@ -207,32 +195,32 @@ public class HttpSegmentStoreSync implements Runnable {
             }
             
             // Remote has new data!
-            log.info("📥 New revision detected in global store!");
+            log.info("New revision detected in global store");
             if (lastKnownRevision != null) {
-                log.info("   Previous: {}", lastKnownRevision.substring(0, Math.min(40, lastKnownRevision.length())));
+                log.debug("  Previous: {}", lastKnownRevision.substring(0, Math.min(40, lastKnownRevision.length())));
             }
-            log.info("   Current:  {}", remoteRevision.substring(0, Math.min(40, remoteRevision.length())));
+            log.debug("  Current:  {}", remoteRevision.substring(0, Math.min(40, remoteRevision.length())));
             
             // Update the head using Cold Standby pattern with direct access
             if (storeProvider != null) {
                 boolean refreshSuccess = updateFileStoreHead(remoteRevision);
                 if (refreshSuccess) {
                     refreshSuccessCount++;
-                    log.info("✅ Composite mount HEAD refreshed successfully (success: {}, failure: {})",
+                    log.info("Composite mount HEAD refreshed successfully (success: {}, failure: {})",
                              refreshSuccessCount, refreshFailureCount);
                 } else {
                     refreshFailureCount++;
-                    log.warn("⚠️  Failed to refresh composite mount HEAD (success: {}, failure: {})",
+                    log.warn("Failed to refresh composite mount HEAD (success: {}, failure: {})",
                              refreshSuccessCount, refreshFailureCount);
                 }
             } else {
-                log.warn("⚠️  SegmentStoreProvider not available - cannot refresh HEAD");
+                log.warn("SegmentStoreProvider not available - cannot refresh HEAD");
             }
             
             lastKnownRevision = remoteRevision;
             updateCount++;
             
-            log.info("✅ Sync complete (update #{} of {} syncs)", updateCount, syncCount);
+            log.debug("Sync complete (update #{} of {} syncs)", updateCount, syncCount);
             
         } catch (Exception e) {
             log.warn("Failed to sync from global store", e);
@@ -245,7 +233,7 @@ public class HttpSegmentStoreSync implements Runnable {
      */
     private void registerWithValidator() {
         try {
-            log.info("📝 Attempting to register with validator: {}", globalStoreUrl);
+            log.debug("Attempting to register with validator: {}", globalStoreUrl);
             
             // Get client identifier from system properties or environment
             String clientId = System.getProperty("sling.instance.id", 
@@ -268,12 +256,11 @@ public class HttpSegmentStoreSync implements Runnable {
                 clientUrl = "http://" + hostname + ":8080";
             }
             
-            log.info("   Client ID: {}", clientId);
-            log.info("   Client URL: {}", clientUrl);
+            log.debug("  Client ID: {}", clientId);
+            log.debug("  Client URL: {}", clientUrl);
             
             // Construct registration URL
             String registrationUrl = globalStoreUrl + "/v1/register-client";
-            log.info("   Registration URL: {}", registrationUrl);
             
             // Build JSON payload with wallet address (required)
             // This method is only called if walletAddress is available (see activate())
@@ -283,7 +270,6 @@ public class HttpSegmentStoreSync implements Runnable {
                 clientUrl.replace("\"", "\\\""),
                 walletAddress.replace("\"", "\\\"")
             );
-            log.info("   Wallet Address: {}", walletAddress);
             
             // Send registration request
             URL url = new URL(registrationUrl);
@@ -302,22 +288,22 @@ public class HttpSegmentStoreSync implements Runnable {
             
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {
-                log.info("✅ Registered with validator: {} (clientId: {})", globalStoreUrl, clientId);
+                log.info("Registered with validator: {} (clientId: {})", globalStoreUrl, clientId);
             } else {
-                log.warn("⚠️  Registration failed: HTTP {} (clientId: {})", responseCode, clientId);
+                log.warn("Registration failed: HTTP {} (clientId: {})", responseCode, clientId);
                 // Read error response
                 try (BufferedReader reader = new BufferedReader(
                         new InputStreamReader(conn.getErrorStream(), StandardCharsets.UTF_8))) {
                     String errorLine;
                     while ((errorLine = reader.readLine()) != null) {
-                        log.warn("   Error response: {}", errorLine);
+                        log.debug("  Error response: {}", errorLine);
                     }
                 }
             }
             
         } catch (Exception e) {
             // Non-fatal - registration failure shouldn't prevent sync from working
-            log.warn("⚠️  Failed to register with validator (non-fatal): {}", e.getMessage(), e);
+            log.warn("Failed to register with validator (non-fatal): {}", e.getMessage());
         }
     }
     

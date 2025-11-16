@@ -119,16 +119,14 @@ public class SlingDeleteProposalService {
             }
         }
         
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("✅ SLING DELETE PROPOSAL SERVICE ACTIVATED");
-        log.info("   Validator URL: {}", validatorUrl);
-        log.info("   Client ID: {}", clientId);
+        log.info("Sling Delete Proposal Service activated");
+        log.info("  Validator URL: {}", validatorUrl);
+        log.info("  Client ID: {}", clientId);
         if (walletService != null && walletService.isAvailable()) {
-            log.info("   Wallet Address: {}", walletService.getWalletAddress());
+            log.info("  Wallet Address: {}", walletService.getWalletAddress());
         } else {
-            log.warn("   Wallet Service: Not available (deletes will fail)");
+            log.warn("  Wallet Service: Not available (deletes will fail)");
         }
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
     
     /**
@@ -178,14 +176,12 @@ public class SlingDeleteProposalService {
                 return new DeleteResult(false, "Failed to sign delete transaction");
             }
             
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("🗑️  SIGNED DELETE TRANSACTION");
-            log.info("   Wallet: {}", walletAddress);
-            log.info("   Content Path: {}", contentPath);
-            log.info("   Signature: {}...{}", 
+            log.info("Submitting signed delete transaction");
+            log.debug("  Wallet: {}", walletAddress);
+            log.debug("  Content Path: {}", contentPath);
+            log.debug("  Signature: {}...{}", 
                 signature.substring(0, Math.min(10, signature.length())),
                 signature.length() > 10 ? signature.substring(signature.length() - 4) : "");
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             
             // Submit signed transaction to validator
             String deleteUrl = validatorUrl + "/v1/propose-delete";
@@ -233,15 +229,15 @@ public class SlingDeleteProposalService {
             }
             
             if (responseCode == 200) {
-                log.info("✅ Signed delete transaction accepted by validator: {}", contentPath);
+                log.info("Delete transaction accepted by validator: {}", contentPath);
                 return new DeleteResult(true, "Delete transaction accepted", responseBody);
             } else {
-                log.warn("⚠️  Delete transaction rejected: HTTP {} - {}", responseCode, responseBody);
+                log.warn("Delete transaction rejected: HTTP {} - {}", responseCode, responseBody);
                 return new DeleteResult(false, "Delete transaction rejected: " + responseBody);
             }
             
         } catch (Exception e) {
-            log.error("❌ Failed to propose signed delete transaction", e);
+            log.error("Failed to propose signed delete transaction", e);
             return new DeleteResult(false, "Failed to propose delete: " + e.getMessage());
         }
     }

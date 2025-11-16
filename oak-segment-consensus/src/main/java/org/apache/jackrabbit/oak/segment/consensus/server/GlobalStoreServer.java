@@ -65,6 +65,7 @@ public class GlobalStoreServer {
     private ValidatorBootstrap bootstrap;
     private org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
+    private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     
     // Bootstrap configuration (for organic peer discovery after promotion)
     private String bootstrapPrimaryHost;
@@ -123,6 +124,34 @@ public class GlobalStoreServer {
             System.out.println("   - Segments: " + storeDir.getAbsolutePath());
             
             // ===========================================================================
+            // Initialize GC Cost Estimator (for GC operations)
+            System.out.println("Initializing GC Cost Estimator...");
+            try {
+                // Access TarFiles via reflection (getTarFiles() is not public)
+                java.lang.reflect.Method getTarFilesMethod = FileStore.class.getDeclaredMethod("getTarFiles");
+                getTarFilesMethod.setAccessible(true);
+                org.apache.jackrabbit.oak.segment.file.tar.TarFiles tarFiles = 
+                    (org.apache.jackrabbit.oak.segment.file.tar.TarFiles) getTarFilesMethod.invoke(fileStore);
+                
+                // Create GC Cost Estimator with default USDC rate ($0.10 per MB)
+                // Can be configured via system property: gc.usdc.per.mb
+                String usdcRateStr = System.getProperty("gc.usdc.per.mb", "0.10");
+                java.math.BigDecimal usdcPerMB = new java.math.BigDecimal(usdcRateStr);
+                org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator = 
+                    new org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator(fileStore, tarFiles, usdcPerMB);
+                
+                System.out.println("✅ GC Cost Estimator initialized");
+                System.out.println("   - USDC rate: $" + usdcPerMB + " per MB");
+                
+                // Store for later access (will be set in ServerContext after HTTP server is created)
+                this.gcCostEstimator = gcCostEstimator;
+            } catch (Exception e) {
+                System.err.println("⚠️  Failed to initialize GC Cost Estimator: " + e.getMessage());
+                System.err.println("   GC cost estimation will not be available");
+                // Don't fail startup - GC estimation is optional
+            }
+            
+            // ===========================================================================
             // Initialize HTTP server FIRST (needed for startConsensusPrimary callback)
             System.out.println("Initializing HTTP server on port " + port + "...");
             httpServer = new SegmentHttpServer(storeDir, port, fileStore, nodeStore);
@@ -139,6 +168,12 @@ public class GlobalStoreServer {
                 System.out.println("   Resolved self URL to IP: " + selfUrl);
             }
             httpServer.setSelfUrl(selfUrl);
+            
+            // Set GC Cost Estimator in ServerContext (if initialized)
+            if (gcCostEstimator != null) {
+                httpServer.getContext().setGCCostEstimator(gcCostEstimator);
+            }
+            
             System.out.println("✅ HTTP server initialized (not yet started)");
             
             // Check consensus mode FIRST to determine if bootstrap is needed
@@ -457,7 +492,21 @@ public class GlobalStoreServer {
                     System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     System.err.println("🚨 FATAL MediaDriver error - exiting JVM for restart");
                     System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    
+                    // Force exit with multiple mechanisms (production-grade)
+                    // System.exit() may not work if threads are hung, so use Runtime.halt() as backup
                     System.exit(1); // Exit with error code (triggers container restart)
+                    
+                    // If still running after 5 seconds, force kill (prevents zombie processes)
+                    new Thread(() -> {
+                        try {
+                            Thread.sleep(5000);
+                            System.err.println("⚠️  JVM still running after System.exit() - forcing halt");
+                            Runtime.getRuntime().halt(1); // Force kill
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }, "force-exit-thread").start();
                 });
                 
                 try {
@@ -539,6 +588,34 @@ public class GlobalStoreServer {
                 System.out.println("   - Current role: " + aeronEngine.getCurrentRole());
                 System.out.println("   - Current leader: " + aeronEngine.getCurrentLeader());
                 System.out.println("   - Ethereum epoch: " + aeronEngine.getCurrentEthereumEpoch());
+                
+                // Initialize Proposal Queue Manager (for Ethereum confirmation tracking)
+                // Use EventDrivenEvmBridge for event-driven architecture
+                // Configuration via OAK_BLOCKCHAIN_MOCK_MODE env var or oak.blockchain.mockMode system property
+                org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig = 
+                    org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+                
+                org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge = 
+                    new org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge(
+                        blockchainConfig.getNetwork(),
+                        blockchainConfig.getContractAddress(),
+                        blockchainConfig.isMockMode()
+                    );
+                evmBridge.start();
+                
+                org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback raftCallback = 
+                    (walletAddress, path, contentType, message, signature) -> {
+                        // Append to Raft via AeronConsensusEngine
+                        if (aeronEngine != null) {
+                            aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
+                        }
+                    };
+                
+                org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager proposalQueueManager = 
+                    new org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager(evmBridge, raftCallback);
+                proposalQueueManager.start();
+                httpServer.getContext().setProposalQueueManager(proposalQueueManager);
+                System.out.println("   ✅ Proposal Queue Manager initialized (Ethereum confirmation tracking)");
                 
                 // ✈️ AERON MODE: Skip HTTP peer registration
                 // Aeron Cluster handles membership via Raft consensus - HTTP registration is legacy

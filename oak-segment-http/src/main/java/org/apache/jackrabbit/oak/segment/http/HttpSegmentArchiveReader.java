@@ -48,19 +48,12 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
 
     public HttpSegmentArchiveReader(String baseUrl, String archiveName, IOMonitor ioMonitor, HttpClientPool httpClientPool) throws IOException {
         super(ioMonitor); // MUST be first in Java
-        log.info("✨ ENTERING HttpSegmentArchiveReader constructor");
-        log.info("✨ baseUrl: {}, archiveName: {}", baseUrl, archiveName);
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-        log.info("✨ Normalized baseUrl: {}", this.baseUrl);
         this.archiveName = archiveName;
-        log.info("✨ Set archiveName");
         this.httpClientPool = httpClientPool;
         this.httpClient = httpClientPool.getHttpClient();
-        log.info("✨ Using shared HTTP client pool ({})", httpClientPool.getPoolStats());
-        log.info("✨ Calling computeArchiveIndexAndLength()...");
         this.length = computeArchiveIndexAndLength();
-        log.info("✨ Archive length: {}", this.length);
-        log.info("✨ HttpSegmentArchiveReader constructor COMPLETE");
+        log.debug("Initialized HttpSegmentArchiveReader for archive: {} at: {}", archiveName, this.baseUrl);
     }
 
     @Override
@@ -75,16 +68,10 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
 
     @Override
     protected long computeArchiveIndexAndLength() throws IOException {
-        log.info("💥 ENTERING computeArchiveIndexAndLength()");
-        log.info("💥 Archive name: {}", archiveName);
-        // POC SIMPLIFICATION: Server uses simple /segments/{uuid} API
-        // We don't have a real archive index endpoint yet
-        // For now, we'll discover segments on-demand
-        log.info("💥 POC mode: Segments will be discovered on-demand via /segments/{{uuid}} endpoint");
-        long length = 0; // Unknown length until we start reading
-        log.info("💥 Returning length: {}", length);
-        log.info("💥 computeArchiveIndexAndLength() COMPLETE");
-        return length;
+        // Server uses simple /segments/{uuid} API
+        // Segments are discovered on-demand, so archive length is unknown initially
+        log.debug("Archive index not available - segments will be fetched on-demand from: {}/segments/{{uuid}}", baseUrl);
+        return 0; // Unknown length until segments are read
     }
 
     @Override

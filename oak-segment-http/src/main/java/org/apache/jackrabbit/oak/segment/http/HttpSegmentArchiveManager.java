@@ -62,44 +62,33 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
      * @param httpClientPool Shared HTTP client pool for connection reuse
      */
     public HttpSegmentArchiveManager(String baseUrl, IOMonitor ioMonitor, HttpClientPool httpClientPool) {
-        log.info("⭐ ENTERING HttpSegmentArchiveManager constructor");
-        log.info("⭐ baseUrl param: {}", baseUrl);
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-        log.info("⭐ Normalized baseUrl: {}", this.baseUrl);
         this.ioMonitor = ioMonitor;
-        log.info("⭐ Set ioMonitor");
         this.httpClientPool = httpClientPool;
         this.httpClient = httpClientPool.getHttpClient();
-        log.info("⭐ Using shared HTTP client pool ({})", httpClientPool.getPoolStats());
-        log.info("⭐ HttpSegmentArchiveManager constructor COMPLETE");
+        log.debug("Initialized HttpSegmentArchiveManager for: {} (pool: {})", this.baseUrl, httpClientPool.getPoolStats());
     }
 
     @Override
     public List<String> listArchives() throws IOException {
-        log.info("💫 ENTERING listArchives()");
-        // POC SIMPLIFICATION: No archive listing endpoint yet
-        // For now, assume a single archive named "data.tar" (standard Oak naming)
-        log.info("💫 POC mode: Returning hardcoded archive list");
+        // No archive listing endpoint - assume a single archive (standard Oak naming)
         List<String> archives = new ArrayList<>();
-        archives.add("data00000a.tar"); // Common Oak segment archive name
-        log.info("💫 Returning {} archives", archives.size());
+        archives.add("data00000a.tar");
+        log.debug("Listing archives: {} (hardcoded for HTTP store)", archives);
         return archives;
     }
 
     @Override
     public SegmentArchiveReader open(String archiveName) throws IOException {
-        log.info("🌟 ENTERING open() for archive: {}", archiveName);
+        log.debug("Opening archive: {}", archiveName);
         
-        // Check if archive exists by querying the server
-        log.info("🌟 Checking if archive exists...");
         if (!exists(archiveName)) {
-            log.info("🌟 Archive does not exist: {}", archiveName);
+            log.debug("Archive does not exist: {}", archiveName);
             return null;
         }
 
-        log.info("🌟 Creating HttpSegmentArchiveReader...");
         HttpSegmentArchiveReader reader = new HttpSegmentArchiveReader(baseUrl, archiveName, ioMonitor, httpClientPool);
-        log.info("🌟 HttpSegmentArchiveReader created successfully");
+        log.debug("Opened archive: {}", archiveName);
         return reader;
     }
 

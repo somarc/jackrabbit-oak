@@ -45,11 +45,13 @@ public class RequestRouter {
     private final PeerDiscoveryHandler peerDiscoveryHandler;
     private final AeronApiHandler aeronApiHandler;
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
+    private final AuthTokenValidator authValidator;
     
     private final ServerContext context;
 
     public RequestRouter(ServerContext context) {
         this.context = context;
+        this.authValidator = new AuthTokenValidator();
         
         // Initialize all handlers
         this.healthHandler = new HealthHandler(
@@ -120,13 +122,21 @@ public class RequestRouter {
                     baseUrl = "http://localhost:8090";
                 }
             }
+            
+            // Set wallet address system property for agent identification (if available)
+            // Validators use wallet address (0x...) as their agent ID for provable identity
+            if (context.myValidatorId != null && !context.myValidatorId.isEmpty()) {
+                System.setProperty("wallet.address", context.myValidatorId);
+            }
+            
             Object chatHandler = chatHandlerClass.getConstructor(
                 llmServiceInterface,
                 ragServiceClass,
                 String.class
             ).newInstance(llmService, ragService, baseUrl);
             
-            log.info("✅ LLM Chat handler initialized (oak-segment-agentic module available) with baseUrl: {}", baseUrl);
+            String walletInfo = context.myValidatorId != null ? " (wallet: " + context.myValidatorId + ")" : "";
+            log.info("✅ LLM Chat handler initialized (oak-segment-agentic module available) with baseUrl: {}{}", baseUrl, walletInfo);
             return chatHandler;
         } catch (ClassNotFoundException e) {
             log.debug("oak-segment-agentic module not available - chat endpoint disabled");
@@ -157,7 +167,7 @@ public class RequestRouter {
         String method = request.getMethod();
         
         try {
-            // Health checks
+            // Health checks (always public - needed for monitoring/load balancers)
             if ("/health".equals(path) && "GET".equals(method)) {
                 healthHandler.handleHealth(response);
                 baseRequest.setHandled(true);
@@ -168,6 +178,13 @@ public class RequestRouter {
                 healthHandler.handleDeepHealth(response);
                 baseRequest.setHandled(true);
                 return;
+            }
+            
+            // Validate authentication for all other endpoints (if auth is enabled)
+            // If auth is disabled (no token configured), this allows all requests (POC mode)
+            if (!authValidator.validateRequest(request, response)) {
+                baseRequest.setHandled(true);
+                return; // Response already sent by validateRequest
             }
             
             // Dashboard and UI
@@ -288,6 +305,26 @@ public class RequestRouter {
             
             if ("/v1/consensus/status".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGetConsensusStatus(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // GC Cost Estimation
+            if ("/v1/gc/estimate".equals(path) && "GET".equals(method)) {
+                consensusApiHandler.handleGCCostEstimate(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // Proposal Queue Status
+            if (path.startsWith("/v1/proposals/") && path.endsWith("/status") && "GET".equals(method)) {
+                consensusApiHandler.handleGetProposalStatus(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/proposals/pending/count".equals(path) && "GET".equals(method)) {
+                consensusApiHandler.handleGetPendingCount(response);
                 baseRequest.setHandled(true);
                 return;
             }

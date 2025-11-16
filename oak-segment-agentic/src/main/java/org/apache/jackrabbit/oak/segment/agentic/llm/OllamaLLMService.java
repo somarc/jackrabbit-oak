@@ -38,8 +38,8 @@ import java.io.IOException;
  * Example setup:
  * <pre>
  *   # Install Ollama: https://ollama.ai
- *   ollama pull phi3
- *   # Or: ollama pull llama3.1:8b
+ *   ollama pull qwen2.5-coder:7b
+ *   # Default model: qwen2.5-coder:7b (Apache 2.0 licensed)
  * </pre>
  */
 public class OllamaLLMService implements LLMService {
@@ -100,7 +100,7 @@ public class OllamaLLMService implements LLMService {
             return model;
         }
         
-        return "phi3"; // Default model
+        return "qwen2.5-coder:7b"; // Default model (Apache 2.0 licensed, optimized for code)
     }
     
     public OllamaLLMService(String ollamaUrl, String modelName) {
@@ -155,18 +155,55 @@ public class OllamaLLMService implements LLMService {
         }
         
         try {
+            // Detect if this is agent-to-agent mode from context
+            boolean isAgentToAgent = context != null && (
+                context.contains("AGENT-TO-AGENT") || 
+                context.contains("TWO-WAY CONVERSATION") ||
+                context.contains("TOOL RESULTS")
+            );
+            
             // Build prompt with context
             StringBuilder prompt = new StringBuilder();
-            prompt.append("You are an AI assistant for Apache Jackrabbit Oak validators.\n");
-            prompt.append("Answer questions concisely using the provided context.\n\n");
+            
+            if (isAgentToAgent) {
+                // Agent-to-agent mode: Very explicit instructions
+                prompt.append("You are an AI agent communicating with another AI agent.\n");
+                prompt.append("CRITICAL: You MUST answer with ACTUAL DATA, not instructions!\n");
+                prompt.append("The tool results below contain REAL data from API calls - USE IT!\n\n");
+            } else {
+                prompt.append("You are an AI assistant for Apache Jackrabbit Oak validators.\n");
+                prompt.append("Answer questions concisely using the provided context.\n\n");
+            }
             
             if (context != null && !context.isEmpty()) {
-                prompt.append("Context:\n");
-                prompt.append(context);
+                // Put tool results FIRST if in agent-to-agent mode (LLMs pay more attention to what comes first)
+                if (isAgentToAgent && context.contains("TOOL RESULTS")) {
+                    // Extract tool results section and put it first
+                    int toolStart = context.indexOf("TOOL RESULTS");
+                    String separator = "=".repeat(70);
+                    int toolEnd = context.indexOf(separator, toolStart + 12);
+                    if (toolEnd > toolStart) {
+                        String toolResults = context.substring(toolStart, toolEnd + separator.length());
+                        String restOfContext = context.substring(0, toolStart) + context.substring(toolEnd + separator.length());
+                        prompt.append(toolResults).append("\n\n");
+                        prompt.append(restOfContext);
+                    } else {
+                        prompt.append(context);
+                    }
+                } else {
+                    prompt.append(context);
+                }
                 prompt.append("\n");
             }
             
             prompt.append("Question: ").append(query).append("\n\n");
+            
+            if (isAgentToAgent) {
+                prompt.append("REMEMBER: Answer with ACTUAL DATA from the tool results above.\n");
+                prompt.append("Do NOT provide instructions - provide the ANSWER with real data!\n");
+                prompt.append("Example: \"The current leader is node-0 (term 5)\" NOT \"Query GET /v1/aeron/cluster-state\"\n\n");
+            }
+            
             prompt.append("Answer:");
             
             // Build JSON request
@@ -174,7 +211,16 @@ public class OllamaLLMService implements LLMService {
             requestJson.addProperty("model", modelName);
             requestJson.addProperty("prompt", prompt.toString());
             requestJson.addProperty("stream", false);
-            // Options can be added here if needed (e.g., temperature, top_p)
+            
+            // For agent-to-agent mode, use lower temperature for more deterministic responses
+            // and higher top_p to focus on the most likely tokens
+            if (isAgentToAgent) {
+                JsonObject options = new JsonObject();
+                options.addProperty("temperature", 0.3);  // Lower = more deterministic
+                options.addProperty("top_p", 0.9);        // Focus on high-probability tokens
+                options.addProperty("num_predict", 500);  // Limit response length
+                requestJson.add("options", options);
+            }
             
             String jsonPayload = gson.toJson(requestJson);
             

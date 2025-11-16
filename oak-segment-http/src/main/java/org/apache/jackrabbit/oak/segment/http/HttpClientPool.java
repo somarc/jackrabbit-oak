@@ -74,12 +74,8 @@ public class HttpClientPool {
      * @param maxPerRoute Maximum connections per route (host:port)
      */
     public HttpClientPool(int maxTotal, int maxPerRoute) {
-        log.info("🔵 Initializing HTTP Client Pool");
-        log.info("   Max Total Connections: {}", maxTotal);
-        log.info("   Max Per Route: {}", maxPerRoute);
-        log.info("   Connection Timeout: {}ms", CONNECTION_TIMEOUT_MS);
-        log.info("   Socket Timeout: {}ms", SOCKET_TIMEOUT_MS);
-        log.info("   Idle Eviction: {}ms", IDLE_CONNECTION_EVICTION_MS);
+        log.info("Initializing HTTP Client Pool (maxTotal={}, maxPerRoute={}, connectTimeout={}ms, socketTimeout={}ms)", 
+                 maxTotal, maxPerRoute, CONNECTION_TIMEOUT_MS, SOCKET_TIMEOUT_MS);
         
         // Create connection pool manager
         this.connectionManager = new PoolingHttpClientConnectionManager();
@@ -105,7 +101,7 @@ public class HttpClientPool {
         this.poolMonitor = new ConnectionPoolMonitor(connectionManager);
         this.poolMonitor.start();
         
-        log.info("✅ HTTP Client Pool initialized successfully");
+        log.info("HTTP Client Pool initialized successfully");
     }
     
     /**
@@ -139,7 +135,7 @@ public class HttpClientPool {
      * Shutdown the HTTP client pool and release all connections.
      */
     public void shutdown() {
-        log.info("🔴 Shutting down HTTP Client Pool");
+        log.info("Shutting down HTTP Client Pool");
         poolMonitor.shutdown();
         try {
             httpClient.close();
@@ -147,7 +143,7 @@ public class HttpClientPool {
             log.warn("Error closing HTTP client: {}", e.getMessage());
         }
         connectionManager.close();
-        log.info("✅ HTTP Client Pool shutdown complete");
+        log.info("HTTP Client Pool shutdown complete");
     }
     
     /**
@@ -186,7 +182,7 @@ public class HttpClientPool {
             int available = connectionManager.getTotalStats().getAvailable();
             int max = connectionManager.getTotalStats().getMax();
             
-            log.info("📊 HTTP Pool Stats: Leased={}, Pending={}, Available={}, Max={}", 
+            log.debug("HTTP Pool Stats: Leased={}, Pending={}, Available={}, Max={}", 
                 leased, pending, available, max);
             
             // Note: Prometheus metrics are updated by SegmentHttpServer if present

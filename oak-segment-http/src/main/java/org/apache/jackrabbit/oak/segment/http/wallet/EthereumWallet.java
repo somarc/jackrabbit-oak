@@ -103,11 +103,11 @@ public class EthereumWallet {
             ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256k1");
             keyGen.initialize(ecSpec, new SecureRandom());
             KeyPair kp = keyGen.generateKeyPair();
-            log.info("✅ Generated new secp256k1 key pair");
+            log.debug("Generated new secp256k1 key pair");
             return kp;
         } catch (Exception e) {
             // Fallback to secp256r1 if secp256k1 is not available
-            log.warn("⚠️  secp256k1 not available, falling back to secp256r1 (for POC)");
+            log.warn("secp256k1 not available, falling back to secp256r1 (for POC)");
             KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC");
             ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256r1");
             keyGen.initialize(ecSpec, new SecureRandom());
@@ -140,8 +140,8 @@ public class EthereumWallet {
         keystoreFile.setWritable(false, false);
         keystoreFile.setWritable(true, true);
         
-        log.info("✅ Keystore saved to {}", keystoreFile.getAbsolutePath());
-        log.warn("🔐 IMPORTANT: Back up this file! Loss = permanent identity loss");
+        log.info("Keystore saved to {}", keystoreFile.getAbsolutePath());
+        log.warn("IMPORTANT: Back up this file! Loss = permanent identity loss");
     }
     
     /**
@@ -177,7 +177,7 @@ public class EthereumWallet {
             new java.security.spec.X509EncodedKeySpec(publicKeyBytes);
         PublicKey publicKey = keyFactory.generatePublic(publicKeySpec);
         
-        log.info("✅ Loaded existing key pair from keystore");
+        log.debug("Loaded existing key pair from keystore");
         return new KeyPair(publicKey, privateKey);
     }
     

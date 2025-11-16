@@ -20,6 +20,9 @@ import com.google.gson.Gson;
 import org.apache.jackrabbit.oak.segment.agentic.llm.LLMService;
 import org.apache.jackrabbit.oak.segment.agentic.rag.RAGService;
 import org.apache.jackrabbit.oak.segment.agentic.tools.AgenticTool;
+import org.apache.jackrabbit.oak.segment.agentic.tools.AgentDiscoveryTool;
+import org.apache.jackrabbit.oak.segment.agentic.tools.ApiDocumentationTool;
+import org.apache.jackrabbit.oak.segment.agentic.tools.ConnectivityDiagnosticTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.LogAccessTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.OSGiBundleTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.OSGiComponentTool;
@@ -114,6 +117,15 @@ public class ChatHandler {
     private void initializeTools() {
         // Common tools
         this.tools.add(new LogAccessTool());
+        this.tools.add(new AgentDiscoveryTool());
+        this.tools.add(new ConnectivityDiagnosticTool());
+        
+        // API documentation tool (always available, especially important for agent-to-agent)
+        String validatorUrl = isSlingContext ? getValidatorUrl() : baseUrl;
+        if (validatorUrl == null || validatorUrl.isEmpty()) {
+            validatorUrl = "http://localhost:8091"; // Default fallback
+        }
+        this.tools.add(new ApiDocumentationTool(isSlingContext, validatorUrl));
         
         if (isSlingContext) {
             // Sling-author context: Focus on Sling/Oak state, OSGi introspection
@@ -123,7 +135,6 @@ public class ChatHandler {
             this.tools.add(new OSGiComponentTool());
             
             // Validator tools for querying validator state (read-only)
-            String validatorUrl = getValidatorUrl();
             if (validatorUrl != null && !validatorUrl.isEmpty()) {
                 this.tools.add(new ValidatorApiTool(validatorUrl));
                 this.tools.add(new ValidatorLLMChatTool(validatorUrl));
@@ -240,11 +251,80 @@ public class ChatHandler {
     private ChatResponse processChat(ChatRequest request) {
         ChatResponse response = new ChatResponse();
         
+        // Check for agent-to-agent communication metadata
+        boolean isAgentToAgent = false;
+        Map<String, Object> agentMetadata = null;
+        if (request.context != null) {
+            // Check for explicit agentToAgent flag (from UI toggle)
+            Object agentToAgentFlag = request.context.get("agentToAgent");
+            if (agentToAgentFlag != null && Boolean.TRUE.equals(agentToAgentFlag)) {
+                isAgentToAgent = true;
+                agentMetadata = new HashMap<>();
+                // Use wallet address as agent ID
+                agentMetadata.put("requestingAgentId", getWalletAddress());
+                agentMetadata.put("requestingAgentType", isSlingContext ? "sling-author" : "validator");
+                agentMetadata.put("requestingCapabilities", getRespondingCapabilities());
+                log.info("🤖 Agent-to-Agent mode enabled (UI toggle) - Agent: {} ({})", 
+                    agentMetadata.get("requestingAgentId"), agentMetadata.get("requestingAgentType"));
+            }
+            // Also check for explicit agent context (from another agent)
+            Object agentContext = request.context.get("agentId");
+            if (agentContext != null && !isAgentToAgent) {
+                isAgentToAgent = true;
+                agentMetadata = new HashMap<>();
+                agentMetadata.put("requestingAgentId", request.context.get("agentId"));
+                agentMetadata.put("requestingAgentType", request.context.get("agentType"));
+                agentMetadata.put("requestingCapabilities", request.context.get("capabilities"));
+                log.info("🤖 Agent-to-Agent request from {} ({})", 
+                    request.context.get("agentId"), request.context.get("agentType"));
+            }
+        }
+        
         // 1. RAG: Retrieve relevant code/docs
         List<RAGService.CodeChunk> relevantChunks = ragService.retrieve(request.query);
         
         // 2. Determine which tools to use
         List<AgenticTool> activeTools = selectTools(request.query);
+        
+        // In agent-to-agent mode, be more proactive about executing tools
+        if (isAgentToAgent) {
+            // Always include API documentation tool
+            ApiDocumentationTool apiDocTool = null;
+            for (AgenticTool tool : tools) {
+                if (tool instanceof ApiDocumentationTool) {
+                    apiDocTool = (ApiDocumentationTool) tool;
+                    break;
+                }
+            }
+            if (apiDocTool != null && !activeTools.contains(apiDocTool)) {
+                activeTools.add(apiDocTool);
+            }
+            
+            // In agent-to-agent mode, be more aggressive about executing API tools
+            // If the query seems to ask for data, try to get it proactively
+            String lowerQuery = request.query.toLowerCase();
+            boolean needsData = lowerQuery.contains("what") || lowerQuery.contains("show") || 
+                               lowerQuery.contains("get") || lowerQuery.contains("current") ||
+                               lowerQuery.contains("status") || lowerQuery.contains("state") ||
+                               lowerQuery.contains("leader") || lowerQuery.contains("cluster");
+            
+            if (needsData) {
+                // Add ValidatorApiTool if not already selected and we're in validator context
+                if (!isSlingContext) {
+                    ValidatorApiTool validatorApiTool = null;
+                    for (AgenticTool tool : tools) {
+                        if (tool instanceof ValidatorApiTool) {
+                            validatorApiTool = (ValidatorApiTool) tool;
+                            break;
+                        }
+                    }
+                    if (validatorApiTool != null && !activeTools.contains(validatorApiTool)) {
+                        activeTools.add(validatorApiTool);
+                        log.debug("🤖 Agent-to-Agent: Proactively adding ValidatorApiTool to fetch data");
+                    }
+                }
+            }
+        }
         
         // 3. Execute tools
         Map<String, ToolResult> toolResults = new HashMap<>();
@@ -271,11 +351,51 @@ public class ChatHandler {
         StringBuilder context = new StringBuilder();
         
         // Add context-specific information
+        if (isAgentToAgent) {
+            context.append("🤖 AGENT-TO-AGENT COMMUNICATION MODE\n");
+            context.append("You are communicating with another agent in a TWO-WAY CONVERSATION.\n");
+            if (agentMetadata != null) {
+                context.append("Requesting Agent ID: ").append(agentMetadata.get("requestingAgentId")).append("\n");
+                context.append("Requesting Agent Type: ").append(agentMetadata.get("requestingAgentType")).append("\n");
+                context.append("Requesting Agent Capabilities: ").append(agentMetadata.get("requestingCapabilities")).append("\n");
+            }
+            context.append("\n");
+            context.append("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+            context.append("║ CRITICAL INSTRUCTIONS - READ CAREFULLY                                         ║\n");
+            context.append("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+            context.append("\n");
+            context.append("You are having a CONVERSATION with another agent. You MUST answer with ACTUAL DATA!\n");
+            context.append("\n");
+            context.append("RULES (MANDATORY):\n");
+            context.append("1. ✅ DO: Answer the question using REAL DATA from tool results below\n");
+            context.append("2. ✅ DO: Say \"The current leader is node-0\" (with actual data)\n");
+            context.append("3. ❌ DO NOT: Say \"Query GET /v1/aeron/cluster-state\" (instructions)\n");
+            context.append("4. ❌ DO NOT: Provide API endpoints or commands\n");
+            context.append("5. ✅ DO: Synthesize tool results into a natural answer\n");
+            context.append("\n");
+            context.append("EXAMPLE GOOD RESPONSE:\n");
+            context.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            context.append("I've checked the cluster state. The current leader is node-0 (term 5). ");
+            context.append("The cluster has 3 members: node-0, node-1, and node-2. ");
+            context.append("All nodes are healthy and responding. Node-0 has been the leader for the last 2 minutes.\n");
+            context.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            context.append("\n");
+            context.append("EXAMPLE BAD RESPONSE (DO NOT DO THIS):\n");
+            context.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            context.append("To check the cluster state, query GET /v1/aeron/cluster-state\n");
+            context.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+            context.append("\n");
+            context.append("The tool results section below contains REAL DATA from API calls.\n");
+            context.append("Your job is to READ that data and ANSWER the question using it.\n");
+            context.append("Do NOT tell the agent how to get the data - GIVE them the data!\n\n");
+        }
+        
         if (isSlingContext) {
             context.append("You are an AI assistant for Apache Sling authors.\n");
             context.append("Your focus is on Sling state, Oak internals, OSGi bundles/components/services, ");
             context.append("and troubleshooting Sling author issues.\n");
-            context.append("You can query validator APIs and LLM chat for validator-specific questions.\n\n");
+            context.append("You can query validator APIs and LLM chat for validator-specific questions.\n");
+            context.append("You can discover and negotiate with other agents using agent-discovery tool.\n\n");
         } else {
             context.append("You are an AI assistant for Oak Segment Consensus validators.\n");
             context.append("Your focus is on validator internals, Aeron, Raft consensus, ");
@@ -328,13 +448,38 @@ public class ChatHandler {
         
         // Add tool results first (most important)
         if (!toolResults.isEmpty()) {
-            context.append("Current System State:\n");
+            if (isAgentToAgent) {
+                context.append("📊 TOOL RESULTS (ACTUAL DATA FROM API CALLS - USE THIS TO ANSWER THE QUESTION):\n");
+                context.append("=").append("=".repeat(70)).append("\n");
+            } else {
+                context.append("Current System State:\n");
+            }
             for (Map.Entry<String, ToolResult> entry : toolResults.entrySet()) {
                 if (entry.getValue().success) {
-                    context.append(entry.getKey()).append(": ").append(entry.getValue().data).append("\n");
+                    if (isAgentToAgent) {
+                        context.append("\n[").append(entry.getKey()).append("]\n");
+                        context.append(entry.getValue().data);
+                        context.append("\n");
+                    } else {
+                        context.append(entry.getKey()).append(": ").append(entry.getValue().data).append("\n");
+                    }
+                } else {
+                    if (isAgentToAgent) {
+                        context.append("\n[").append(entry.getKey()).append("] FAILED: ").append(entry.getValue().data).append("\n");
+                    }
                 }
             }
-            context.append("\n");
+            if (isAgentToAgent) {
+                context.append("=").append("=".repeat(70)).append("\n");
+                context.append("\n");
+                context.append("IMPORTANT: The data above is REAL, ACTUAL data from API calls. ");
+                context.append("Use this data to answer the requesting agent's question in a natural, conversational way.\n");
+                context.append("Do NOT just repeat the instructions - synthesize the data into a helpful response.\n\n");
+            } else {
+                context.append("\n");
+            }
+        } else if (isAgentToAgent) {
+            context.append("⚠️  No tool results available. You may need to suggest which API endpoint to call.\n\n");
         }
         
         // Add RAG chunks (code documentation)
@@ -350,7 +495,22 @@ public class ChatHandler {
         String answer = llmService.generate(request.query, context.toString());
         response.answer = answer;
         
-        // 6. Add RAG sources
+        // 6. Add agent metadata if this is agent-to-agent communication
+        if (isAgentToAgent && agentMetadata != null) {
+            // Add response agent metadata (using Ethereum wallet address)
+            agentMetadata.put("respondingAgentId", getWalletAddress());
+            agentMetadata.put("respondingAgentType", isSlingContext ? "sling-author" : "validator");
+            agentMetadata.put("respondingCapabilities", getRespondingCapabilities());
+            // Store in a way that can be accessed (we'll add this to response later)
+            // For now, append to answer
+            answer += "\n\n--- Agent Metadata ---\n";
+            answer += "Responding Agent: " + agentMetadata.get("respondingAgentId") + " (" + 
+                     agentMetadata.get("respondingAgentType") + ")\n";
+            answer += "Capabilities: " + agentMetadata.get("respondingCapabilities") + "\n";
+            response.answer = answer;
+        }
+        
+        // 7. Add RAG sources
         for (RAGService.CodeChunk chunk : relevantChunks) {
             ChatResponse.Source source = new ChatResponse.Source(
                 "rag",
@@ -361,6 +521,95 @@ public class ChatHandler {
         }
         
         return response;
+    }
+    
+    /**
+     * Get Ethereum wallet address for agent identification.
+     * Uses 0x wallet address for provable identity and signing.
+     */
+    private String getWalletAddress() {
+        // Try to get wallet address from OSGi service (Sling context)
+        if (isSlingContext) {
+            try {
+                Object bundleContext = getBundleContext();
+                if (bundleContext != null) {
+                    Object serviceRef = bundleContext.getClass()
+                        .getMethod("getServiceReference", String.class)
+                        .invoke(bundleContext, "org.apache.jackrabbit.oak.segment.http.wallet.SlingAuthorWalletService");
+                    if (serviceRef != null) {
+                        Object walletService = bundleContext.getClass()
+                            .getMethod("getService", Class.forName("org.osgi.framework.ServiceReference"))
+                            .invoke(bundleContext, serviceRef);
+                        if (walletService != null) {
+                            String address = (String) walletService.getClass()
+                                .getMethod("getWalletAddress").invoke(walletService);
+                            if (address != null && !address.isEmpty()) {
+                                return address;
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Could not get wallet address from OSGi service", e);
+            }
+        }
+        
+        // Fallback: Try system property (for validators or if OSGi lookup fails)
+        String walletAddress = System.getProperty("wallet.address");
+        if (walletAddress != null && !walletAddress.isEmpty()) {
+            return walletAddress;
+        }
+        
+        // Last resort: Generate temporary ID (should not happen in production)
+        log.warn("⚠️  No wallet address found - using temporary ID. Wallet should be configured.");
+        String hostname = System.getProperty("user.name", "unknown");
+        long pid = ProcessHandle.current().pid();
+        long timestamp = System.currentTimeMillis();
+        return String.format("temp-%s-%d-%d", hostname, pid, timestamp);
+    }
+    
+    /**
+     * Get BundleContext using reflection (for Sling context).
+     */
+    private Object getBundleContext() {
+        try {
+            Class<?> frameworkUtilClass = Class.forName("org.osgi.framework.FrameworkUtil");
+            Object bundle = frameworkUtilClass.getMethod("getBundle", Class.class)
+                .invoke(null, getClass());
+            if (bundle != null) {
+                return bundle.getClass().getMethod("getBundleContext").invoke(bundle);
+            }
+        } catch (Exception e) {
+            // Not in OSGi context
+        }
+        return null;
+    }
+    
+    /**
+     * Get capabilities of this responding agent.
+     */
+    private List<String> getRespondingCapabilities() {
+        List<String> capabilities = new ArrayList<>();
+        
+        if (isSlingContext) {
+            capabilities.add("osgi-introspection");
+            capabilities.add("sling-state-query");
+            capabilities.add("oak-composite-mount");
+            capabilities.add("validator-api-access");
+            capabilities.add("rag-sling-codebase");
+        } else {
+            capabilities.add("aeron-consensus");
+            capabilities.add("validator-apis");
+            capabilities.add("segment-serving");
+            capabilities.add("raft-state");
+            capabilities.add("rag-validator-codebase");
+        }
+        
+        capabilities.add("llm-chat");
+        capabilities.add("log-access");
+        capabilities.add("agent-to-agent-communication");
+        
+        return capabilities;
     }
     
     private List<AgenticTool> selectTools(String query) {

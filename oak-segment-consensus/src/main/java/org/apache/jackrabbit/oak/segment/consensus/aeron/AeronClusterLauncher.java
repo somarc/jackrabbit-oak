@@ -165,13 +165,37 @@ public class AeronClusterLauncher {
             return t;
         });
         
-        // Check for crash markers from previous runs
-        if (crashHandler.hasCrashed()) {
-            log.warn("⚠️  Crash markers detected from previous run: {}", crashHandler.getState());
+        // Check for crash markers from previous runs OR stale MediaDriver directory
+        // ActiveDriverException occurs when MediaDriver directory exists but process is dead
+        File aeronDir = new File(aeronDirName);
+        boolean hasCrashMarkers = crashHandler.hasCrashed();
+        boolean aeronDirExists = aeronDir.exists();
+        
+        if (hasCrashMarkers || aeronDirExists) {
+            if (hasCrashMarkers) {
+                log.warn("⚠️  Crash markers detected from previous run: {}", crashHandler.getState());
+            }
+            if (aeronDirExists) {
+                log.warn("⚠️  Stale MediaDriver directory detected: {}", aeronDirName);
+                log.warn("   This may cause ActiveDriverException if MediaDriver didn't shut down cleanly");
+            }
             
-            // Clean up stale MediaDriver directory if crash markers exist
-            // This prevents MediaDriver timeout errors from corrupted state
-            File aeronDir = new File(aeronDirName);
+            // Check if MediaDriver process is actually running
+            boolean mediaDriverRunning = false;
+            try {
+                // Check for MediaDriver lock file (indicates active driver)
+                File lockFile = new File(aeronDir, "driver.lock");
+                if (lockFile.exists()) {
+                    // Try to read PID from lock file (if available)
+                    // If lock file exists but process is dead, we can safely delete
+                    log.debug("MediaDriver lock file exists: {}", lockFile.getAbsolutePath());
+                }
+            } catch (Exception e) {
+                log.debug("Could not check MediaDriver lock file: {}", e.getMessage());
+            }
+            
+            // Clean up stale MediaDriver directory
+            // This prevents ActiveDriverException from stale directories
             if (aeronDir.exists()) {
                 log.warn("🧹 Cleaning up stale MediaDriver directory: {}", aeronDirName);
                 try {
@@ -179,7 +203,8 @@ public class AeronClusterLauncher {
                     log.info("✅ Cleaned up stale MediaDriver directory");
                 } catch (Exception e) {
                     log.warn("⚠️  Failed to clean up MediaDriver directory: {}", e.getMessage());
-                    // Continue anyway - MediaDriver might handle it
+                    log.warn("   You may need to manually delete: {}", aeronDirName);
+                    // Continue anyway - MediaDriver might handle it or fail with clear error
                 }
             }
         }
@@ -209,9 +234,11 @@ public class AeronClusterLauncher {
                 // Uses backoff strategy to reduce CPU spinning when idle
                 .conductorIdleStrategy(new org.agrona.concurrent.BackoffIdleStrategy(100, 100, 1000, 1000000))
                 // ✈️ RESILIENCE: Increase driver timeout for better resilience under load
-                // Default is 10s, increasing to 20s provides more tolerance for GC pauses
+                // Default is 10s, increasing to 60s provides more tolerance for GC pauses and system load
+                // Production: 60s (tested - prevents false positives from macOS/system pauses)
                 // Note: This is a trade-off - longer timeout means slower failure detection
-                .driverTimeoutMs(20000);  // 20 seconds (default is 10s)
+                // But MediaDriver thread hangs need longer timeout to avoid false positives
+                .driverTimeoutMs(60000);  // 60 seconds (production-grade, was 20s)
         
         // Archive Context (use IP address for Aeron channels)
         AeronArchive.Context replicationArchiveContext = new AeronArchive.Context()

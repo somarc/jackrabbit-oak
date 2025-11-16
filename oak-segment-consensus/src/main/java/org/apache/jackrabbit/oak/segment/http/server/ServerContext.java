@@ -21,6 +21,8 @@ import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusStateService;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
@@ -53,6 +55,8 @@ public class ServerContext {
     public volatile ProofVerifier proofVerifier;
     public volatile String selfUrl;
     public volatile ConsensusStateService consensusStateService;
+    public volatile GCCostEstimator gcCostEstimator;
+    public volatile ProposalQueueManager proposalQueueManager;
     
     // Shared state
     public final Map<String, ClientRegistration> registeredClients;
@@ -139,6 +143,16 @@ public class ServerContext {
     
     public void setAeronPrometheusMetrics(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics aeronPrometheusMetrics) {
         this.aeronPrometheusMetrics = aeronPrometheusMetrics;
+    }
+    
+    public void setGCCostEstimator(GCCostEstimator gcCostEstimator) {
+        this.gcCostEstimator = gcCostEstimator;
+        log.info("✅ GC Cost Estimator initialized");
+    }
+    
+    public void setProposalQueueManager(ProposalQueueManager proposalQueueManager) {
+        this.proposalQueueManager = proposalQueueManager;
+        log.info("✅ Proposal Queue Manager initialized");
     }
 }
 

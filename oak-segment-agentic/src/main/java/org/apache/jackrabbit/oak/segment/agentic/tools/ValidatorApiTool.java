@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.agentic.tools;
 
-import com.google.gson.Gson;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
@@ -37,7 +36,6 @@ public class ValidatorApiTool implements AgenticTool {
     private static final Logger log = LoggerFactory.getLogger(ValidatorApiTool.class);
     
     private final String baseUrl;
-    private final Gson gson = new Gson();
     private final CloseableHttpClient httpClient;
     
     public ValidatorApiTool(String baseUrl) {
@@ -175,7 +173,12 @@ public class ValidatorApiTool implements AgenticTool {
     @Override
     public boolean shouldUse(String query) {
         String lower = query.toLowerCase();
-        return lower.contains("leader") || lower.contains("cluster") || 
+        // In agent-to-agent mode, be more proactive - if query asks for data, we should fetch it
+        boolean isDataQuery = lower.contains("what") || lower.contains("show") || 
+                             lower.contains("get") || lower.contains("current") ||
+                             lower.contains("tell") || lower.contains("find");
+        
+        return isDataQuery || lower.contains("leader") || lower.contains("cluster") || 
                lower.contains("consensus") || lower.contains("peer") ||
                lower.contains("validator") || lower.contains("status") ||
                lower.contains("health") || lower.contains("metric") ||

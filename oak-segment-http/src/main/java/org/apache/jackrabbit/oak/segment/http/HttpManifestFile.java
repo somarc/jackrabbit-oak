@@ -50,18 +50,18 @@ public class HttpManifestFile implements ManifestFile {
     @Override
     public boolean exists() {
         String manifestUrl = baseUrl + "/manifest";
-        log.debug("🔍 Checking if manifest exists at: {}", manifestUrl);
+        log.debug("Checking if manifest exists at: {}", manifestUrl);
         try {
             org.apache.http.client.methods.HttpHead request = 
                 new org.apache.http.client.methods.HttpHead(manifestUrl);
             try (CloseableHttpResponse response = httpClient.execute(request)) {
                 int statusCode = response.getStatusLine().getStatusCode();
                 boolean exists = (statusCode == HttpStatus.SC_OK);
-                log.debug("🔍 Manifest HEAD request: {} -> {} (exists: {})", manifestUrl, statusCode, exists);
+                log.debug("Manifest HEAD request: {} -> {} (exists: {})", manifestUrl, statusCode, exists);
                 return exists;
             }
         } catch (IOException e) {
-            log.warn("⚠️ Failed to check manifest existence at {}: {}", manifestUrl, e.getMessage());
+            log.debug("Failed to check manifest existence at {}: {}", manifestUrl, e.getMessage());
             return false;
         }
     }

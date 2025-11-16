@@ -47,31 +47,21 @@ public class HttpJournalFile implements JournalFile {
     private final CloseableHttpClient httpClient;
     
     public HttpJournalFile(String baseUrl, WriteAccessController writeAccessController, HttpClientPool httpClientPool) {
-        log.info("🟢 ENTERING HttpJournalFile constructor");
-        log.info("🟢 baseUrl: {}", baseUrl);
         this.baseUrl = baseUrl;
-        log.info("🟢 Set baseUrl");
         this.writeAccessController = writeAccessController;
-        log.info("🟢 Set writeAccessController");
         this.httpClientPool = httpClientPool;
         this.httpClient = httpClientPool.getHttpClient();
-        log.info("🟢 Using shared HTTP client pool ({})", httpClientPool.getPoolStats());
-        log.info("🟢 HttpJournalFile constructor COMPLETE");
+        log.debug("Initialized HttpJournalFile for: {} (pool: {})", baseUrl, httpClientPool.getPoolStats());
     }
     
     @Override
     public JournalFileReader openJournalReader() throws IOException {
-        log.info("🟡 ENTERING openJournalReader()");
-        
-        // Fetch journal.log via HTTP
         String url = baseUrl + "/journal.log";
-        log.info("🟡 Fetching from URL: {}", url);
+        log.debug("Fetching journal from: {}", url);
+        
         HttpGet request = new HttpGet(url);
-        log.info("🟡 Executing HTTP GET...");
         try (CloseableHttpResponse response = httpClient.execute(request)) {
-            log.info("🟡 Got response: {}", response.getStatusLine());
             if (response.getStatusLine().getStatusCode() == HttpStatus.SC_OK) {
-                log.info("🟡 Reading journal content...");
                 // Read all lines into memory
                 List<String> lines = new ArrayList<>();
                 try (BufferedReader reader = new BufferedReader(
@@ -82,7 +72,7 @@ public class HttpJournalFile implements JournalFile {
                     }
                 }
                 
-                log.info("🟡 Loaded {} journal entries from HTTP", lines.size());
+                log.debug("Loaded {} journal entries from HTTP", lines.size());
                 return new HttpJournalFileReader(lines);
             } else {
                 throw new IOException("Failed to fetch journal.log: HTTP " + 
@@ -96,7 +86,7 @@ public class HttpJournalFile implements JournalFile {
         // Read-only mount - return a no-op writer
         // DO NOT call checkWritingAllowed() - it blocks forever!
         // Oak's TarRevisions requires a writer even for read-only stores
-        log.info("🟡 ENTERING openJournalWriter() - returning NO-OP writer for read-only mount");
+        log.debug("Returning no-op journal writer for read-only HTTP mount");
         return new NoOpJournalFileWriter();
     }
     
@@ -133,22 +123,15 @@ public class HttpJournalFile implements JournalFile {
     
     @Override
     public boolean exists() {
-        log.info("🟣 ENTERING exists()");
         try {
             String url = baseUrl + "/journal.log";
-            log.info("🟣 Checking existence at: {}", url);
             org.apache.http.client.methods.HttpHead request = 
                 new org.apache.http.client.methods.HttpHead(url);
-            log.info("🟣 Executing HEAD request...");
             try (CloseableHttpResponse response = httpClient.execute(request)) {
-                int status = response.getStatusLine().getStatusCode();
-                log.info("🟣 HEAD response: {}", status);
-                boolean exists = (status == HttpStatus.SC_OK);
-                log.info("🟣 Journal exists: {}", exists);
-                return exists;
+                return response.getStatusLine().getStatusCode() == HttpStatus.SC_OK;
             }
         } catch (IOException e) {
-            log.warn("🔴 Error checking journal existence: {}", e.getMessage());
+            log.debug("Error checking journal existence: {}", e.getMessage());
             return false;
         }
     }

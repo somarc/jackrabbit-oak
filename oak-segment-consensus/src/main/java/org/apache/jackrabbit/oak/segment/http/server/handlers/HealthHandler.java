@@ -152,26 +152,58 @@ public class HealthHandler {
             json.append("  \"mediaDriver\": {\n");
             try {
                 CrashHandler crashHandler = aeronLauncher.getCrashHandler();
+                org.apache.jackrabbit.oak.segment.consensus.aeron.MediaDriverHealthMonitor healthMonitor = 
+                    aeronLauncher.getHealthMonitor();
+                
+                boolean mediaDriverHealthy = true;
+                
+                // Check crash handler
                 if (crashHandler != null) {
                     String crashState = crashHandler.getState();
                     boolean hasCrashed = crashHandler.hasCrashed();
                     boolean shouldBootstrap = crashHandler.shouldForceBootstrap();
                     
-                    json.append("    \"status\": \"").append(hasCrashed ? "DEGRADED" : "UP").append("\",\n");
                     json.append("    \"crashState\": \"").append(crashState).append("\",\n");
                     json.append("    \"hasCrashed\": ").append(hasCrashed).append(",\n");
-                    json.append("    \"forceBootstrap\": ").append(shouldBootstrap).append("\n");
+                    json.append("    \"forceBootstrap\": ").append(shouldBootstrap).append(",\n");
                     
                     if (hasCrashed) {
-                        allHealthy = false;
+                        mediaDriverHealthy = false;
+                    }
+                } else {
+                    json.append("    \"crashHandler\": \"not_initialized\",\n");
+                }
+                
+                // Check health monitor (if available)
+                if (healthMonitor != null) {
+                    boolean monitorHealthy = healthMonitor.isHealthy();
+                    String monitorStatus = healthMonitor.getHealthStatus();
+                    long errorCount = healthMonitor.getErrorCount();
+                    long timeoutCount = healthMonitor.getTimeoutCount();
+                    long backpressureCount = healthMonitor.getBackpressureCount();
+                    long freeSpaceMB = healthMonitor.getFreeSpaceMB();
+                    
+                    json.append("    \"status\": \"").append(monitorHealthy ? "UP" : "DEGRADED").append("\",\n");
+                    json.append("    \"healthStatus\": \"").append(monitorStatus).append("\",\n");
+                    json.append("    \"errorCount\": ").append(errorCount).append(",\n");
+                    json.append("    \"timeoutCount\": ").append(timeoutCount).append(",\n");
+                    json.append("    \"backpressureCount\": ").append(backpressureCount).append(",\n");
+                    json.append("    \"freeSpaceMB\": ").append(freeSpaceMB).append("\n");
+                    
+                    if (!monitorHealthy) {
+                        mediaDriverHealthy = false;
                     }
                 } else {
                     json.append("    \"status\": \"UP\",\n");
-                    json.append("    \"crashHandler\": \"not_initialized\"\n");
+                    json.append("    \"healthMonitor\": \"not_initialized\"\n");
+                }
+                
+                if (!mediaDriverHealthy) {
+                    allHealthy = false;
                 }
             } catch (Exception e) {
                 json.append("    \"status\": \"DOWN\",\n");
-                json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+                json.append("    \"error\": \"").append(e.getMessage().replace("\"", "\\\"")).append("\"\n");
                 allHealthy = false;
             }
             json.append("  },\n");

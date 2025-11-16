@@ -98,7 +98,7 @@ public class SlingWriteProposalService {
         this.enabled = config.enabled();
         
         if (!enabled) {
-            log.info("🔐 Sling Write Proposal Service disabled");
+            log.info("Sling Write Proposal Service disabled");
             return;
         }
         
@@ -112,16 +112,14 @@ public class SlingWriteProposalService {
             }
         }
         
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("✅ SLING WRITE PROPOSAL SERVICE ACTIVATED");
-        log.info("   Validator URL: {}", validatorUrl);
-        log.info("   Client ID: {}", clientId);
+        log.info("Sling Write Proposal Service activated");
+        log.info("  Validator URL: {}", validatorUrl);
+        log.info("  Client ID: {}", clientId);
         if (walletService != null && walletService.isAvailable()) {
-            log.info("   Wallet Address: {}", walletService.getWalletAddress());
+            log.info("  Wallet Address: {}", walletService.getWalletAddress());
         } else {
-            log.warn("   Wallet Service: Not available (writes will fail)");
+            log.warn("  Wallet Service: Not available (writes will fail)");
         }
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
     
     /**
@@ -162,15 +160,13 @@ public class SlingWriteProposalService {
                 return new WriteResult(false, "Failed to sign write transaction");
             }
             
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("📝 SIGNED WRITE TRANSACTION");
-            log.info("   Wallet: {}", walletAddress);
-            log.info("   Content Type: {}", contentType);
-            log.info("   Message: {}", message);
-            log.info("   Signature: {}...{}", 
+            log.info("Submitting signed write transaction");
+            log.debug("  Wallet: {}", walletAddress);
+            log.debug("  Content Type: {}", contentType);
+            log.debug("  Message: {}", message);
+            log.debug("  Signature: {}...{}", 
                 signature.substring(0, Math.min(10, signature.length())),
                 signature.length() > 10 ? signature.substring(signature.length() - 4) : "");
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             
             // Submit signed transaction to validator
             String writeUrl = validatorUrl + "/v1/propose-write";
@@ -219,15 +215,15 @@ public class SlingWriteProposalService {
             }
             
             if (responseCode == 200) {
-                log.info("✅ Signed write transaction accepted by validator");
+                log.info("Write transaction accepted by validator");
                 return new WriteResult(true, "Write transaction accepted", responseBody);
             } else {
-                log.warn("⚠️  Write transaction rejected: HTTP {} - {}", responseCode, responseBody);
+                log.warn("Write transaction rejected: HTTP {} - {}", responseCode, responseBody);
                 return new WriteResult(false, "Write transaction rejected: " + responseBody);
             }
             
         } catch (Exception e) {
-            log.error("❌ Failed to propose signed write transaction", e);
+            log.error("Failed to propose signed write transaction", e);
             return new WriteResult(false, "Failed to propose write: " + e.getMessage());
         }
     }

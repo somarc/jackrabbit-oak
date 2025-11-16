@@ -80,7 +80,7 @@ public class SlingAuthorWalletService {
         this.keystorePath = config.keystorePath();
         
         if (!enabled) {
-            log.info("🔐 Sling Author Wallet Service disabled");
+            log.info("Sling Author Wallet Service disabled");
             return;
         }
         
@@ -111,14 +111,12 @@ public class SlingAuthorWalletService {
             // Load or generate wallet
             this.wallet = new EthereumWallet(actualKeystorePath);
             
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("✅ SLING AUTHOR WALLET SERVICE ACTIVATED");
-            log.info("   Wallet Address: {}", wallet.getWalletAddress());
-            log.info("   Keystore: {}", actualKeystorePath);
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("Sling Author Wallet Service activated");
+            log.info("  Wallet Address: {}", wallet.getWalletAddress());
+            log.info("  Keystore: {}", actualKeystorePath);
             
         } catch (Exception e) {
-            log.error("❌ Failed to initialize Sling Author wallet", e);
+            log.error("Failed to initialize Sling Author wallet", e);
             this.wallet = null;
         }
     }
@@ -140,13 +138,13 @@ public class SlingAuthorWalletService {
      */
     public String sign(String message) {
         if (wallet == null) {
-            log.warn("⚠️  Cannot sign: Wallet not initialized");
+            log.warn("Cannot sign: Wallet not initialized");
             return null;
         }
         try {
             return wallet.sign(message);
         } catch (Exception e) {
-            log.error("❌ Failed to sign message", e);
+            log.error("Failed to sign message", e);
             return null;
         }
     }

@@ -37,6 +37,22 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
 - **REST APIs**: Comprehensive API endpoints for cluster state, consensus status, health
 - **Segment Serving**: HTTP endpoints for segment transfer (`/segments/{id}`, `/journal.log`)
 
+**Security Note**: Validators are pure Oak (no Sling), so they don't have Sling authentication. 
+
+**Token-Based Authentication (Optional)**:
+- Validators support optional token-based authentication
+- Configure token via system property: `-Doak.validator.auth.token=<token>`
+- Or environment variable: `OAK_VALIDATOR_AUTH_TOKEN=<token>`
+- If no token is configured, authentication is **disabled** (POC mode - all requests allowed)
+- Health checks (`/health`, `/health/deep`) are always public (needed for monitoring)
+- Clients should use `ValidatorAuthHelper` to add `Authorization` header when token is configured
+
+**Production Deployment**:
+- For production, validators should be protected by:
+  - Token-based authentication (configure token)
+  - Network security (firewall, VPN, private networks)
+  - Reverse proxy authentication
+
 ### Segment Replication
 - **HTTP Segment Transfer**: Segments replicated via HTTP GET requests
 - **CAS Updates**: Conditional requests with HEAD checks for efficiency

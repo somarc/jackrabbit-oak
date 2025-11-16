@@ -72,80 +72,66 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
                                                      IOMonitor ioMonitor, 
                                                      FileStoreMonitor fileStoreMonitor,
                                                      RemoteStoreMonitor remoteStoreMonitor) {
-        log.info("🟠 ENTERING createArchiveManager()");
-        log.info("🟠 Parameters: mmap={}, offHeapAccess={}", mmap, offHeapAccess);
-        log.info("🟠 Creating HttpSegmentArchiveManager with baseUrl: {}", baseUrl);
+        log.debug("Creating HttpSegmentArchiveManager (mmap={}, offHeapAccess={})", mmap, offHeapAccess);
         try {
             HttpSegmentArchiveManager manager = new HttpSegmentArchiveManager(baseUrl, ioMonitor, httpClientPool);
-            log.info("🟠 HttpSegmentArchiveManager created successfully");
+            log.debug("HttpSegmentArchiveManager created successfully");
             return manager;
         } catch (Exception e) {
-            log.error("🔴 ERROR creating HttpSegmentArchiveManager", e);
+            log.error("Failed to create HttpSegmentArchiveManager", e);
             throw e;
         }
     }
     
     @Override
     public boolean segmentFilesExist() {
-        log.info("🟤 ENTERING segmentFilesExist()");
-        log.info("🟤 Checking at baseUrl: {}", baseUrl);
-        // POC: Assume segments exist if server is reachable
+        log.debug("Checking if segment files exist at: {}", baseUrl);
+        // Assume segments exist if server is reachable
         // In production, would check via HTTP HEAD to /archives endpoint
-        boolean exists = true;
-        log.info("🟤 Returning: {}", exists);
-        return exists;
+        return true;
     }
     
     @Override
     public JournalFile getJournalFile() {
-        log.info("🔵 ENTERING getJournalFile()");
-        log.info("🔵 Creating HttpJournalFile with baseUrl: {}", baseUrl);
+        log.debug("Creating HttpJournalFile for: {}", baseUrl);
         try {
             HttpJournalFile journalFile = new HttpJournalFile(baseUrl, writeAccessController, httpClientPool);
-            log.info("🔵 HttpJournalFile created successfully");
             return journalFile;
         } catch (Exception e) {
-            log.error("🔴 ERROR creating HttpJournalFile", e);
+            log.error("Failed to create HttpJournalFile", e);
             throw e;
         }
     }
     
     @Override
     public GCJournalFile getGCJournalFile() throws IOException {
-        log.info("🟡 ENTERING getGCJournalFile()");
-        log.info("🟡 Creating HttpGCJournalFile with baseUrl: {}", baseUrl);
+        log.debug("Creating HttpGCJournalFile for: {}", baseUrl);
         try {
             HttpGCJournalFile gcFile = new HttpGCJournalFile(baseUrl, httpClientPool);
-            log.info("🟡 HttpGCJournalFile created successfully");
             return gcFile;
         } catch (Exception e) {
-            log.error("🔴 ERROR creating HttpGCJournalFile", e);
+            log.error("Failed to create HttpGCJournalFile", e);
             throw e;
         }
     }
     
     @Override
     public ManifestFile getManifestFile() throws IOException {
-        log.info("⚪ ENTERING getManifestFile()");
-        log.info("⚪ Creating HttpManifestFile with baseUrl: {}", baseUrl);
+        log.debug("Creating HttpManifestFile for: {}", baseUrl);
         try {
             HttpManifestFile manifestFile = new HttpManifestFile(baseUrl, httpClientPool);
-            log.info("⚪ HttpManifestFile created successfully");
             return manifestFile;
         } catch (Exception e) {
-            log.error("🔴 ERROR creating HttpManifestFile", e);
+            log.error("Failed to create HttpManifestFile", e);
             throw e;
         }
     }
     
     @Override
     public RepositoryLock lockRepository() throws IOException {
-        log.info("🟣 ENTERING lockRepository()");
-        log.info("🟣 Creating no-op repository lock for read-only HTTP store");
+        log.debug("Creating no-op repository lock for read-only HTTP store");
         // Read-only mount doesn't need locking
-        NoOpRepositoryLock lock = new NoOpRepositoryLock();
-        log.info("🟣 Repository lock created successfully");
-        return lock;
+        return new NoOpRepositoryLock();
     }
     
     /**

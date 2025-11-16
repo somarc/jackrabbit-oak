@@ -520,7 +520,7 @@ class SegmentNodeStoreRegistrar {
             if (!segmentDir.mkdirs()) {
                 throw new IOException("Failed to create segment store directory: " + segmentDir);
             }
-            cfg.getLogger().info("✅ Segment store directory created: {}", segmentDir.getAbsolutePath());
+            cfg.getLogger().info("Segment store directory created: {}", segmentDir.getAbsolutePath());
         }
         
         ReadOnlyFileStore store;

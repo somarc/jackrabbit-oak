@@ -14,6 +14,8 @@ This module provides an optional LLM-powered chat interface that helps developer
 - ✅ **Enhanced RAG** - Scans and indexes actual Oak codebase for semantic code search
 - ✅ **Agentic Tools** - Can query validator APIs autonomously
 - ✅ **Log Access Tool** - Read and analyze log files with filtering
+- ✅ **API Documentation Tool** - Provides comprehensive API docs for agent-to-agent communication
+- ✅ **Agent-to-Agent Mode** - Enhanced mode for inter-agent communication with structured API knowledge
 - 🔜 **Metrics Tool** - Query Prometheus metrics
 
 ## Setup
@@ -25,10 +27,13 @@ Download and install Ollama from https://ollama.ai
 ### 2. Pull a Model
 
 ```bash
-# Recommended: Phi-3 Mini (fast, good for code)
+# Default: Qwen2.5 Coder 7B (Apache 2.0 licensed, optimized for code)
+ollama pull qwen2.5-coder:7b
+
+# Alternative: Phi-3 Mini (fast, good for code, MIT licensed)
 ollama pull phi3
 
-# Or: Llama 3.1 8B (better understanding, slower)
+# Alternative: Llama 3.1 8B (better understanding, slower, Meta license)
 ollama pull llama3.1:8b
 ```
 
@@ -140,7 +145,10 @@ oak-segment-agentic/
 │           ├── AgenticTool.java       # Tool interface
 │           ├── ToolResult.java        # Tool result model
 │           ├── ValidatorApiTool.java # Validator API tool
-│           └── LogAccessTool.java    # Log file access tool
+│           ├── ApiDocumentationTool.java # API documentation tool
+│           ├── LogAccessTool.java    # Log file access tool
+│           ├── AgentDiscoveryTool.java # Agent discovery tool
+│           └── ValidatorLLMChatTool.java # Validator LLM chat tool
 └── pom.xml
 ```
 
@@ -205,6 +213,70 @@ java -jar oak-segment-consensus.jar -Dlog.file.path=/path/to/validator.log
 - "Show last 100 log entries" - Tail mode with limit
 - "Find logs containing 'consensus'" - Search for specific term
 - "Show warnings" - Filter by log level
+
+## Agent-to-Agent Communication
+
+The module supports enhanced **two-way agent-to-agent communication** mode. When enabled (via UI toggle or context flag), agents engage in actual conversations where they:
+
+1. **Execute API Calls Automatically** - Agents proactively make API calls to fetch data
+2. **Include Actual Results** - Responses contain real data from API calls, not just instructions
+3. **Have Natural Conversations** - Agents synthesize tool results into conversational responses
+4. **Share Agent Metadata** - Information about requesting and responding agents (ID, type, capabilities)
+
+### How It Works
+
+When agent-to-agent mode is enabled:
+
+1. **Automatic Tool Execution**: The system automatically executes relevant API tools based on the query
+2. **Data-First Responses**: The LLM receives actual API results and synthesizes them into natural responses
+3. **Proactive Data Fetching**: If a query asks for data (e.g., "What is the current leader?"), the system proactively calls the appropriate API
+4. **Conversational Format**: Responses are natural conversations, not just API instructions
+
+### API Documentation Tool
+
+The `ApiDocumentationTool` provides structured documentation for all available APIs:
+
+- **Oak Segment Consensus APIs**: Explorer, Health, Consensus, Aeron Cluster, Registration, Oak Files
+- **Oak Segment HTTP APIs**: Client-side usage patterns and endpoint consumption
+- **Agent-to-Agent Guidance**: Best practices for inter-agent communication
+
+This tool is automatically included in agent-to-agent mode to ensure the LLM knows what APIs are available.
+
+### Example Agent-to-Agent Conversation
+
+**Agent A (Sling Author) asks:**
+```bash
+curl -X POST http://localhost:8090/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What is the current leader?",
+    "context": {
+      "agentToAgent": true
+    }
+  }'
+```
+
+**Agent B (Validator) responds:**
+```
+I've checked the cluster state. The current leader is node-0 (term 5). 
+The cluster has 3 members: node-0, node-1, and node-2. 
+All nodes are healthy and responding. Node-0 has been the leader for the last 2 minutes.
+```
+
+**Key Differences from Instruction Mode:**
+- ✅ **Before**: "To check the leader, query GET /v1/aeron/cluster-state"
+- ✅ **After**: "The current leader is node-0 (term 5)" - includes actual data!
+
+### Two-Way Interaction Flow
+
+1. **Agent A** sends a query with `agentToAgent: true`
+2. **Agent B** receives the query and:
+   - Automatically executes relevant API tools (e.g., `ValidatorApiTool`)
+   - Receives actual API response data
+   - Synthesizes the data into a natural response
+   - Includes the actual results in the answer
+3. **Agent A** receives a response with real data, not just instructions
+4. **Conversation continues** - agents can ask follow-up questions and get actual data
 
 ## Future Enhancements
 

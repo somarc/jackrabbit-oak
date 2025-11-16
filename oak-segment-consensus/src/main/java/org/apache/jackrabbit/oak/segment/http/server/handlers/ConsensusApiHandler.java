@@ -18,7 +18,10 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.Vote;
 import org.apache.jackrabbit.oak.segment.consensus.WriteProposal;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.WriteMetadata;
@@ -171,13 +174,22 @@ public class ConsensusApiHandler {
                 
                 // TEMPORARY FOR TESTING: Auto-register any valid Ethereum address (0x + 40 hex chars = 42 total)
                 if (!isValidatorWallet && normalizedWallet.startsWith("0x") && normalizedWallet.length() == 42) {
-                    log.info("🧪 TEST MODE: Auto-registering wallet {} as client for replication testing", normalizedWallet);
+                    // Auto-registration only in mock mode
+                    org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig = 
+                        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+                    if (blockchainConfig.isMockMode()) {
+                        log.info("🧪 MOCK MODE: Auto-registering wallet {} as client for replication testing", normalizedWallet);
+                    }
                     isValidatorWallet = true;
                     validatorId = normalizedWallet;
                 }
                 
-                if (isValidatorWallet) {
-                    log.info("✅ Auto-registering wallet {} as client (TEST MODE)", validatorId);
+                // Check if auto-registration is allowed (mock mode only)
+                org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig = 
+                    org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+                
+                if (isValidatorWallet && blockchainConfig.isMockMode()) {
+                    log.info("✅ Auto-registering wallet {} as client (MOCK MODE - testing only)", validatorId);
                     clientReg = new ClientRegistration(validatorId, context.selfUrl, normalizedWallet);
                     context.registeredClients.put(validatorId, clientReg);
                     clientId = validatorId;
@@ -223,8 +235,21 @@ public class ConsensusApiHandler {
             if (contentType == null || contentType.isEmpty()) {
                 contentType = "page";
             }
+            
+            // Check blockchain config for mock mode
+            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig = 
+                org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+            
+            // In mock mode, generate mock signature if not provided
             if (signature == null || signature.isEmpty()) {
-                signature = "0xMOCK" + System.currentTimeMillis(); // Mock signature
+                if (blockchainConfig.isMockMode()) {
+                    signature = "0xMOCK" + System.currentTimeMillis(); // Mock signature
+                } else {
+                    log.warn("🚫 Write rejected: Signature required in real blockchain mode");
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                        "Signature required. In real blockchain mode, all writes must be signed.");
+                    return;
+                }
             }
             
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -237,21 +262,29 @@ public class ConsensusApiHandler {
                      signature.length() > 10 ? signature.substring(signature.length() - 4) : "");
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             
-            // TODO: Real signature verification with Web3j
-            // For now, we accept all signatures starting with "0x"
+            // Signature verification
             if (!signature.startsWith("0x")) {
                 log.warn("🚫 Write rejected: Invalid signature format (must start with '0x')");
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid signature format");
                 return;
             }
-            log.info("✅ Signature verification: MOCK (accepted)");
             
-            // ✈️ AERON MODE: Send write through Aeron ingress (like production code)
-            // Aeron replicates message to ALL nodes via Raft, then onSessionMessage() applies write on ALL nodes
+            if (blockchainConfig.isMockMode()) {
+                log.info("✅ Signature verification: MOCK (accepted - mock mode enabled)");
+            } else {
+                // TODO: Real signature verification with Web3j
+                // For now, accept signature format (real verification will be added)
+                log.info("✅ Signature verification: Format valid (real mode - full verification TODO)");
+            }
             
-            // Get current HEAD before write
-            String previousHead = context.fileStore.getHead().getRecordId().toString();
-            log.info("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
+            // Extract Ethereum transaction hash (REQUIRED for queue)
+            String ethereumTxHash = request.getParameter("ethereumTxHash");
+            if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
+                log.warn("🚫 Write rejected: Missing ethereumTxHash parameter");
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Missing ethereumTxHash parameter. Must provide Ethereum transaction hash from authorizeWrite() call.");
+                return;
+            }
             
             // Build sharded path
             String shardedPath = WalletPathUtil.toShardedPath(wallet.toLowerCase());
@@ -263,24 +296,57 @@ public class ConsensusApiHandler {
                             addr.substring(2, 4) + "/" + addr.substring(4, 6) + "/" + 
                             normalizedWallet + "/" + contentId;
             
-            log.info("✈️  AERON MODE: Sending write through Aeron ingress channel (IPC mode)...");
-            log.info("   Storage path: {}", fullPath);
+            // Generate proposal ID
+            String proposalId = java.util.UUID.randomUUID().toString();
             
-            // ✈️ IPC MODE: Use internal AeronConsensusEngine IPC client (more efficient than external UDP client)
-            // The internal client uses IPC for same-process communication, avoiding network overhead and timeouts
-            if (context.aeronConsensusEngine == null) {
-                log.error("❌ AeronConsensusEngine not available - cannot send write");
-                log.error("   Context: {}", context);
-                log.error("   FileStore: {}", context.fileStore != null ? "present" : "null");
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                    "AeronConsensusEngine not initialized");
+            // Check if proposal queue manager is available
+            if (context.proposalQueueManager == null) {
+                log.warn("⚠️  ProposalQueueManager not available - falling back to immediate append");
+                // Fallback: immediate append (for backward compatibility)
+                if (context.aeronConsensusEngine == null) {
+                    response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                        "AeronConsensusEngine not initialized");
+                    return;
+                }
+                
+                boolean success = context.aeronConsensusEngine.sendWriteThroughIngress(
+                    normalizedWallet,
+                    fullPath,
+                    contentType != null ? contentType : "page",
+                    message != null ? message : "",
+                    signature != null ? signature : ""
+                );
+                
+                if (!success) {
+                    response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                        "Failed to send write through Aeron ingress channel");
+                    return;
+                }
+                
+                response.setContentType("application/json");
+                response.setStatus(HttpServletResponse.SC_OK);
+                String currentHead = context.fileStore != null 
+                    ? context.fileStore.getHead().getRecordId().toString() 
+                    : "unknown";
+                String resultJson = "{" +
+                    "\"success\":true," +
+                    "\"proposalId\":\"" + proposalId + "\"," +
+                    "\"wallet\":\"" + wallet + "\"," +
+                    "\"contentId\":\"" + contentId + "\"," +
+                    "\"storagePath\":\"" + fullPath + "\"," +
+                    "\"newHead\":\"" + currentHead + "\"," +
+                    "\"message\":\"" + message + "\"," +
+                    "\"contentType\":\"" + contentType + "\"," +
+                    "\"mode\":\"immediate\"}";
+                response.getWriter().write(resultJson);
                 return;
             }
             
-            log.debug("✅ AeronConsensusEngine available - using internal IPC client");
-            
-            // Send write through internal IPC client (handles message encoding internally)
-            boolean success = context.aeronConsensusEngine.sendWriteThroughIngress(
+            // Queue proposal (waiting for Ethereum confirmation)
+            log.info("📥 Queuing proposal {} (tx: {}), waiting for Ethereum confirmation", proposalId, ethereumTxHash);
+            context.proposalQueueManager.queueProposal(
+                proposalId,
+                ethereumTxHash,
                 normalizedWallet,
                 fullPath,
                 contentType != null ? contentType : "page",
@@ -288,59 +354,20 @@ public class ConsensusApiHandler {
                 signature != null ? signature : ""
             );
             
-            String consensusMode = "aeron-cluster";
-            String newHead = null;
-            
-            if (success) {
-                log.info("✅ Write sent through Aeron ingress (IPC mode) - will be replicated to all nodes via Raft");
-                log.info("   Write will be applied on ALL nodes via onSessionMessage() callback");
-                
-                // Get new HEAD after replication (will be updated by onSessionMessage callback)
-                // For now, return success - actual HEAD will be set when write is applied
-                newHead = "pending-replication";
-            } else {
-                log.error("❌ Failed to send write through Aeron ingress (IPC mode)");
-                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
-                    "Failed to send write through Aeron ingress channel");
-                return;
-            }
-            
-            // Return result
+            // Return queued status (202 Accepted)
             response.setContentType("application/json");
-            response.setStatus(HttpServletResponse.SC_OK);
-            
-            // Get current HEAD for response (may be pending-replication)
-            String currentHead = (newHead != null && !newHead.equals("pending-replication")) 
-                ? newHead 
-                : (context.fileStore != null ? context.fileStore.getHead().getRecordId().toString() : "unknown");
-            
-            // Return result
-            boolean writeSuccess = success;
+            response.setStatus(HttpServletResponse.SC_ACCEPTED);
             String resultJson = "{" +
-                "\"success\":" + writeSuccess + "," +
-                "\"proposalId\":\"" + java.util.UUID.randomUUID().toString() + "\"," +
+                "\"proposalId\":\"" + proposalId + "\"," +
+                "\"state\":\"PENDING\"," +
+                "\"message\":\"Proposal queued, waiting for Ethereum confirmation\"," +
+                "\"ethereumTxHash\":\"" + ethereumTxHash + "\"," +
+                "\"timeoutTimestamp\":" + (System.currentTimeMillis() + 300_000) + "," +
                 "\"wallet\":\"" + wallet + "\"," +
-                "\"contentId\":\"" + contentId + "\"," +
                 "\"storagePath\":\"" + fullPath + "\"," +
-                "\"previousHead\":\"" + previousHead + "\"," +
-                "\"newHead\":\"" + currentHead + "\"," +
-                "\"message\":\"" + message + "\"," +
-                "\"contentType\":\"" + contentType + "\"," +
-                "\"consensusMode\":\"" + consensusMode + "\"," +
-                "\"mode\":\"aeron\"" +
-                "}";
-            
+                "\"contentType\":\"" + contentType + "\"}";
             response.getWriter().write(resultJson);
-            
-            if (writeSuccess) {
-                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                log.info("✅ WRITE SENT! Write sent through Aeron ingress - will replicate to all nodes");
-                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            } else {
-                log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                log.warn("❌ CONSENSUS FAILED! Write not sent through ingress");
-                log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            }
+            log.info("✅ Proposal {} queued successfully", proposalId);
             
         } catch (Exception e) {
             log.error("❌ Test write failed", e);
@@ -673,6 +700,73 @@ public class ConsensusApiHandler {
     }
     
     /**
+     * Get proposal status.
+     * GET /v1/proposals/{proposalId}/status
+     */
+    public void handleGetProposalStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        
+        try {
+            String path = request.getRequestURI();
+            // Extract proposalId from path: /v1/proposals/{proposalId}/status
+            String[] parts = path.split("/");
+            if (parts.length < 4) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID");
+                return;
+            }
+            String proposalId = parts[3];
+            
+            if (context.proposalQueueManager == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
+                return;
+            }
+            
+            ProposalStatus status = context.proposalQueueManager.getProposalStatus(proposalId);
+            if (status == null) {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Proposal not found");
+                return;
+            }
+            
+            response.setStatus(HttpServletResponse.SC_OK);
+            String json = "{" +
+                "\"proposalId\":\"" + status.getProposalId() + "\"," +
+                "\"state\":\"" + status.getState().name() + "\"," +
+                "\"ethereumTxHash\":\"" + status.getEthereumTxHash() + "\"," +
+                "\"timeoutTimestamp\":" + status.getTimeoutTimestamp() + "," +
+                "\"confirmedBlock\":" + (status.getConfirmedBlock() != null ? status.getConfirmedBlock() : -1) + "," +
+                "\"rejectionReason\":" + (status.getRejectionReason() != null ? "\"" + status.getRejectionReason() + "\"" : "null") +
+                "}";
+            response.getWriter().write(json);
+        } catch (Exception e) {
+            log.error("Error getting proposal status", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Get pending proposals count.
+     * GET /v1/proposals/pending/count
+     */
+    public void handleGetPendingCount(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        
+        try {
+            if (context.proposalQueueManager == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
+                return;
+            }
+            
+            int count = context.proposalQueueManager.getPendingCount();
+            response.setStatus(HttpServletResponse.SC_OK);
+            String json = "{\"pendingCount\":" + count + "}";
+            response.getWriter().write(json);
+        } catch (Exception e) {
+            log.error("Error getting pending count", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+        }
+    }
+    
+    /**
      * ✈️ AERON NATIVE: Apply replicated write to FileStore.
      * This is called from AeronConsensusEngine.onSessionMessage() after Aeron replicates the write.
      */
@@ -893,6 +987,91 @@ public class ConsensusApiHandler {
         // Return next validator in rotation (wrap around if needed)
         int nextIndex = (leaderIndex + 1) % allValidators.size();
         return allValidators.get(nextIndex);
+    }
+    
+    /**
+     * Handle GET /v1/gc/estimate - GC cost estimation endpoint
+     * 
+     * <p>Estimates the cost of garbage collection operations in USDC.
+     * 
+     * <p>Query Parameters:
+     *   - revision: Optional target revision (null = use HEAD)
+     * 
+     * <p>Response: JSON with GC cost estimate
+     *   - reclaimableSegmentCount: Number of reclaimable segments
+     *   - reclaimableSizeBytes: Total size of reclaimable segments
+     *   - reclaimableSizeMB: Total size in MB
+     *   - reclaimablePercentage: Percentage of repository reclaimable
+     *   - totalSegmentCount: Total number of segments
+     *   - totalSizeBytes: Total repository size
+     *   - totalSizeMB: Total size in MB
+     *   - estimatedCostUSDC: Estimated cost in USDC
+     *   - reclaimableByTarFile: Breakdown by TAR file
+     */
+    public void handleGCCostEstimate(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        if (context.gcCostEstimator == null) {
+            log.warn("GC Cost Estimator not available - endpoint disabled");
+            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\":\"GC Cost Estimator not available\"}");
+            return;
+        }
+        
+        try {
+            String targetRevision = request.getParameter("revision");
+            log.debug("GC cost estimation request - revision: {}", targetRevision != null ? targetRevision : "HEAD");
+            
+            GCCostEstimate estimate = context.gcCostEstimator.estimateCost(targetRevision);
+            
+            log.info("GC cost estimation complete - reclaimable: {} MB ({}%), cost: {} USDC",
+                estimate.getReclaimableSizeMB(), 
+                String.format("%.2f", estimate.getReclaimablePercentage()),
+                estimate.getEstimatedCostUSDC());
+            
+            // Convert to JSON
+            response.setContentType("application/json");
+            response.setStatus(HttpServletResponse.SC_OK);
+            
+            StringBuilder json = new StringBuilder("{");
+            json.append("\"reclaimableSegmentCount\":").append(estimate.getReclaimableSegmentCount()).append(",");
+            json.append("\"reclaimableSizeBytes\":").append(estimate.getReclaimableSizeBytes()).append(",");
+            json.append("\"reclaimableSizeMB\":").append(estimate.getReclaimableSizeMB()).append(",");
+            json.append("\"reclaimablePercentage\":").append(String.format("%.2f", estimate.getReclaimablePercentage())).append(",");
+            json.append("\"totalSegmentCount\":").append(estimate.getTotalSegmentCount()).append(",");
+            json.append("\"totalSizeBytes\":").append(estimate.getTotalSizeBytes()).append(",");
+            json.append("\"totalSizeMB\":").append(estimate.getTotalSizeMB()).append(",");
+            json.append("\"estimatedCostUSDC\":\"").append(estimate.getEstimatedCostUSDC()).append("\",");
+            
+            // Reclaimable by TAR file
+            json.append("\"reclaimableByTarFile\":{");
+            boolean first = true;
+            for (java.util.Map.Entry<String, Long> entry : estimate.getReclaimableByTarFile().entrySet()) {
+                if (!first) json.append(",");
+                first = false;
+                json.append("\"").append(FormatUtils.escapeJson(entry.getKey())).append("\":").append(entry.getValue());
+            }
+            json.append("}");
+            
+            json.append("}");
+            
+            response.getWriter().write(json.toString());
+            
+        } catch (IllegalArgumentException e) {
+            // Invalid revision format
+            log.warn("Invalid revision format: {}", request.getParameter("revision"), e);
+            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\":\"Invalid revision format: " + 
+                FormatUtils.escapeJson(e.getMessage()) + "\"}");
+            
+        } catch (IOException e) {
+            // Graph traversal failed
+            log.error("GC cost estimation failed", e);
+            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\":\"GC cost estimation failed: " + 
+                FormatUtils.escapeJson(e.getMessage()) + "\"}");
+        }
     }
 }
 
