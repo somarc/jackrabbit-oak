@@ -44,6 +44,7 @@ public class RequestRouter {
     private final RegistrationHandler registrationHandler;
     private final PeerDiscoveryHandler peerDiscoveryHandler;
     private final AeronApiHandler aeronApiHandler;
+    private final FragmentationApiHandler fragmentationApiHandler;
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
     
@@ -86,6 +87,7 @@ public class RequestRouter {
         this.registrationHandler = new RegistrationHandler(context);
         this.peerDiscoveryHandler = new PeerDiscoveryHandler(context);
         this.aeronApiHandler = new AeronApiHandler(context);
+        this.fragmentationApiHandler = new FragmentationApiHandler(context);
         
         // Chat handler will be initialized lazily on first use (after selfUrl is set)
         this.chatHandler = null;
@@ -288,6 +290,26 @@ public class RequestRouter {
             
             // Consensus API
             if ("/v1/propose-write".equals(path) && "POST".equals(method)) {
+                // Phase 1: Optional shard routing logging (for demonstration)
+                // Phase 2: Will actually forward requests to correct shard
+                if (context.shardRouter != null) {
+                    String walletAddress = request.getParameter("walletAddress");
+                    if (walletAddress == null || walletAddress.isEmpty()) {
+                        walletAddress = request.getParameter("wallet"); // Fallback
+                    }
+                    if (walletAddress != null && !walletAddress.isEmpty()) {
+                        try {
+                            String leaderUrl = context.shardRouter.routeRequest(walletAddress);
+                            if (leaderUrl != null) {
+                                log.debug("🔀 Shard routing: wallet {} → leader {}", walletAddress, leaderUrl);
+                                // Phase 1: Log routing decision (all requests still process locally)
+                                // Phase 2: Forward to leaderUrl if different from selfUrl
+                            }
+                        } catch (Exception e) {
+                            log.debug("Shard routing check failed: {}", e.getMessage());
+                        }
+                    }
+                }
                 consensusApiHandler.handleProposeWrite(request, response);
                 baseRequest.setHandled(true);
                 return;
@@ -370,6 +392,50 @@ public class RequestRouter {
             
             if ("/v1/aeron/leadership-history".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleLeadershipHistory(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // Fragmentation & GC Metrics API
+            if ("/v1/fragmentation/metrics".equals(path) && "GET".equals(method)) {
+                fragmentationApiHandler.handleGetAllMetrics(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if (path != null && path.startsWith("/v1/fragmentation/metrics/") && "GET".equals(method)) {
+                String walletAddress = path.substring("/v1/fragmentation/metrics/".length());
+                fragmentationApiHandler.handleGetEntityMetrics(request, response, walletAddress);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/fragmentation/top".equals(path) && "GET".equals(method)) {
+                fragmentationApiHandler.handleGetTopFragmented(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/gc/status".equals(path) && "GET".equals(method)) {
+                fragmentationApiHandler.handleGetGcStatus(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/compaction/proposals".equals(path) && "GET".equals(method)) {
+                fragmentationApiHandler.handleGetCompactionProposals(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/propose-gc".equals(path) && "POST".equals(method)) {
+                fragmentationApiHandler.handleProposeGC(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/gc/execute".equals(path) && "POST".equals(method)) {
+                fragmentationApiHandler.handleExecuteGC(request, response);
                 baseRequest.setHandled(true);
                 return;
             }

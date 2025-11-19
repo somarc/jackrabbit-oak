@@ -38,20 +38,57 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Standalone server for the global Blockchain AEM repository.
- * <p>
- * This server hosts the read-only global segment store that contains
+ * Distributed validator server for the global Blockchain AEM repository.
+ * 
+ * <p><strong>DISTRIBUTED ARCHITECTURE:</strong>
+ * This server is designed for distributed deployment across multiple machines,
+ * networks, and data centers. Validators form a distributed consensus network
+ * using Aeron Cluster Raft, communicating via UDP/IP across network boundaries.
+ * The system is NOT confined to localhost or single-machine deployments.
+ * 
+ * <p>This server hosts the read-only global segment store that contains
  * all wallet-owned content at /oak-chain/content/<wallet-uuid>/*
- * <p>
- * Other AEM instances connect to this server and mount the content
- * as a read-only Composite NodeStore mount.
- * <p>
- * Usage:
+ * 
+ * <p>Other AEM instances (Sling authors) connect to validator servers via HTTP
+ * and mount the content as a read-only Composite NodeStore mount.
+ * 
+ * <p><strong>Distributed Deployment Example:</strong>
  * <pre>
+ * # Validator 0 (US-East data center)
  * java -jar oak-segment-consensus.jar \
  *   --port 8090 \
- *   --store /var/oak-chain/segmentstore
+ *   --store /var/oak-chain/segmentstore \
+ *   -Dconsensus.enabled=true \
+ *   -Dconsensus.mode=aeron \
+ *   -Dconsensus.self.url=http://validator-0.us-east.example.com:8090 \
+ *   -Dconsensus.peers=http://validator-1.eu-west.example.com:8090,http://validator-2.ap-south.example.com:8090
+ * 
+ * # Validator 1 (EU-West data center)
+ * java -jar oak-segment-consensus.jar \
+ *   --port 8090 \
+ *   --store /var/oak-chain/segmentstore \
+ *   -Dconsensus.enabled=true \
+ *   -Dconsensus.mode=aeron \
+ *   -Dconsensus.self.url=http://validator-1.eu-west.example.com:8090 \
+ *   -Dconsensus.peers=http://validator-0.us-east.example.com:8090,http://validator-2.ap-south.example.com:8090
+ * 
+ * # Validator 2 (AP-South data center)
+ * java -jar oak-segment-consensus.jar \
+ *   --port 8090 \
+ *   --store /var/oak-chain/segmentstore \
+ *   -Dconsensus.enabled=true \
+ *   -Dconsensus.mode=aeron \
+ *   -Dconsensus.self.url=http://validator-2.ap-south.example.com:8090 \
+ *   -Dconsensus.peers=http://validator-0.us-east.example.com:8090,http://validator-1.eu-west.example.com:8090
  * </pre>
+ * 
+ * <p><strong>Network Requirements:</strong>
+ * <ul>
+ *   <li>UDP/IP connectivity between validators (Aeron Cluster)</li>
+ *   <li>HTTP endpoints accessible to Sling authors (segment serving)</li>
+ *   <li>Peer URLs can be IP addresses, hostnames, or public URLs</li>
+ *   <li>No localhost assumptions - fully distributed</li>
+ * </ul>
  */
 public class GlobalStoreServer {
     
@@ -172,6 +209,89 @@ public class GlobalStoreServer {
             // Set GC Cost Estimator in ServerContext (if initialized)
             if (gcCostEstimator != null) {
                 httpServer.getContext().setGCCostEstimator(gcCostEstimator);
+            }
+            
+            // ===========================================================================
+            // Initialize Fragmentation Tracker (for fragmentation metrics and tax)
+            System.out.println("Initializing Fragmentation Tracker...");
+            org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker fragmentationTracker = null;
+            try {
+                fragmentationTracker = new org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker();
+                
+                httpServer.getContext().setFragmentationTracker(fragmentationTracker);
+                
+                System.out.println("✅ Fragmentation Tracker initialized");
+                System.out.println("   - Tracks TAR file creation per entity");
+                System.out.println("   - Calculates fragmentation scores and taxes");
+            } catch (Exception e) {
+                System.err.println("⚠️  Failed to initialize Fragmentation Tracker: " + e.getMessage());
+                System.err.println("   Fragmentation tracking will not be available");
+                // Don't fail startup - fragmentation tracking is optional
+            }
+            
+            // ===========================================================================
+            // Initialize GC Proposal Manager (for GC consensus)
+            System.out.println("Initializing GC Proposal Manager...");
+            try {
+                // Determine total validators (from peers + self)
+                int totalValidators = 1; // Default: just self
+                String peersConfig = System.getProperty("consensus.peers", "");
+                if (peersConfig != null && !peersConfig.isEmpty()) {
+                    String[] peers = peersConfig.split(",");
+                    totalValidators = peers.length + 1; // Peers + self
+                }
+                
+                // Create executor ID supplier (gets current node ID from Aeron if available)
+                // Access from ServerContext since aeronConsensusEngine is initialized later
+                java.util.function.Supplier<Integer> executorIdSupplier = () -> {
+                    // Try to get from Aeron cluster via ServerContext
+                    org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = 
+                        httpServer.getContext().aeronConsensusEngine;
+                    if (aeronEngine != null && aeronEngine.getCluster() != null) {
+                        try {
+                            return aeronEngine.getCluster().memberId();
+                        } catch (Exception e) {
+                            // Fallback to 0
+                        }
+                    }
+                    return 0; // Default fallback
+                };
+                
+                // Create leader check supplier (only leader should execute GC)
+                // Access from ServerContext since aeronConsensusEngine is initialized later
+                java.util.function.Supplier<Boolean> isLeaderSupplier = () -> {
+                    org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = 
+                        httpServer.getContext().aeronConsensusEngine;
+                    if (aeronEngine != null) {
+                        return aeronEngine.isLeader();
+                    }
+                    return true; // Default: allow execution (for single-node setups)
+                };
+                
+                // Get EvmBridge from ServerContext (set earlier during ProposalQueueManager initialization)
+                org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge gcEvmBridge = httpServer.getContext().evmBridge;
+                
+                org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager gcProposalManager = 
+                    new org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager(
+                        fileStore,
+                        gcCostEstimator,
+                        fragmentationTracker,
+                        gcEvmBridge, // 🔒 CRITICAL: Pass EvmBridge for payment verification (tokenomics)
+                        totalValidators,
+                        executorIdSupplier,
+                        isLeaderSupplier
+                    );
+                
+                httpServer.getContext().setGCProposalManager(gcProposalManager);
+                
+                System.out.println("✅ GC Proposal Manager initialized");
+                System.out.println("   - Total validators: " + totalValidators);
+                System.out.println("   - Quorum required: " + ((totalValidators * 2 / 3) + 1) + "/" + totalValidators);
+                System.out.println("   - Tracks GC proposals, voting, and execution");
+            } catch (Exception e) {
+                System.err.println("⚠️  Failed to initialize GC Proposal Manager: " + e.getMessage());
+                System.err.println("   GC consensus will not be available");
+                // Don't fail startup - GC consensus is optional
             }
             
             System.out.println("✅ HTTP server initialized (not yet started)");
@@ -581,6 +701,62 @@ public class GlobalStoreServer {
                 // NOTE: ConsensusApiHandler now uses internal client, but keeping this for API compatibility
                 httpServer.setAeronWriteClient(aeronWriteClient);
                 
+                // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                // SHARD ROUTER: Initialize shard routing (Phase 1)
+                // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                try {
+                    // Get number of shards from configuration (default: 1 for single-shard mode)
+                    String numShardsConfig = System.getProperty("sharding.numShards", System.getenv("NUM_SHARDS"));
+                    int numShards = 1; // Default: single shard
+                    if (numShardsConfig != null && !numShardsConfig.isEmpty()) {
+                        try {
+                            numShards = Integer.parseInt(numShardsConfig);
+                            if (numShards <= 0) {
+                                System.err.println("⚠️  Invalid NUM_SHARDS: " + numShardsConfig + ", using default: 1");
+                                numShards = 1;
+                            }
+                        } catch (NumberFormatException e) {
+                            System.err.println("⚠️  Invalid NUM_SHARDS format: " + numShardsConfig + ", using default: 1");
+                            numShards = 1;
+                        }
+                    }
+                    
+                    // Create shard directory: single shard (shard 0) with all peers
+                    // Phase 1: All shards route to the same cluster
+                    // Phase 2+: Will support multiple shards
+                    java.util.List<String> allPeerUrls = new java.util.ArrayList<>();
+                    allPeerUrls.add(selfUrl);
+                    allPeerUrls.addAll(peerUrls);
+                    
+                    org.apache.jackrabbit.oak.segment.consensus.sharding.ShardDirectory shardDirectory = 
+                        new org.apache.jackrabbit.oak.segment.consensus.sharding.ShardDirectory(allPeerUrls);
+                    
+                    // Create wallet-based sharding strategy
+                    org.apache.jackrabbit.oak.segment.consensus.sharding.WalletShardingStrategy shardingStrategy = 
+                        new org.apache.jackrabbit.oak.segment.consensus.sharding.WalletShardingStrategy(numShards);
+                    
+                    // Create shard router
+                    org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter shardRouter = 
+                        new org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter(shardDirectory, shardingStrategy);
+                    
+                    // Set in ServerContext
+                    httpServer.getContext().setShardRouter(shardRouter);
+                    
+                    System.out.println("✅ Shard Router initialized");
+                    System.out.println("   - Number of shards: " + numShards);
+                    System.out.println("   - Shard directory: " + shardDirectory.getNumShards() + " shard(s)");
+                    System.out.println("   - Sharding strategy: Wallet-based");
+                    if (shardingStrategy.isPowerOfTwo()) {
+                        System.out.println("   - Power-of-2: Yes (optimal)");
+                    } else {
+                        System.out.println("   - Power-of-2: No (consider using power-of-2 for optimal performance)");
+                    }
+                } catch (Exception e) {
+                    System.err.println("⚠️  WARNING: Failed to initialize Shard Router: " + e.getMessage());
+                    System.err.println("   → Shard routing disabled, requests will route directly");
+                    e.printStackTrace();
+                }
+                
                 System.out.println("✅ Aeron Cluster Consensus engine initialized");
                 System.out.println("   - Model: Raft-based consensus (Aeron Cluster)");
                 System.out.println("   - Node ID: " + nodeId);
@@ -615,6 +791,7 @@ public class GlobalStoreServer {
                     new org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager(evmBridge, raftCallback);
                 proposalQueueManager.start();
                 httpServer.getContext().setProposalQueueManager(proposalQueueManager);
+                httpServer.getContext().evmBridge = evmBridge; // Store for GC Proposal Manager
                 System.out.println("   ✅ Proposal Queue Manager initialized (Ethereum confirmation tracking)");
                 
                 // ✈️ AERON MODE: Skip HTTP peer registration

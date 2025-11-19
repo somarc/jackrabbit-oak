@@ -22,7 +22,10 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusStateService;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager;
+import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
@@ -56,7 +59,11 @@ public class ServerContext {
     public volatile String selfUrl;
     public volatile ConsensusStateService consensusStateService;
     public volatile GCCostEstimator gcCostEstimator;
+    public volatile GCProposalManager gcProposalManager;
     public volatile ProposalQueueManager proposalQueueManager;
+    public volatile FragmentationTracker fragmentationTracker;
+    public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
+    public volatile ShardRouter shardRouter; // Optional - for sharded routing
     
     // Shared state
     public final Map<String, ClientRegistration> registeredClients;
@@ -153,6 +160,21 @@ public class ServerContext {
     public void setProposalQueueManager(ProposalQueueManager proposalQueueManager) {
         this.proposalQueueManager = proposalQueueManager;
         log.info("✅ Proposal Queue Manager initialized");
+    }
+    
+    public void setFragmentationTracker(FragmentationTracker fragmentationTracker) {
+        this.fragmentationTracker = fragmentationTracker;
+        log.info("✅ Fragmentation Tracker initialized");
+    }
+    
+    public void setGCProposalManager(GCProposalManager gcProposalManager) {
+        this.gcProposalManager = gcProposalManager;
+        log.info("✅ GC Proposal Manager initialized");
+    }
+    
+    public void setShardRouter(ShardRouter shardRouter) {
+        this.shardRouter = shardRouter;
+        log.info("✅ Shard Router initialized");
     }
 }
 
