@@ -60,7 +60,23 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
 
 ## Architecture
 
+### Distributed Validator Network
+
 ```
+┌─────────────────────────────────────────────────────────────────────┐
+│              Distributed Validator Network                         │
+│  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐    │
+│  │ Validator-0  │      │ Validator-1  │      │ Validator-2  │    │
+│  │ (US-East)    │      │ (EU-West)     │      │ (AP-South)   │    │
+│  │ 10.0.1.10    │◄────►│ 10.0.2.10    │◄────►│ 10.0.3.10    │    │
+│  └──────┬───────┘      └──────┬───────┘      └──────┬───────┘    │
+│         │                     │                      │              │
+│         └─────────────────────┼──────────────────────┘              │
+│                               │                                     │
+│                    UDP/IP Network (Aeron Cluster Raft)             │
+└─────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              GlobalStoreServer (Standalone JAR)              │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -74,8 +90,9 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │  AeronConsensusEngine (Raft Consensus)              │   │
 │  │  - Leader election                                   │   │
-│  │  - Write replication                                │   │
+│  │  - Write replication (across network)               │   │
 │  │  - Quorum management                                │   │
+│  │  - Network partition tolerance                      │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -85,6 +102,12 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**Network Topology:**
+- Validators communicate via UDP/IP (configurable endpoints)
+- Peer URLs can be IP addresses, hostnames, or public URLs
+- Supports deployment across multiple data centers/regions
+- No hard-coded localhost assumptions - fully distributed
 
 ### Key Components
 

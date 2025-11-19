@@ -333,11 +333,88 @@ public class DashboardDataService {
     }
     
     /**
+     * Get TarMK growth statistics (TAR file count, sizes, generations).
+     */
+    public TarMkGrowthStats getTarMkGrowthStats() {
+        TarMkGrowthStats stats = new TarMkGrowthStats();
+        try {
+            if (context.fileStore != null && context.storeDirectory != null) {
+                java.nio.file.Path storeDir = context.storeDirectory;
+                
+                // List all .tar files
+                java.util.List<java.nio.file.Path> tarFiles = new java.util.ArrayList<>();
+                try (java.util.stream.Stream<java.nio.file.Path> paths = java.nio.file.Files.list(storeDir)) {
+                    tarFiles = paths
+                        .filter(p -> p.toString().endsWith(".tar"))
+                        .sorted(java.util.Comparator.comparing(java.nio.file.Path::toString))
+                        .collect(java.util.stream.Collectors.toList());
+                }
+                
+                stats.tarFileCount = tarFiles.size();
+                stats.totalSize = 0;
+                long largestSize = 0;
+                long smallestSize = Long.MAX_VALUE;
+                
+                for (java.nio.file.Path tarFile : tarFiles) {
+                    long fileSize = java.nio.file.Files.size(tarFile);
+                    stats.totalSize += fileSize;
+                    if (fileSize > largestSize) {
+                        largestSize = fileSize;
+                    }
+                    if (fileSize < smallestSize) {
+                        smallestSize = fileSize;
+                    }
+                }
+                
+                stats.largestTarSize = largestSize == 0 ? 0 : largestSize;
+                stats.smallestTarSize = smallestSize == Long.MAX_VALUE ? 0 : smallestSize;
+                stats.averageTarSize = tarFiles.isEmpty() ? 0 : stats.totalSize / tarFiles.size();
+                
+                // Get segment count from FileStore
+                stats.segmentCount = context.fileStore.getSegmentCount();
+                
+                // Calculate growth efficiency
+                // Ideal: TAR files should be close to maxFileSize (256 MB default)
+                // Many small TAR files indicate inefficient packing
+                long maxFileSize = 256L * 1024 * 1024; // 256 MB default
+                if (stats.averageTarSize > 0) {
+                    stats.packingEfficiency = (double) stats.averageTarSize / maxFileSize * 100.0;
+                }
+                
+                stats.status = "UP";
+            } else {
+                stats.status = "DOWN";
+                stats.error = "FileStore or storeDirectory not initialized";
+            }
+        } catch (Exception e) {
+            stats.status = "DOWN";
+            stats.error = e.getMessage();
+            log.warn("Failed to get TarMK growth stats", e);
+        }
+        return stats;
+    }
+    
+    /**
      * FileStore statistics data class.
      */
     public static class FileStoreStats {
         public long size = 0;
         public int segmentCount = 0;
+        public String status = "UNKNOWN";
+        public String error = null;
+    }
+    
+    /**
+     * TarMK growth statistics data class.
+     */
+    public static class TarMkGrowthStats {
+        public int tarFileCount = 0;
+        public long totalSize = 0;
+        public long largestTarSize = 0;
+        public long smallestTarSize = 0;
+        public long averageTarSize = 0;
+        public int segmentCount = 0;
+        public double packingEfficiency = 0.0; // Percentage of max file size
         public String status = "UNKNOWN";
         public String error = null;
     }

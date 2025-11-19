@@ -27,6 +27,7 @@ import org.apache.jackrabbit.oak.segment.agentic.tools.LogAccessTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.OSGiBundleTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.OSGiComponentTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.OSGiServiceTool;
+import org.apache.jackrabbit.oak.segment.agentic.tools.TarMkAnalysisTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.ToolResult;
 import org.apache.jackrabbit.oak.segment.agentic.tools.ValidatorApiTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.ValidatorLLMChatTool;
@@ -143,6 +144,7 @@ public class ChatHandler {
             // Validator context: Focus on validator internals, Aeron, consensus
             log.info("🤖 Agentic Chat initialized in VALIDATOR context");
             this.tools.add(new ValidatorApiTool(baseUrl));
+            this.tools.add(new TarMkAnalysisTool(baseUrl));
             // Validator doesn't need OSGi introspection (not running in OSGi)
         }
     }
@@ -448,12 +450,25 @@ public class ChatHandler {
         
         // Add tool results first (most important)
         if (!toolResults.isEmpty()) {
+            // Check if TarMkAnalysisTool was used - needs special handling
+            boolean hasTarMkAnalysis = toolResults.containsKey("tarmk-analysis");
+            
             if (isAgentToAgent) {
                 context.append("📊 TOOL RESULTS (ACTUAL DATA FROM API CALLS - USE THIS TO ANSWER THE QUESTION):\n");
                 context.append("=").append("=".repeat(70)).append("\n");
             } else {
                 context.append("Current System State:\n");
             }
+            
+            // Special instructions for TarMK analysis (always apply, not just agent-to-agent)
+            if (hasTarMkAnalysis) {
+                context.append("\n⚠️  CRITICAL FOR TarMK ANALYSIS: The tool results below contain EXACT metrics.\n");
+                context.append("   You MUST use the TAR_FILE_COUNT, TOTAL_SIZE_FORMATTED, PACKING_EFFICIENCY_PERCENT values EXACTLY as shown.\n");
+                context.append("   Do NOT invent different numbers like '100 files' or '50 GB' - use the ACTUAL values provided.\n");
+                context.append("   If it says 40 files and 10.0 MB, report exactly that - not estimates or examples.\n");
+                context.append("   Look for lines like 'TAR_FILE_COUNT=40' and 'TOTAL_SIZE_FORMATTED=10.0 MB' - use those EXACT values.\n\n");
+            }
+            
             for (Map.Entry<String, ToolResult> entry : toolResults.entrySet()) {
                 if (entry.getValue().success) {
                     if (isAgentToAgent) {
@@ -474,9 +489,19 @@ public class ChatHandler {
                 context.append("\n");
                 context.append("IMPORTANT: The data above is REAL, ACTUAL data from API calls. ");
                 context.append("Use this data to answer the requesting agent's question in a natural, conversational way.\n");
+                if (hasTarMkAnalysis) {
+                    context.append("For TarMK metrics, use the EXACT numbers from TAR_FILE_COUNT, TOTAL_SIZE_FORMATTED, etc. ");
+                    context.append("Do NOT make up different numbers.\n");
+                }
                 context.append("Do NOT just repeat the instructions - synthesize the data into a helpful response.\n\n");
             } else {
-                context.append("\n");
+                // Even in non-agent-to-agent mode, add special instructions for TarMK
+                if (hasTarMkAnalysis) {
+                    context.append("\n⚠️  CRITICAL: For TarMK analysis, use the EXACT metric values shown above.\n");
+                    context.append("   Do NOT invent or estimate different numbers. Use TAR_FILE_COUNT, TOTAL_SIZE_FORMATTED, etc. exactly as provided.\n\n");
+                } else {
+                    context.append("\n");
+                }
             }
         } else if (isAgentToAgent) {
             context.append("⚠️  No tool results available. You may need to suggest which API endpoint to call.\n\n");

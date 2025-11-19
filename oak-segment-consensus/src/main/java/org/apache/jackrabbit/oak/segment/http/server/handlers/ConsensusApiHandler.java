@@ -826,6 +826,9 @@ public class ConsensusApiHandler {
             // Flush FileStore
             context.fileStore.flush();
             
+            // Track fragmentation: Check for new TAR files created by this write
+            trackFragmentation(walletAddress);
+            
             // Get new HEAD
             String newHead = context.fileStore.getHead().getRecordId().toString();
             log.info("📍 New HEAD: {}", newHead.substring(0, Math.min(20, newHead.length())));
@@ -1071,6 +1074,49 @@ public class ConsensusApiHandler {
             response.setContentType("application/json");
             response.getWriter().write("{\"error\":\"GC cost estimation failed: " + 
                 FormatUtils.escapeJson(e.getMessage()) + "\"}");
+        }
+    }
+    
+    /**
+     * Track fragmentation: Check for new TAR files and associate with wallet address.
+     */
+    private void trackFragmentation(String walletAddress) {
+        if (context.fragmentationTracker == null || walletAddress == null || walletAddress.isEmpty()) {
+            return;
+        }
+        
+        try {
+            // Get current TAR files
+            java.util.List<String> currentTarFiles = new java.util.ArrayList<>();
+            try (java.util.stream.Stream<java.nio.file.Path> paths = java.nio.file.Files.list(context.storeDirectory)) {
+                currentTarFiles = paths
+                    .filter(p -> p.toString().endsWith(".tar"))
+                    .map(p -> p.getFileName().toString())
+                    .sorted()
+                    .collect(java.util.stream.Collectors.toList());
+            }
+            
+            // Find new TAR files (not yet tracked for this entity)
+            java.util.List<String> entityTarFiles = context.fragmentationTracker.getTarFilesForEntity(walletAddress);
+            java.util.Set<String> knownTarFiles = new java.util.HashSet<>(entityTarFiles);
+            
+            for (String tarFile : currentTarFiles) {
+                if (!knownTarFiles.contains(tarFile)) {
+                    // New TAR file - get its size
+                    java.nio.file.Path tarPath = context.storeDirectory.resolve(tarFile);
+                    long tarFileSize = java.nio.file.Files.exists(tarPath) 
+                        ? java.nio.file.Files.size(tarPath) 
+                        : 0;
+                    
+                    // Record write (this will create or update metrics)
+                    context.fragmentationTracker.recordWrite(walletAddress, tarFile, tarFileSize);
+                    
+                    log.debug("📊 Fragmentation tracked: entity={}, tarFile={}, size={}", 
+                        walletAddress, tarFile, tarFileSize);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to track fragmentation for entity {}: {}", walletAddress, e.getMessage());
         }
     }
 }

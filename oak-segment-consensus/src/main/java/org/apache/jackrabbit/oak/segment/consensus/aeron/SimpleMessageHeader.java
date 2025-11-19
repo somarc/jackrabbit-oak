@@ -37,6 +37,10 @@ public class SimpleMessageHeader {
     // Template IDs for our message types
     public static final int TEMPLATE_ID_WRITE_PROPOSAL = 100;
     public static final int TEMPLATE_ID_DELETE_PROPOSAL = 101;
+    public static final int TEMPLATE_ID_SNAPSHOT = 102;
+    public static final int TEMPLATE_ID_GC_PROPOSAL = 103;
+    public static final int TEMPLATE_ID_GC_VOTE = 104;
+    public static final int TEMPLATE_ID_GC_EXECUTE = 105;
     
     // Schema ID and version (arbitrary values for our custom messages)
     private static final int SCHEMA_ID = 1;
