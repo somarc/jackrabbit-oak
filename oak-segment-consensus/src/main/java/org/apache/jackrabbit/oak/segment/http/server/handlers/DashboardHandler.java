@@ -17,11 +17,13 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.DashboardDataService;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.net.URL;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -183,18 +185,97 @@ public class DashboardHandler {
             int term = asInt(clusterState.get("term"), -1);
             long clusterTime = asLong(clusterState.get("clusterTime"), -1L);
             long logPosition = asLong(clusterState.get("logPosition"), -1L);
+            int ethereumEpoch = asInt(clusterState.get("ethereumEpoch"), -1);
+            
+            // Get current HEAD for state consistency display
+            String currentHead = null;
+            try {
+                if (context.fileStore != null) {
+                    currentHead = context.fileStore.getHead().getRecordId().toString();
+                    // Truncate for display (show first 20 chars)
+                    if (currentHead.length() > 20) {
+                        currentHead = currentHead.substring(0, 20) + "...";
+                    }
+                }
+            } catch (Exception e) {
+                // Ignore - HEAD not available
+            }
 
             html.append("<div class='summary-grid'>");
+            // Key metrics first (most important)
             appendSummaryCard(html, "Role", role, isLeader ? "This validator currently owns leadership" : "Following elected leader");
             appendSummaryCard(html, "Leader", formatLeaderLabel(leaderUrl), leaderUrl == null ? "Leader discovery pending" : (leaderUrl.equals(context.selfUrl) ? "This node is the leader" : "Tracking elected leader"));
-            appendSummaryCard(html, "Term", term >= 0 ? String.valueOf(term) : "Not available", "Leadership term reported by Aeron");
+            
+            // Ethereum Epoch - prominently displayed (economic finality layer)
+            if (ethereumEpoch >= 0) {
+                appendSummaryCard(html, "⛓️ Ethereum Epoch", String.format("%,d", ethereumEpoch), "Current finalized Ethereum Beacon Chain epoch (economic finality layer)");
+            } else {
+                appendSummaryCard(html, "⛓️ Ethereum Epoch", "Not available", "Ethereum epoch polling not started");
+            }
+            
+            // Current HEAD - critical for state consistency
+            if (currentHead != null) {
+                appendSummaryCard(html, "📍 Current HEAD", currentHead, "FileStore HEAD revision (critical for state consistency across validators)");
+            } else {
+                appendSummaryCard(html, "📍 Current HEAD", "Not available", "FileStore HEAD not available");
+            }
+            
+            // Cluster operational metrics
+            appendSummaryCard(html, "Term", term >= 0 ? String.valueOf(term) : "Not available", "Leadership term reported by Aeron Raft consensus");
             appendSummaryCard(html, "Member ID", memberId >= 0 ? "#" + memberId : "Unknown", "Aeron-assigned member identifier");
-            appendSummaryCard(html, "Cluster Time", clusterTime > 0 ? formatTimestamp(clusterTime) : "Not available", clusterTime > 0 ? formatRelativeTime(clusterTime) : "-");
-            appendSummaryCard(html, "Log Position", logPosition >= 0 ? String.format("%,d", logPosition) : "Not available", "Current replicated log index");
             appendSummaryCard(html, "Members", String.valueOf(memberCount), "Validators participating in this cluster");
+            
+            // Replication metrics
+            appendSummaryCard(html, "Messages Replicated", logPosition >= 0 ? String.format("%,d", logPosition) : "Not available", "Total messages replicated through Aeron Raft log (indicates cluster activity)");
+            appendSummaryCard(html, "Cluster Time", clusterTime > 0 ? formatTimestamp(clusterTime) : "Not available", clusterTime > 0 ? formatRelativeTime(clusterTime) : "-");
+            
+            // Storage metrics
             appendSummaryCard(html, "Store Size", FormatUtils.formatBytes(fileStoreStats.size), fileStoreStats.segmentCount + " segments");
             appendSummaryCard(html, "Connected Peers", String.valueOf(clientCount), "AEM/Sling author instances");
+            
+            // Shard Router metrics (Phase 1)
+            if (context.shardRouter != null) {
+                org.apache.jackrabbit.oak.segment.consensus.sharding.ShardDirectory shardDirectory = context.shardRouter.getShardDirectory();
+                org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingStrategy strategy = context.shardRouter.getStrategy();
+                int numShards = strategy.getNumShards();
+                int shardsInDirectory = shardDirectory.getNumShards();
+                
+                appendSummaryCard(html, "🔀 Shard Router", "Enabled", "Stateless shard routing layer (Phase 1)");
+                appendSummaryCard(html, "Shards Configured", String.valueOf(numShards), 
+                    numShards == 1 ? "Single-shard mode (all requests route to this cluster)" : 
+                    String.format("%d shards configured (multi-shard mode)", numShards));
+                appendSummaryCard(html, "Shard Directory", String.valueOf(shardsInDirectory) + " shard(s)", 
+                    "Shards registered in directory");
+            } else {
+                appendSummaryCard(html, "🔀 Shard Router", "Disabled", "Shard routing not initialized");
+            }
+            
             html.append("</div>\n");
+            
+            // Shard Router explanation card (when disabled)
+            if (context.shardRouter == null) {
+                html.append("<div class='card' style='background: rgba(15,23,42,0.5); border-left: 3px solid #facc15; margin-top: 16px;'>\n");
+                html.append("<h2 style='margin-top: 0; color: #facc15;'>🔀 Shard Router Status</h2>\n");
+                html.append("<div style='color: #cbd5e1; line-height: 1.6;'>\n");
+                html.append("<p style='margin-top: 0;'><strong>Status:</strong> <span style='color: #fbbf24;'>Disabled</span></p>\n");
+                html.append("<p><strong>What is Shard Routing?</strong></p>\n");
+                html.append("<p style='margin-left: 16px; color: #94a3b8;'>Shard routing enables horizontal scaling by distributing requests across multiple independent Raft clusters (shards). Each shard handles a subset of wallets based on wallet address hashing.</p>\n");
+                html.append("<p><strong>Why is it disabled?</strong></p>\n");
+                html.append("<ul style='margin-left: 16px; color: #94a3b8; padding-left: 20px;'>\n");
+                html.append("<li>Shard router initializes after Aeron Cluster setup</li>\n");
+                html.append("<li>If Aeron Cluster is not configured, shard router remains disabled</li>\n");
+                html.append("<li>This is normal for single-cluster deployments (Phase 1)</li>\n");
+                html.append("</ul>\n");
+                html.append("<p><strong>When is it enabled?</strong></p>\n");
+                html.append("<ul style='margin-left: 16px; color: #94a3b8; padding-left: 20px;'>\n");
+                html.append("<li>Automatically enabled when Aeron Cluster consensus is active</li>\n");
+                html.append("<li>Required for multi-shard scaling (Phase 2+)</li>\n");
+                html.append("<li>Provides real-time leader discovery and request routing</li>\n");
+                html.append("</ul>\n");
+                html.append("<p style='margin-bottom: 0; color: #64748b; font-size: 0.9em;'><em>Note: Shard routing is optional. The validator operates normally without it in single-cluster mode.</em></p>\n");
+                html.append("</div>\n");
+                html.append("</div>\n");
+            }
 
             html.append("<div class='card table-card'>\n");
             html.append("<h2>Cluster Members</h2>\n");
@@ -253,6 +334,140 @@ public class DashboardHandler {
                 html.append("</tbody></table>\n");
             }
             html.append("</div>\n");
+
+            // TarMK Growth State Section
+            DashboardDataService.TarMkGrowthStats tarMkStats = dataService.getTarMkGrowthStats();
+            html.append("<div class='card table-card'>\n");
+            html.append("<h2>💾 TarMK Growth State</h2>\n");
+            if ("UP".equals(tarMkStats.status)) {
+                html.append("<div style='margin-bottom: 20px;'>\n");
+                html.append("<div class='summary-grid' style='grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 16px;'>\n");
+                appendSummaryCard(html, "TAR Files", String.valueOf(tarMkStats.tarFileCount), "Total TAR file generations");
+                appendSummaryCard(html, "Total Size", FormatUtils.formatBytes(tarMkStats.totalSize), "Combined size of all TAR files");
+                appendSummaryCard(html, "Avg TAR Size", FormatUtils.formatBytes(tarMkStats.averageTarSize), tarMkStats.tarFileCount > 0 ? String.format("Average: %s (max: %s, min: %s)", 
+                    FormatUtils.formatBytes(tarMkStats.averageTarSize),
+                    FormatUtils.formatBytes(tarMkStats.largestTarSize),
+                    FormatUtils.formatBytes(tarMkStats.smallestTarSize)) : "No TAR files");
+                appendSummaryCard(html, "Packing Efficiency", String.format("%.1f%%", tarMkStats.packingEfficiency), 
+                    tarMkStats.packingEfficiency < 10.0 ? "Many small TAR files (inefficient)" : 
+                    tarMkStats.packingEfficiency < 50.0 ? "Moderate packing (acceptable)" : 
+                    "Good packing (efficient)");
+                html.append("</div>\n");
+                html.append("</div>\n");
+                
+                // AI-Powered TarMK Analysis (collapsible)
+                html.append("<div style='background: rgba(15,23,42,0.5); border-left: 3px solid #3b82f6; padding: 16px; margin-top: 16px; border-radius: 8px;'>\n");
+                html.append("<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;'>\n");
+                html.append("<h3 style='margin: 0; color: #60a5fa;'>🤖 AI TarMK Analysis</h3>\n");
+                html.append("<button onclick='toggleTarMkAnalysis()' style='background: rgba(59, 130, 246, 0.2); border: 1px solid rgba(59, 130, 246, 0.4); color: #60a5fa; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em;'>Analyze with AI</button>\n");
+                html.append("</div>\n");
+                html.append("<div id='tarmk-analysis-section' style='display: none; color: #cbd5e1; line-height: 1.6; margin-top: 12px;'>\n");
+                html.append("<div id='tarmk-analysis-content' style='padding: 12px; background: rgba(15,23,42,0.6); border-radius: 6px;'>\n");
+                html.append("<p style='color: #94a3b8;'>Click 'Analyze with AI' to get AI-powered insights on TarMK growth state, fragmentation, and GC recommendations.</p>\n");
+                html.append("</div>\n");
+                html.append("</div>\n");
+                html.append("</div>\n");
+                
+                // Add JavaScript for AI analysis
+                html.append("<script>\n");
+                html.append("function toggleTarMkAnalysis() {\n");
+                html.append("  const section = document.getElementById('tarmk-analysis-section');\n");
+                html.append("  const content = document.getElementById('tarmk-analysis-content');\n");
+                html.append("  if (section.style.display === 'none') {\n");
+                html.append("    section.style.display = 'block';\n");
+                html.append("    content.innerHTML = '<p style=\"color: #94a3b8;\">🔄 Analyzing TarMK state with AI...</p>';\n");
+                html.append("    // Call chat API to analyze TarMK state\n");
+                html.append("    fetch('/v1/chat', {\n");
+                html.append("      method: 'POST',\n");
+                html.append("      headers: { 'Content-Type': 'application/json' },\n");
+                html.append("      body: JSON.stringify({ query: 'Analyze the current TarMK growth state, fragmentation metrics, and provide recommendations for GC and compaction decisions.' })\n");
+                html.append("    })\n");
+                html.append("    .then(response => response.json())\n");
+                html.append("    .then(data => {\n");
+                html.append("      if (data.answer) {\n");
+                html.append("        content.innerHTML = '<div style=\"white-space: pre-wrap; color: #cbd5e1;\">' + escapeHtml(data.answer) + '</div>';\n");
+                html.append("        if (data.sources && data.sources.length > 0) {\n");
+                html.append("          content.innerHTML += '<div style=\"margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(148,163,184,0.2);\"><strong style=\"color: #94a3b8; font-size: 0.85em;\">Sources:</strong><ul style=\"margin: 4px 0; padding-left: 20px; font-size: 0.85em; color: #94a3b8;\">';\n");
+                html.append("          data.sources.forEach(source => {\n");
+                html.append("            content.innerHTML += '<li>' + escapeHtml(source.name || source.type) + '</li>';\n");
+                html.append("          });\n");
+                html.append("          content.innerHTML += '</ul></div>';\n");
+                html.append("        }\n");
+                html.append("      } else if (data.error) {\n");
+                html.append("        content.innerHTML = '<p style=\"color: #f87171;\">❌ Error: ' + escapeHtml(data.error) + '</p><p style=\"color: #94a3b8; font-size: 0.85em; margin-top: 8px;\">Note: AI analysis requires oak-segment-agentic module to be installed.</p>';\n");
+                html.append("      }\n");
+                html.append("    })\n");
+                html.append("    .catch(error => {\n");
+                html.append("      content.innerHTML = '<p style=\"color: #f87171;\">❌ Error calling AI analysis: ' + escapeHtml(error.message) + '</p><p style=\"color: #94a3b8; font-size: 0.85em; margin-top: 8px;\">Note: AI analysis requires oak-segment-agentic module to be installed and /chat endpoint to be available.</p>';\n");
+                html.append("    });\n");
+                html.append("  } else {\n");
+                html.append("    section.style.display = 'none';\n");
+                html.append("  }\n");
+                html.append("}\n");
+                html.append("function escapeHtml(text) {\n");
+                html.append("  const div = document.createElement('div');\n");
+                html.append("  div.textContent = text;\n");
+                html.append("  return div.innerHTML;\n");
+                html.append("}\n");
+                html.append("</script>\n");
+            } else {
+                html.append("<div class='card-caption'>TarMK growth stats not available: ").append(FormatUtils.escapeHtml(tarMkStats.error != null ? tarMkStats.error : "Unknown error")).append("</div>\n");
+            }
+            html.append("</div>\n");
+
+            // Fragmentation Metrics Section
+            if (context.fragmentationTracker != null) {
+                Map<String, FragmentationTracker.EntityFragmentationMetrics> allMetrics = context.fragmentationTracker.getAllMetrics();
+                if (!allMetrics.isEmpty()) {
+                    html.append("<div class='card table-card'>\n");
+                    html.append("<h2>📊 Fragmentation Metrics by Entity</h2>\n");
+                    html.append("<div style='margin-bottom: 16px; color: #94a3b8;'>");
+                    html.append("Tracks TAR file creation per wallet address for fragmentation tax calculation");
+                    html.append("</div>\n");
+                    
+                    // Show top fragmented entities
+                    List<FragmentationTracker.EntityFragmentationMetrics> topEntities = 
+                        context.fragmentationTracker.getTopFragmentedEntities(10);
+                    
+                    if (!topEntities.isEmpty()) {
+                        html.append("<table>\n<thead><tr>");
+                        html.append("<th>Wallet Address</th>");
+                        html.append("<th>TAR Files</th>");
+                        html.append("<th>Total Size</th>");
+                        html.append("<th>Avg Size</th>");
+                        html.append("<th>Efficiency</th>");
+                        html.append("<th>Score</th>");
+                        html.append("<th>Tax</th>");
+                        html.append("</tr></thead><tbody>\n");
+                        
+                        for (FragmentationTracker.EntityFragmentationMetrics metrics : topEntities) {
+                            BigInteger tax = context.fragmentationTracker.calculateFragmentationTax(metrics.walletAddress);
+                            String taxDisplay = tax.equals(BigInteger.ZERO) ? "0 ETH" : formatWeiToEth(tax) + " ETH";
+                            
+                            html.append("<tr>");
+                            html.append("<td><code style='font-size: 0.85em;'>").append(FormatUtils.escapeHtml(metrics.walletAddress.substring(0, Math.min(20, metrics.walletAddress.length())))).append("...</code></td>");
+                            html.append("<td>").append(metrics.tarFilesCreated).append("</td>");
+                            html.append("<td>").append(FormatUtils.formatBytes(metrics.totalBytesWritten)).append("</td>");
+                            html.append("<td>").append(FormatUtils.formatBytes(metrics.averageTarFileSize)).append("</td>");
+                            html.append("<td>").append(String.format("%.1f%%", metrics.packingEfficiency)).append("</td>");
+                            html.append("<td>").append(metrics.fragmentationScore).append("</td>");
+                            html.append("<td>").append(taxDisplay).append("</td>");
+                            html.append("</tr>\n");
+                        }
+                        
+                        html.append("</tbody></table>\n");
+                    } else {
+                        html.append("<div class='card-caption'>No fragmentation metrics available yet</div>\n");
+                    }
+                    
+                    html.append("<div style='margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(148,163,184,0.15);'>");
+                    html.append("<a href='/v1/fragmentation/metrics' style='color: #60a5fa; text-decoration: none;'>View all metrics (JSON)</a> | ");
+                    html.append("<a href='/v1/fragmentation/top?limit=20' style='color: #60a5fa; text-decoration: none;'>Top fragmented entities</a>");
+                    html.append("</div>\n");
+                    
+                    html.append("</div>\n");
+                }
+            }
 
             // Connected Peers Card
             html.append("<div class='card'>\n");
@@ -408,6 +623,28 @@ public class DashboardHandler {
         }
     }
 
+    /**
+     * Format Wei to ETH (simplified - assumes 18 decimals).
+     */
+    private String formatWeiToEth(BigInteger wei) {
+        if (wei == null || wei.equals(BigInteger.ZERO)) {
+            return "0";
+        }
+        // Simple formatting: divide by 10^18
+        BigInteger eth = wei.divide(BigInteger.valueOf(10).pow(18));
+        BigInteger remainder = wei.remainder(BigInteger.valueOf(10).pow(18));
+        if (remainder.equals(BigInteger.ZERO)) {
+            return eth.toString();
+        }
+        String remainderStr = remainder.toString();
+        // Pad with zeros if needed
+        while (remainderStr.length() < 18) {
+            remainderStr = "0" + remainderStr;
+        }
+        // Take first 6 decimal places
+        return eth.toString() + "." + remainderStr.substring(0, Math.min(6, remainderStr.length()));
+    }
+    
     private String formatLeaderLabel(String leaderUrl) {
         if (leaderUrl == null || leaderUrl.isEmpty()) {
             return "Unknown";
@@ -687,6 +924,33 @@ public class DashboardHandler {
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");
+        html.append("<h2>🗑️ Garbage Collection & Compaction</h2>\n");
+        addApiEndpoint(html, "GET", "/v1/gc/estimate", "Estimate GC cost and reclaimable space (JSON)", "gc_estimate");
+        addApiEndpoint(html, "GET", "/v1/gc/status", "Get GC proposal status and history (JSON)", "gc_status");
+        addApiEndpoint(html, "POST", "/v1/propose-gc", "Propose a GC operation (requires consensus)", "propose_gc");
+        addApiEndpoint(html, "POST", "/v1/gc/execute", "Manually execute an approved GC proposal (auto-executes on approval)", "gc_execute");
+        addApiEndpoint(html, "GET", "/v1/compaction/proposals", "Get pending compaction proposals (JSON)", "compaction_proposals");
+        html.append("</div>\n");
+        
+        html.append("<div class='category'>\n");
+        html.append("<h2>📊 Fragmentation Metrics</h2>\n");
+        addApiEndpoint(html, "GET", "/v1/fragmentation/metrics", "Get fragmentation metrics for all entities (JSON)", "fragmentation_metrics");
+        addApiEndpoint(html, "GET", "/v1/fragmentation/metrics/{walletAddress}", "Get fragmentation metrics for specific entity (JSON)", "fragmentation_entity");
+        addApiEndpoint(html, "GET", "/v1/fragmentation/top?limit=20", "Get top N most fragmented entities (JSON)", "fragmentation_top");
+        html.append("</div>\n");
+        
+        html.append("<div class='category'>\n");
+        html.append("<h2>📋 Proposal Management</h2>\n");
+        addApiEndpoint(html, "GET", "/v1/proposals/pending/count", "Get count of pending proposals (JSON)", "proposals_count");
+        addApiEndpoint(html, "GET", "/v1/proposals/{id}/status", "Get status of specific proposal (JSON)", "proposal_status");
+        html.append("</div>\n");
+        
+        html.append("<div class='category'>\n");
+        html.append("<h2>🤖 AI Chat (Optional)</h2>\n");
+        addApiEndpoint(html, "POST", "/v1/chat", "LLM-powered chat interface (requires oak-segment-agentic)", "chat");
+        html.append("</div>\n");
+        
+        html.append("<div class='category'>\n");
         html.append("<h2>📄 Oak Files</h2>\n");
         addApiEndpoint(html, "GET", "/journal.log", "Journal file (text)", "journal");
         addApiEndpoint(html, "GET", "/manifest", "Manifest file (text)", "manifest");
@@ -727,7 +991,15 @@ public class DashboardHandler {
         html.append("  if (method === 'POST' || method === 'PUT') {\n");
         html.append("    formHtml += '<div class=\"form-group\">';\n");
         html.append("    formHtml += '<label>Request Body (JSON):</label>';\n");
-        html.append("    formHtml += '<textarea id=\"request-body\">' + getExampleBody(id) + '</textarea>';\n");
+        html.append("    // Get example body and ensure it's valid JSON\n");
+        html.append("    const exampleBody = getExampleBody(id);\n");
+        html.append("    // Validate the example body is valid JSON\n");
+        html.append("    try {\n");
+        html.append("      JSON.parse(exampleBody);\n");
+        html.append("    } catch (e) {\n");
+        html.append("      console.error('Invalid example JSON for', id, ':', e);\n");
+        html.append("    }\n");
+        html.append("    formHtml += '<textarea id=\"request-body\" style=\"font-family: monospace; white-space: pre;\">' + exampleBody + '</textarea>';\n");
         html.append("    formHtml += '</div>';\n");
         html.append("  }\n");
         html.append("  \n");
@@ -740,7 +1012,9 @@ public class DashboardHandler {
         html.append("function getExampleBody(id) {\n");
         html.append("  const examples = {\n");
         html.append("    'test_write': JSON.stringify({wallet: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb', message: 'Hello Blockchain!', contentType: 'page', signature: '0x...', clientId: 'test-client'}, null, 2),\n");
-        html.append("    'register_client': JSON.stringify({clientId: 'sling-author-1', clientUrl: 'http://localhost:8080', walletAddress: '0xabc...def'}, null, 2)\n");
+        html.append("    'register_client': JSON.stringify({clientId: 'sling-author-1', clientUrl: 'http://localhost:8080', walletAddress: '0xabc...def'}, null, 2),\n");
+        html.append("    'propose_gc': JSON.stringify({walletAddress: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb', targetRevision: null}, null, 2),\n");
+        html.append("    'gc_execute': JSON.stringify({proposalId: 'uuid-here'}, null, 2)\n");
         html.append("  };\n");
         html.append("  return examples[id] || '{}';\n");
         html.append("}\n");
@@ -766,6 +1040,12 @@ public class DashboardHandler {
         html.append("    \n");
         html.append("    const bodyField = document.getElementById('request-body');\n");
         html.append("    if (bodyField && bodyField.value) {\n");
+        html.append("      // Validate JSON before sending\n");
+        html.append("      try {\n");
+        html.append("        JSON.parse(bodyField.value);\n");
+        html.append("      } catch (e) {\n");
+        html.append("        throw new Error('Invalid JSON: ' + e.message);\n");
+        html.append("      }\n");
         html.append("      options.headers = { 'Content-Type': 'application/json' };\n");
         html.append("      options.body = bodyField.value;\n");
         html.append("    }\n");
