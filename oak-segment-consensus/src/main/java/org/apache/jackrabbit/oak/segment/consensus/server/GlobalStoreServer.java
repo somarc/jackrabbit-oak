@@ -557,9 +557,13 @@ public class GlobalStoreServer {
         String peersConfig = System.getProperty("consensus.peers", "");
         String genesisNode = System.getProperty("consensus.genesis.node", "");  // Boot node for genesis sync
         
-        // Allow leader consensus even with no peers (single validator = leader of 1)
+        // Allow consensus even with no peers:
+        // - Leader mode: single validator = leader of 1
+        // - Aeron mode: single validator can start cluster (genesis node)
         boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled) && 
-                                 ("leader".equalsIgnoreCase(consensusMode) || !peersConfig.isEmpty());
+                                 ("leader".equalsIgnoreCase(consensusMode) || 
+                                  "aeron".equalsIgnoreCase(consensusMode) || 
+                                  !peersConfig.isEmpty());
         
         // CRITICAL: Don't initialize consensus here if we're in STANDBY mode
         // The bootstrap promotion callback (startConsensusPrimary or startAeronClusterAfterBootstrap) will initialize it
