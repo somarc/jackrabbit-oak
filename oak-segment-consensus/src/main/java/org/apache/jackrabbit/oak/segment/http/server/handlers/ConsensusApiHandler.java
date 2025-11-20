@@ -252,15 +252,7 @@ public class ConsensusApiHandler {
                 }
             }
             
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("🔐 WALLET-BASED WRITE INITIATED");
-            log.info("   Client: {} (registered)", clientId);
-            log.info("   Wallet: {} (verified)", wallet);
-            log.info("   Content Type: {}", contentType);
-            log.info("   Message: {}", message);
-            log.info("   Signature: {}...{}", signature.substring(0, Math.min(10, signature.length())), 
-                     signature.length() > 10 ? signature.substring(signature.length() - 4) : "");
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.debug("🔐 WALLET-BASED WRITE: client={}, wallet={}, contentType={}", clientId, wallet, contentType);
             
             // Signature verification
             if (!signature.startsWith("0x")) {
@@ -270,11 +262,11 @@ public class ConsensusApiHandler {
             }
             
             if (blockchainConfig.isMockMode()) {
-                log.info("✅ Signature verification: MOCK (accepted - mock mode enabled)");
+                log.debug("✅ Signature verification: MOCK (accepted - mock mode enabled)");
             } else {
                 // TODO: Real signature verification with Web3j
                 // For now, accept signature format (real verification will be added)
-                log.info("✅ Signature verification: Format valid (real mode - full verification TODO)");
+                log.debug("✅ Signature verification: Format valid (real mode - full verification TODO)");
             }
             
             // Extract Ethereum transaction hash (REQUIRED for queue)
@@ -505,14 +497,7 @@ public class ConsensusApiHandler {
                 return;
             }
             
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("🗑️  DELETE PROPOSAL RECEIVED");
-            log.info("   Client: {} (registered)", clientId);
-            log.info("   Wallet: {} (verified)", wallet);
-            log.info("   Content Path: {}", contentPath);
-            log.info("   Signature: {}...{}", signature.substring(0, Math.min(10, signature.length())), 
-                     signature.length() > 10 ? signature.substring(signature.length() - 4) : "");
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.debug("🗑️  DELETE PROPOSAL: client={}, wallet={}, path={}", clientId, wallet, contentPath);
             
             // TODO: Verify signature matches wallet address
             // TODO: Check if content actually exists at the path
@@ -773,15 +758,11 @@ public class ConsensusApiHandler {
     public void applyReplicatedWrite(String walletAddress, String path, String contentType, 
                                      String message, String signature) {
         try {
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("✈️  APPLYING REPLICATED WRITE (Aeron native replication)");
-            log.info("   Wallet: {}", walletAddress);
-            log.info("   Path: {}", path);
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}", walletAddress, path);
             
             // Get current HEAD
             String previousHead = context.fileStore.getHead().getRecordId().toString();
-            log.info("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
+            log.debug("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
             
             // Parse path: /oak-chain/content/{L1}/{L2}/{L3}/{wallet}/{contentId}
             String[] pathParts = path.split("/");
@@ -813,7 +794,12 @@ public class ConsensusApiHandler {
             contentNode.setProperty("signature", signature != null ? signature : "");
             contentNode.setProperty("source", "aeron-replicated");
             
-            // Commit the change
+            // 🎯 DETERMINISTIC STATE MACHINE: ALL nodes commit identically
+            // Aeron guarantees: same messages, same order, on ALL nodes
+            // Therefore: same processing = same HEAD (guaranteed!)
+            // NO manual HEAD broadcasts needed - consistency by design
+            
+            // Commit info (SAME on all nodes)
             org.apache.jackrabbit.oak.spi.commit.CommitInfo commitInfo = 
                 new org.apache.jackrabbit.oak.spi.commit.CommitInfo(
                     "aeron-replication", 
@@ -821,18 +807,26 @@ public class ConsensusApiHandler {
                     java.util.Collections.singletonMap("replicated", "true")
                 );
             
+            // Merge changes (SAME on all nodes)
             context.nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, commitInfo);
             
-            // Flush FileStore
+            // Flush FileStore (SAME on all nodes)
             context.fileStore.flush();
             
-            // Track fragmentation: Check for new TAR files created by this write
+            // Track fragmentation (SAME on all nodes)
             trackFragmentation(walletAddress);
             
-            // Get new HEAD
-            String newHead = context.fileStore.getHead().getRecordId().toString();
-            log.info("📍 New HEAD: {}", newHead.substring(0, Math.min(20, newHead.length())));
-            log.info("✅ Replicated write applied successfully");
+            // Get new HEAD (SAME on all nodes because same processing!)
+            String newHead = context.fileStore.getHead().getRecordId().toString10();
+            log.debug("✅ Write applied, HEAD: {}...", newHead.substring(0, Math.min(20, newHead.length())));
+            
+            // Update latest HEAD cache (SAME on all nodes)
+            if (context.aeronConsensusEngine != null) {
+                context.aeronConsensusEngine.updateLatestHead(newHead);
+            }
+            
+            // 🎯 ALL nodes now have IDENTICAL HEAD - no broadcast needed!
+            log.debug("✅ Deterministic write applied successfully");
             
         } catch (Exception e) {
             log.error("❌ Failed to apply replicated write", e);

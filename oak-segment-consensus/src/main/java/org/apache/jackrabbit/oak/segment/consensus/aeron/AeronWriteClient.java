@@ -29,8 +29,8 @@ import java.util.List;
 /**
  * Simple Aeron client for sending write messages through the cluster ingress.
  * 
- * <p>This matches the production pattern from oak-repository-service:
- * - Creates an AeronCluster client that connects via UDP
+ * <p>Creates an AeronCluster client for external write submissions:
+ * - Connects via UDP to the cluster ingress endpoints
  * - Uses the same MediaDriver directory as the ClusteredService
  * - Provides offer() method to send messages through ingress
  * 
@@ -71,7 +71,7 @@ public class AeronWriteClient {
     
     /**
      * Connect to the Aeron cluster.
-     * Retries with exponential backoff like production code.
+     * Retries with exponential backoff for resilient connection handling.
      */
     public void connect() {
         if (connected && clusterClient != null) {
@@ -207,7 +207,7 @@ public class AeronWriteClient {
      * Send a message through the cluster ingress.
      * Returns the position if successful, or a negative value if failed.
      * 
-     * <p>This matches the production pattern: cluster.offer(buffer, offset, length)
+     * <p>Uses standard Aeron Cluster pattern: cluster.offer(buffer, offset, length)
      */
     public long offer(MutableDirectBuffer buffer, int offset, int length) {
         if (!connected || clusterClient == null) {

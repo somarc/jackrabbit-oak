@@ -41,6 +41,7 @@ public class ProposalQueueManager {
     private final EvmBridge evmBridge;
     private final RaftAppendCallback raftAppendCallback;
     private final ScheduledExecutorService scheduler;
+    private final BackpressureManager backpressureManager;
     private volatile boolean running = false;
     
     /**
@@ -48,12 +49,15 @@ public class ProposalQueueManager {
      * 
      * @param evmBridge EVM bridge for payment verification
      * @param raftAppendCallback Callback to append verified proposals to Raft
+     * @param backpressureManager Backpressure manager for flow control
      */
     public ProposalQueueManager(
             EvmBridge evmBridge,
-            RaftAppendCallback raftAppendCallback) {
+            RaftAppendCallback raftAppendCallback,
+            BackpressureManager backpressureManager) {
         this.evmBridge = evmBridge;
         this.raftAppendCallback = raftAppendCallback;
+        this.backpressureManager = backpressureManager;
         this.scheduler = Executors.newScheduledThreadPool(2, r -> {
             Thread t = new Thread(r, "ProposalQueueMonitor");
             t.setDaemon(true);
@@ -203,6 +207,7 @@ public class ProposalQueueManager {
     
     /**
      * Append verified proposal to Raft log.
+     * Rate-limited to prevent overwhelming Aeron cluster with bursts.
      */
     private void appendToRaft(QueuedProposal queued) {
         try {
@@ -227,6 +232,19 @@ public class ProposalQueueManager {
                 
                 // Remove from pending map after successful append (optimize memory)
                 pendingProposals.remove(queued.getProposalId());
+                
+                // Apply backpressure if Aeron cluster cannot keep up
+                // Replaces fixed rate limiting with dynamic flow control
+                // Blocks ONLY when pending messages >= max (default: 2000)
+                // No delay when cluster healthy - achieves maximum throughput
+                try {
+                    backpressureManager.applyBackpressureIfNeeded();
+                    backpressureManager.incrementSent(); // Track this offer
+                } catch (BackpressureTimeoutException e) {
+                    log.error("❌ Backpressure timeout - Aeron cluster overloaded: {}", e.getMessage());
+                    rejectProposal(queued, "Backpressure timeout: " + e.getMessage());
+                    // Continue processing next proposal (don't stop entire queue)
+                }
             } else {
                 log.warn("⚠️  No Raft append callback configured for proposal {}", queued.getProposalId());
                 rejectProposal(queued, "No Raft append callback configured");

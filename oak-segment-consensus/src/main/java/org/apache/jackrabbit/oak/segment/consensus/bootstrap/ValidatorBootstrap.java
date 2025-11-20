@@ -155,6 +155,11 @@ public class ValidatorBootstrap {
     /**
      * Check if standby is caught up with primary by comparing HEAD record IDs.
      * The standby is caught up when its HEAD matches the primary's HEAD.
+     * 
+     * NEW GENESIS ARCHITECTURE:
+     * - Empty-to-empty sync is VALID (both validators waiting for genesis creation)
+     * - If both stores are empty, we're "caught up" (ready to join cluster)
+     * - Genesis will be created as first consensus write after cluster forms
      */
     private boolean isCaughtUp() {
         if (primaryUrl == null) {
@@ -162,8 +167,18 @@ public class ValidatorBootstrap {
         }
         
         try {
-            // Get local HEAD
-            String localHead = fileStore.getHead().getRecordId().toString();
+            // Check if local store is empty
+            long localSize = fileStore.size();
+            boolean localIsEmpty = (localSize == 0);
+            
+            // Get local HEAD (may be null/invalid if empty)
+            String localHead = null;
+            try {
+                localHead = fileStore.getHead().getRecordId().toString10();
+            } catch (Exception e) {
+                // Empty store may not have valid HEAD - this is OK
+                log.debug("Local store has no valid HEAD (likely empty): {}", e.getMessage());
+            }
             
             // Get primary HEAD via HTTP
             java.net.URL url = new java.net.URL(primaryUrl + "/v1/head");
@@ -174,21 +189,87 @@ public class ValidatorBootstrap {
             
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {
+                // Read full JSON response
                 java.io.BufferedReader reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(conn.getInputStream())
                 );
-                String primaryHead = reader.readLine();
+                StringBuilder jsonResponse = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    jsonResponse.append(line);
+                }
                 reader.close();
                 
-                boolean caughtUp = localHead.equals(primaryHead);
+                // Parse JSON to extract latestHead or committedHead
+                String json = jsonResponse.toString();
+                String primaryHead = null;
+                
+                // Simple JSON parsing: look for "latestHead" or "committedHead" field
+                // Format: {"latestHead": "uuid:offset", "committedHead": "uuid:offset"}
+                int latestHeadIdx = json.indexOf("\"latestHead\"");
+                if (latestHeadIdx >= 0) {
+                    int startIdx = json.indexOf("\"", latestHeadIdx + 12) + 1;
+                    int endIdx = json.indexOf("\"", startIdx);
+                    if (endIdx > startIdx) {
+                        primaryHead = json.substring(startIdx, endIdx);
+                    }
+                }
+                
+                // Fallback to committedHead if latestHead not found
+                if (primaryHead == null) {
+                    int committedHeadIdx = json.indexOf("\"committedHead\"");
+                    if (committedHeadIdx >= 0) {
+                        int startIdx = json.indexOf("\"", committedHeadIdx + 16) + 1;
+                        int endIdx = json.indexOf("\"", startIdx);
+                        if (endIdx > startIdx) {
+                            primaryHead = json.substring(startIdx, endIdx);
+                        }
+                    }
+                }
+                
+                // NEW GENESIS ARCHITECTURE: Handle empty-to-empty bootstrap
+                // If both stores are empty, we're caught up (waiting for genesis creation)
+                if (localIsEmpty && (primaryHead == null || primaryHead.isEmpty() || primaryHead.equals("null"))) {
+                    log.info("✅ EMPTY-TO-EMPTY BOOTSTRAP: Both stores empty (ready for genesis)");
+                    log.info("   Local: empty store ({} bytes)", localSize);
+                    log.info("   Primary: empty store (HEAD: {})", primaryHead);
+                    log.info("   Genesis will be created as first consensus write after cluster forms");
+                    return true;  // Caught up! Both empty is valid state
+                }
+                
+                // If local is empty but primary has data, not caught up yet
+                if (localIsEmpty && primaryHead != null && !primaryHead.isEmpty() && !primaryHead.equals("null")) {
+                    log.debug("   Local empty, primary has data: {} - syncing...", primaryHead.substring(0, Math.min(20, primaryHead.length())));
+                    return false;
+                }
+                
+                // If local has HEAD but primary doesn't, something's wrong
+                if (localHead != null && (primaryHead == null || primaryHead.isEmpty() || primaryHead.equals("null"))) {
+                    log.warn("Local has HEAD but primary doesn't - unusual state");
+                    return false;
+                }
+                
+                // Both have HEADs - compare them
+                if (localHead == null) {
+                    log.warn("Local HEAD is null but primary has: {}", primaryHead);
+                    return false;
+                }
+                
+                // Compare HEADs (extract UUID part before : or . for comparison)
+                // Format can be "uuid:offset" or "uuid.offset" - compare UUID part
+                String localUuid = localHead.split("[:.]")[0];
+                String primaryUuid = primaryHead.split("[:.]")[0];
+                
+                boolean caughtUp = localUuid.equals(primaryUuid);
                 
                 if (caughtUp) {
                     log.info("✅ CAUGHT UP! Local HEAD matches primary");
-                    log.info("   HEAD: {}", localHead.substring(0, Math.min(20, localHead.length())) + "...");
+                    log.info("   Local HEAD: {}", localHead);
+                    log.info("   Primary HEAD: {}", primaryHead);
                 } else {
                     log.debug("   Still syncing... Local: {} vs Primary: {}", 
-                        localHead.substring(0, Math.min(12, localHead.length())),
-                        primaryHead.substring(0, Math.min(12, primaryHead.length())));
+                        localHead.substring(0, Math.min(20, localHead.length())),
+                        primaryHead.substring(0, Math.min(20, primaryHead.length())));
                 }
                 
                 return caughtUp;

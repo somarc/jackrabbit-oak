@@ -146,13 +146,132 @@ public class GlobalStoreServer {
         
         // Bootstrap mode (needs to be accessible throughout method)
         BootstrapMode detectedMode = BootstrapMode.PRIMARY;  // Default
+        int standbyPort = port + 1;  // Standby port = HTTP port + 1 (used for Oak FileStore bootstrap)
+        
+        // ✈️ AERON-ONLY POC: This POC uses Aeron Cluster Raft consensus exclusively
+        // Check if Aeron mode is enabled (default: true for POC)
+        String consensusModeProp = System.getProperty("consensus.mode", "aeron");
+        boolean isAeronMode = "aeron".equalsIgnoreCase(consensusModeProp);
+        
+        if (!isAeronMode) {
+            throw new IllegalArgumentException("This POC only supports Aeron Cluster consensus. Set consensus.mode=aeron or omit it (defaults to aeron).");
+        }
+        
+        // Check if store directory is empty BEFORE building FileStore
+        // This prevents Oak from creating a new HEAD before we can bootstrap
+        File storeDir = new File(storeDirectory);
+        boolean directoryIsEmpty = false;
+        if (storeDir.exists() && storeDir.isDirectory()) {
+            File[] files = storeDir.listFiles((dir, name) -> 
+                name.startsWith("data") && name.endsWith(".tar") || 
+                name.equals("journal.log") || 
+                name.startsWith("journal.log"));
+            directoryIsEmpty = (files == null || files.length == 0);
+        } else {
+            directoryIsEmpty = true; // Directory doesn't exist = empty
+        }
+        
+        // Check if bootstrap is needed (empty directory + peers exist)
+        // CRITICAL: Only mark for bootstrap if we've VERIFIED peers are reachable
+        // This prevents getting stuck if peers are configured but not actually available
+        boolean needsBootstrapBeforeBuild = false;
+        boolean hasVerifiedReachablePeers = false;
+        String verifiedBootstrapPrimaryHost = "";
+        int verifiedBootstrapPrimaryPort = 0;
+        
+        if (isAeronMode && directoryIsEmpty) {
+            String peersConfig = System.getProperty("consensus.peers", "");
+            List<String> aeronPeers = parsePeerUrls(peersConfig);
+            String bootstrapPrimaryHost = System.getProperty("bootstrap.primary.host", "");
+            String bootstrapPrimaryPortStr = System.getProperty("bootstrap.primary.port", "");
+            
+            // First, try to verify peers from consensus.peers
+            if (!aeronPeers.isEmpty()) {
+                for (String peerUrl : aeronPeers) {
+                    try {
+                        java.net.URL url = new java.net.URL(peerUrl + "/health");
+                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                        conn.setRequestMethod("GET");
+                        conn.setConnectTimeout(2000);
+                        conn.setReadTimeout(2000);
+                        if (conn.getResponseCode() == 200) {
+                            hasVerifiedReachablePeers = true;
+                            // Extract host from peer URL for bootstrap
+                            verifiedBootstrapPrimaryHost = peerUrl.replace("http://", "").replace("https://", "").split(":")[0];
+                            // Standby port = HTTP port + 1
+                            try {
+                                int httpPort = Integer.parseInt(peerUrl.split(":")[2]);
+                                verifiedBootstrapPrimaryPort = httpPort + 1;
+                            } catch (Exception e) {
+                                verifiedBootstrapPrimaryPort = port + 1; // Fallback
+                            }
+                            System.out.println("✅ Verified reachable peer: " + peerUrl);
+                            break;
+                        }
+                    } catch (Exception e) {
+                        // Try next peer
+                    }
+                }
+            }
+            
+            // If no peers from consensus.peers, try bootstrap.primary.host
+            if (!hasVerifiedReachablePeers && !bootstrapPrimaryHost.isEmpty()) {
+                try {
+                    // Try to reach bootstrap primary (use HTTP port, not standby port)
+                    int httpPort = 8090; // Default
+                    if (!bootstrapPrimaryPortStr.isEmpty()) {
+                        try {
+                            int parsedStandbyPort = Integer.parseInt(bootstrapPrimaryPortStr);
+                            httpPort = parsedStandbyPort - 1; // Standby port - 1 = HTTP port
+                        } catch (NumberFormatException e) {
+                            // Use default
+                        }
+                    }
+                    String primaryUrl = "http://" + bootstrapPrimaryHost + ":" + httpPort;
+                    java.net.URL url = new java.net.URL(primaryUrl + "/health");
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setConnectTimeout(2000);
+                    conn.setReadTimeout(2000);
+                    if (conn.getResponseCode() == 200) {
+                        hasVerifiedReachablePeers = true;
+                        verifiedBootstrapPrimaryHost = bootstrapPrimaryHost;
+                        verifiedBootstrapPrimaryPort = !bootstrapPrimaryPortStr.isEmpty() ? 
+                            Integer.parseInt(bootstrapPrimaryPortStr) : (httpPort + 1);
+                        System.out.println("✅ Verified bootstrap primary: " + bootstrapPrimaryHost + ":" + verifiedBootstrapPrimaryPort);
+                    }
+                } catch (Exception e) {
+                    System.out.println("⚠️  Bootstrap primary configured but not reachable: " + bootstrapPrimaryHost);
+                    System.out.println("   Will fall back to GENESIS mode if store is empty");
+                }
+            }
+            
+            // Only mark for bootstrap if we've VERIFIED a peer is reachable
+            needsBootstrapBeforeBuild = hasVerifiedReachablePeers;
+            
+            if (needsBootstrapBeforeBuild) {
+                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                System.out.println("⚠️  CRITICAL: Empty store directory detected");
+                System.out.println("   Bootstrap needed - verified peer is reachable");
+                System.out.println("   This ensures all validators start with same genesis HEAD");
+                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                System.out.println("   Bootstrap primary: " + verifiedBootstrapPrimaryHost + ":" + verifiedBootstrapPrimaryPort);
+            } else if (directoryIsEmpty) {
+                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                System.out.println("⚠️  Empty store directory detected, but no reachable peers");
+                System.out.println("   Will create genesis state (this node becomes genesis)");
+                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            }
+        }
         
         // Initialize Oak FileStore
         System.out.println("Initializing Oak FileStore...");
-        File storeDir = new File(storeDirectory);
         try {
             
             // Build FileStore with read-write mode (so we can initialize /oak-chain structure)
+            // NOTE: If bootstrap is needed, this will create an initial HEAD, but bootstrap will sync
+            // segments and update HEAD to match primary. This is unavoidable - Oak requires FileStore
+            // instance for StandbyClientSync, but we'll sync immediately after build.
             fileStore = FileStoreBuilder.fileStoreBuilder(storeDir)
                 .withMaxFileSize(256)  // 256 MB per TAR file
                 .withMemoryMapping(false)  // Disable for Docker
@@ -164,6 +283,11 @@ public class GlobalStoreServer {
             System.out.println("✅ Oak FileStore initialized");
             System.out.println("   - Store version: " + fileStore.getHead().getRecordId());
             System.out.println("   - Segments: " + storeDir.getAbsolutePath());
+            
+            // If bootstrap is needed, mark for immediate sync (before any other initialization)
+            if (needsBootstrapBeforeBuild) {
+                System.out.println("   ⚠️  Initial HEAD created (will be replaced by bootstrap sync)");
+            }
             
             // ===========================================================================
             // Initialize GC Cost Estimator (for GC operations)
@@ -201,7 +325,7 @@ public class GlobalStoreServer {
             String selfUrlConfig = System.getProperty("consensus.self.url");
             String selfUrl;
             if (selfUrlConfig != null && !selfUrlConfig.isEmpty()) {
-                // Use configured URL (can be ngrok/Ethos URL, IP, or hostname)
+                // Use configured URL (can be ngrok/cloud URL, IP, or hostname)
                 selfUrl = selfUrlConfig;
                 System.out.println("   Using configured self URL: " + selfUrl);
             } else {
@@ -301,13 +425,8 @@ public class GlobalStoreServer {
             
             System.out.println("✅ HTTP server initialized (not yet started)");
             
-            // Check consensus mode FIRST to determine if bootstrap is needed
-            String consensusMode = System.getProperty("consensus.mode", "leader");
-            boolean isAeronMode = "aeron".equalsIgnoreCase(consensusMode);
-            
-            // Declare variables for bootstrap logic (needed for EpochLeaderEngine mode)
-            List<String> peers = new java.util.ArrayList<>();
-            int standbyPort = port + 1;
+            // ✈️ AERON-ONLY: Bootstrap logic is handled above in Aeron mode detection
+            // No separate mode-specific bootstrap logic needed
             
             // BOOTSTRAP: Hybrid approach for Aeron mode
             // ===========================================================================
@@ -321,10 +440,12 @@ public class GlobalStoreServer {
             // - If store has data → Start Aeron directly (will replay Raft log)
             // ===========================================================================
             if (isAeronMode) {
-                // Check if store is empty (needs Oak FileStore bootstrap)
-                boolean storeIsEmpty = (fileStore.size() == 0);
+                // Use directory emptiness check (done BEFORE FileStore build) instead of fileStore.size()
+                // This is more reliable - fileStore.size() might be > 0 even for a fresh FileStore
+                // if Oak creates initial segments, but directory emptiness is definitive
+                boolean storeIsEmpty = directoryIsEmpty;
                 
-                // Check if peers are reachable
+                // Check if peers are reachable (reuse check from before FileStore build)
                 String peersConfig = System.getProperty("consensus.peers", "");
                 List<String> aeronPeers = parsePeerUrls(peersConfig);
                 boolean hasReachablePeers = false;
@@ -350,12 +471,15 @@ public class GlobalStoreServer {
                     }
                 }
                 
-                if (storeIsEmpty && hasReachablePeers) {
-                    // ✈️ AERON MODE: Empty store + peers exist → Bootstrap Oak FileStore FIRST
+                // If bootstrap was needed before build, ensure it runs NOW (immediately after FileStore build)
+                // CRITICAL: Re-verify peer reachability AFTER FileStore build (peer might have come online)
+                // But use verified peer info from before build to avoid getting stuck
+                if (needsBootstrapBeforeBuild) {
+                    // ✈️ AERON MODE: Empty store + verified peers exist → Bootstrap Oak FileStore FIRST
                     // This ensures all validators start with same genesis HEAD
                     System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     System.out.println("✈️  AERON MODE: Empty store detected");
-                    System.out.println("   Bootstrapping Oak FileStore from peers BEFORE Aeron Cluster join");
+                    System.out.println("   Bootstrapping Oak FileStore from verified peer BEFORE Aeron Cluster join");
                     System.out.println("   This ensures deterministic genesis (all validators have same HEAD)");
                     System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     
@@ -366,39 +490,58 @@ public class GlobalStoreServer {
                     this.aeronPeerUrls = aeronPeers;
                     
                     // Use ValidatorBootstrap to sync Oak FileStore
-                    String bootstrapMode = System.getProperty("bootstrap.mode", "auto");
-                    this.bootstrapPrimaryHost = System.getProperty("bootstrap.primary.host", "");
-                    this.bootstrapPrimaryPort = Integer.parseInt(System.getProperty("bootstrap.primary.port", String.valueOf(port + 1)));
-                    standbyPort = port + 1;
-                    
                     bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
                     
-                    // Determine bootstrap primary (first reachable peer)
-                    String primaryHost = this.bootstrapPrimaryHost;
-                    int primaryPort = this.bootstrapPrimaryPort;
+                    // Use verified bootstrap primary (from before FileStore build)
+                    String primaryHost = verifiedBootstrapPrimaryHost;
+                    int primaryPort = verifiedBootstrapPrimaryPort;
                     
+                    // Fallback: If verified info not available, try system properties
+                    if (primaryHost.isEmpty()) {
+                        primaryHost = System.getProperty("bootstrap.primary.host", "");
+                        String bootstrapPrimaryPortStr = System.getProperty("bootstrap.primary.port", String.valueOf(port + 1));
+                        try {
+                            primaryPort = Integer.parseInt(bootstrapPrimaryPortStr);
+                        } catch (NumberFormatException e) {
+                            primaryPort = port + 1;
+                        }
+                    }
+                    
+                    // Final fallback: Use first peer from consensus.peers
                     if (primaryHost.isEmpty() && !aeronPeers.isEmpty()) {
-                        // Use first peer as bootstrap primary
                         String firstPeer = aeronPeers.get(0);
                         primaryHost = firstPeer.replace("http://", "").replace("https://", "").split(":")[0];
-                        primaryPort = port + 1; // Standby port = HTTP port + 1
+                        try {
+                            int httpPort = Integer.parseInt(firstPeer.split(":")[2]);
+                            primaryPort = httpPort + 1; // Standby port = HTTP port + 1
+                        } catch (Exception e) {
+                            primaryPort = port + 1; // Fallback
+                        }
                         System.out.println("   Using first peer as bootstrap primary: " + primaryHost + ":" + primaryPort);
                     }
                     
                     if (primaryHost.isEmpty()) {
-                        throw new IOException("AERON MODE: Empty store requires bootstrap.primary.host or consensus.peers for Oak FileStore bootstrap");
+                        // CRITICAL: Don't get stuck - fall back to GENESIS mode
+                        System.err.println("❌ ERROR: Bootstrap needed but no primary host available");
+                        System.err.println("   Falling back to GENESIS mode (this node will create genesis state)");
+                        detectedMode = BootstrapMode.GENESIS;
+                        bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
+                    } else {
+                        // Store verified primary info for bootstrap
+                        this.bootstrapPrimaryHost = primaryHost;
+                        this.bootstrapPrimaryPort = primaryPort;
+                        detectedMode = BootstrapMode.STANDBY; // Will bootstrap Oak FileStore
+                        System.out.println("   Bootstrap mode: STANDBY (will sync Oak FileStore, then start Aeron Cluster)");
+                        System.out.println("   Bootstrap primary: " + primaryHost + ":" + primaryPort);
                     }
-                    
-                    detectedMode = BootstrapMode.STANDBY; // Will bootstrap Oak FileStore
-                    System.out.println("   Bootstrap mode: STANDBY (will sync Oak FileStore, then start Aeron Cluster)");
-                } else if (storeIsEmpty && !hasReachablePeers) {
-                    // ✈️ AERON MODE: Empty store + no peers → Create genesis, then start Aeron
-                    System.out.println("✈️  AERON MODE: Empty store + no peers → Creating genesis");
-                    System.out.println("   This validator will become the genesis node");
-                    System.out.println("   Initializing StandbyServerSync for Oak FileStore bootstrap (other validators will sync from this node)");
-                    detectedMode = BootstrapMode.GENESIS;
-                    // Initialize bootstrap for StandbyServerSync (needed for Oak FileStore bootstrap, not Raft replication)
-                    standbyPort = port + 1;
+                } else if (storeIsEmpty) {
+                    // ✈️ AERON MODE (PARALLEL LAUNCH): Empty store → Start Aeron cluster, genesis created by elected leader
+                    System.out.println("✈️  AERON MODE: Empty store detected");
+                    System.out.println("   Starting Aeron Cluster in parallel with peers");
+                    System.out.println("   Genesis will be created by elected leader via consensus");
+                    System.out.println("   All validators will replicate genesis → identical HEADs");
+                    detectedMode = BootstrapMode.PRIMARY; // Start Aeron directly, let consensus handle genesis
+                    // Initialize bootstrap for StandbyServerSync (so late-joining validators can sync)
                     bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
                 } else {
                     // ✈️ AERON MODE: Store has data → Start Aeron directly
@@ -406,82 +549,53 @@ public class GlobalStoreServer {
                     System.out.println("✈️  AERON MODE: Existing store found");
                     System.out.println("   Starting Aeron Cluster (will replay Raft log if needed)");
                     detectedMode = BootstrapMode.PRIMARY;
-                    bootstrap = null;
-                }
-            } else {
-                // EpochLeaderEngine mode: Initialize bootstrap
-                String peersConfig = System.getProperty("consensus.peers", "");
-                String bootstrapMode = System.getProperty("bootstrap.mode", "auto");  // auto, genesis, standby, primary
-                this.bootstrapPrimaryHost = System.getProperty("bootstrap.primary.host", "");
-                this.bootstrapPrimaryPort = Integer.parseInt(System.getProperty("bootstrap.primary.port", "8001"));
-                standbyPort = port + 1;  // Standby port = HTTP port + 1
-                
-                bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
-                peers = parsePeerUrls(peersConfig);
-                
-                if ("auto".equalsIgnoreCase(bootstrapMode)) {
-                    // Check if we have a bootstrap primary configured
-                    boolean hasBootstrapPrimary = this.bootstrapPrimaryHost != null && !this.bootstrapPrimaryHost.isEmpty();
-                    
-                    if (hasBootstrapPrimary) {
-                        // If bootstrap primary is configured, try to reach it and use STANDBY mode
-                        String primaryUrl = "http://" + this.bootstrapPrimaryHost + ":8090";
-                        try {
-                            java.net.URL url = new java.net.URL(primaryUrl + "/health");
-                            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                            conn.setRequestMethod("GET");
-                            conn.setConnectTimeout(3000);
-                            conn.setReadTimeout(3000);
-                            
-                            int responseCode = conn.getResponseCode();
-                            if (responseCode == 200) {
-                                System.out.println("🔍 AUTO MODE → STANDBY (bootstrap primary reachable)");
-                                System.out.println("   Primary: " + primaryUrl);
-                                detectedMode = BootstrapMode.STANDBY;
-                            } else {
-                                System.out.println("🔍 AUTO MODE → GENESIS (bootstrap primary not healthy)");
-                                detectedMode = BootstrapMode.GENESIS;
-                            }
-                        } catch (Exception e) {
-                            System.out.println("🔍 AUTO MODE → GENESIS (cannot reach bootstrap primary: " + e.getMessage() + ")");
-                            detectedMode = BootstrapMode.GENESIS;
-                        }
-                    } else {
-                        // Fall back to peer-based detection
-                        detectedMode = ValidatorBootstrap.detectMode(fileStore, nodeStore, peers);
-                        System.out.println("🔍 AUTO MODE → " + detectedMode);
-                    }
-                } else {
-                    detectedMode = BootstrapMode.valueOf(bootstrapMode.toUpperCase());
-                    System.out.println("📌 EXPLICIT MODE → " + detectedMode);
+                    // Initialize bootstrap for StandbyServerSync (so late-joining validators can sync)
+                    bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
                 }
             }
             
-            // Handle bootstrap logic for both modes
+            // ✈️ AERON-ONLY: Handle STANDBY bootstrap (sync FileStore, then start Aeron Cluster)
             if (detectedMode == BootstrapMode.STANDBY) {
                 // STANDBY MODE: Bootstrap Oak FileStore from existing validator
-                // This applies to BOTH EpochLeaderEngine and Aeron modes
+                // After bootstrap completes, start Aeron Cluster
+                
+                // CRITICAL: Store Aeron configuration BEFORE bootstrap starts (needed for callback)
+                // Get self URL from system property, or resolve localhost to IP
+                String selfUrlConfigStandy = System.getProperty("consensus.self.url");
+                String selfUrlStandy;
+                if (selfUrlConfigStandy != null && !selfUrlConfigStandy.isEmpty()) {
+                    selfUrlStandy = selfUrlConfigStandy; // Use configured URL (can be ngrok/Ethos URL, IP, or hostname)
+                } else {
+                    selfUrlStandy = resolveUrlToIP("http://localhost:" + port); // Default: resolve to IP
+                }
+                String peersConfigStandy = System.getProperty("consensus.peers", "");
+                List<String> peerUrlsStandy = parsePeerUrls(peersConfigStandy);
+                
+                // Store for bootstrap callback
+                this.aeronSelfUrl = selfUrlStandy;
+                this.aeronPeerUrls = peerUrlsStandy;
                 
                 // Determine which peer to bootstrap from
-                String primaryHost = bootstrapPrimaryHost;
-                int primaryPort = bootstrapPrimaryPort;
+                String primaryHostInitial = bootstrapPrimaryHost;
+                int primaryPortInitial = bootstrapPrimaryPort;
                 
-                // Get peers list based on mode
-                List<String> bootstrapPeers;
-                String consensusModeBootstrap = System.getProperty("consensus.mode", "leader");
-                boolean isAeronModeLocal = "aeron".equalsIgnoreCase(consensusModeBootstrap);
-                if (isAeronModeLocal) {
-                    bootstrapPeers = this.aeronPeerUrls != null ? this.aeronPeerUrls : new java.util.ArrayList<>();
-                } else {
-                    bootstrapPeers = peers;
-                }
+                // Use Aeron peer URLs (already verified earlier)
+                List<String> bootstrapPeers = this.aeronPeerUrls != null ? this.aeronPeerUrls : new java.util.ArrayList<>();
+                
+                String primaryHost = primaryHostInitial;
+                int primaryPort = primaryPortInitial;
                 
                 if (primaryHost.isEmpty() && !bootstrapPeers.isEmpty()) {
                     // Use first peer as primary
                     String firstPeer = bootstrapPeers.get(0);
                     // Parse URL (e.g., "http://validator-1:8090")
                     primaryHost = firstPeer.replace("http://", "").replace("https://", "").split(":")[0];
-                    primaryPort = standbyPort;  // Standby port = HTTP port + 1
+                    try {
+                        int httpPort = Integer.parseInt(firstPeer.split(":")[2]);
+                        primaryPort = httpPort + 1; // Standby port = HTTP port + 1
+                    } catch (Exception e) {
+                        primaryPort = port + 1; // Fallback
+                    }
                     System.out.println("🔍 Using first peer as bootstrap primary: " + primaryHost + ":" + primaryPort);
                 }
                 
@@ -489,63 +603,119 @@ public class GlobalStoreServer {
                     throw new IOException("STANDBY mode requires bootstrap.primary.host or consensus.peers");
                 }
                 
+                // Make final for lambda
+                final String finalPrimaryHost = primaryHost;
+                final int finalPrimaryPort = primaryPort;
+                
                 // Bootstrap from primary (this will block until initial sync, then schedule periodic sync)
-                bootstrap.bootstrapFromPrimary(primaryHost, primaryPort, () -> {
+                bootstrap.bootstrapFromPrimary(finalPrimaryHost, finalPrimaryPort, () -> {
                     System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     System.out.println("🎖️  PROMOTED TO PRIMARY - Oak FileStore bootstrap complete");
-                    System.out.println("   Starting consensus engine...");
+                    System.out.println("   Local HEAD: " + fileStore.getHead().getRecordId());
+                    System.out.println("   Starting Aeron Cluster...");
                     System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     try {
-                        if (isAeronMode) {
-                            // Aeron mode: Start Aeron Cluster after Oak FileStore bootstrap
-                            System.out.println("✈️  Starting Aeron Cluster (Oak FileStore already synced)");
-                            // Start Aeron Cluster using stored configuration
-                            startAeronClusterAfterBootstrap();
-                        } else {
-                            // EpochLeaderEngine mode: Start consensus engine
-                            startConsensusPrimary();
-                        }
+                        // ✈️ AERON-ONLY: Start Aeron Cluster after Oak FileStore bootstrap
+                        System.out.println("✈️  Starting Aeron Cluster (Oak FileStore already synced)");
+                        startAeronClusterAfterBootstrap();
+                        
+                        // Start HTTP server (was deferred in STANDBY mode)
+                        System.out.println("Starting HTTP server (deferred from STANDBY mode)...");
+                        httpServer.start();
+                        System.out.println("✅ HTTP server started on port " + port);
                     } catch (Exception e) {
-                        System.err.println("❌ Failed to start consensus after promotion: " + e.getMessage());
+                        System.err.println("❌ Failed to start Aeron Cluster after promotion: " + e.getMessage());
                         e.printStackTrace();
                     }
                 });
                 
             } else if (detectedMode == BootstrapMode.GENESIS) {
-                // GENESIS MODE: Create deterministic genesis state
-                System.out.println("🌍 GENESIS MODE: Creating network genesis state");
-                initializeGenesisContent();
+                // GENESIS MODE: DEFER genesis creation until Aeron cluster reaches quorum
+                // NEW ARCHITECTURE: Genesis should be the FIRST consensus write, not a pre-consensus local write
+                // This ensures all validators have identical segment history from genesis
+                System.out.println("🌍 GENESIS MODE DEFERRED: Will create genesis AFTER Aeron cluster forms");
+                System.out.println("   Genesis will be created as the first replicated write through consensus");
+                System.out.println("   This ensures all validators start with identical state");
+                
+                // Start StandbyServerSync so other validators can bootstrap (empty-to-empty is valid)
+                if (bootstrap != null) {
+                    try {
+                        bootstrap.startStandbyServer();
+                        System.out.println("✅ StandbyServerSync started on port " + standbyPort);
+                        System.out.println("   Other validators can bootstrap from empty store (will sync genesis after creation)");
+                    } catch (Exception e) {
+                        System.err.println("⚠️  Failed to start StandbyServerSync: " + e.getMessage());
+                        System.err.println("   Other validators will not be able to bootstrap from this node");
+                        // Don't fail startup - genesis node can still operate
+                    }
+                }
                 
             } else {
-                // PRIMARY MODE: Already has data, just init genesis if needed
-                initializeGenesisContent();
+                // PRIMARY MODE: Check if genesis already exists before initializing
+                // Empty stores (no genesis) will have genesis created by elected leader via consensus
+                try {
+                    org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
+                    boolean genesisExists = root.getChildNode("oak-chain")
+                        .getChildNode("content")
+                        .getChildNode("00")
+                        .getChildNode("00")
+                        .getChildNode("00")
+                        .getChildNode("0x0000000000000000000000000000000000000000")
+                        .getChildNode("genesis")
+                        .exists();
+                    
+                    if (genesisExists) {
+                        // Genesis already exists - verify it
+                        System.out.println("   ℹ️  Genesis exists - verifying integrity...");
+                        initializeGenesisContent();
+                    } else {
+                        // No genesis - skip initialization (will be created by elected leader via consensus)
+                        System.out.println("   ⏭️  Genesis does not exist - will be created by elected leader via consensus");
+                        System.out.println("   ⏭️  Skipping genesis initialization at startup");
+                    }
+                } catch (Exception e) {
+                    // Fallback: check store size as backup
+                    try {
+                        long storeSize = fileStore.size();
+                        // Use a more meaningful threshold (empty stores have ~256KB of metadata)
+                        if (storeSize > 1024 * 1024) { // > 1 MB means likely has content
+                            System.out.println("   ℹ️  Store has data (" + (storeSize / (1024 * 1024)) + " MB) - verifying genesis...");
+                            initializeGenesisContent();
+                        } else {
+                            System.out.println("   ⏭️  Store is empty or minimal - skipping genesis (will be created by consensus)");
+                        }
+                    } catch (Exception e2) {
+                        System.out.println("   ⚠️  Could not check store state, skipping genesis init (will be created by consensus)");
+                    }
+                }
             }
             
         } catch (InvalidFileStoreVersionException e) {
             throw new IOException("Invalid FileStore version", e);
         }
         
-        // Start HTTP server (already initialized earlier for STANDBY mode support)
-        System.out.println("Starting HTTP server...");
-        try {
-            httpServer.start();
-            System.out.println("✅ HTTP server started");
-            System.out.println("   - GET /journal.log - journal file");
-            System.out.println("   - GET /manifest - manifest file");
-            System.out.println("   - GET /gc.log - garbage collection log");
-            System.out.println("   - GET /segments/{id} - fetch segment");
-            System.out.println("   - HEAD /segments/{id} - check existence");
-            System.out.println("   - GET /health - health check");
-            System.out.println("   - POST /v1/propose - submit write proposal");
-            System.out.println("   - POST /v1/vote - submit vote");
-        } catch (Exception e) {
-            throw new IOException("Failed to start HTTP server", e);
+        // Start HTTP server (deferred in STANDBY mode until bootstrap completes)
+        // Note: In real-world deployments, all validators use standardized ports (HTTP=8090, Standby=8091)
+        //       because they run on different hosts. For local dev, we use different ports (8091, 8092, 8093)
+        //       to avoid conflicts on the same machine.
+        if (detectedMode == BootstrapMode.STANDBY) {
+            // STANDBY mode: HTTP server starts after bootstrap completes (prevents port conflicts in local dev)
+            System.out.println("⏸️  HTTP server startup deferred (STANDBY mode - will start after bootstrap completes)");
+        } else {
+            // PRIMARY or GENESIS mode: Start HTTP server immediately
+            System.out.println("Starting HTTP server...");
+            try {
+                httpServer.start();
+                System.out.println("✅ HTTP server started on port " + port);
+            } catch (Exception e) {
+                throw new IOException("Failed to start HTTP server", e);
+            }
         }
         
         // Initialize Consensus Engine (Multi-Validator)
         // CRITICAL: Skip this if we're in STANDBY mode (bootstrap will initialize via callback)
         String consensusEnabled = System.getProperty("consensus.enabled", "false");
-        String consensusMode = System.getProperty("consensus.mode", "leader"); // leader, dag, blockchain, or aeron
+        // Reuse consensusMode and isAeronMode variables declared earlier (before FileStore build)
         // Get self URL from system property, or resolve localhost to IP
         String selfUrlConfig = System.getProperty("consensus.self.url");
         String selfUrl;
@@ -557,68 +727,32 @@ public class GlobalStoreServer {
         String peersConfig = System.getProperty("consensus.peers", "");
         String genesisNode = System.getProperty("consensus.genesis.node", "");  // Boot node for genesis sync
         
-        // Allow consensus even with no peers:
-        // - Leader mode: single validator = leader of 1
-        // - Aeron mode: single validator can start cluster (genesis node)
+        // ✈️ AERON-ONLY: Allow consensus even with no peers (single validator can start cluster as genesis node)
         boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled) && 
-                                 ("leader".equalsIgnoreCase(consensusMode) || 
-                                  "aeron".equalsIgnoreCase(consensusMode) || 
-                                  !peersConfig.isEmpty());
+                                 (isAeronMode || !peersConfig.isEmpty());
         
         // CRITICAL: Don't initialize consensus here if we're in STANDBY mode
-        // The bootstrap promotion callback (startConsensusPrimary or startAeronClusterAfterBootstrap) will initialize it
+        // The bootstrap promotion callback (startAeronClusterAfterBootstrap) will initialize it
         boolean isStandbyMode = (detectedMode == BootstrapMode.STANDBY);
         
         // Store selfUrl and peerUrls for bootstrap callback (if Aeron mode with bootstrap)
-        String consensusModeCheck = System.getProperty("consensus.mode", "leader");
-        boolean isAeronModeCheck = "aeron".equalsIgnoreCase(consensusModeCheck);
-        if (isAeronModeCheck && isStandbyMode) {
+        // Note: For STANDBY mode, these are already stored in the STANDBY block above
+        // This block handles other modes (PRIMARY/GENESIS) that also need Aeron config stored
+        if (isAeronMode && !isStandbyMode) {
+            List<String> peerUrlsForStorage = parsePeerUrls(peersConfig);
             this.aeronSelfUrl = selfUrl;
-            // aeronPeerUrls already stored earlier in bootstrap detection
+            this.aeronPeerUrls = peerUrlsForStorage;
         }
         
         if (enableConsensus && !isStandbyMode) {
             System.out.println();
             System.out.println("Initializing Consensus Engine...");
-            System.out.println("   Mode: " + consensusMode.toUpperCase());
+            System.out.println("   Mode: AERON (Aeron Cluster Raft)");
             
             List<String> peerUrls = parsePeerUrls(peersConfig);
             
-            if ("leader".equalsIgnoreCase(consensusMode)) {
-                // LEADER-BASED CONSENSUS (Raft-style)
-                System.out.println("   🎖️  Using Leader-Based Consensus");
-                System.out.println("      - Single leader sequences all writes");
-                System.out.println("      - Followers replicate from leader");
-                System.out.println("      - Leader rotates every 5 minutes");
-                
-                // Get leader term from system property (default: 300 seconds = 5 minutes)
-                int leaderTermSeconds = Integer.parseInt(
-                    System.getProperty("consensus.leader.term.seconds", "300")
-                );
-                
-                org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine epochEngine = 
-                    new org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine(
-                        fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds, wallet
-                    );
-                
-                // Wire epoch leader engine to HTTP server
-                httpServer.setEpochLeaderEngine(epochEngine);
-                
-                // Start epoch rotation monitor
-                epochEngine.startRotationMonitor();
-                
-                System.out.println("✅ Epoch Leader Consensus engine initialized");
-                System.out.println("   - Model: Epoch-based Leader/Follower (Raft-style)");
-                System.out.println("   - Total validators: " + (1 + peerUrls.size()));
-                System.out.println("   - Leader term: " + leaderTermSeconds + " seconds");
-                System.out.println("   - Current role: " + epochEngine.getCurrentRole());
-                System.out.println("   - Current leader: " + epochEngine.getCurrentLeader());
-                
-                // Register with peer validators using wallet address as ID
-                String validatorId = wallet.getWalletAddress();
-                httpServer.registerWithPeers(validatorId, peerUrls);
-                
-            } else if ("aeron".equalsIgnoreCase(consensusMode)) {
+            // ✈️ AERON-ONLY POC: Initialize Aeron Cluster Consensus Engine
+            if (isAeronMode) {
                 // AERON CLUSTER CONSENSUS (Raft-based)
                 System.out.println("   ✈️  Using Aeron Cluster Consensus (Raft)");
                 System.out.println("      - Proven Raft consensus algorithm");
@@ -709,8 +843,8 @@ public class GlobalStoreServer {
                 aeronEngine.setNodeIdMapping(nodeIdToUrl);
                 
                 // ✈️ CRITICAL: Set write application callback BEFORE launching cluster
-                // This ensures the callback is ready when messages start arriving after launch
-                // Production pattern: Callbacks are set before ClusteredServiceContainer.launch()
+                // Set write callback BEFORE launching cluster to ensure it's ready for incoming messages
+                // IMPORTANT: Callback must be set before ClusteredServiceContainer.launch()
                 aeronEngine.setWriteApplicationCallback((walletAddress, path, contentType, message, signature) -> {
                     httpServer.getConsensusApiHandler().applyReplicatedWrite(
                         walletAddress, path, contentType, message, signature
@@ -720,7 +854,6 @@ public class GlobalStoreServer {
                 
                 // Wire Aeron engine to HTTP server context (needed for callback to access ConsensusApiHandler)
                 // This must be done before setting callback so callback can access httpServer
-                httpServer.setEpochLeaderEngine(null); // Clear epoch leader engine
                 httpServer.setAeronConsensusEngine(aeronEngine);
                 
                 // Launch Aeron Cluster
@@ -759,9 +892,9 @@ public class GlobalStoreServer {
                     throw new IOException("Failed to launch Aeron Cluster", e);
                 }
                 
-                // ✈️ REPOSITORY-SERVICE PATTERN: Create AeronWriteClient (separate from ClusteredService)
-                // This matches production architecture where AeronClient is created separately and injected
-                // Both use the same MediaDriver directory (shared process)
+                // ✈️ AERON WRITE CLIENT: Create client for sending writes through cluster ingress
+                // Client is separate from ClusteredService but shares same MediaDriver (same process)
+                // This allows external components to send writes through the Raft consensus layer
                 // NOTE: aeronDirectoryName is set by launcher.launch() - get it after launch
                 String aeronDirectoryName = aeronClusterLauncher.getAeronDirectoryName();
                 int clusterBasePort = org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher.getPortBase();
@@ -775,8 +908,8 @@ public class GlobalStoreServer {
                     clientHostname = "localhost"; // Fallback
                 }
                 
-                // Create AeronWriteClient (matches production pattern)
-                // NOTE: This is the external UDP client - we're now using internal client in ConsensusApiHandler
+                // Create AeronWriteClient for external write submissions
+                // NOTE: ConsensusApiHandler now uses internal cluster client for writes
                 // Keeping this for backward compatibility, but ConsensusApiHandler uses internal client
                 org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient aeronWriteClient = 
                     new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient(
@@ -911,12 +1044,21 @@ public class GlobalStoreServer {
                         }
                     };
                 
+                // Get backpressure manager from Aeron consensus engine for write flow control
+                org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager backpressureManager =
+                    aeronEngine != null ? aeronEngine.getBackpressureManager() : null;
+                
+                if (backpressureManager == null) {
+                    System.out.println("   ⚠️  WARNING: BackpressureManager not available - using fallback");
+                    backpressureManager = new org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager();
+                }
+                
                 org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager proposalQueueManager = 
-                    new org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager(evmBridge, raftCallback);
+                    new org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager(evmBridge, raftCallback, backpressureManager);
                 proposalQueueManager.start();
                 httpServer.getContext().setProposalQueueManager(proposalQueueManager);
                 httpServer.getContext().evmBridge = evmBridge; // Store for GC Proposal Manager
-                System.out.println("   ✅ Proposal Queue Manager initialized (Ethereum confirmation tracking)");
+                System.out.println("   ✅ Proposal Queue Manager initialized (Ethereum confirmation + backpressure)");
                 
                 // ✈️ AERON MODE: Skip HTTP peer registration
                 // Aeron Cluster handles membership via Raft consensus - HTTP registration is legacy
@@ -928,11 +1070,8 @@ public class GlobalStoreServer {
                 System.out.println("   - Self registered: " + validatorId + " (Aeron Cluster handles peer membership via Raft)");
                 
             } else {
-                // Unknown consensus mode
-                System.err.println("   ❌ ERROR: Unknown consensus mode: " + consensusMode);
-                System.err.println("   ⚠️  Supported modes: 'leader' or 'aeron'");
-                System.err.println("   ⚠️  Default mode is 'leader'");
-                throw new IllegalArgumentException("Unsupported consensus mode: " + consensusMode + ". Use 'leader' or 'aeron'.");
+                // This should never happen - we validate Aeron mode at startup
+                throw new IllegalStateException("Aeron mode validation failed - this should not happen");
             }
         } else if (!isStandbyMode) {
             // Only print this if NOT in standby mode (standby will init via callback)
@@ -997,11 +1136,6 @@ public class GlobalStoreServer {
     }
     
     /**
-     * Initialize genesis content if it doesn't already exist.
-     * Creates a simple "DO IT LIVE!" node at /oak-chain/content/genesis
-     * following the BYOD model (no binary data, just node structure).
-     */
-    /**
      * Initialize the IMMORTAL GENESIS NODE.
      * 
      * Like Ethereum's Block 0, this is the birth certificate of the network.
@@ -1009,7 +1143,7 @@ public class GlobalStoreServer {
      * 
      * Contains:
      * - Network identity (chainId, genesisHash)
-     * - Consensus rules (leaderTerm, probationPeriod)
+     * - Consensus rules (Raft term duration, quorum requirements)
      * - Bootstrap instructions (how to join)
      * - Protocol parameters (ports, endpoints)
      */
@@ -1042,14 +1176,30 @@ public class GlobalStoreServer {
                                     System.out.println("   ℹ️  Genesis already exists - verifying integrity...");
                                     
                                     // Verify genesis message (like Ethereum verifies Block 0 hash)
+                                    // Check both old flat structure (backward compatibility) and new hierarchical structure
                                     org.apache.jackrabbit.oak.spi.state.NodeState genesisNode = genesisWallet.getChildNode("genesis");
-                                    org.apache.jackrabbit.oak.api.PropertyState msgProp = genesisNode.getProperty("protocol.message");
+                                    
+                                    // Try new hierarchical structure first
+                                    org.apache.jackrabbit.oak.spi.state.NodeState protocolNode = genesisNode.getChildNode("protocol");
+                                    org.apache.jackrabbit.oak.api.PropertyState msgProp = null;
+                                    
+                                    if (protocolNode.exists()) {
+                                        // New hierarchical structure
+                                        msgProp = protocolNode.getProperty("message");
+                                    } else {
+                                        // Old flat structure (backward compatibility)
+                                        msgProp = genesisNode.getProperty("protocol.message");
+                                    }
                                     
                                     if (msgProp == null || !"DO IT LIVE!".equals(msgProp.getValue(org.apache.jackrabbit.oak.api.Type.STRING))) {
                                         throw new IllegalStateException("❌ GENESIS CORRUPTION! This node has invalid genesis state.");
                                     }
                                     
                                     System.out.println("   ✅ Genesis integrity verified");
+                                    
+                                    // Log genesis HEAD for script detection
+                                    org.apache.jackrabbit.oak.segment.RecordId genesisHead = fileStore.getHead().getRecordId();
+                                    System.out.println("   Genesis HEAD: " + genesisHead.toString10());
                                     return;
                                 }
                             }
@@ -1100,75 +1250,112 @@ public class GlobalStoreServer {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // PROTOCOL: Network Identity (Immutable)
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            genesis.setProperty("protocol.message", "DO IT LIVE!");
-            genesis.setProperty("protocol.version", "1.0.0-POC");
-            genesis.setProperty("protocol.chainId", "oak-blockchain-aem-poc");
-            genesis.setProperty("protocol.genesisTimestamp", timestamp);
-            genesis.setProperty("protocol.genesisDate", genesisDate);
-            genesis.setProperty("protocol.description", 
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder protocol = genesis.child("protocol");
+            protocol.setProperty("jcr:primaryType", "nt:unstructured");
+            protocol.setProperty("message", "DO IT LIVE!");
+            protocol.setProperty("version", "1.0.0-POC");
+            protocol.setProperty("chainId", "oak-blockchain-aem-poc");
+            protocol.setProperty("genesisTimestamp", timestamp);
+            protocol.setProperty("genesisDate", genesisDate);
+            protocol.setProperty("description", 
                 "Decentralized content storage for Adobe Experience Manager using Oak + Blockchain consensus");
             
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // CONSENSUS: Network Rules
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            genesis.setProperty("consensus.model", "leader-based-raft");
-            genesis.setProperty("consensus.leaderTermSeconds", 300L); // 5 minutes
-            genesis.setProperty("consensus.probationSeconds", 300L); // 5 minutes
-            genesis.setProperty("consensus.heartbeatIntervalMs", 10000L); // 10 seconds
-            genesis.setProperty("consensus.quorumType", "voting-electorate-only");
-            genesis.setProperty("consensus.quorumFormula", "(totalVotingMembers / 2) + 1");
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder consensus = genesis.child("consensus");
+            consensus.setProperty("jcr:primaryType", "nt:unstructured");
+            consensus.setProperty("model", "aeron-raft");
+            consensus.setProperty("quorumType", "majority");
+            consensus.setProperty("quorumFormula", "(totalMembers / 2) + 1");
+            // Note: Aeron/Raft handles terms and heartbeats internally - no configuration needed
+            // Note: Aeron/Raft doesn't have probation - all cluster members are voting members
             
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // NETWORK: Bootstrap Configuration
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            genesis.setProperty("network.genesisValidator", genesisValidator);
-            genesis.setProperty("network.genesisHost", genesisHost);
-            genesis.setProperty("network.bootstrapPort", 8091L);
-            genesis.setProperty("network.consensusPort", 8090L);
-            genesis.setProperty("network.metricsPort", 8090L);
-            genesis.setProperty("network.metricsPath", "/metrics");
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder network = genesis.child("network");
+            network.setProperty("jcr:primaryType", "nt:unstructured");
+            network.setProperty("genesisValidator", genesisValidator);
+            network.setProperty("genesisHost", genesisHost);
+            network.setProperty("bootstrapPort", 8091L);
+            network.setProperty("consensusPort", 8090L);
+            network.setProperty("metricsPort", 8090L);
+            network.setProperty("metricsPath", "/metrics");
             
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // INSTRUCTIONS: How to Join This Network
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            genesis.setProperty("join.title", "🚀 Welcome to Blockchain AEM Network");
-            genesis.setProperty("join.step1.title", "Configure Bootstrap Primary");
-            genesis.setProperty("join.step1.env", "BOOTSTRAP_PRIMARY_HOST=" + genesisHost);
-            genesis.setProperty("join.step2.title", "Set Bootstrap Port");
-            genesis.setProperty("join.step2.env", "BOOTSTRAP_PRIMARY_PORT=8091");
-            genesis.setProperty("join.step3.title", "Set Validator Mode");
-            genesis.setProperty("join.step3.env", "VALIDATOR_MODE=auto");
-            genesis.setProperty("join.step4.title", "Enable Consensus");
-            genesis.setProperty("join.step4.env", "CONSENSUS_ENABLED=true");
-            genesis.setProperty("join.step5.title", "Set Consensus Mode");
-            genesis.setProperty("join.step5.env", "CONSENSUS_MODE=leader");
-            genesis.setProperty("join.step6.title", "Set Your Validator URL");
-            genesis.setProperty("join.step6.env", "CONSENSUS_SELF_URL=http://your-validator:8090");
-            genesis.setProperty("join.step7.note", 
-                "After bootstrap, you join as NON-VOTING follower for 300s probation");
-            genesis.setProperty("join.step8.note", 
-                "After probation, you're eligible for voting and leadership");
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder join = genesis.child("join");
+            join.setProperty("jcr:primaryType", "nt:unstructured");
+            join.setProperty("title", "🚀 Welcome to Blockchain AEM Network");
+            
+            // Join steps as child nodes for better structure
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder steps = join.child("steps");
+            steps.setProperty("jcr:primaryType", "nt:unstructured");
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder step1 = steps.child("step1");
+            step1.setProperty("jcr:primaryType", "nt:unstructured");
+            step1.setProperty("title", "Configure Bootstrap Primary");
+            step1.setProperty("env", "BOOTSTRAP_PRIMARY_HOST=" + genesisHost);
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder step2 = steps.child("step2");
+            step2.setProperty("jcr:primaryType", "nt:unstructured");
+            step2.setProperty("title", "Set Bootstrap Port");
+            step2.setProperty("env", "BOOTSTRAP_PRIMARY_PORT=8091");
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder step3 = steps.child("step3");
+            step3.setProperty("jcr:primaryType", "nt:unstructured");
+            step3.setProperty("title", "Enable Consensus");
+            step3.setProperty("env", "CONSENSUS_ENABLED=true");
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder step4 = steps.child("step4");
+            step4.setProperty("jcr:primaryType", "nt:unstructured");
+            step4.setProperty("title", "Set Consensus Mode");
+            step4.setProperty("env", "CONSENSUS_MODE=aeron");
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder step5 = steps.child("step5");
+            step5.setProperty("jcr:primaryType", "nt:unstructured");
+            step5.setProperty("title", "Set Your Validator URL");
+            step5.setProperty("env", "CONSENSUS_SELF_URL=http://your-validator:8090");
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder step6 = steps.child("step6");
+            step6.setProperty("jcr:primaryType", "nt:unstructured");
+            step6.setProperty("title", "Configure Aeron Cluster (Optional)");
+            step6.setProperty("env", "AERON_CLUSTER_NODE_ID=0");
+            step6.setProperty("note", "Node ID must be unique per validator (0, 1, 2, ...)");
+            
+            // Notes as properties on join node
+            join.setProperty("note", 
+                "After bootstrap, you join as a voting member of the Aeron Cluster (Raft consensus)");
             
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // SECURITY: Byzantine Fault Tolerance
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            genesis.setProperty("security.proofOfReadiness", true);
-            genesis.setProperty("security.splitBrainDetection", true);
-            genesis.setProperty("security.probationaryPeriod", true);
-            genesis.setProperty("security.genesisVerification", true);
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder security = genesis.child("security");
+            security.setProperty("jcr:primaryType", "nt:unstructured");
+            security.setProperty("splitBrainDetection", true); // Raft quorum enforcement
+            security.setProperty("genesisVerification", true);
+            // Note: Aeron/Raft provides election safety, log matching, and leader completeness guarantees
             
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // METADATA: Project Information
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            genesis.setProperty("meta.author", "Blockchain AEM POC Team");
-            genesis.setProperty("meta.repository", "Apache Jackrabbit Oak");
-            genesis.setProperty("meta.documentation", "See /oak-chain/content/genesis");
-            genesis.setProperty("meta.license", "Apache License 2.0");
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder meta = genesis.child("meta");
+            meta.setProperty("jcr:primaryType", "nt:unstructured");
+            meta.setProperty("author", "Oak Segment Consensus");
+            meta.setProperty("repository", "Apache Jackrabbit Oak");
+            meta.setProperty("documentation", "See /oak-chain/content/genesis");
+            meta.setProperty("license", "Apache License 2.0");
             
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // BYOD Model (binaries external)
-            genesis.setProperty("byod.imageUri", "https://participant-cdn.example.com/assets/do-it-live.jpeg");
-            genesis.setProperty("byod.imageMimeType", "image/jpeg");
-            genesis.setProperty("byod.note", "Binaries stored in participant-owned datastore, not in global chain");
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder byod = genesis.child("byod");
+            byod.setProperty("jcr:primaryType", "nt:unstructured");
+            byod.setProperty("imageUri", "https://participant-cdn.example.com/assets/do-it-live.jpeg");
+            byod.setProperty("imageMimeType", "image/jpeg");
+            byod.setProperty("note", "Binaries stored in participant-owned datastore, not in global chain");
             
             // Commit the IMMORTAL GENESIS
             nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
@@ -1190,11 +1377,10 @@ public class GlobalStoreServer {
             System.out.println("      Birth: " + genesisDate);
             System.out.println("");
             System.out.println("   🎖️  CONSENSUS:");
-            System.out.println("      Model: leader-based-raft");
-            System.out.println("      Leader Term: 300 seconds (5 minutes)");
-            System.out.println("      Probation: 300 seconds (new validators)");
-            System.out.println("      Heartbeat: 10 seconds");
-            System.out.println("      Quorum: (totalVotingMembers / 2) + 1");
+            System.out.println("      Model: aeron-raft");
+            System.out.println("      Quorum: (totalMembers / 2) + 1");
+            System.out.println("      Note: All cluster members are voting members (Raft consensus)");
+            System.out.println("      Note: Terms and heartbeats handled internally by Aeron Cluster");
             System.out.println("");
             System.out.println("   🌐 NETWORK:");
             System.out.println("      Genesis Validator: " + genesisValidator);
@@ -1203,21 +1389,20 @@ public class GlobalStoreServer {
             System.out.println("      Consensus Port: 8090");
             System.out.println("");
             System.out.println("   🛡️  SECURITY:");
-            System.out.println("      ✅ Proof-of-Readiness (Byzantine protection)");
-            System.out.println("      ✅ Split-Brain Detection (quorum enforcement)");
-            System.out.println("      ✅ Probationary Period (manipulation prevention)");
+            System.out.println("      ✅ Split-Brain Detection (Raft quorum enforcement)");
             System.out.println("      ✅ Genesis Verification (state integrity)");
+            System.out.println("      ✅ Raft guarantees: Election safety, log matching, leader completeness");
             System.out.println("");
             System.out.println("   🚀 TO JOIN THIS NETWORK:");
             System.out.println("      1. BOOTSTRAP_PRIMARY_HOST=" + genesisHost);
             System.out.println("      2. BOOTSTRAP_PRIMARY_PORT=8091");
-            System.out.println("      3. VALIDATOR_MODE=auto");
-            System.out.println("      4. CONSENSUS_ENABLED=true");
-            System.out.println("      5. CONSENSUS_MODE=leader");
-            System.out.println("      6. CONSENSUS_SELF_URL=http://your-validator:8090");
+            System.out.println("      3. CONSENSUS_ENABLED=true");
+            System.out.println("      4. CONSENSUS_MODE=aeron");
+            System.out.println("      5. CONSENSUS_SELF_URL=http://your-validator:8090");
+            System.out.println("      6. AERON_CLUSTER_NODE_ID=<unique-id> (0, 1, 2, ...)");
             System.out.println("");
-            System.out.println("      → You'll join as NON-VOTING follower (300s probation)");
-            System.out.println("      → After probation, eligible for voting & leadership");
+            System.out.println("      → You'll join as a voting member of the Aeron Cluster");
+            System.out.println("      → Raft consensus ensures safety and liveness guarantees");
             System.out.println("");
             System.out.println("   📊 QUERY GENESIS:");
             System.out.println("      GET /api/explore?path=" + genesisShardedPath + "/genesis");
@@ -1231,6 +1416,10 @@ public class GlobalStoreServer {
             System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             System.out.println("   🎉 Network initialized and ready for validators!");
             System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            
+            // Log genesis HEAD for script detection
+            org.apache.jackrabbit.oak.segment.RecordId genesisHead = fileStore.getHead().getRecordId();
+            System.out.println("   Genesis HEAD: " + genesisHead.toString10());
             System.out.println("");
             
         } catch (Exception e) {
@@ -1250,7 +1439,7 @@ public class GlobalStoreServer {
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
         String consensusEnabled = System.getProperty("consensus.enabled", "false");
-        String consensusMode = System.getProperty("consensus.mode", "leader");
+        // ✈️ AERON-ONLY: This method is only called for Aeron mode (startConsensusPrimary is deprecated)
         // Get self URL from system property, or resolve localhost to IP
         String selfUrlConfig = System.getProperty("consensus.self.url");
         String selfUrl;
@@ -1280,44 +1469,15 @@ public class GlobalStoreServer {
         List<String> peerUrls = parsePeerUrls(peersConfig);
         System.out.println("   📋 Parsed peer URLs: " + peerUrls);
         
-        if ("leader".equalsIgnoreCase(consensusMode)) {
-            int leaderTermSeconds = Integer.parseInt(
-                System.getProperty("consensus.leader.term.seconds", "300")
-            );
-            
-            // SCALABLE BOOTSTRAP JOIN
-            // Pass isBootstrapJoin=true so constructor skips election math
-            // and starts directly as FOLLOWER. Scales to 1000s of validators.
-            org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine epochEngine = 
-                new org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine(
-                    fileStore, nodeStore, selfUrl, peerUrls, leaderTermSeconds, wallet,
-                    true  // isBootstrapJoin = true (post-genesis join)
-                );
-            
-            httpServer.setEpochLeaderEngine(epochEngine);
-            
-            System.out.println("✅ Epoch Leader Consensus engine initialized");
-            System.out.println("   - Join type: BOOTSTRAP (post-genesis)");
-            System.out.println("   - Initial role: " + epochEngine.getCurrentRole() + " (no election math)");
-            System.out.println("   - Expected leader: " + epochEngine.getCurrentLeader());
-            System.out.println("   - Will learn actual leader from heartbeat");
-            System.out.println("");
-            
-            // Broadcast presence to network (Dynamic Peer Discovery)
-            // Use wallet address as permanent validator identity
-            String validatorId = wallet.getWalletAddress();
-            httpServer.broadcastPresenceToNetwork(validatorId, selfUrl, peerUrls);
-        }
+        // ✈️ AERON-ONLY: This method should not be called in Aeron mode
+        // Aeron mode uses startAeronClusterAfterBootstrap() instead
+        // This method is kept for backward compatibility but should not execute
+        System.err.println("⚠️  WARNING: startConsensusPrimary() called but this POC uses Aeron-only");
+        System.err.println("   This method is deprecated - use startAeronClusterAfterBootstrap() instead");
         
         // Start StandbyServerSync (now a primary, serve other standbys)
         // ✈️ AERON MODE: Skip StandbyServerSync - Aeron Cluster handles replication
-        if (bootstrap != null && !"aeron".equalsIgnoreCase(consensusMode)) {
-            try {
-                bootstrap.startStandbyServer();
-            } catch (Exception e) {
-                System.err.println("⚠️  Failed to start StandbyServerSync: " + e.getMessage());
-            }
-        } else if ("aeron".equalsIgnoreCase(consensusMode)) {
+        if (bootstrap != null) {
             System.out.println("✈️  AERON MODE: Skipping StandbyServerSync (Aeron Cluster handles replication)");
         }
         
@@ -1493,6 +1653,57 @@ public class GlobalStoreServer {
         
         httpServer.setAeronWriteClient(aeronWriteClient);
         
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // SHARD ROUTER: Initialize shard routing (Phase 1)
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        try {
+            // Get number of shards from configuration (default: 1 for single-shard mode)
+            String numShardsConfig = System.getProperty("sharding.numShards", System.getenv("NUM_SHARDS"));
+            int numShards = 1; // Default: single shard
+            if (numShardsConfig != null && !numShardsConfig.isEmpty()) {
+                try {
+                    numShards = Integer.parseInt(numShardsConfig);
+                    if (numShards <= 0) {
+                        System.err.println("⚠️  Invalid NUM_SHARDS: " + numShardsConfig + ", using default: 1");
+                        numShards = 1;
+                    }
+                } catch (NumberFormatException e) {
+                    System.err.println("⚠️  Invalid NUM_SHARDS format: " + numShardsConfig + ", using default: 1");
+                    numShards = 1;
+                }
+            }
+            
+            // Create shard directory: single shard (shard 0) with all peers
+            // Phase 1: All shards route to the same cluster
+            // Phase 2+: Will support multiple shards
+            java.util.List<String> allPeerUrls = new java.util.ArrayList<>();
+            allPeerUrls.add(selfUrl);
+            allPeerUrls.addAll(peerUrls);
+            
+            org.apache.jackrabbit.oak.segment.consensus.sharding.ShardDirectory shardDirectory = 
+                new org.apache.jackrabbit.oak.segment.consensus.sharding.ShardDirectory(allPeerUrls);
+            
+            // Create wallet-based sharding strategy
+            org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingStrategy shardingStrategy = 
+                new org.apache.jackrabbit.oak.segment.consensus.sharding.WalletShardingStrategy(numShards);
+            
+            // Create shard router
+            org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter shardRouter = 
+                new org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter(shardDirectory, shardingStrategy);
+            
+            // Set in ServerContext
+            httpServer.getContext().setShardRouter(shardRouter);
+            
+            System.out.println("✅ Shard Router initialized");
+            System.out.println("   - Number of shards: " + numShards);
+            System.out.println("   - Shard directory: " + shardDirectory.getNumShards() + " shard(s)");
+            System.out.println("   - Sharding strategy: Wallet-based");
+        } catch (Exception e) {
+            System.err.println("⚠️  WARNING: Failed to initialize Shard Router: " + e.getMessage());
+            System.err.println("   → Shard routing disabled, requests will route directly");
+            e.printStackTrace();
+        }
+        
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         System.out.println("✈️  Aeron Cluster started successfully!");
         System.out.println("   - Node ID: " + nodeId);
@@ -1579,7 +1790,7 @@ public class GlobalStoreServer {
      * <p>If the URL contains a hostname (not an IP), resolves it to an IP address.
      * This ensures reliable networking in Docker environments where DNS can be unreliable.
      * 
-     * <p>For production deployments (ngrok, Adobe Ethos), set `consensus.self.url` 
+     * <p>For production deployments (ngrok, cloud environments), set `consensus.self.url` 
      * system property to override this behavior.
      * 
      * @param url URL with hostname (e.g., "http://localhost:8090" or "http://validator-1:8090")

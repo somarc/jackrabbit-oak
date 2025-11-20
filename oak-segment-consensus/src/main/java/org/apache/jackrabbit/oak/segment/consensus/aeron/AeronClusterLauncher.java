@@ -147,7 +147,7 @@ public class AeronClusterLauncher {
         
         // Now resolve hostnames to IP addresses with resilient retry logic
         // Peers that aren't ready yet will use placeholder IPs - Aeron will retry DNS resolution
-        // Reference: oak-repository-service uses IPs to avoid DNS caching issues
+        // Using IPs avoids DNS caching issues when containers/nodes restart
         List<String> ipAddresses = resolveHostnamesToIPs(myIPAddress);
         log.info("   Using IP addresses for Aeron Cluster channels (P2P-organic mode)");
         log.info("   My IP: {} (hostname: {})", myIPAddress, getHostname());
@@ -409,8 +409,8 @@ public class AeronClusterLauncher {
      * <p>P2P-ORGANIC APPROACH: Aggressive retry logic for P2P startup where peers
      * may not be ready immediately. Uses exponential backoff for better resilience.
      * 
-     * <p>Reference: oak-repository-service uses IP addresses instead of hostnames
-     * to avoid DNS caching issues when containers restart.
+     * <p>Uses IP addresses instead of hostnames to avoid DNS caching issues
+     * when containers or validator nodes restart.
      * 
      * @param hostname Hostname to resolve
      * @return IP address as string
@@ -719,9 +719,8 @@ public class AeronClusterLauncher {
     /**
      * Enhanced error handler that detects FATAL errors and triggers graceful shutdown.
      * 
-     * <p>Based on proven patterns from oak-repository-service production code.
-     * On FATAL MediaDriver errors (timeouts, crashes), schedules graceful shutdown
-     * to allow restart/recovery.
+     * <p>On FATAL MediaDriver errors (timeouts, crashes), schedules graceful shutdown
+     * to allow automatic restart and recovery of the Aeron cluster connection.
      * 
      * <p>Key behaviors:
      * <ul>

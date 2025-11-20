@@ -186,43 +186,19 @@ public class DashboardHandler {
             long clusterTime = asLong(clusterState.get("clusterTime"), -1L);
             long logPosition = asLong(clusterState.get("logPosition"), -1L);
             int ethereumEpoch = asInt(clusterState.get("ethereumEpoch"), -1);
-            
-            // Get current HEAD for state consistency display
-            String currentHead = null;
-            try {
-                if (context.fileStore != null) {
-                    currentHead = context.fileStore.getHead().getRecordId().toString();
-                    // Truncate for display (show first 20 chars)
-                    if (currentHead.length() > 20) {
-                        currentHead = currentHead.substring(0, 20) + "...";
-                    }
-                }
-            } catch (Exception e) {
-                // Ignore - HEAD not available
-            }
 
             html.append("<div class='summary-grid'>");
-            // Key metrics first (most important)
+            // Key metrics - simplified for deterministic consensus
             appendSummaryCard(html, "Role", role, isLeader ? "This validator currently owns leadership" : "Following elected leader");
             appendSummaryCard(html, "Leader", formatLeaderLabel(leaderUrl), leaderUrl == null ? "Leader discovery pending" : (leaderUrl.equals(context.selfUrl) ? "This node is the leader" : "Tracking elected leader"));
             
-            // Ethereum Epoch - prominently displayed (economic finality layer)
+            // Ethereum Epoch - economic finality layer
             if (ethereumEpoch >= 0) {
                 appendSummaryCard(html, "⛓️ Ethereum Epoch", String.format("%,d", ethereumEpoch), "Current finalized Ethereum Beacon Chain epoch (economic finality layer)");
-            } else {
-                appendSummaryCard(html, "⛓️ Ethereum Epoch", "Not available", "Ethereum epoch polling not started");
             }
             
-            // Current HEAD - critical for state consistency
-            if (currentHead != null) {
-                appendSummaryCard(html, "📍 Current HEAD", currentHead, "FileStore HEAD revision (critical for state consistency across validators)");
-            } else {
-                appendSummaryCard(html, "📍 Current HEAD", "Not available", "FileStore HEAD not available");
-            }
-            
-            // Cluster operational metrics
+            // Cluster metrics
             appendSummaryCard(html, "Term", term >= 0 ? String.valueOf(term) : "Not available", "Leadership term reported by Aeron Raft consensus");
-            appendSummaryCard(html, "Member ID", memberId >= 0 ? "#" + memberId : "Unknown", "Aeron-assigned member identifier");
             appendSummaryCard(html, "Members", String.valueOf(memberCount), "Validators participating in this cluster");
             
             // Replication metrics
@@ -905,7 +881,6 @@ public class DashboardHandler {
         html.append("<h2>🔄 Consensus APIs</h2>\n");
         addApiEndpoint(html, "GET", "/v1/consensus/status", "Get consensus state (Aeron-aware)", "consensus_status");
         addApiEndpoint(html, "POST", "/v1/propose-write", "Propose signed write transaction", "propose_write");
-        addApiEndpoint(html, "GET", "/v1/head", "Get current HEAD record ID (text)", "head");
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");

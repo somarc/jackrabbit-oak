@@ -56,7 +56,10 @@ public class ProposalQueueIntegrationTest {
             raftAppendLatch.countDown();
         };
         
-        queueManager = new ProposalQueueManager(bridge, callback);
+        // Create backpressure manager for test
+        BackpressureManager backpressureManager = new BackpressureManager();
+        
+        queueManager = new ProposalQueueManager(bridge, callback, backpressureManager);
         queueManager.start();
     }
     
@@ -144,7 +147,10 @@ public class ProposalQueueIntegrationTest {
             latch.countDown();
         };
         
-        ProposalQueueManager multiQueue = new ProposalQueueManager(bridge, callback);
+        // Create backpressure manager for test
+        BackpressureManager testBackpressureManager = new BackpressureManager();
+        
+        ProposalQueueManager multiQueue = new ProposalQueueManager(bridge, callback, testBackpressureManager);
         multiQueue.start();
         
         try {

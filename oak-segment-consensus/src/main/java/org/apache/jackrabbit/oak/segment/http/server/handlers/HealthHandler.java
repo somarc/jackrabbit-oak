@@ -66,11 +66,41 @@ public class HealthHandler {
     
     /**
      * Handle simple health check endpoint.
+     * 
+     * <p>🔄 FINALITY-AWARE: Includes committedHead vs latestHead for clients to know what is safe.
      */
     public void handleHealth(HttpServletResponse response) throws IOException {
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType("application/json");
-        response.getWriter().write("{\"status\":\"UP\",\"store\":\"" + storeDirectory + "\"}");
+        
+        StringBuilder json = new StringBuilder();
+        json.append("{\n");
+        json.append("  \"status\": \"UP\",\n");
+        json.append("  \"store\": \"").append(storeDirectory).append("\"");
+        
+        // Add committedHead vs latestHead if Aeron engine is available
+        if (context != null && context.aeronConsensusEngine != null) {
+            String committedHead = context.aeronConsensusEngine.getCommittedHead();
+            String latestHead = context.aeronConsensusEngine.getLatestHead();
+            int latestEpochSeen = context.aeronConsensusEngine.getLatestEpochSeen();
+            int committedEpoch = context.aeronConsensusEngine.getLastCommittedEpoch();
+            
+            if (committedHead != null && !committedHead.isEmpty()) {
+                json.append(",\n  \"committedHead\": \"").append(committedHead).append("\"");
+            }
+            if (latestHead != null && !latestHead.isEmpty()) {
+                json.append(",\n  \"latestHead\": \"").append(latestHead).append("\"");
+            }
+            if (latestEpochSeen >= 0) {
+                json.append(",\n  \"latestEpochSeen\": ").append(latestEpochSeen);
+            }
+            if (committedEpoch >= 0) {
+                json.append(",\n  \"committedEpoch\": ").append(committedEpoch);
+            }
+        }
+        
+        json.append("\n}");
+        response.getWriter().write(json.toString());
     }
     
     /**
@@ -91,6 +121,50 @@ public class HealthHandler {
                 String headId = fileStore.getHead().getRecordId().toString10();
                 json.append("    \"status\": \"UP\",\n");
                 json.append("    \"head\": \"").append(headId.substring(0, Math.min(16, headId.length()))).append("...\"\n");
+                
+                // 🔄 FINALITY-AWARE HEAD TRACKING: Expose committedHead vs latestHead
+                // committedHead: HEAD that has reached finality (epoch N-2) - immutable, safe
+                // latestHead: Current HEAD including pending writes (epoch N, N+1) - may change
+                AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
+                if (aeronEngine != null) {
+                    String committedHead = aeronEngine.getCommittedHead();
+                    String latestHead = aeronEngine.getLatestHead();
+                    int latestEpochSeen = aeronEngine.getLatestEpochSeen();
+                    int committedEpoch = aeronEngine.getLastCommittedEpoch();
+                    
+                    boolean hasCommittedHead = committedHead != null && !committedHead.isEmpty();
+                    boolean hasLatestHead = latestHead != null && !latestHead.isEmpty();
+                    boolean hasLatestEpoch = latestEpochSeen >= 0;
+                    boolean hasCommittedEpoch = committedEpoch >= 0;
+                    
+                    if (hasCommittedHead) {
+                        json.append("    \"committedHead\": \"").append(committedHead).append("\"");
+                        if (hasLatestHead || hasLatestEpoch || hasCommittedEpoch) {
+                            json.append(",\n");
+                        } else {
+                            json.append("\n");
+                        }
+                    }
+                    if (hasLatestHead) {
+                        json.append("    \"latestHead\": \"").append(latestHead).append("\"");
+                        if (hasLatestEpoch || hasCommittedEpoch) {
+                            json.append(",\n");
+                        } else {
+                            json.append("\n");
+                        }
+                    }
+                    if (hasLatestEpoch) {
+                        json.append("    \"latestEpochSeen\": ").append(latestEpochSeen);
+                        if (hasCommittedEpoch) {
+                            json.append(",\n");
+                        } else {
+                            json.append("\n");
+                        }
+                    }
+                    if (hasCommittedEpoch) {
+                        json.append("    \"committedEpoch\": ").append(committedEpoch).append("\n");
+                    }
+                }
             } else {
                 json.append("    \"status\": \"DOWN\",\n");
                 json.append("    \"error\": \"FileStore not initialized\"\n");

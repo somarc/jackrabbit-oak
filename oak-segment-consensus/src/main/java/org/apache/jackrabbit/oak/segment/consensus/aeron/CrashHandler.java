@@ -34,8 +34,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Handles crashes and errors in Aeron Cluster components.
  * 
- * <p>Based on proven patterns from oak-repository-service production code.
- * Tracks crash history via marker files and triggers recovery mechanisms.
+ * <p>Tracks crash history via marker files and triggers recovery mechanisms
+ * to ensure resilient operation of the Aeron Cluster consensus layer.
  * 
  * <p>Key features:
  * <ul>

@@ -22,7 +22,7 @@ import org.agrona.MutableDirectBuffer;
 /**
  * Minimal SBE-compatible message header encoder/decoder.
  * 
- * <p>Matches the SBE MessageHeader structure used by production repository-service:
+ * <p>Implements the standard SBE MessageHeader structure:
  * - blockLength (2 bytes): Length of the root block
  * - templateId (2 bytes): Template identifier for the message type
  * - schemaId (2 bytes): Schema identifier

@@ -49,10 +49,10 @@ import org.agrona.DirectBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
 
 /**
- * Exposes Aeron metrics to Prometheus.
+ * Exposes Aeron Cluster metrics to Prometheus.
  * 
- * <p>Based on proven patterns from oak-repository-service AeronMetrics class.
- * Reads from Aeron's CountersReader and exposes metrics via Prometheus SimpleClient.
+ * <p>Reads from Aeron's CountersReader and exposes metrics via Prometheus SimpleClient
+ * for monitoring cluster health, message throughput, and error rates.
  * 
  * <p>Tracks:
  * <ul>

@@ -45,6 +45,7 @@ public class RequestRouter {
     private final PeerDiscoveryHandler peerDiscoveryHandler;
     private final AeronApiHandler aeronApiHandler;
     private final FragmentationApiHandler fragmentationApiHandler;
+    private final LeaderConsensusHandler leaderConsensusHandler;
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
     
@@ -88,6 +89,7 @@ public class RequestRouter {
         this.peerDiscoveryHandler = new PeerDiscoveryHandler(context);
         this.aeronApiHandler = new AeronApiHandler(context);
         this.fragmentationApiHandler = new FragmentationApiHandler(context);
+        this.leaderConsensusHandler = new LeaderConsensusHandler(context);
         
         // Chat handler will be initialized lazily on first use (after selfUrl is set)
         this.chatHandler = null;
@@ -315,18 +317,64 @@ public class RequestRouter {
                 return;
             }
             
-            // HEAD endpoint
+            // HEAD endpoint - returns JSON with committedHead vs latestHead
             if ("/v1/head".equals(path) && "GET".equals(method)) {
-                response.setContentType("text/plain");
+                response.setContentType("application/json");
                 response.setStatus(HttpServletResponse.SC_OK);
-                String headId = context.fileStore.getHead().getRecordId().toString();
-                response.getWriter().write(headId);
+                
+                StringBuilder json = new StringBuilder();
+                json.append("{\n");
+                
+                // 🔄 CRITICAL: Get HEAD from AeronConsensusEngine first (tracks latest HEAD correctly)
+                // Fallback to FileStore only if Aeron engine not available
+                String latestHead = null;
+                String committedHead = null;
+                int latestEpochSeen = -1;
+                int committedEpoch = -1;
+                
+                if (context.aeronConsensusEngine != null) {
+                    // Get tracked HEAD values from AeronConsensusEngine (most accurate)
+                    latestHead = context.aeronConsensusEngine.getLatestHead();
+                    committedHead = context.aeronConsensusEngine.getCommittedHead();
+                    latestEpochSeen = context.aeronConsensusEngine.getLatestEpochSeen();
+                    committedEpoch = context.aeronConsensusEngine.getLastCommittedEpoch();
+                }
+                
+                // Fallback to FileStore HEAD if Aeron engine not available or latestHead not set
+                if (latestHead == null || latestHead.isEmpty()) {
+                    latestHead = context.fileStore.getHead().getRecordId().toString10();
+                }
+                
+                // Use latestHead as committedHead fallback if no committedHead set
+                if (committedHead == null || committedHead.isEmpty()) {
+                    committedHead = latestHead;
+                }
+                
+                json.append("  \"latestHead\": \"").append(latestHead).append("\",\n");
+                json.append("  \"committedHead\": \"").append(committedHead).append("\"");
+                
+                if (latestEpochSeen >= 0) {
+                    json.append(",\n  \"latestEpochSeen\": ").append(latestEpochSeen);
+                }
+                if (committedEpoch >= 0) {
+                    json.append(",\n  \"committedEpoch\": ").append(committedEpoch);
+                }
+                
+                json.append("\n}\n");
+                response.getWriter().write(json.toString());
                 baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/consensus/status".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGetConsensusStatus(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // Follower HEAD update endpoint (used by leader to broadcast HEAD to followers)
+            if ("/v1/follower/head-update".equals(path) && "POST".equals(method)) {
+                leaderConsensusHandler.handleFollowerHeadUpdate(request, response);
                 baseRequest.setHandled(true);
                 return;
             }
