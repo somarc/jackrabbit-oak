@@ -8,10 +8,12 @@
 
 `oak-segment-consensus` implements a **distributed consensus layer** for Apache Jackrabbit Oak Segment Store, enabling blockchain-backed AEM content repositories with:
 
+- ✅ **Deterministic state machine** (guaranteed consistency via Aeron Cluster)
 - ✅ **Aeron Cluster-based Raft consensus** (proven, production-grade)
 - ✅ **Ethereum wallet-based access control** (path ownership enforcement)
 - ✅ **HTTP segment transfer** (multi-peer read-only mounts)
-- ✅ **Validator network** (leader-follower architecture)
+- ✅ **Distributed validator network** (all nodes commit identically)
+- ✅ **Dynamic backpressure** (flow control for write throughput)
 - ✅ **Embedded HTTP server** (dashboard, APIs, segment serving)
 - ✅ **LLM Chat Interface** (optional AI assistant via `oak-segment-agentic`)
 
@@ -19,11 +21,14 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
 
 ## Key Features
 
-### Consensus & Leadership
+### Consensus & State Machine
+- **Deterministic State Machine**: All nodes commit writes identically via Aeron's guaranteed message ordering
 - **Aeron Cluster Raft**: Battle-tested consensus algorithm with election safety guarantees
 - **Automatic Leader Election**: Aeron Cluster handles leader election and failover
+- **Guaranteed Consistency**: Same message order = same processing = same SegmentStore state
 - **Quorum Requirements**: Majority-based consensus (2 of 3, 3 of 5, etc.)
-- **Failure Recovery**: Automatic leader election on failure
+- **No Manual Sync**: HEAD consistency is automatic, not manually broadcast
+- **Backpressure Management**: Dynamic flow control prevents cluster overload
 
 ### Ethereum Integration
 - **Wallet-Based Writes**: All writes require Ethereum wallet signature
@@ -60,6 +65,32 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
 
 ## Architecture
 
+### Deterministic State Machine Model
+
+**Key Insight**: All validators process writes identically via Aeron's guaranteed message ordering.
+
+```
+Write Flow (Deterministic):
+1. Client submits write to ANY validator (leader or follower)
+2. Validator validates Ethereum wallet signature
+3. Validator sends write through Aeron Cluster ingress
+4. Aeron routes to leader (automatic)
+5. Leader replicates via Raft to ALL nodes (automatic)
+6. ALL nodes receive message in SAME ORDER
+7. ALL nodes execute SAME commit logic
+8. Result: IDENTICAL SegmentStore state on all nodes
+   - Same content tree
+   - Same segments
+   - Same HEAD pointer (as natural consequence)
+```
+
+**Benefits**:
+- ✅ Guaranteed consistency (no eventual consistency window)
+- ✅ No manual HEAD broadcasting needed
+- ✅ Simpler architecture (Aeron handles everything)
+- ✅ Better performance (no HTTP sync overhead)
+- ✅ Production-ready pattern
+
 ### Distributed Validator Network
 
 ```
@@ -88,10 +119,11 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
 │  └──────────────────────────────────────────────────────┘   │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  AeronConsensusEngine (Raft Consensus)              │   │
-│  │  - Leader election                                   │   │
-│  │  - Write replication (across network)               │   │
-│  │  - Quorum management                                │   │
+│  │  AeronConsensusEngine (Deterministic State Machine) │   │
+│  │  - Deterministic write processing (all nodes)       │   │
+│  │  - Aeron Cluster message ordering                   │   │
+│  │  - Backpressure management                          │   │
+│  │  - Leader election (automatic)                      │   │
 │  │  - Network partition tolerance                      │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                              │
@@ -189,8 +221,8 @@ http://localhost:8091/
 - `GET /api/explore?path=/` - Browse node tree (JSON)
 
 ### Write Operations
-- `POST /v1/write` - Write proposal (requires wallet signature)
-- `POST /v1/register` - Register client with validator
+- `POST /v1/propose-write` - Propose write transaction (requires wallet signature)
+- `POST /v1/register-client` - Register Sling author client with validator
 
 ## Integration
 
@@ -241,7 +273,9 @@ Key documents:
 ## Status
 
 ### ✅ Implemented
+- Deterministic state machine (guaranteed consistency)
 - Aeron Cluster Raft consensus
+- Dynamic backpressure management
 - HTTP segment transfer
 - Dashboard UI
 - Wallet-based write enforcement
