@@ -35,6 +35,8 @@ public class QueuedProposal {
     private volatile String message;
     private volatile String signature;
     private volatile long epoch; // Ethereum epoch when transaction was seen
+    private volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier = 
+        org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD; // Payment tier for priority handling
     
     public QueuedProposal(
             String proposalId,
@@ -136,6 +138,14 @@ public class QueuedProposal {
     
     public void setRejectionReason(String rejectionReason) {
         this.rejectionReason = rejectionReason;
+    }
+    
+    public org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier getTier() {
+        return tier;
+    }
+    
+    public void setTier(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+        this.tier = tier;
     }
 }
 

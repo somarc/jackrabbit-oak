@@ -122,6 +122,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final List<String> peerUrls;
     private final org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
     private final SegmentReplicator replicator;
+    private final String storeDirectory;
     private final org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager backpressureManager;
     
     // Aeron Cluster components
@@ -216,12 +217,14 @@ public class AeronConsensusEngine implements ClusteredService {
             NodeStore nodeStore,
             String selfUrl,
             List<String> peerUrls,
-            org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet) {
+            org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet,
+            String storeDirectory) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.selfUrl = selfUrl;
         this.peerUrls = peerUrls;
         this.wallet = wallet;
+        this.storeDirectory = storeDirectory;
         this.replicator = new SegmentReplicator(fileStore);
         this.backpressureManager = new org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager();
         
@@ -586,7 +589,7 @@ public class AeronConsensusEngine implements ClusteredService {
     @Override
     public void onTakeSnapshot(io.aeron.ExclusivePublication snapshotPublication) {
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("📸 Taking snapshot...");
+        log.info("📸 Taking FileStore Snapshot (Aeron Native)");
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
         try {
@@ -597,67 +600,160 @@ public class AeronConsensusEngine implements ClusteredService {
             
             log.info("   Current HEAD: {}", currentHead);
             log.info("   Current Ethereum epoch: {}", currentEpoch);
-            log.info("   Timestamp: {}", timestamp);
+            log.info("   Store directory: {}", storeDirectory);
             
-            // Serialize state to JSON
-            String json = String.format(
-                "{\"head\":\"%s\",\"ethereumEpoch\":%d,\"timestamp\":%d}",
-                currentHead, currentEpoch, timestamp
-            );
-            
-            byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            
-            // Create buffer with SBE header + JSON payload
-            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.concurrent.UnsafeBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
-            );
-            
-            // Encode SBE header
-            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
-                messageBuffer, 0, jsonBytes.length, 
-                org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT
-            );
-            
-            // Write JSON payload after header
-            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
-            
-            // Send through snapshot publication
-            // Use idleStrategy if available, otherwise use default (onSnapshot can be called before onStart)
+            // Use idleStrategy if available
             org.agrona.concurrent.IdleStrategy strategy = idleStrategy != null 
                 ? idleStrategy 
                 : new org.agrona.concurrent.BusySpinIdleStrategy();
             
-            strategy.reset();
-            long result;
-            int retries = 0;
-            while ((result = snapshotPublication.offer(messageBuffer, 0, totalLength)) < 0) {
-                if (result == io.aeron.Publication.BACK_PRESSURED) {
-                    strategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ Snapshot back-pressured after {} retries", retries);
-                        return;
-                    }
-                } else if (result == io.aeron.Publication.NOT_CONNECTED) {
-                    log.warn("⚠️  Snapshot publication not connected - waiting...");
-                    strategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ Snapshot publication not connected after {} retries", retries);
-                        return;
-                    }
-                } else {
-                    log.error("❌ Failed to send snapshot: {}", result);
-                    return;
-                }
-            }
+            // 1. Send metadata header
+            sendSnapshotMetadata(snapshotPublication, currentHead, currentEpoch, timestamp, strategy);
             
-            log.info("✅ Snapshot taken successfully: HEAD={}, epoch={}, size={} bytes", 
-                currentHead, currentEpoch, totalLength);
+            // 2. Stream TAR files
+            streamTarFiles(snapshotPublication, strategy);
+            
+            // 3. Stream journal.log
+            streamJournal(snapshotPublication, strategy);
+            
+            log.info("✅ FileStore snapshot complete: HEAD={}, epoch={}", currentHead, currentEpoch);
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         } catch (Exception e) {
             log.error("❌ Failed to take snapshot", e);
+        }
+    }
+    
+    private void sendSnapshotMetadata(io.aeron.ExclusivePublication pub, String head, int epoch, long timestamp, 
+                                      org.agrona.concurrent.IdleStrategy strategy) throws Exception {
+        // Create metadata JSON
+        String json = String.format(
+            "{\"type\":\"metadata\",\"head\":\"%s\",\"ethereumEpoch\":%d,\"timestamp\":%d}",
+            head, epoch, timestamp
+        );
+        
+        byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
+        org.agrona.concurrent.UnsafeBuffer buffer = new org.agrona.concurrent.UnsafeBuffer(new byte[totalLength]);
+        
+        // Encode SBE header
+        org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
+            buffer, 0, jsonBytes.length, 
+            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT
+        );
+        buffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+        
+        offerWithRetry(pub, buffer, 0, totalLength, strategy, "metadata");
+        log.info("   📤 Sent snapshot metadata: {} bytes", totalLength);
+    }
+    
+    private void streamTarFiles(io.aeron.ExclusivePublication pub, org.agrona.concurrent.IdleStrategy strategy) throws Exception {
+        java.io.File storeDir = new java.io.File(storeDirectory);
+        java.io.File[] tarFiles = storeDir.listFiles((dir, name) -> name.endsWith(".tar"));
+        
+        if (tarFiles == null || tarFiles.length == 0) {
+            log.warn("⚠️  No TAR files found in {}", storeDirectory);
+            return;
+        }
+        
+        log.info("   📦 Streaming {} TAR files...", tarFiles.length);
+        
+        for (java.io.File tarFile : tarFiles) {
+            streamFile(pub, tarFile, "tar", strategy);
+        }
+    }
+    
+    private void streamJournal(io.aeron.ExclusivePublication pub, org.agrona.concurrent.IdleStrategy strategy) throws Exception {
+        java.io.File journalFile = new java.io.File(storeDirectory, "journal.log");
+        if (!journalFile.exists()) {
+            log.warn("⚠️  journal.log not found in {}", storeDirectory);
+            return;
+        }
+        
+        log.info("   📄 Streaming journal.log...");
+        streamFile(pub, journalFile, "journal", strategy);
+    }
+    
+    private void streamFile(io.aeron.ExclusivePublication pub, java.io.File file, String fileType, 
+                           org.agrona.concurrent.IdleStrategy strategy) throws Exception {
+        String fileName = file.getName();
+        long fileSize = file.length();
+        
+        log.info("      📤 Streaming {}: {} ({} bytes)", fileType, fileName, fileSize);
+        
+        // Send file header
+        String headerJson = String.format(
+            "{\"type\":\"file_header\",\"fileType\":\"%s\",\"fileName\":\"%s\",\"fileSize\":%d}",
+            fileType, fileName, fileSize
+        );
+        byte[] headerBytes = headerJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int headerTotalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + headerBytes.length;
+        org.agrona.concurrent.UnsafeBuffer headerBuffer = new org.agrona.concurrent.UnsafeBuffer(new byte[headerTotalLength]);
+        
+        org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
+            headerBuffer, 0, headerBytes.length,
+            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT
+        );
+        headerBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, headerBytes);
+        
+        offerWithRetry(pub, headerBuffer, 0, headerTotalLength, strategy, "file_header:" + fileName);
+        
+        // Stream file contents in chunks (1MB chunks to avoid MTU issues)
+        int CHUNK_SIZE = 1024 * 1024; // 1MB
+        byte[] chunk = new byte[CHUNK_SIZE];
+        long bytesStreamed = 0;
+        int chunkIndex = 0;
+        
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(file)) {
+            int bytesRead;
+            while ((bytesRead = fis.read(chunk)) > 0) {
+                // Send chunk with header
+                int chunkTotalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + bytesRead;
+                org.agrona.concurrent.UnsafeBuffer chunkBuffer = new org.agrona.concurrent.UnsafeBuffer(new byte[chunkTotalLength]);
+                
+                org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
+                    chunkBuffer, 0, bytesRead,
+                    org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT
+                );
+                chunkBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, chunk, 0, bytesRead);
+                
+                offerWithRetry(pub, chunkBuffer, 0, chunkTotalLength, strategy, "chunk:" + chunkIndex);
+                
+                bytesStreamed += bytesRead;
+                chunkIndex++;
+                
+                if (chunkIndex % 10 == 0) {
+                    log.debug("         Streamed {}/{} bytes ({} chunks)", bytesStreamed, fileSize, chunkIndex);
+                }
+            }
+        }
+        
+        log.info("      ✅ Streamed {}: {} bytes in {} chunks", fileName, bytesStreamed, chunkIndex);
+    }
+    
+    private void offerWithRetry(io.aeron.ExclusivePublication pub, org.agrona.concurrent.UnsafeBuffer buffer, 
+                                int offset, int length, org.agrona.concurrent.IdleStrategy strategy, 
+                                String context) throws Exception {
+        strategy.reset();
+        long result;
+        int retries = 0;
+        int maxRetries = 1000; // Increased for large snapshots
+        
+        while ((result = pub.offer(buffer, offset, length)) < 0) {
+            if (result == io.aeron.Publication.BACK_PRESSURED) {
+                strategy.idle();
+                retries++;
+                if (retries > maxRetries) {
+                    throw new Exception("Snapshot back-pressured after " + retries + " retries (" + context + ")");
+                }
+            } else if (result == io.aeron.Publication.NOT_CONNECTED) {
+                strategy.idle();
+                retries++;
+                if (retries > maxRetries) {
+                    throw new Exception("Snapshot publication not connected after " + retries + " retries (" + context + ")");
+                }
+            } else {
+                throw new Exception("Failed to send snapshot (" + context + "): " + result);
+            }
         }
     }
     
@@ -777,6 +873,114 @@ public class AeronConsensusEngine implements ClusteredService {
                     log.error("   This means setWriteApplicationCallback() was never called");
                     log.error("   Check GlobalStoreServer initialization to ensure callback is set");
                 }
+            } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH) {
+                // Read JSON batch array from buffer
+                byte[] jsonBytes = new byte[headerInfo.blockLength];
+                buffer.getBytes(offset, jsonBytes);
+                String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
+                
+                log.debug("✈️  Processing replicated write BATCH via Aeron (templateId: {})", headerInfo.templateId);
+                
+                // Parse batch JSON: {"batch":[{...},{...}]}
+                int batchStart = json.indexOf("[");
+                int batchEnd = json.lastIndexOf("]");
+                
+                if (batchStart < 0 || batchEnd < 0) {
+                    log.error("❌ Invalid batch format: {}", json);
+                    return;
+                }
+                
+                // Split batch into individual proposals (simple JSON parsing)
+                String batchContent = json.substring(batchStart + 1, batchEnd);
+                java.util.List<String> proposals = new java.util.ArrayList<>();
+                
+                int depth = 0;
+                StringBuilder currentProposal = new StringBuilder();
+                for (int i = 0; i < batchContent.length(); i++) {
+                    char c = batchContent.charAt(i);
+                    if (c == '{') {
+                        depth++;
+                        currentProposal.append(c);
+                    } else if (c == '}') {
+                        depth--;
+                        currentProposal.append(c);
+                        if (depth == 0) {
+                            proposals.add(currentProposal.toString());
+                            currentProposal = new StringBuilder();
+                        }
+                    } else if (depth > 0) {
+                        currentProposal.append(c);
+                    }
+                }
+                
+                log.debug("   Batch contains {} proposals", proposals.size());
+                
+                // Process each proposal in the batch
+                int processed = 0;
+                for (String proposalJson : proposals) {
+                    String walletAddress = extractJsonField(proposalJson, "walletAddress");
+                    String path = extractJsonField(proposalJson, "path");
+                    String contentType = extractJsonField(proposalJson, "contentType");
+                    String message = extractJsonField(proposalJson, "message");
+                    String signature = extractJsonField(proposalJson, "signature");
+                    
+                    if (walletAddress == null || path == null) {
+                        log.error("❌ Invalid proposal in batch: missing required fields");
+                        continue;
+                    }
+                    
+                    // Apply write to FileStore via callback
+                    if (writeCallback != null) {
+                        writeCallback.applyWrite(walletAddress, path, contentType, message, signature);
+                        
+                        // Track acknowledgment for backpressure management
+                        backpressureManager.incrementAcknowledged();
+                        
+                        processed++;
+                    }
+                }
+                
+                // 📊 Track replication latency for the batch
+                Long ingressTimestampNanos = ingressTimestamps.poll();
+                if (ingressTimestampNanos != null) {
+                    performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
+                }
+                
+                // Track write throughput
+                long currentWriteCount = totalWritesProcessed.addAndGet(processed);
+                long currentTime = System.currentTimeMillis();
+                
+                // Update queue depths for metrics
+                performanceMetrics.updateQueueDepths(
+                    0,
+                    backpressureManager.getPendingCount()
+                );
+                
+                // Log summary every 10 seconds
+                if (currentTime - lastSummaryLogTime >= SUMMARY_LOG_INTERVAL_MS) {
+                    long writesInInterval = currentWriteCount - lastSummaryWriteCount;
+                    long intervalMs = currentTime - lastSummaryLogTime;
+                    long intervalSeconds = intervalMs / 1000;
+                    if (intervalSeconds == 0) intervalSeconds = 1; // Avoid division by zero
+                    
+                    double writesPerSecond = (double) writesInInterval / intervalSeconds;
+                    
+                    // Get Raft performance snapshot
+                    AeronPerformanceMetrics.Snapshot metrics = performanceMetrics.getSnapshot();
+                    
+                    log.info("📊 Write Throughput: {} writes in {}s ({} writes/sec) | Total: {}", 
+                        writesInInterval, intervalSeconds, String.format("%.1f", writesPerSecond),
+                        currentWriteCount);
+                    
+                    // Log detailed Raft metrics
+                    log.info(metrics.toSummaryString());
+                    
+                    lastSummaryLogTime = currentTime;
+                    lastSummaryWriteCount = currentWriteCount;
+                }
+                
+                log.debug("✅ Batch replicated and applied: {}/{} proposals successful", processed, proposals.size());
+                
             } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL) {
                 log.info("✈️  Delete proposal received (templateId: {}) - not yet implemented", headerInfo.templateId);
                 // TODO: Implement delete proposal handling
@@ -987,16 +1191,22 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * ✈️ AERON NATIVE: Load snapshot state from Aeron snapshot image.
      * 
-     * This method polls the snapshot image to extract the snapshot data.
-     * The snapshot contains the HEAD and other state needed to ensure consistent startup.
+     * This method polls the snapshot image to extract and restore the complete FileStore:
+     * - TAR files (segment data)
+     * - journal.log (HEAD + history)
+     * - Metadata (HEAD pointer, Ethereum epoch)
      * 
      * @param snapshotImage The Aeron snapshot image
      * @return SnapshotState if found, null otherwise
      */
     private SnapshotState loadSnapshotFromImage(Image snapshotImage) {
-        log.info("📥 Polling snapshot image for snapshot data...");
+        log.info("📥 Loading FileStore snapshot from Aeron...");
         
         final java.util.concurrent.atomic.AtomicReference<SnapshotState> snapshotStateRef = 
+            new java.util.concurrent.atomic.AtomicReference<>();
+        
+        // Track current file being received
+        final java.util.concurrent.atomic.AtomicReference<FileReceiver> currentFileReceiver = 
             new java.util.concurrent.atomic.AtomicReference<>();
         
         io.aeron.FragmentAssembler fragmentAssembler = new io.aeron.FragmentAssembler(
@@ -1011,39 +1221,63 @@ public class AeronConsensusEngine implements ClusteredService {
                     org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.HeaderInfo headerInfo = 
                         org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.decode(buffer, offset);
                     
-                    // Check if this is a snapshot message
                     if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
-                        // Skip header
-                        offset += org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH;
-                        length -= org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH;
+                        int payloadOffset = offset + org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH;
+                        int payloadLength = headerInfo.blockLength;
                         
-                        // Read JSON payload
-                        byte[] jsonBytes = new byte[headerInfo.blockLength];
-                        buffer.getBytes(offset, jsonBytes);
-                        String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
+                        byte[] payload = new byte[payloadLength];
+                        buffer.getBytes(payloadOffset, payload);
                         
-                        log.debug("📸 Snapshot JSON: {}", json);
+                        // Try to parse as JSON to determine message type
+                        String payloadStr = new String(payload, 0, Math.min(200, payloadLength), java.nio.charset.StandardCharsets.UTF_8);
                         
-                        // Parse snapshot state
-                        String head = extractJsonField(json, "head");
-                        Long ethereumEpochLong = extractJsonFieldLong(json, "ethereumEpoch");
-                        Long timestampLong = extractJsonFieldLong(json, "timestamp");
-                        
-                        if (head != null && ethereumEpochLong != null && timestampLong != null) {
-                            snapshotStateRef.set(new SnapshotState(
-                                head, 
-                                ethereumEpochLong.intValue(), 
-                                timestampLong
-                            ));
-                            log.info("✅ Snapshot state parsed: HEAD={}, epoch={}, timestamp={}", 
-                                head, ethereumEpochLong.intValue(), timestampLong);
+                        if (payloadStr.contains("\"type\":\"metadata\"")) {
+                            // Metadata message
+                            String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
+                            String head = extractJsonField(json, "head");
+                            Long ethereumEpochLong = extractJsonFieldLong(json, "ethereumEpoch");
+                            Long timestampLong = extractJsonFieldLong(json, "timestamp");
+                            
+                            if (head != null && ethereumEpochLong != null && timestampLong != null) {
+                                snapshotStateRef.set(new SnapshotState(
+                                    head, 
+                                    ethereumEpochLong.intValue(), 
+                                    timestampLong
+                                ));
+                                log.info("   ✅ Metadata received: HEAD={}, epoch={}", head, ethereumEpochLong.intValue());
+                            }
+                        } else if (payloadStr.contains("\"type\":\"file_header\"")) {
+                            // File header - start new file
+                            String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
+                            String fileType = extractJsonField(json, "fileType");
+                            String fileName = extractJsonField(json, "fileName");
+                            Long fileSize = extractJsonFieldLong(json, "fileSize");
+                            
+                            if (fileName != null && fileSize != null) {
+                                // Close previous file if any
+                                FileReceiver prev = currentFileReceiver.get();
+                                if (prev != null) {
+                                    prev.close();
+                                }
+                                
+                                // Start new file
+                                java.io.File targetFile = new java.io.File(storeDirectory, fileName);
+                                FileReceiver receiver = new FileReceiver(targetFile, fileSize);
+                                currentFileReceiver.set(receiver);
+                                log.info("   📥 Receiving {}: {} ({} bytes)", fileType, fileName, fileSize);
+                            }
                         } else {
-                            log.warn("⚠️  Incomplete snapshot data: head={}, epoch={}, timestamp={}", 
-                                head != null, ethereumEpochLong != null, timestampLong != null);
+                            // File chunk data
+                            FileReceiver receiver = currentFileReceiver.get();
+                            if (receiver != null) {
+                                receiver.writeChunk(payload, 0, payloadLength);
+                            } else {
+                                log.debug("Received file chunk but no active receiver (may be non-file payload)");
+                            }
                         }
                     }
                 } catch (Exception e) {
-                    log.error("❌ Failed to parse snapshot fragment", e);
+                    log.error("❌ Failed to process snapshot fragment", e);
                 }
             }
         );
@@ -1059,14 +1293,64 @@ public class AeronConsensusEngine implements ClusteredService {
             idleStrategy.idle(fragments);
         }
         
-        log.info("📥 Snapshot image polling complete: {} fragments polled", fragmentsPolled);
+        // Close final file
+        FileReceiver finalReceiver = currentFileReceiver.get();
+        if (finalReceiver != null) {
+            finalReceiver.close();
+        }
+        
+        log.info("📥 Snapshot restore complete: {} fragments processed", fragmentsPolled);
         
         SnapshotState state = snapshotStateRef.get();
         if (state == null) {
-            log.warn("⚠️  No snapshot state found in snapshot image");
+            log.warn("⚠️  No snapshot metadata found");
         }
         
         return state;
+    }
+    
+    /**
+     * Helper class to receive and write file chunks during snapshot restore.
+     */
+    private static class FileReceiver {
+        private final java.io.File targetFile;
+        private final long expectedSize;
+        private long bytesReceived;
+        private java.io.FileOutputStream fos;
+        
+        FileReceiver(java.io.File targetFile, long expectedSize) throws Exception {
+            this.targetFile = targetFile;
+            this.expectedSize = expectedSize;
+            this.bytesReceived = 0;
+            
+            // Ensure parent directory exists
+            targetFile.getParentFile().mkdirs();
+            
+            // Open output stream
+            this.fos = new java.io.FileOutputStream(targetFile);
+        }
+        
+        void writeChunk(byte[] data, int offset, int length) throws Exception {
+            fos.write(data, offset, length);
+            bytesReceived += length;
+        }
+        
+        void close() {
+            try {
+                if (fos != null) {
+                    fos.close();
+                }
+                
+                if (bytesReceived == expectedSize) {
+                    System.out.println("      ✅ File complete: " + targetFile.getName() + " (" + bytesReceived + " bytes)");
+                } else {
+                    System.err.println("      ⚠️  File size mismatch: " + targetFile.getName() + 
+                        " (expected " + expectedSize + ", got " + bytesReceived + ")");
+                }
+            } catch (Exception e) {
+                System.err.println("      ❌ Failed to close file: " + targetFile.getName() + " - " + e.getMessage());
+            }
+        }
     }
     
     /**
@@ -1377,6 +1661,118 @@ public class AeronConsensusEngine implements ClusteredService {
         } catch (Exception e) {
             log.error("❌ Exception sending write through ingress", e);
             return false;
+        }
+    }
+    
+    /**
+     * Send a batch of write proposals through Aeron ingress as a single message.
+     * This is more efficient than individual sends as Aeron can optimize batched messages.
+     * 
+     * @param proposals List of queued proposals to send as a batch
+     * @return number of proposals successfully sent (all or none for atomic batch)
+     */
+    public int sendWriteBatchThroughIngress(java.util.List<org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal> proposals) {
+        if (cluster == null) {
+            log.error("❌ Cluster not initialized - cannot send batch write through ingress");
+            return 0;
+        }
+        
+        if (proposals == null || proposals.isEmpty()) {
+            return 0;
+        }
+        
+        // Ensure internal cluster client is created (lazy initialization)
+        ensureInternalClusterClient();
+        
+        if (internalClusterClient == null) {
+            log.error("❌ Internal AeronCluster client not available - cannot send batch write through ingress");
+            return 0;
+        }
+        
+        try {
+            // Build JSON array of write proposals
+            StringBuilder json = new StringBuilder();
+            json.append("{\"batch\":[");
+            
+            boolean first = true;
+            for (org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal proposal : proposals) {
+                if (!first) {
+                    json.append(",");
+                }
+                first = false;
+                
+                json.append("{");
+                json.append("\"walletAddress\":\"").append(escapeJson(proposal.getWalletAddress())).append("\",");
+                json.append("\"path\":\"").append(escapeJson(proposal.getPath())).append("\",");
+                json.append("\"contentType\":\"").append(escapeJson(proposal.getContentType() != null ? proposal.getContentType() : "page")).append("\",");
+                json.append("\"message\":\"").append(escapeJson(proposal.getMessage() != null ? proposal.getMessage() : "")).append("\",");
+                json.append("\"signature\":\"").append(escapeJson(proposal.getSignature() != null ? proposal.getSignature() : "")).append("\"");
+                json.append("}");
+            }
+            
+            json.append("]}");
+            
+            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            
+            // ✈️ AERON SBE MESSAGE FORMAT: Encode message with SBE header
+            int blockLength = jsonBytes.length;
+            int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH; // New template ID for batches
+            
+            // Allocate buffer: SBE header (8 bytes) + JSON payload
+            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
+            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
+                new byte[totalLength]
+            );
+            
+            // Encode SBE message header for Aeron cluster protocol
+            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
+                messageBuffer, 0, blockLength, templateId);
+            
+            // Write JSON payload after header
+            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+            
+            // ✈️ AERON CLUSTER: Send batch message through internal AeronCluster client
+            try {
+                // Send message through AeronCluster client ingress
+                idleStrategy.reset();
+                long result;
+                int retries = 0;
+                while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
+                    if (result == io.aeron.Publication.BACK_PRESSURED) {
+                        idleStrategy.idle();
+                        retries++;
+                        if (retries > 100) {
+                            log.error("❌ Ingress back-pressured after {} retries (batch size: {})", retries, proposals.size());
+                            return 0;
+                        }
+                    } else if (result == io.aeron.Publication.NOT_CONNECTED) {
+                        log.warn("⚠️  Ingress not connected - waiting... (batch size: {})", proposals.size());
+                        idleStrategy.idle();
+                        retries++;
+                        if (retries > 100) {
+                            log.error("❌ Ingress not connected after {} retries (batch size: {})", retries, proposals.size());
+                            return 0;
+                        }
+                    } else {
+                        log.error("❌ Failed to send batch write through ingress: {} (batch size: {})", result, proposals.size());
+                        return 0;
+                    }
+                }
+                
+                // 📊 Track ingress timestamp for Raft latency calculation
+                ingressTimestamps.offer(System.nanoTime());
+                performanceMetrics.recordMessageIngressed();
+                
+                log.debug("✅ Batch write sent through AeronCluster.offer() - {} proposals will replicate via Raft", proposals.size());
+                return proposals.size();
+            } catch (Exception e) {
+                log.error("❌ Exception sending batch write through AeronCluster client (batch size: {})", proposals.size(), e);
+                return 0;
+            }
+            
+        } catch (Exception e) {
+            log.error("❌ Exception sending batch write through ingress (batch size: {})", proposals.size(), e);
+            return 0;
         }
     }
     
@@ -2166,14 +2562,32 @@ public class AeronConsensusEngine implements ClusteredService {
                 }
                 
                 if (leaderHead != null && !leaderHead.trim().isEmpty()) {
-                    // Use toString10() for consistency
-                    String localHead = fileStore.getHead().getRecordId().toString10();
+                    // 🐛 FIX: Compare full RecordId string including timestamp, not just UUID+offset
+                    // toString() includes timestamp, toString10() only returns UUID:offset
+                    // This prevents false positives when segment ID matches but timestamp differs
+                    String localHead = fileStore.getHead().getRecordId().toString();  // Full format with timestamp
                     String leaderHeadTrimmed = leaderHead.trim();
                     
-                    if (!localHead.equals(leaderHeadTrimmed)) {
-                        log.info("📍 HEAD mismatch detected:");
-                        log.info("   Local:  {}...", localHead.substring(0, Math.min(20, localHead.length())));
-                        log.info("   Leader: {}...", leaderHeadTrimmed.substring(0, Math.min(20, leaderHeadTrimmed.length())));
+                    // Extract segment UUID portion for comparison (format: "uuid:offset root timestamp")
+                    // If leader sends just "uuid:offset", we need to handle both formats
+                    String localHeadSegment = localHead.split(" ")[0];  // Get "uuid:offset" part
+                    String leaderHeadSegment = leaderHeadTrimmed.contains(" ") ? 
+                        leaderHeadTrimmed.split(" ")[0] : leaderHeadTrimmed;
+                    
+                    // Compare: If segment UUIDs match BUT full strings differ, we're behind
+                    boolean segmentMatches = localHeadSegment.equals(leaderHeadSegment);
+                    boolean fullMatch = localHead.equals(leaderHeadTrimmed);
+                    
+                    if (!fullMatch) {
+                        if (segmentMatches) {
+                            log.warn("🔍 HEAD segment matches but timestamp differs (validator behind):");
+                            log.warn("   Local:  {} (possibly stale)", localHead);
+                            log.warn("   Leader: {} (current)", leaderHeadTrimmed);
+                        } else {
+                            log.info("📍 HEAD mismatch detected:");
+                            log.info("   Local:  {}...", localHead.substring(0, Math.min(40, localHead.length())));
+                            log.info("   Leader: {}...", leaderHeadTrimmed.substring(0, Math.min(40, leaderHeadTrimmed.length())));
+                        }
                         
                         // If syncing committed HEAD, update our committed HEAD tracking
                         if (syncCommittedHead) {
@@ -2190,20 +2604,22 @@ public class AeronConsensusEngine implements ClusteredService {
                         
                         log.info("📥 Syncing segments from leader: {}", leaderUrl);
                         
-                        // Pull segments for leader's HEAD
+                        // Pull segments for leader's HEAD (use segment portion for lookup)
                         try {
-                            int segmentsFetched = pullSegmentsForHead(leaderHeadTrimmed, leaderUrl);
+                            int segmentsFetched = pullSegmentsForHead(leaderHeadSegment, leaderUrl);
                             log.info("✅ Synced {} segments from leader", segmentsFetched);
                             
-                            // Verify HEAD matches now (use toString10() for consistency)
-                            String newLocalHead = fileStore.getHead().getRecordId().toString10();
-                            if (newLocalHead.equals(leaderHeadTrimmed)) {
+                            // Verify HEAD matches now
+                            String newLocalHead = fileStore.getHead().getRecordId().toString();
+                            String newLocalHeadSegment = newLocalHead.split(" ")[0];
+                            if (newLocalHeadSegment.equals(leaderHeadSegment)) {
                                 log.info("✅ HEAD synchronized successfully!");
+                                log.info("   Local HEAD now: {}", newLocalHead);
                                 log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                             } else {
                                 log.warn("⚠️  HEAD still doesn't match after sync");
-                                log.warn("   Local:  {}...", newLocalHead.substring(0, Math.min(20, newLocalHead.length())));
-                                log.warn("   Leader: {}...", leaderHeadTrimmed.substring(0, Math.min(20, leaderHeadTrimmed.length())));
+                                log.warn("   Local:  {}...", newLocalHead.substring(0, Math.min(40, newLocalHead.length())));
+                                log.warn("   Leader: {}...", leaderHeadTrimmed.substring(0, Math.min(40, leaderHeadTrimmed.length())));
                                 log.warn("   This may indicate a deeper sync issue");
                             }
                         } catch (Exception e) {
@@ -2213,7 +2629,8 @@ public class AeronConsensusEngine implements ClusteredService {
                             // Don't throw - allow startup to continue (may sync later via writes)
                         }
                     } else {
-                        log.info("✅ HEAD already matches leader - no sync needed");
+                        log.info("✅ HEAD fully matches leader - no sync needed");
+                        log.info("   HEAD: {}", localHead);
                         
                         // If we synced committed HEAD, update tracking even if HEAD already matched
                         if (syncCommittedHead && leaderCommittedHead != null && !leaderCommittedHead.isEmpty()) {

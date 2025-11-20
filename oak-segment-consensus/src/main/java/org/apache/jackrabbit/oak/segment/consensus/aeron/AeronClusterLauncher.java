@@ -261,6 +261,11 @@ public class AeronClusterLauncher {
                 .aeronDirectoryName(aeronDirName);
         
         // Consensus Module Context (use IP addresses for cluster members)
+        // Note: Aeron Cluster 1.49.1 automatically manages snapshot intervals based on log size
+        // Snapshots are taken periodically by the leader to enable faster recovery
+        // Default behavior: snapshot after significant log growth (typically ~1024 entries)
+        log.info("📸 Aeron snapshot management: automatic (leader-controlled)");
+        
         ConsensusModule.Context consensusModuleContext = new ConsensusModule.Context()
                 .errorHandler(closingErrorHandler(errorHandler("Consensus Module")))
                 .clusterMemberId(nodeId)

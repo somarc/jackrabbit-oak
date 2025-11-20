@@ -26,7 +26,6 @@ import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
 
@@ -75,6 +74,7 @@ public class ProposalQueueManagerOptimized {
     // Configuration
     private static final long CONFIRMATION_TIMEOUT_MS = 300_000; // 5 minutes
     private static final int MAX_MESSAGE_BATCH = 10; // Process up to 10 messages per Aeron cycle
+    private static final int FINALIZATION_CHUNK_SIZE = 500; // Chunk finalized epochs to avoid backpressure
     
     // Queues
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
@@ -92,6 +92,10 @@ public class ProposalQueueManagerOptimized {
     private AgentRunner evmVerifierAgent;
     private AgentRunner epochFinalizerAgent; // NEW: Finalizes epochs and creates batches
     private volatile boolean running = false;
+    
+    // Metrics: Priority tier routing
+    private final java.util.concurrent.atomic.AtomicLong priorityProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong batchedProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
     
     /**
      * Create optimized proposal queue manager with Ethereum epoch-based batching.
@@ -173,6 +177,13 @@ public class ProposalQueueManagerOptimized {
     }
     
     /**
+     * Get the epoch queue (for dashboard and metrics).
+     */
+    public EpochBasedBatchQueue getEpochQueue() {
+        return epochQueue;
+    }
+    
+    /**
      * Get comprehensive queue statistics for dashboard display.
      */
     public java.util.Map<String, Object> getQueueStats() {
@@ -200,10 +211,25 @@ public class ProposalQueueManagerOptimized {
         stats.put("rejectedCount", rejected);
         stats.put("processedCount", processed);
         
+        // Per-epoch proposal counts (for triangular pipeline visualization)
+        java.util.Map<Long, Long> proposalsByEpoch = new java.util.HashMap<>();
+        for (QueuedProposal proposal : allProposals.values()) {
+            if (proposal.getState() == ProposalState.VERIFIED || proposal.getState() == ProposalState.PENDING) {
+                long epoch = proposal.getEpoch();
+                proposalsByEpoch.merge(epoch, 1L, Long::sum);
+            }
+        }
+        stats.put("proposalsByEpoch", proposalsByEpoch);
+        
         // Backpressure stats
         stats.put("backpressureActive", backpressureManager.getPendingCount() >= 2000);
         stats.put("backpressurePendingCount", backpressureManager.getPendingCount());
         stats.put("backpressureStats", backpressureManager.getStats());
+        
+        // Tier routing stats
+        stats.put("priorityProposalsSent", priorityProposalsSent.get());
+        stats.put("batchedProposalsSent", batchedProposalsSent.get());
+        stats.put("totalProposalsSent", priorityProposalsSent.get() + batchedProposalsSent.get());
         
         return stats;
     }
@@ -264,7 +290,36 @@ public class ProposalQueueManagerOptimized {
             String signature) {
         // Calculate current epoch automatically
         long currentEpoch = epochQueue.getCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch);
+        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch, 
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
+    }
+    
+    /**
+     * Queue a new proposal for verification and epoch-based batching (with payment tier).
+     * This overload calculates the current epoch automatically.
+     * 
+     * @param proposalId Unique proposal ID
+     * @param ethereumTxHash Ethereum transaction hash (optional)
+     * @param walletAddress Ethereum wallet address
+     * @param path Content path
+     * @param contentType Content type
+     * @param message Content message
+     * @param signature Transaction signature
+     * @param tier Payment tier (STANDARD, EXPRESS, or PRIORITY)
+     * @return The queued proposal
+     */
+    public QueuedProposal queueProposal(
+            String proposalId,
+            String ethereumTxHash,
+            String walletAddress,
+            String path,
+            String contentType,
+            String message,
+            String signature,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+        // Calculate current epoch automatically
+        long currentEpoch = epochQueue.getCurrentEpoch();
+        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch, tier);
     }
     
     /**
@@ -278,6 +333,7 @@ public class ProposalQueueManagerOptimized {
      * @param signature Transaction signature
      * @param ethereumTxHash Ethereum transaction hash (optional)
      * @param epoch Ethereum epoch when transaction was seen (for finality tracking)
+     * @param tier Payment tier (STANDARD, EXPRESS, or PRIORITY) for priority handling
      * @return The queued proposal
      */
     public QueuedProposal queueProposal(
@@ -288,7 +344,8 @@ public class ProposalQueueManagerOptimized {
             String message,
             String signature,
             String ethereumTxHash,
-            long epoch) {
+            long epoch,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
         
         long now = System.currentTimeMillis();
         QueuedProposal proposal = new QueuedProposal(
@@ -307,13 +364,14 @@ public class ProposalQueueManagerOptimized {
         proposal.setMessage(message);
         proposal.setSignature(signature);
         proposal.setEpoch(epoch); // NEW: Track epoch for finality
+        proposal.setTier(tier); // Set payment tier for priority handling
         
         // Add to tracking map and unverified queue
         allProposals.put(proposalId, proposal);
         unverifiedQueue.offer(proposal);
         
-        log.debug("📥 Queued proposal {} for EVM verification in epoch {} (queue size: {})", 
-            proposalId, epoch, unverifiedQueue.size());
+        log.debug("📥 Queued proposal {} for EVM verification in epoch {} (tier: {}, queue size: {})", 
+            proposalId, epoch, tier, unverifiedQueue.size());
         
         return proposal;
     }
@@ -392,44 +450,55 @@ public class ProposalQueueManagerOptimized {
                 log.debug("📤 Processing batch {}: {} proposals (wallet: {})",
                     batchesProcessed, batch.size(), batch.get(0).getWalletAddress());
                 
-                // Send batch to Aeron
-                for (QueuedProposal queued : batch) {
+                // Apply backpressure ONCE per batch (not per proposal)
                 try {
-                    // Apply backpressure if Aeron cluster cannot keep up
                     backpressureManager.applyBackpressureIfNeeded();
+                } catch (BackpressureTimeoutException e) {
+                    batchQueue.offer(batch);
+                    log.warn("⚠️  Backpressure timeout - re-queuing batch ({} proposals)", batch.size());
+                    break;
+                }
+                
+                // ✈️ AERON BATCHING: Send entire batch as single message
+                // This is MUCH more efficient than individual sends
+                // Aeron can optimize batched messages at the transport layer
+                try {
+                    int sent = raftAppendCallback.appendProposalBatch(batch);
                     
-                    // Send to Raft via callback
-                    raftAppendCallback.appendProposal(
-                        queued.getWalletAddress(),
-                        queued.getPath(),
-                        queued.getContentType(),
-                        queued.getMessage(),
-                        queued.getSignature()
-                    );
-                    
-                    queued.setState(ProposalState.PROCESSED);
-                    allProposals.remove(queued.getProposalId());
-                    
-                    // Track for backpressure management
-                    backpressureManager.incrementSent();
-                    
-                    workCount++;
-                    
-                    log.debug("✅ Proposal {} sent to Aeron (batch: {}/{})", 
-                        queued.getProposalId(), workCount, batch.size());
+                    if (sent > 0) {
+                        // Mark all proposals in batch as processed
+                        for (QueuedProposal queued : batch) {
+                            queued.setState(ProposalState.PROCESSED);
+                            allProposals.remove(queued.getProposalId());
+                            
+                            // Track for backpressure management (one per proposal)
+                            backpressureManager.incrementSent();
+                            batchedProposalsSent.incrementAndGet();
+                            workCount++;
+                        }
+                        
+                        log.debug("✅ Batch sent to Aeron: {} proposals in 1 message", sent);
+                    } else {
+                        // Batch send failed - re-queue for retry
+                        batchQueue.offer(batch);
+                        log.warn("⚠️  Batch send failed - re-queuing batch ({} proposals)", batch.size());
+                        break;
+                    }
                     
                 } catch (BackpressureTimeoutException e) {
                     // Backpressure timeout - re-queue entire batch for next cycle
                     batchQueue.offer(batch);
                     log.warn("⚠️  Backpressure timeout - re-queuing batch ({} proposals)", batch.size());
-                    break; // Stop processing this batch
+                    break;
                 } catch (Exception e) {
-                    log.error("Error sending proposal {} to Aeron", queued.getProposalId(), e);
-                    queued.setState(ProposalState.REJECTED);
-                    queued.setRejectionReason("Aeron send failed: " + e.getMessage());
-                    allProposals.remove(queued.getProposalId());
+                    log.error("Error sending batch to Aeron ({} proposals)", batch.size(), e);
+                    // Mark all proposals in batch as rejected
+                    for (QueuedProposal queued : batch) {
+                        queued.setState(ProposalState.REJECTED);
+                        queued.setRejectionReason("Aeron batch send failed: " + e.getMessage());
+                        allProposals.remove(queued.getProposalId());
+                    }
                 }
-            }
             }
             
             return workCount;
@@ -592,22 +661,61 @@ public class ProposalQueueManagerOptimized {
                     // - Paid for (Ethereum tx confirmed)
                     // - Cryptographically signed (proves authority)
                     // - Authorized (wallet can write to path)
-                    //
-                    // Add to EPOCH QUEUE for wallet-based batching!
-                    // Will be finalized and sent after 2 epochs (~12.8 minutes)
                     // ═══════════════════════════════════════════════════════════
                     
                     proposal.setState(ProposalState.VERIFIED);
                     proposal.setConfirmedBlock(proof.getBlockNumber());
-                    epochQueue.addProposal(proposal, proposal.getEpoch());
-                    workCount++;
                     
-                    log.info("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, wallet: {}) → queued for epoch finality", 
-                        proposal.getProposalId(),
-                        proof.getTransactionHash().substring(0, Math.min(10, proof.getTransactionHash().length())) + "...",
-                        proof.getBlockNumber(),
-                        proposal.getEpoch(),
-                        proposal.getWalletAddress());
+                    // ═══════════════════════════════════════════════════════════
+                    // PRIORITY TIER: Fast-path directly to Aeron (bypass epoch batching)
+                    // ═══════════════════════════════════════════════════════════
+                    if (proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
+                        log.info("🚀 PRIORITY TIER: Fast-tracking proposal {} directly to Aeron (bypassing epoch queue)", 
+                            proposal.getProposalId());
+                        
+                        try {
+                            // Send directly to Aeron (bypass batch queue)
+                            raftAppendCallback.appendProposal(
+                                proposal.getWalletAddress(),
+                                proposal.getPath(),
+                                proposal.getContentType(),
+                                proposal.getMessage(),
+                                proposal.getSignature()
+                            );
+                            
+                            proposal.setState(ProposalState.PROCESSED);
+                            allProposals.remove(proposal.getProposalId());
+                            
+                            // Track for backpressure
+                            backpressureManager.incrementSent();
+                            
+                            log.info("✅ Priority proposal {} sent to Aeron (tx: {}, block: {}, latency: ~30s)", 
+                                proposal.getProposalId(),
+                                proof.getTransactionHash().substring(0, Math.min(10, proof.getTransactionHash().length())) + "...",
+                                proof.getBlockNumber());
+                            priorityProposalsSent.incrementAndGet();
+                            workCount++;
+                            
+                        } catch (Exception e) {
+                            log.error("❌ Failed to send priority proposal {} to Aeron", proposal.getProposalId(), e);
+                            rejectProposal(proposal, "Aeron send failed: " + e.getMessage());
+                        }
+                    } else {
+                        // EXPRESS or STANDARD: Add to epoch queue for batching
+                        epochQueue.addProposal(proposal, proposal.getEpoch());
+                        workCount++;
+                        
+                        String tierLabel = proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS 
+                            ? "EXPRESS (1-epoch)" : "STANDARD (2-epoch)";
+                        
+                        log.info("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, tier: {}, wallet: {}) → queued for epoch finality", 
+                            proposal.getProposalId(),
+                            proof.getTransactionHash().substring(0, Math.min(10, proof.getTransactionHash().length())) + "...",
+                            proof.getBlockNumber(),
+                            proposal.getEpoch(),
+                            tierLabel,
+                            proposal.getWalletAddress());
+                    }
                     
                 } catch (Exception e) {
                     log.error("Error verifying proposal {}", proposal.getProposalId(), e);
@@ -688,19 +796,56 @@ public class ProposalQueueManagerOptimized {
                         continue;
                     }
                     
-                    // Queue each batch for Aeron sender
+                    // Queue each batch for Aeron sender (with chunking to avoid backpressure)
+                    int totalProposals = 0;
+                    int totalChunks = 0;
+                    
                     for (List<QueuedProposal> batch : batches) {
-                        batchQueue.offer(batch);
-                        workCount++;
+                        totalProposals += batch.size();
                         
-                        log.debug("📦 Batch from epoch {} queued: {} proposals, wallet: {}",
-                            epoch, batch.size(),
-                            batch.isEmpty() ? "?" : batch.get(0).getWalletAddress());
+                        // If batch is large, chunk it to avoid overwhelming Aeron
+                        if (batch.size() > FINALIZATION_CHUNK_SIZE) {
+                            log.debug("📦 Large batch detected ({} proposals), chunking into {}s",
+                                batch.size(), FINALIZATION_CHUNK_SIZE);
+                            
+                            for (int i = 0; i < batch.size(); i += FINALIZATION_CHUNK_SIZE) {
+                                int endIdx = Math.min(i + FINALIZATION_CHUNK_SIZE, batch.size());
+                                List<QueuedProposal> chunk = batch.subList(i, endIdx);
+                                batchQueue.offer(chunk);
+                                totalChunks++;
+                                workCount++;
+                                
+                                log.debug("  ↳ Chunk {}/{}: {} proposals, wallet: {}",
+                                    (i / FINALIZATION_CHUNK_SIZE) + 1,
+                                    (batch.size() + FINALIZATION_CHUNK_SIZE - 1) / FINALIZATION_CHUNK_SIZE,
+                                    chunk.size(),
+                                    chunk.get(0).getWalletAddress());
+                                
+                                // Small delay to let Aeron process chunks smoothly
+                                // Prevents all chunks hitting backpressure simultaneously
+                                if (endIdx < batch.size()) {
+                                    try {
+                                        Thread.sleep(50); // 50ms between chunks
+                                    } catch (InterruptedException e) {
+                                        Thread.currentThread().interrupt();
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Small batch, queue as-is
+                            batchQueue.offer(batch);
+                            totalChunks++;
+                            workCount++;
+                            
+                            log.debug("📦 Batch from epoch {} queued: {} proposals, wallet: {}",
+                                epoch, batch.size(),
+                                batch.isEmpty() ? "?" : batch.get(0).getWalletAddress());
+                        }
                     }
                     
-                    log.info("✅ Finalized epoch {}: {} batches, {} proposals total",
-                        epoch, batches.size(),
-                        batches.stream().mapToInt(List::size).sum());
+                    log.info("✅ Finalized epoch {}: {} proposals → {} chunks (chunk size: {})",
+                        epoch, totalProposals, totalChunks, FINALIZATION_CHUNK_SIZE);
                     
                 } catch (Exception e) {
                     log.error("Error finalizing epoch {}", epoch, e);

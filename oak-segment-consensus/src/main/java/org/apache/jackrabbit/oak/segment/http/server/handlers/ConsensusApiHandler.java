@@ -334,10 +334,27 @@ public class ConsensusApiHandler {
                 return;
             }
             
+            // Parse payment tier from request (defaults to STANDARD)
+            String paymentTierParam = request.getParameter("paymentTier");
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier = 
+                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
+            
             // POC: Auto-simulate payment for testing (BEFORE queuing to avoid race condition)
             if (context.evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
                 org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge simpleEvmBridge = 
                     (org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) context.evmBridge;
+                
+                java.math.BigInteger paymentAmount;
+                if ("express".equalsIgnoreCase(paymentTierParam)) {
+                    tier = org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS;
+                    paymentAmount = tier.baseRate; // 0.000002 ETH
+                } else if ("priority".equalsIgnoreCase(paymentTierParam)) {
+                    tier = org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY;
+                    paymentAmount = tier.baseRate; // 0.00001 ETH
+                } else {
+                    // Standard tier (default)
+                    paymentAmount = tier.baseRate; // 0.000001 ETH
+                }
                 
                 // Create mock payment proof with correct wallet address
                 org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof mockPayment = 
@@ -347,15 +364,28 @@ public class ConsensusApiHandler {
                         normalizedWallet,  // fromAddress = wallet address (CRITICAL!)
                         simpleEvmBridge.getContractAddress(),
                         proposalId,
-                        "1000000000000000", // 0.001 ETH in wei
+                        paymentAmount.toString(), // Wei amount based on tier
                         6 // 6 confirmations
                     );
                 simpleEvmBridge.simulatePayment(mockPayment);
-                log.debug("🧪 POC: Auto-simulated payment for proposal {} from wallet {}", proposalId, normalizedWallet);
+                
+                // Record validator earnings (distributed across all validators)
+                if (context.validatorEarningsTracker != null) {
+                    // Get current epoch from BeaconChainClient (if available)
+                    long currentEpoch = -1;
+                    if (context.proposalQueueManager != null && context.proposalQueueManager.getEpochQueue() != null) {
+                        currentEpoch = context.proposalQueueManager.getEpochQueue().getCurrentEpoch();
+                    }
+                    
+                    context.validatorEarningsTracker.recordPayment(paymentAmount, tier, currentEpoch);
+                    log.debug("💰 Payment recorded: {} wei (tier: {}) distributed across validators", paymentAmount, tier);
+                }
+                
+                log.debug("🧪 POC: Auto-simulated payment for proposal {} from wallet {} (tier: {})", proposalId, normalizedWallet, tier);
             }
             
             // Queue proposal (waiting for Ethereum confirmation)
-            log.debug("📥 Queuing proposal {} (tx: {}), waiting for Ethereum confirmation", proposalId, ethereumTxHash);
+            log.debug("📥 Queuing proposal {} (tx: {}, tier: {}), waiting for Ethereum confirmation", proposalId, ethereumTxHash, tier);
             context.proposalQueueManager.queueProposal(
                 proposalId,
                 ethereumTxHash,
@@ -363,7 +393,8 @@ public class ConsensusApiHandler {
                 fullPath,
                 contentType != null ? contentType : "page",
                 message != null ? message : "",
-                signature != null ? signature : ""
+                signature != null ? signature : "",
+                tier  // Pass payment tier for priority handling
             );
             
             // Return queued status (202 Accepted)

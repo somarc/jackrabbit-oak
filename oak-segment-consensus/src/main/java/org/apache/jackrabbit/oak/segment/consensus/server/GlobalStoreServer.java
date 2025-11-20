@@ -268,10 +268,30 @@ public class GlobalStoreServer {
         System.out.println("Initializing Oak FileStore...");
         try {
             
-            // Build FileStore with read-write mode (so we can initialize /oak-chain structure)
-            // NOTE: If bootstrap is needed, this will create an initial HEAD, but bootstrap will sync
-            // segments and update HEAD to match primary. This is unavoidable - Oak requires FileStore
-            // instance for StandbyClientSync, but we'll sync immediately after build.
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // BOOTSTRAP ARCHITECTURE: Genesis via Aeron Consensus
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // PROBLEM: Oak's fileStore.build() automatically creates local genesis
+            //          When 3 validators start simultaneously, each creates
+            //          slightly different genesis (due to timing/threading)
+            //          → Divergent DAGs from T0!
+            //
+            // SOLUTION: Aeron leader creates canonical genesis via consensus
+            //   1. All validators call fileStore.build() → creates local genesis
+            //   2. Aeron cluster forms and elects leader (requires quorum)
+            //   3. Leader creates /oak-chain structure via consensus
+            //   4. Followers receive leader's genesis write
+            //   5. Result: All HEADs converge to leader's genesis
+            //
+            // KNOWN TRADE-OFF: Followers have 1-2 extra journal entries
+            //   (their local genesis + leader's consensus genesis)
+            //   These are harmless and get cleaned up by:
+            //   - First Aeron snapshot (overwrites entire FileStore)
+            //   - Normal garbage collection
+            //
+            // FUTURE: Could be eliminated by modifying Oak core to support
+            //         "deferred genesis" mode, but out of scope for POC.
+            
             fileStore = FileStoreBuilder.fileStoreBuilder(storeDir)
                 .withMaxFileSize(256)  // 256 MB per TAR file
                 .withMemoryMapping(false)  // Disable for Docker
@@ -837,7 +857,7 @@ public class GlobalStoreServer {
                 // Create Aeron Consensus Engine
                 org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = 
                     new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine(
-                        fileStore, nodeStore, selfUrl, peerUrls, wallet
+                        fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory
                     );
                 
                 // Initialize Ethereum integration if configured
@@ -1055,10 +1075,22 @@ public class GlobalStoreServer {
                 evmBridge.start();
                 
                 org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback raftCallback = 
-                    (walletAddress, path, contentType, message, signature) -> {
-                        // Append to Raft via AeronConsensusEngine
-                        if (aeronEngine != null) {
-                            aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
+                    new org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback() {
+                        @Override
+                        public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
+                            // Append single proposal to Raft via AeronConsensusEngine
+                            if (aeronEngine != null) {
+                                aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
+                            }
+                        }
+                        
+                        @Override
+                        public int appendProposalBatch(java.util.List<org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal> proposals) {
+                            // Append batch of proposals to Raft via AeronConsensusEngine
+                            if (aeronEngine != null) {
+                                return aeronEngine.sendWriteBatchThroughIngress(proposals);
+                            }
+                            return 0;
                         }
                     };
                 
@@ -1082,7 +1114,31 @@ public class GlobalStoreServer {
                 proposalQueueManager.start();
                 httpServer.getContext().setProposalQueueManager(proposalQueueManager);
                 httpServer.getContext().evmBridge = evmBridge; // Store for GC Proposal Manager
+                proposalQueueManager.start(); // Start tri-agent architecture (EVM verifier, Aeron sender, Epoch finalizer)
                 System.out.println("   ✅ Proposal Queue Manager initialized (Ethereum epoch-based batching + 3-checkpoint security)");
+                
+                // Initialize Validator Earnings Tracker (economic simulation)
+                // Build validator wallet list from hostnamesList (each node's wallet will be collected dynamically)
+                // For POC: Use self wallet + peer count to simulate fair distribution
+                java.util.List<String> validatorWallets = new java.util.ArrayList<>();
+                
+                // Add self wallet
+                validatorWallets.add(wallet.getWalletAddress());
+                
+                // For POC: Generate placeholder wallets for expected validators based on cluster size
+                // In production, these would be collected from actual validator registrations
+                int expectedValidators = hostnamesList != null ? hostnamesList.size() : 1;
+                for (int i = 1; i < expectedValidators; i++) {
+                    // Placeholder wallet (will be replaced by real wallets as validators register)
+                    validatorWallets.add("0x" + String.format("%040x", i));
+                }
+                
+                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker earningsTracker = 
+                    new org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker(validatorWallets);
+                httpServer.getContext().setValidatorEarningsTracker(earningsTracker);
+                System.out.println("   ✅ Validator Earnings Tracker initialized (" + validatorWallets.size() + " validators)");
+                System.out.println("   - Self wallet: " + wallet.getWalletAddress());
+                System.out.println("   - Earnings distributed equitably across all validators (regardless of Aeron leader)");
                 
                 // ✈️ AERON MODE: Skip HTTP peer registration
                 // Aeron Cluster handles membership via Raft consensus - HTTP registration is legacy
@@ -1568,7 +1624,7 @@ public class GlobalStoreServer {
         // Create Aeron Consensus Engine
         org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = 
             new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine(
-                fileStore, nodeStore, selfUrl, peerUrls, wallet
+                fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory
             );
         
         // Initialize Ethereum integration if configured

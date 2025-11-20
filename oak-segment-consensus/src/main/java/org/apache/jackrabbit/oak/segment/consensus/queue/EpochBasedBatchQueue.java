@@ -65,8 +65,28 @@ public class EpochBasedBatchQueue {
     private static final Logger log = LoggerFactory.getLogger(EpochBasedBatchQueue.class);
     
     // Configuration: Ethereum Finality Parameters
-    private static final int FINALITY_EPOCHS = 2; // 2 epochs for finality
+    private static final int FINALITY_EPOCHS = 2; // 2 epochs for STANDARD tier
     private static final int OPTIMAL_BATCH_SIZE = 25; // Proposals per batch
+    
+    /**
+     * Get finality delay (in epochs) for a given payment tier.
+     * 
+     * @param tier Payment tier
+     * @return Number of epochs to wait before finalizing
+     */
+    private static int getFinalityDelay(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+        if (tier == null) {
+            return FINALITY_EPOCHS; // Default to STANDARD
+        }
+        
+        if (tier == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
+            return 0;  // Immediate (handled via fast-path, shouldn't reach here)
+        } else if (tier == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS) {
+            return 1;   // 1 epoch (~6.4 minutes)
+        } else {
+            return 2;  // STANDARD: 2 epochs (~12.8 minutes)
+        }
+    }
     
     // Ethereum Beacon Chain client (provides real-time epoch data)
     private final BeaconChainClient beaconClient;
@@ -184,15 +204,36 @@ public class EpochBasedBatchQueue {
     
     /**
      * Get epochs that are ready for finalization.
-     * An epoch is finalizable if it's <= the current finalized epoch from Ethereum.
+     * An epoch is finalizable if proposals within it have passed their tier-based finality delay.
+     * 
+     * <p><strong>Tier-based Finality:</strong>
+     * <ul>
+     *   <li>PRIORITY: 0 epochs (immediate, handled via fast-path)</li>
+     *   <li>EXPRESS: 1 epoch (~6.4 minutes)</li>
+     *   <li>STANDARD: 2 epochs (~12.8 minutes)</li>
+     * </ul>
      * 
      * @return List of epoch numbers ready for finalization
      */
     public List<Long> getFinalizableEpochs() {
-        long finalizedEpoch = getFinalizedEpoch();
+        long currentEpoch = getCurrentEpoch();
         
         return pendingEpochWrites.keySet().stream()
-            .filter(epoch -> epoch <= finalizedEpoch)
+            .filter(epoch -> {
+                // Check if ANY proposals in this epoch have passed their finality delay
+                ConcurrentHashMap<String, List<QueuedProposal>> epochMap = pendingEpochWrites.get(epoch);
+                if (epochMap == null) return false;
+                
+                // Find minimum finality delay required for proposals in this epoch
+                int minDelay = epochMap.values().stream()
+                    .flatMap(List::stream)
+                    .mapToInt(p -> getFinalityDelay(p.getTier()))
+                    .min()
+                    .orElse(FINALITY_EPOCHS);
+                
+                // Epoch is finalizable if current epoch >= (proposal epoch + required delay)
+                return currentEpoch >= (epoch + minDelay);
+            })
             .filter(epoch -> epoch > lastFinalizedEpoch) // Don't re-finalize
             .sorted()
             .collect(Collectors.toList());
@@ -201,8 +242,9 @@ public class EpochBasedBatchQueue {
     /**
      * Finalize an epoch and return optimally-batched proposals.
      * 
-     * <p><strong>Batching Algorithm:</strong>
+     * <p><strong>Tier-Aware Batching Algorithm:</strong>
      * <ol>
+     *   <li>Filter proposals by tier-based finality delay</li>
      *   <li>Group all proposals by wallet address</li>
      *   <li>Sort each wallet's proposals by path, then timestamp</li>
      *   <li>Create batches of optimal size (25 proposals each)</li>
@@ -218,29 +260,75 @@ public class EpochBasedBatchQueue {
             return Collections.emptyList();
         }
         
-        // Remove epoch from pending map
-        ConcurrentHashMap<String, List<QueuedProposal>> epochMap = pendingEpochWrites.remove(epoch);
+        // Get epoch map (don't remove yet - might have proposals with longer delays)
+        ConcurrentHashMap<String, List<QueuedProposal>> epochMap = pendingEpochWrites.get(epoch);
         if (epochMap == null || epochMap.isEmpty()) {
             log.debug("📭 Epoch {} had no proposals to finalize", epoch);
             lastFinalizedEpoch = epoch;
             return Collections.emptyList();
         }
         
+        // Calculate current epoch for tier-based finality checks
+        long currentEpoch = getCurrentEpoch();
+        
+        // Filter proposals by tier-based finality delay
+        // Copy and filter proposals that have met their finality requirement
+        ConcurrentHashMap<String, List<QueuedProposal>> readyProposals = new ConcurrentHashMap<>();
+        java.util.concurrent.atomic.AtomicInteger expressCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger standardCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        
+        for (Map.Entry<String, List<QueuedProposal>> entry : epochMap.entrySet()) {
+            String wallet = entry.getKey();
+            List<QueuedProposal> proposals = entry.getValue();
+            
+            List<QueuedProposal> ready = proposals.stream()
+                .filter(p -> {
+                    int requiredDelay = getFinalityDelay(p.getTier());
+                    boolean isReady = currentEpoch >= (epoch + requiredDelay);
+                    if (isReady) {
+                        if (p.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS) {
+                            expressCount.incrementAndGet();
+                        } else {
+                            standardCount.incrementAndGet();
+                        }
+                    }
+                    return isReady;
+                })
+                .collect(Collectors.toList());
+            
+            if (!ready.isEmpty()) {
+                readyProposals.put(wallet, ready);
+                
+                // Remove finalized proposals from original epoch map
+                proposals.removeAll(ready);
+            }
+        }
+        
+        // Clean up empty wallet lists and remove epoch if completely processed
+        epochMap.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+        if (epochMap.isEmpty()) {
+            pendingEpochWrites.remove(epoch);
+        }
+        
+        if (readyProposals.isEmpty()) {
+            log.debug("📭 Epoch {} had no proposals ready for finalization yet (waiting for tier delays)", epoch);
+            return Collections.emptyList();
+        }
+        
+        log.info("📦 Finalizing epoch {} with {} proposals (EXPRESS: {}, STANDARD: {})",
+            epoch, expressCount.get() + standardCount.get(), expressCount.get(), standardCount.get());
+        
         long startTime = System.nanoTime();
         List<List<QueuedProposal>> batches = new ArrayList<>();
         
         // Sort wallets by address for deterministic ordering
-        List<String> sortedWallets = epochMap.keySet().stream()
+        List<String> sortedWallets = readyProposals.keySet().stream()
             .sorted()
             .collect(Collectors.toList());
         
-        log.info("📦 Finalizing epoch {} with {} wallets, {} total proposals",
-            epoch, sortedWallets.size(), 
-            epochMap.values().stream().mapToInt(List::size).sum());
-        
         // Process each wallet's proposals
         for (String walletAddress : sortedWallets) {
-            List<QueuedProposal> walletProposals = epochMap.get(walletAddress);
+            List<QueuedProposal> walletProposals = readyProposals.get(walletAddress);
             if (walletProposals == null || walletProposals.isEmpty()) {
                 continue;
             }

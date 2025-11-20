@@ -65,6 +65,7 @@ public class ServerContext {
     public volatile org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics;
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
     public volatile ShardRouter shardRouter; // Optional - for sharded routing
+    public volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker validatorEarningsTracker;
     
     // Shared state
     public final Map<String, ClientRegistration> registeredClients;
@@ -181,6 +182,11 @@ public class ServerContext {
     public void setShardRouter(ShardRouter shardRouter) {
         this.shardRouter = shardRouter;
         log.info("✅ Shard Router initialized");
+    }
+    
+    public void setValidatorEarningsTracker(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker validatorEarningsTracker) {
+        this.validatorEarningsTracker = validatorEarningsTracker;
+        log.info("✅ Validator Earnings Tracker initialized");
     }
 }
 

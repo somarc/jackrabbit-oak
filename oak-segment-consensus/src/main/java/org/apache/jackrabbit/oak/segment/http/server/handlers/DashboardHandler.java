@@ -575,13 +575,13 @@ public class DashboardHandler {
                 }
             }
 
-            // Epoch Queue & EVM Bridge Status (NEW)
+            // Epoch Queue & EVM Bridge Status (REDESIGNED - Triangular Pipeline Visualization)
             if (context.proposalQueueManager != null) {
                 java.util.Map<String, Object> queueStats = context.proposalQueueManager.getQueueStats();
                 
                 long currentEpoch = asLong(queueStats.get("currentEpoch"), -1L);
                 long finalizedEpoch = asLong(queueStats.get("finalizedEpoch"), -1L);
-                long epochsUntilFinality = asLong(queueStats.get("epochsUntilFinality"), 0L);
+                long epochsUntilFinality = currentEpoch - finalizedEpoch;
                 
                 long pendingCount = asLong(queueStats.get("pendingCount"), 0L);
                 long verifiedCount = asLong(queueStats.get("verifiedCount"), 0L);
@@ -590,62 +590,219 @@ public class DashboardHandler {
                 boolean backpressureActive = Boolean.TRUE.equals(queueStats.get("backpressureActive"));
                 long backpressurePending = asLong(queueStats.get("backpressurePendingCount"), 0L);
                 
-                html.append("<div class='card' style='background: rgba(15,23,42,0.85); border-left: 3px solid #8b5cf6;'>\n");
-                html.append("<h2>⛓️  Ethereum Epoch Finality Queue</h2>\n");
-                html.append("<div style='margin-bottom: 16px; color: #94a3b8;'>");
-                html.append("Epoch-based batching: writes finalize after 2 Ethereum epochs (~12.8 min)");
+                // Get per-epoch proposal counts (if available)
+                @SuppressWarnings("unchecked")
+                java.util.Map<Long, Long> epochProposalCounts = (java.util.Map<Long, Long>) queueStats.get("proposalsByEpoch");
+                if (epochProposalCounts == null) {
+                    epochProposalCounts = new java.util.HashMap<>();
+                }
+                
+                html.append("<div class='card' style='background: linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(30,41,59,0.95) 100%); border-left: 3px solid #8b5cf6;'>\n");
+                html.append("<h2>⛓️  Ethereum Epoch Finality Pipeline</h2>\n");
+                html.append("<div style='margin-bottom: 20px; color: #94a3b8; line-height: 1.6;'>");
+                html.append("Proposals flow through a 3-stage pipeline based on Ethereum epoch finality (~6.4 min per epoch).<br>");
+                html.append("<strong style='color: #a78bfa;'>Economic Finality:</strong> Users can pay to bump priority for faster inclusion.");
                 html.append("</div>\n");
                 
-                // Epoch timeline visual
-                html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 20px 0;'>\n");
+                // TRIANGULAR PIPELINE VISUALIZATION
+                html.append("<div style='position: relative; margin: 32px 0; padding: 24px; background: rgba(15,23,42,0.6); border-radius: 12px;'>\n");
                 
-                // Current Epoch
-                html.append("<div style='background: rgba(59, 130, 246, 0.15); padding: 16px; border-radius: 8px; border-left: 3px solid #60a5fa;'>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-bottom: 8px;'>📡 Current Epoch</div>\n");
-                html.append("<div style='font-size: 1.8em; font-weight: 600; color: #60a5fa;'>").append(currentEpoch).append("</div>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-top: 8px;'>Live from beaconscan.com</div>\n");
+                // Pipeline stages header
+                html.append("<div style='display: grid; grid-template-columns: 1fr 60px 1fr 60px 1fr; gap: 0; align-items: center; margin-bottom: 24px;'>\n");
+                
+                // Stage 1: Current Epoch (Queuing)
+                long stage1Count = epochProposalCounts.getOrDefault(currentEpoch, 0L);
+                html.append("<div style='background: rgba(59, 130, 246, 0.2); padding: 20px; border-radius: 12px; border: 2px solid #60a5fa; position: relative;'>\n");
+                html.append("<div style='position: absolute; top: -12px; left: 12px; background: #0f172a; padding: 0 8px;'>\n");
+                html.append("<span style='color: #60a5fa; font-size: 0.75em; font-weight: 600; text-transform: uppercase;'>Stage 1</span>\n");
+                html.append("</div>\n");
+                html.append("<div style='color: #60a5fa; font-size: 0.9em; margin-bottom: 12px;'>📡 Current Epoch</div>\n");
+                html.append("<div style='font-size: 2.2em; font-weight: 700; color: #60a5fa; margin-bottom: 8px;'>").append(currentEpoch).append("</div>\n");
+                html.append("<div style='color: #cbd5e1; font-size: 0.95em; margin-bottom: 12px;'><strong>").append(stage1Count).append("</strong> proposals queuing</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.8em; line-height: 1.4;'>New writes enter here<br>EVM verification in progress</div>\n");
                 html.append("</div>\n");
                 
-                // Finalized Epoch
-                html.append("<div style='background: rgba(52, 211, 153, 0.15); padding: 16px; border-radius: 8px; border-left: 3px solid #34d399;'>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-bottom: 8px;'>✅ Finalized Epoch</div>\n");
-                html.append("<div style='font-size: 1.8em; font-weight: 600; color: #34d399;'>").append(finalizedEpoch).append("</div>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-top: 8px;'>Safe to process</div>\n");
+                // Arrow 1
+                html.append("<div style='text-align: center; color: #8b5cf6; font-size: 2em; line-height: 1;'>→</div>\n");
+                
+                // Stage 2: Current - 1 (Waiting)
+                long stage2Epoch = currentEpoch - 1;
+                long stage2Count = epochProposalCounts.getOrDefault(stage2Epoch, 0L);
+                html.append("<div style='background: rgba(250, 204, 21, 0.2); padding: 20px; border-radius: 12px; border: 2px solid #facc15; position: relative;'>\n");
+                html.append("<div style='position: absolute; top: -12px; left: 12px; background: #0f172a; padding: 0 8px;'>\n");
+                html.append("<span style='color: #facc15; font-size: 0.75em; font-weight: 600; text-transform: uppercase;'>Stage 2</span>\n");
+                html.append("</div>\n");
+                html.append("<div style='color: #facc15; font-size: 0.9em; margin-bottom: 12px;'>⏳ Epoch - 1</div>\n");
+                html.append("<div style='font-size: 2.2em; font-weight: 700; color: #facc15; margin-bottom: 8px;'>").append(stage2Epoch).append("</div>\n");
+                html.append("<div style='color: #cbd5e1; font-size: 0.95em; margin-bottom: 12px;'><strong>").append(stage2Count).append("</strong> proposals waiting</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.8em; line-height: 1.4;'>Verified & secured<br>~6.4 min until finality</div>\n");
                 html.append("</div>\n");
                 
-                // Gap
-                String gapColor = epochsUntilFinality <= 2 ? "#34d399" : "#facc15";
-                html.append("<div style='background: rgba(250, 204, 21, 0.15); padding: 16px; border-radius: 8px; border-left: 3px solid ").append(gapColor).append(";'>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-bottom: 8px;'>⏳ Finality Gap</div>\n");
-                html.append("<div style='font-size: 1.8em; font-weight: 600; color: ").append(gapColor).append(";'>").append(epochsUntilFinality).append(" epochs</div>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-top: 8px;'>~").append(String.format("%.1f", epochsUntilFinality * 6.4)).append(" min until next batch</div>\n");
+                // Arrow 2
+                html.append("<div style='text-align: center; color: #8b5cf6; font-size: 2em; line-height: 1;'>→</div>\n");
+                
+                // Stage 3: Finalized (Current - 2)
+                long stage3Count = epochProposalCounts.getOrDefault(finalizedEpoch, 0L);
+                html.append("<div style='background: rgba(52, 211, 153, 0.2); padding: 20px; border-radius: 12px; border: 2px solid #34d399; position: relative;'>\n");
+                html.append("<div style='position: absolute; top: -12px; left: 12px; background: #0f172a; padding: 0 8px;'>\n");
+                html.append("<span style='color: #34d399; font-size: 0.75em; font-weight: 600; text-transform: uppercase;'>Stage 3</span>\n");
+                html.append("</div>\n");
+                html.append("<div style='color: #34d399; font-size: 0.9em; margin-bottom: 12px;'>✅ Finalized</div>\n");
+                html.append("<div style='font-size: 2.2em; font-weight: 700; color: #34d399; margin-bottom: 8px;'>").append(finalizedEpoch).append("</div>\n");
+                html.append("<div style='color: #cbd5e1; font-size: 0.95em; margin-bottom: 12px;'><strong>").append(stage3Count > 0 ? stage3Count + " batches" : "Ready").append("</strong> for Aeron</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.8em; line-height: 1.4;'>Batched & replicated<br>Writing to SegmentStore</div>\n");
                 html.append("</div>\n");
                 
+                html.append("</div>\n");
+                
+                // Timeline indicator
+                html.append("<div style='margin-top: 20px; text-align: center; color: #94a3b8; font-size: 0.85em;'>");
+                html.append("⏱️  <strong>Total Pipeline Time:</strong> ~12.8 minutes (2 Ethereum epochs) • ");
+                html.append("<strong>Gap:</strong> ").append(epochsUntilFinality).append(" epoch").append(epochsUntilFinality != 1 ? "s" : "").append(" (").append(String.format("%.1f", epochsUntilFinality * 6.4)).append(" min)");
+                html.append("</div>\n");
+                
+                html.append("</div>\n");
+                
+                // Economic Finality Tiers (Future Feature Preview)
+                html.append("<div style='margin-top: 24px; padding: 20px; background: rgba(139, 92, 246, 0.1); border-radius: 12px; border: 1px solid rgba(139, 92, 246, 0.3);'>\n");
+                html.append("<h3 style='color: #a78bfa; margin-bottom: 16px; font-size: 1.1em;'>💎 Economic Finality Tiers <span style='color: #64748b; font-size: 0.75em; font-weight: normal;'>(Future Feature)</span></h3>\n");
+                html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;'>\n");
+                
+                // Standard Tier
+                html.append("<div style='background: rgba(15,23,42,0.6); padding: 14px; border-radius: 8px; border-left: 3px solid #64748b;'>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.8em; margin-bottom: 6px;'>🥉 STANDARD</div>\n");
+                html.append("<div style='color: #cbd5e1; font-size: 1.1em; font-weight: 600; margin-bottom: 6px;'>~12.8 min</div>\n");
+                html.append("<div style='color: #64748b; font-size: 0.75em;'>Base rate: 0.000001 ETH/MB<br>2 epoch safety</div>\n");
+                html.append("</div>\n");
+                
+                // Express Tier
+                html.append("<div style='background: rgba(15,23,42,0.6); padding: 14px; border-radius: 8px; border-left: 3px solid #facc15;'>\n");
+                html.append("<div style='color: #fbbf24; font-size: 0.8em; margin-bottom: 6px;'>🥈 EXPRESS</div>\n");
+                html.append("<div style='color: #fde047; font-size: 1.1em; font-weight: 600; margin-bottom: 6px;'>~6.4 min</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.75em;'>2x rate: 0.000002 ETH/MB<br>1 epoch safety</div>\n");
+                html.append("</div>\n");
+                
+                // Priority Tier
+                html.append("<div style='background: rgba(15,23,42,0.6); padding: 14px; border-radius: 8px; border-left: 3px solid #8b5cf6;'>\n");
+                html.append("<div style='color: #a78bfa; font-size: 0.8em; margin-bottom: 6px;'>🥇 PRIORITY</div>\n");
+                html.append("<div style='color: #c4b5fd; font-size: 1.1em; font-weight: 600; margin-bottom: 6px;'>~30 sec</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.75em;'>10x rate: 0.00001 ETH/MB<br>Immediate inclusion</div>\n");
+                html.append("</div>\n");
+                
+                html.append("</div>\n");
+                html.append("<div style='margin-top: 12px; color: #94a3b8; font-size: 0.8em; line-height: 1.6;'>");
+                html.append("💡 <strong>Economics:</strong> Higher tiers pay premium for faster finality. Standard tier enforces 2-epoch safety. ");
+                html.append("Priority tier bypasses queue for time-sensitive operations (e.g., emergency content updates).");
+                html.append("</div>\n");
                 html.append("</div>\n");
                 
                 // EVM Verifier Stats
-                html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px;'>\n");
+                html.append("<div style='margin-top: 24px;'>\n");
+                html.append("<h3 style='color: #a78bfa; margin-bottom: 12px; font-size: 1em;'>📊 EVM Verification Stats</h3>\n");
+                html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;'>\n");
                 appendMiniCard(html, "⏳ Unverified", String.valueOf(pendingCount), "#94a3b8", "Awaiting EVM confirmation");
                 appendMiniCard(html, "✅ Verified", String.valueOf(verifiedCount), "#34d399", "Passed 3-checkpoint security");
                 appendMiniCard(html, "❌ Rejected", String.valueOf(rejectedCount), "#f87171", "Failed security checks");
+                html.append("</div>\n");
                 html.append("</div>\n");
                 
                 // Backpressure indicator
                 if (backpressureActive) {
                     html.append("<div style='margin-top: 16px; padding: 12px; background: rgba(239, 68, 68, 0.15); border-left: 3px solid #ef4444; border-radius: 8px;'>\n");
                     html.append("<strong style='color: #fca5a5;'>⚠️  Backpressure Active</strong><br>\n");
-                    html.append("<span style='color: #fca5a5; font-size: 0.9em;'>").append(backpressurePending).append(" messages pending replication. System protecting itself from overload.</span>\n");
+                    html.append("<span style='color: #fca5a5; font-size: 0.9em;'>").append(backpressurePending).append(" messages pending Aeron replication. System self-regulating ingress rate.</span>\n");
                     html.append("</div>\n");
                 } else if (verifiedCount > 0) {
                     html.append("<div style='margin-top: 16px; padding: 12px; background: rgba(52, 211, 153, 0.15); border-left: 3px solid #34d399; border-radius: 8px;'>\n");
                     html.append("<strong style='color: #6ee7b7;'>✅ System Healthy</strong><br>\n");
-                    html.append("<span style='color: #6ee7b7; font-size: 0.9em;'>").append(verifiedCount).append(" proposals awaiting epoch finality. Aeron replication operating normally.</span>\n");
+                    html.append("<span style='color: #6ee7b7; font-size: 0.9em;'>").append(verifiedCount).append(" proposals flowing through pipeline. Aeron replication operating normally.</span>\n");
                     html.append("</div>\n");
                 }
                 
                 html.append("</div>\n");
             }
 
+            // Validator Earnings Card (Economics Simulation)
+            if (context.validatorEarningsTracker != null) {
+                java.util.Map<String, org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.ValidatorEarnings> allEarnings = 
+                    context.validatorEarningsTracker.getAllValidatorEarnings();
+                
+                if (!allEarnings.isEmpty()) {
+                    html.append("<div class='card' style='background: linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(59,130,246,0.15) 100%); border-left: 3px solid #facc15;'>\n");
+                    html.append("<h2>💰 Validator Earnings (Economic Simulation)</h2>\n");
+                    html.append("<div style='margin-bottom: 16px; color: #94a3b8; line-height: 1.6;'>");
+                    html.append("Real-world simulation: Validators earn income from write transactions. ");
+                    html.append("<strong style='color: #fbbf24;'>Payments distributed equitably across ALL validators</strong>, regardless of Aeron leader.");
+                    html.append("</div>\n");
+                    
+                    // Network summary
+                    long totalTxCount = allEarnings.values().stream().mapToLong(e -> e.transactionCount).sum();
+                    long totalEarningsWei = context.validatorEarningsTracker.getTotalNetworkEarnings();
+                    String totalEarningsEth = "0";
+                    if (totalEarningsWei > 0) {
+                        java.math.BigInteger ethBig = java.math.BigInteger.valueOf(totalEarningsWei).divide(java.math.BigInteger.TEN.pow(18));
+                        java.math.BigInteger remainder = java.math.BigInteger.valueOf(totalEarningsWei).remainder(java.math.BigInteger.TEN.pow(18));
+                        if (!remainder.equals(java.math.BigInteger.ZERO)) {
+                            String remainderStr = remainder.toString();
+                            while (remainderStr.length() < 18) {
+                                remainderStr = "0" + remainderStr;
+                            }
+                            totalEarningsEth = ethBig + "." + remainderStr.substring(0, Math.min(6, remainderStr.length()));
+                        } else {
+                            totalEarningsEth = ethBig.toString();
+                        }
+                    }
+                    
+                    html.append("<div style='background: rgba(15,23,42,0.6); padding: 16px; border-radius: 8px; margin-bottom: 20px;'>\n");
+                    html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;'>\n");
+                    appendMiniCard(html, "💵 Total Network Revenue", totalEarningsEth + " ETH", "#facc15", "Cumulative earnings from all writes");
+                    appendMiniCard(html, "📝 Total Transactions", String.format("%,d", totalTxCount), "#60a5fa", "Write operations processed");
+                    appendMiniCard(html, "👥 Active Validators", String.valueOf(allEarnings.size()), "#34d399", "Earning validators in cluster");
+                    html.append("</div>\n");
+                    html.append("</div>\n");
+                    
+                    // Per-validator earnings table
+                    html.append("<div style='overflow-x: auto;'>\n");
+                    html.append("<table style='width: 100%; border-collapse: collapse;'>\n");
+                    html.append("<thead><tr style='border-bottom: 2px solid rgba(148,163,184,0.3);'>");
+                    html.append("<th style='text-align: left; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Validator Wallet</th>");
+                    html.append("<th style='text-align: right; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Earnings</th>");
+                    html.append("<th style='text-align: right; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Transactions</th>");
+                    html.append("<th style='text-align: center; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Standard</th>");
+                    html.append("<th style='text-align: center; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Express</th>");
+                    html.append("<th style='text-align: center; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Priority</th>");
+                    html.append("</tr></thead>\n");
+                    html.append("<tbody>\n");
+                    
+                    for (org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.ValidatorEarnings earnings : allEarnings.values()) {
+                        String walletDisplay = earnings.walletAddress;
+                        if (walletDisplay.length() > 15) {
+                            walletDisplay = walletDisplay.substring(0, 12) + "...";
+                        }
+                        
+                        html.append("<tr style='border-bottom: 1px solid rgba(148,163,184,0.1);'>");
+                        html.append("<td style='padding: 12px;'><code style='font-size: 0.9em; color: #60a5fa;'>").append(FormatUtils.escapeHtml(walletDisplay)).append("</code></td>");
+                        html.append("<td style='padding: 12px; text-align: right; font-weight: 600; color: #fbbf24;'>").append(FormatUtils.escapeHtml(earnings.getEarningsEth())).append(" ETH</td>");
+                        html.append("<td style='padding: 12px; text-align: right; color: #cbd5e1;'>").append(String.format("%,d", earnings.transactionCount)).append("</td>");
+                        html.append("<td style='padding: 12px; text-align: center; color: #94a3b8;'>").append(String.format("%,d", earnings.standardTierCount)).append("</td>");
+                        html.append("<td style='padding: 12px; text-align: center; color: #facc15;'>").append(String.format("%,d", earnings.expressTierCount)).append("</td>");
+                        html.append("<td style='padding: 12px; text-align: center; color: #a78bfa;'>").append(String.format("%,d", earnings.priorityTierCount)).append("</td>");
+                        html.append("</tr>\n");
+                    }
+                    
+                    html.append("</tbody></table>\n");
+                    html.append("</div>\n");
+                    
+                    html.append("<div style='margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(148,163,184,0.15); color: #94a3b8; font-size: 0.85em; line-height: 1.6;'>");
+                    html.append("💡 <strong>Economic Model:</strong> Even though Aeron Raft has a single leader, ");
+                    html.append("<strong style='color: #fbbf24;'>all validators earn equally</strong> from every write transaction. ");
+                    html.append("This ensures fair compensation for all nodes maintaining consensus and replication.");
+                    html.append("</div>\n");
+                    
+                    html.append("</div>\n");
+                }
+            }
+            
             // Connected Peers Card
             html.append("<div class='card'>\n");
             html.append("<h2>🌐 Connected Peers</h2>\n");

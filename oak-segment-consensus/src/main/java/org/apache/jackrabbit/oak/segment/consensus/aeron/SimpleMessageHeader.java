@@ -36,6 +36,7 @@ public class SimpleMessageHeader {
     
     // Template IDs for our message types
     public static final int TEMPLATE_ID_WRITE_PROPOSAL = 100;
+    public static final int TEMPLATE_ID_WRITE_BATCH = 106; // Batch of write proposals
     public static final int TEMPLATE_ID_DELETE_PROPOSAL = 101;
     public static final int TEMPLATE_ID_SNAPSHOT = 102;
     public static final int TEMPLATE_ID_GC_PROPOSAL = 103;

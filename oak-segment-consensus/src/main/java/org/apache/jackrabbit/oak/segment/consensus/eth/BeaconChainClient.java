@@ -45,6 +45,9 @@ public class BeaconChainClient {
     
     private final String beaconApiUrl;
     
+    // Track last logged epoch to avoid spamming logs
+    private long lastLoggedEpoch = -1;
+    
     /**
      * Create a new Beacon Chain client.
      * 
@@ -73,7 +76,8 @@ public class BeaconChainClient {
         // (waiting for 2/3 validator attestations)
         long finalizedEpoch = currentEpoch - 2;
         
-        log.info("⛓️  Calculating finalized epoch: {} (current: {})", 
+        // Only log at DEBUG level to avoid spam (gets called every few seconds)
+        log.debug("⛓️  Calculating finalized epoch: {} (current: {})", 
                  finalizedEpoch, currentEpoch);
         
         return getEpochDetails(finalizedEpoch);
@@ -92,7 +96,15 @@ public class BeaconChainClient {
      * @return Epoch data with metadata
      */
     public EpochData getEpochDetails(long epochNumber) {
-        log.info("📊 Fetching Ethereum epoch: {}", epochNumber);
+        // Only log at INFO level when we see a NEW epoch
+        // This reduces log spam from ~3 lines every 1-5 seconds to once per epoch (~6.4 minutes)
+        boolean isNewEpoch = (epochNumber != lastLoggedEpoch);
+        
+        if (isNewEpoch) {
+            log.info("📊 Fetching NEW Ethereum epoch: {}", epochNumber);
+        } else {
+            log.debug("📊 Re-fetching Ethereum epoch: {} (no change)", epochNumber);
+        }
         
         // Calculate epoch timestamp
         long timestamp = BEACON_GENESIS_TIME + (epochNumber * EPOCH_DURATION_MS);
@@ -131,12 +143,23 @@ public class BeaconChainClient {
         data.deposits = (int) (Math.random() * 5); // 0-4 new deposits
         data.voluntaryExits = (Math.random() < 0.05) ? 1 : 0; // 5% chance
         
-        log.info("✅ Fetched epoch {} (finalized: {}, blocks: {}/{}, attestations: {})", 
-                 epochNumber, 
-                 data.finalized, 
-                 data.blocksProposed - data.blocksSkipped, 
-                 data.blocksProposed,
-                 data.attestations);
+        // Only log at INFO level for NEW epochs
+        if (isNewEpoch) {
+            log.info("✅ Fetched epoch {} (finalized: {}, blocks: {}/{}, attestations: {})", 
+                     epochNumber, 
+                     data.finalized, 
+                     data.blocksProposed - data.blocksSkipped, 
+                     data.blocksProposed,
+                     data.attestations);
+            lastLoggedEpoch = epochNumber;
+        } else {
+            log.debug("✅ Re-fetched epoch {} (finalized: {}, blocks: {}/{}, attestations: {})", 
+                     epochNumber, 
+                     data.finalized, 
+                     data.blocksProposed - data.blocksSkipped, 
+                     data.blocksProposed,
+                     data.attestations);
+        }
         
         return data;
     }

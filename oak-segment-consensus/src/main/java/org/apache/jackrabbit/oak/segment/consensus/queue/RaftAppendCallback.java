@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
+import java.util.List;
+
 /**
  * Callback interface for appending verified proposals to Raft log.
  */
@@ -30,5 +32,29 @@ public interface RaftAppendCallback {
      * @param signature Transaction signature
      */
     void appendProposal(String walletAddress, String path, String contentType, String message, String signature);
+    
+    /**
+     * Append a batch of verified proposals to Raft log as a single message.
+     * This is more efficient than individual appends as Aeron can optimize batched messages.
+     * 
+     * @param proposals List of proposals to append as a batch
+     * @return number of proposals successfully sent
+     */
+    default int appendProposalBatch(List<QueuedProposal> proposals) {
+        // Default implementation: fall back to individual appends
+        // Implementations should override this for true batch support
+        int sent = 0;
+        for (QueuedProposal proposal : proposals) {
+            appendProposal(
+                proposal.getWalletAddress(),
+                proposal.getPath(),
+                proposal.getContentType(),
+                proposal.getMessage(),
+                proposal.getSignature()
+            );
+            sent++;
+        }
+        return sent;
+    }
 }
 
