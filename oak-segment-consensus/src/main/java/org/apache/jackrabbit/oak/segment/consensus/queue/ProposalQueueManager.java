@@ -126,7 +126,7 @@ public class ProposalQueueManager {
         queued.setSignature(signature);
         
         pendingProposals.put(proposalId, queued);
-        log.info("📥 Queued proposal {} (tx: {}), waiting for Ethereum confirmation", 
+        log.debug("📥 Queued proposal {} (tx: {}), waiting for Ethereum confirmation", 
             proposalId, ethereumTxHash);
     }
     
@@ -188,7 +188,7 @@ public class ProposalQueueManager {
                     queued.setConfirmedBlock(proof.getBlockNumber());
                 }
                 
-                log.info("✅ Proposal {} verified on-chain (tx: {}, block: {}), ready for Raft", 
+                log.debug("✅ Proposal {} verified on-chain (tx: {}, block: {}), ready for Raft", 
                     queued.getProposalId(), 
                     queued.getEthereumTxHash() != null ? queued.getEthereumTxHash().substring(0, Math.min(10, queued.getEthereumTxHash().length())) + "..." : "unknown",
                     queued.getConfirmedBlock());
@@ -225,7 +225,7 @@ public class ProposalQueueManager {
                 queued.setState(ProposalState.PROCESSED);
                 long duration = System.currentTimeMillis() - startTime;
                 
-                log.info("✅ Proposal {} appended to Raft (path: {}, duration: {}ms)", 
+                log.debug("✅ Proposal {} appended to Raft (path: {}, duration: {}ms)", 
                     queued.getProposalId(), 
                     queued.getPath(),
                     duration);

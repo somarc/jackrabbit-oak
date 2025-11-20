@@ -359,6 +359,25 @@ public class GlobalStoreServer {
             }
             
             // ===========================================================================
+            // Initialize Wallet Storage Metrics (for tokenomics)
+            System.out.println("Initializing Wallet Storage Metrics...");
+            org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics = null;
+            try {
+                walletStorageMetrics = new org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics(fileStore);
+                
+                httpServer.getContext().setWalletStorageMetrics(walletStorageMetrics);
+                
+                System.out.println("✅ Wallet Storage Metrics initialized");
+                System.out.println("   - Tracks per-wallet storage ownership %");
+                System.out.println("   - Calculates storage tax and delete tax");
+                System.out.println("   - Monitors capacity (2 TB upper bound)");
+            } catch (Exception e) {
+                System.err.println("⚠️  Failed to initialize Wallet Storage Metrics: " + e.getMessage());
+                System.err.println("   Storage metrics will not be available");
+                // Don't fail startup - storage metrics are optional
+            }
+            
+            // ===========================================================================
             // Initialize GC Proposal Manager (for GC consensus)
             System.out.println("Initializing GC Proposal Manager...");
             try {
@@ -1023,16 +1042,15 @@ public class GlobalStoreServer {
                 System.out.println("   - Ethereum epoch: " + aeronEngine.getCurrentEthereumEpoch());
                 
                 // Initialize Proposal Queue Manager (for Ethereum confirmation tracking)
-                // Use EventDrivenEvmBridge for event-driven architecture
+                // Use SimpleEvmBridge for POC testing (supports auto-simulation of payments)
                 // Configuration via OAK_BLOCKCHAIN_MOCK_MODE env var or oak.blockchain.mockMode system property
                 org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig = 
                     org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
                 
                 org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge = 
-                    new org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge(
+                    new org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge(
                         blockchainConfig.getNetwork(),
-                        blockchainConfig.getContractAddress(),
-                        blockchainConfig.isMockMode()
+                        blockchainConfig.getContractAddress()
                     );
                 evmBridge.start();
                 
@@ -1053,12 +1071,18 @@ public class GlobalStoreServer {
                     backpressureManager = new org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager();
                 }
                 
-                org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager proposalQueueManager = 
-                    new org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager(evmBridge, raftCallback, backpressureManager);
+                // Initialize Beacon Chain client for real-time Ethereum epoch tracking (reuse beaconApiUrl from earlier)
+                org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient = 
+                    new org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient(beaconApiUrl);
+                System.out.println("   ✅ Beacon Chain client initialized (tracking Ethereum epochs from " + beaconApiUrl + ")");
+                
+                // Use optimized epoch-based batching queue manager
+                org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized proposalQueueManager = 
+                    new org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized(evmBridge, raftCallback, backpressureManager, beaconClient);
                 proposalQueueManager.start();
                 httpServer.getContext().setProposalQueueManager(proposalQueueManager);
                 httpServer.getContext().evmBridge = evmBridge; // Store for GC Proposal Manager
-                System.out.println("   ✅ Proposal Queue Manager initialized (Ethereum confirmation + backpressure)");
+                System.out.println("   ✅ Proposal Queue Manager initialized (Ethereum epoch-based batching + 3-checkpoint security)");
                 
                 // ✈️ AERON MODE: Skip HTTP peer registration
                 // Aeron Cluster handles membership via Raft consensus - HTTP registration is legacy

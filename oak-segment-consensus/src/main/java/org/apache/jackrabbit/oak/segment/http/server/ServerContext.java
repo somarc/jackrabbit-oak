@@ -23,7 +23,7 @@ import org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusStateService;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
-import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -60,8 +60,9 @@ public class ServerContext {
     public volatile ConsensusStateService consensusStateService;
     public volatile GCCostEstimator gcCostEstimator;
     public volatile GCProposalManager gcProposalManager;
-    public volatile ProposalQueueManager proposalQueueManager;
+    public volatile ProposalQueueManagerOptimized proposalQueueManager;
     public volatile FragmentationTracker fragmentationTracker;
+    public volatile org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics;
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
     public volatile ShardRouter shardRouter; // Optional - for sharded routing
     
@@ -157,7 +158,7 @@ public class ServerContext {
         log.info("✅ GC Cost Estimator initialized");
     }
     
-    public void setProposalQueueManager(ProposalQueueManager proposalQueueManager) {
+    public void setProposalQueueManager(ProposalQueueManagerOptimized proposalQueueManager) {
         this.proposalQueueManager = proposalQueueManager;
         log.info("✅ Proposal Queue Manager initialized");
     }
@@ -165,6 +166,11 @@ public class ServerContext {
     public void setFragmentationTracker(FragmentationTracker fragmentationTracker) {
         this.fragmentationTracker = fragmentationTracker;
         log.info("✅ Fragmentation Tracker initialized");
+    }
+    
+    public void setWalletStorageMetrics(org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics) {
+        this.walletStorageMetrics = walletStorageMetrics;
+        log.info("✅ Wallet Storage Metrics initialized");
     }
     
     public void setGCProposalManager(GCProposalManager gcProposalManager) {

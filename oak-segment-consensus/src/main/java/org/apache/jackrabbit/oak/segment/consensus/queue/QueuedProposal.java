@@ -34,6 +34,7 @@ public class QueuedProposal {
     private volatile String contentType;
     private volatile String message;
     private volatile String signature;
+    private volatile long epoch; // Ethereum epoch when transaction was seen
     
     public QueuedProposal(
             String proposalId,
@@ -99,6 +100,14 @@ public class QueuedProposal {
     
     public void setSignature(String signature) {
         this.signature = signature;
+    }
+    
+    public long getEpoch() {
+        return epoch;
+    }
+    
+    public void setEpoch(long epoch) {
+        this.epoch = epoch;
     }
     
     public long getTimeoutTimestamp() {

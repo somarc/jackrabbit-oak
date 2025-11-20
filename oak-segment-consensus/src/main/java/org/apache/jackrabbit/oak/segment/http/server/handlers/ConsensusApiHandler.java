@@ -178,7 +178,7 @@ public class ConsensusApiHandler {
                     org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig = 
                         org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
                     if (blockchainConfig.isMockMode()) {
-                        log.info("🧪 MOCK MODE: Auto-registering wallet {} as client for replication testing", normalizedWallet);
+                        log.debug("🧪 MOCK MODE: Auto-registering wallet {} as client for replication testing", normalizedWallet);
                     }
                     isValidatorWallet = true;
                     validatorId = normalizedWallet;
@@ -189,7 +189,7 @@ public class ConsensusApiHandler {
                     org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
                 
                 if (isValidatorWallet && blockchainConfig.isMockMode()) {
-                    log.info("✅ Auto-registering wallet {} as client (MOCK MODE - testing only)", validatorId);
+                    log.debug("✅ Auto-registering wallet {} as client (MOCK MODE - testing only)", validatorId);
                     clientReg = new ClientRegistration(validatorId, context.selfUrl, normalizedWallet);
                     context.registeredClients.put(validatorId, clientReg);
                     clientId = validatorId;
@@ -280,7 +280,7 @@ public class ConsensusApiHandler {
             
             // Build sharded path
             String shardedPath = WalletPathUtil.toShardedPath(wallet.toLowerCase());
-            log.info("🪣 Using sharded path: {}", shardedPath);
+            log.debug("🪣 Using sharded path: {}", shardedPath);
             
             String addr = normalizedWallet.replace("0x", "");
             String contentId = contentType + "-" + System.currentTimeMillis();
@@ -334,8 +334,28 @@ public class ConsensusApiHandler {
                 return;
             }
             
+            // POC: Auto-simulate payment for testing (BEFORE queuing to avoid race condition)
+            if (context.evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
+                org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge simpleEvmBridge = 
+                    (org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) context.evmBridge;
+                
+                // Create mock payment proof with correct wallet address
+                org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof mockPayment = 
+                    new org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof(
+                        ethereumTxHash,
+                        simpleEvmBridge.getCurrentBlockNumber(),
+                        normalizedWallet,  // fromAddress = wallet address (CRITICAL!)
+                        simpleEvmBridge.getContractAddress(),
+                        proposalId,
+                        "1000000000000000", // 0.001 ETH in wei
+                        6 // 6 confirmations
+                    );
+                simpleEvmBridge.simulatePayment(mockPayment);
+                log.debug("🧪 POC: Auto-simulated payment for proposal {} from wallet {}", proposalId, normalizedWallet);
+            }
+            
             // Queue proposal (waiting for Ethereum confirmation)
-            log.info("📥 Queuing proposal {} (tx: {}), waiting for Ethereum confirmation", proposalId, ethereumTxHash);
+            log.debug("📥 Queuing proposal {} (tx: {}), waiting for Ethereum confirmation", proposalId, ethereumTxHash);
             context.proposalQueueManager.queueProposal(
                 proposalId,
                 ethereumTxHash,
@@ -359,7 +379,7 @@ public class ConsensusApiHandler {
                 "\"storagePath\":\"" + fullPath + "\"," +
                 "\"contentType\":\"" + contentType + "\"}";
             response.getWriter().write(resultJson);
-            log.info("✅ Proposal {} queued successfully", proposalId);
+            log.debug("✅ Proposal {} queued successfully", proposalId);
             
         } catch (Exception e) {
             log.error("❌ Test write failed", e);

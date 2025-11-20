@@ -166,6 +166,19 @@ public class AeronConsensusEngine implements ClusteredService {
     private volatile long cachedLeaderTimestamp = 0;
     private static final long LEADER_CACHE_TTL_MS = 10000; // 10 seconds
     
+    // Write throughput tracking (for periodic summary logging)
+    private final java.util.concurrent.atomic.AtomicLong totalWritesProcessed = new java.util.concurrent.atomic.AtomicLong(0);
+    private volatile long lastSummaryLogTime = System.currentTimeMillis();
+    private volatile long lastSummaryWriteCount = 0;
+    private static final long SUMMARY_LOG_INTERVAL_MS = 10000; // Log summary every 10 seconds
+    
+    // Raft performance metrics (track consensus latency, throughput, utilization)
+    private final AeronPerformanceMetrics performanceMetrics = new AeronPerformanceMetrics();
+    
+    // Ingress timestamp tracking (for Raft latency calculation)
+    // Since Raft processes messages in order, we can use a simple FIFO queue
+    private final java.util.concurrent.ConcurrentLinkedQueue<Long> ingressTimestamps = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    
     // ✈️ AERON NATIVE: Track leadership rotation history from onRoleChange() callbacks
     public static class LeadershipChange {
         public final long timestamp;
@@ -654,7 +667,7 @@ public class AeronConsensusEngine implements ClusteredService {
         // ✈️ AERON NATIVE: Handle replicated write proposals
         // This callback is invoked on ALL nodes after Aeron replicates the message via Raft
         // Deterministic state machine: ALL nodes process messages in same order
-        log.info("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}", 
+        log.debug("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}", 
             session.id(), length, cluster != null ? cluster.role() : "UNKNOWN", timestamp);
         
         // ✈️ AERON MESSAGE VALIDATION: Check SBE message header length first
@@ -719,6 +732,46 @@ public class AeronConsensusEngine implements ClusteredService {
                     // This tells the system that Aeron has successfully replicated and applied a write
                     backpressureManager.incrementAcknowledged();
                     log.debug("   Backpressure stats: {}", backpressureManager.getStats());
+                    
+                    // 📊 Track replication latency for Raft performance metrics
+                    // Match with ingress timestamp from FIFO queue (Raft preserves message order)
+                    Long ingressTimestampNanos = ingressTimestamps.poll();
+                    if (ingressTimestampNanos != null) {
+                        performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
+                    } else {
+                        // Timestamp queue empty - might be from a different ingress path
+                        performanceMetrics.recordMessageReplicated(System.nanoTime());
+                    }
+                    
+                    // Track write throughput and log periodic summaries
+                    long currentWriteCount = totalWritesProcessed.incrementAndGet();
+                    long currentTime = System.currentTimeMillis();
+                    
+                    // Update queue depths for metrics
+                    performanceMetrics.updateQueueDepths(
+                        0, // Ingress queue depth (we don't track this separately yet)
+                        backpressureManager.getPendingCount()
+                    );
+                    
+                    // Log summary every 10 seconds
+                    if (currentTime - lastSummaryLogTime >= SUMMARY_LOG_INTERVAL_MS) {
+                        long writesInInterval = currentWriteCount - lastSummaryWriteCount;
+                        long intervalSeconds = (currentTime - lastSummaryLogTime) / 1000;
+                        double writesPerSecond = intervalSeconds > 0 ? (double) writesInInterval / intervalSeconds : 0;
+                        
+                        // Get Raft performance snapshot
+                        AeronPerformanceMetrics.Snapshot metrics = performanceMetrics.getSnapshot();
+                        
+                        log.info("📊 Write Throughput: {} writes in {}s ({} writes/sec) | Total: {}", 
+                            writesInInterval, intervalSeconds, String.format("%.1f", writesPerSecond),
+                            currentWriteCount);
+                        
+                        // Log detailed Raft metrics
+                        log.info(metrics.toSummaryString());
+                        
+                        lastSummaryLogTime = currentTime;
+                        lastSummaryWriteCount = currentWriteCount;
+                    }
                 } else {
                     log.error("❌ Write callback not set - cannot apply replicated write");
                     log.error("   This means setWriteApplicationCallback() was never called");
@@ -1308,6 +1361,11 @@ public class AeronConsensusEngine implements ClusteredService {
                         return false;
                     }
                 }
+                
+                // 📊 Track ingress timestamp for Raft latency calculation
+                // Store in FIFO queue - will be matched with replication in onSessionMessage()
+                ingressTimestamps.offer(System.nanoTime());
+                performanceMetrics.recordMessageIngressed();
                 
                 log.debug("✅ Write sent through AeronCluster.offer() - will replicate to all nodes via Raft");
                 return true;
@@ -2981,6 +3039,15 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager getBackpressureManager() {
         return backpressureManager;
+    }
+    
+    /**
+     * Get Raft performance metrics (for monitoring and testing).
+     * 
+     * @return AeronPerformanceMetrics instance tracking consensus latency, throughput, utilization
+     */
+    public AeronPerformanceMetrics getPerformanceMetrics() {
+        return performanceMetrics;
     }
     
     /**

@@ -444,6 +444,207 @@ public class DashboardHandler {
                     html.append("</div>\n");
                 }
             }
+            
+            // Tokenomics / Storage Metrics Section
+            if (context.walletStorageMetrics != null) {
+                double capacityPercent = context.walletStorageMetrics.getCapacityPercent();
+                double pressureMultiplier = context.walletStorageMetrics.getStoragePressureMultiplier();
+                boolean atCapacity = context.walletStorageMetrics.isAtCapacity();
+                long totalSize = context.walletStorageMetrics.getTotalSegmentStoreSize();
+                
+                // Storage Capacity Card
+                html.append("<div class='card'>\n");
+                html.append("<h2>💾 Storage Capacity</h2>\n");
+                html.append("<div style='margin-bottom: 16px; color: #94a3b8;'>");
+                html.append("Production upper bound: 2 TB (pure SegmentStore metadata)");
+                html.append("</div>\n");
+                
+                // Capacity progress bar
+                String capacityColor;
+                String capacityStatus;
+                if (capacityPercent < 50) {
+                    capacityColor = "#34d399"; // green
+                    capacityStatus = "✅ Normal";
+                } else if (capacityPercent < 75) {
+                    capacityColor = "#60a5fa"; // blue
+                    capacityStatus = "✅ Healthy";
+                } else if (capacityPercent < 85) {
+                    capacityColor = "#facc15"; // yellow
+                    capacityStatus = "⚠️  Warning";
+                } else if (capacityPercent < 95) {
+                    capacityColor = "#f87171"; // red
+                    capacityStatus = "🚨 High Pressure";
+                } else {
+                    capacityColor = "#dc2626"; // dark red
+                    capacityStatus = "❌ Emergency";
+                }
+                
+                html.append("<div style='margin: 20px 0;'>\n");
+                html.append("<div style='display: flex; justify-content: space-between; margin-bottom: 8px;'>\n");
+                html.append("<span style='color: #cbd5e1; font-weight: 600;'>").append(FormatUtils.formatBytes(totalSize)).append("</span>\n");
+                html.append("<span style='color: ").append(capacityColor).append("; font-weight: 600;'>").append(String.format("%.1f%%", capacityPercent)).append("</span>\n");
+                html.append("</div>\n");
+                html.append("<div style='background: rgba(148,163,184,0.2); height: 20px; border-radius: 10px; overflow: hidden;'>\n");
+                html.append("<div style='background: linear-gradient(90deg, ").append(capacityColor).append(", ").append(capacityColor).append("aa); height: 100%; width: ").append(String.format("%.1f%%", Math.min(capacityPercent, 100))).append("; transition: width 0.5s;'></div>\n");
+                html.append("</div>\n");
+                html.append("<div style='margin-top: 8px; color: #94a3b8; font-size: 0.9em;'>");
+                html.append("Status: <strong style='color: ").append(capacityColor).append(";'>").append(capacityStatus).append("</strong>");
+                html.append(" | Tax Multiplier: <strong>").append(String.format("%.1fx", pressureMultiplier)).append("</strong>");
+                html.append("</div>\n");
+                html.append("</div>\n");
+                
+                if (atCapacity) {
+                    html.append("<div style='padding: 12px; background: rgba(239, 68, 68, 0.15); border-left: 3px solid #ef4444; border-radius: 8px; margin-top: 12px;'>\n");
+                    html.append("<strong style='color: #fca5a5;'>⚠️  At Capacity Limit</strong><br>\n");
+                    html.append("<span style='color: #fca5a5; font-size: 0.9em;'>New writes will be rejected. Mandatory archival required.</span>\n");
+                    html.append("</div>\n");
+                } else if (capacityPercent >= 75) {
+                    html.append("<div style='padding: 12px; background: rgba(250, 204, 21, 0.15); border-left: 3px solid #facc15; border-radius: 8px; margin-top: 12px;'>\n");
+                    html.append("<strong style='color: #fde047;'>📋 Recommendation</strong><br>\n");
+                    html.append("<span style='color: #fde047; font-size: 0.9em;'>Consider archival or BYOD (Bring Your Own Datastore) for non-critical data.</span>\n");
+                    html.append("</div>\n");
+                }
+                
+                html.append("</div>\n");
+                
+                // Wallet Storage Ownership Table
+                java.util.Map<String, org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.WalletStorage> allWallets = 
+                    context.walletStorageMetrics.getAllWalletStorage();
+                
+                if (!allWallets.isEmpty()) {
+                    html.append("<div class='card table-card'>\n");
+                    html.append("<h2>💰 Storage Ownership & Tokenomics</h2>\n");
+                    html.append("<div style='margin-bottom: 16px; color: #94a3b8;'>");
+                    html.append("Per-wallet storage ownership % and tax liability (proportional to storage used)");
+                    html.append("</div>\n");
+                    
+                    // Show top 10 wallets by storage
+                    java.util.List<java.util.Map.Entry<String, org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.WalletStorage>> sortedWallets = 
+                        new java.util.ArrayList<>(allWallets.entrySet());
+                    sortedWallets.sort((a, b) -> Long.compare(b.getValue().bytesOwned, a.getValue().bytesOwned));
+                    
+                    if (sortedWallets.size() > 10) {
+                        sortedWallets = sortedWallets.subList(0, 10);
+                    }
+                    
+                    html.append("<table>\n<thead><tr>");
+                    html.append("<th>Wallet Address</th>");
+                    html.append("<th>Storage Used</th>");
+                    html.append("<th>% of Total</th>");
+                    html.append("<th>Nodes</th>");
+                    html.append("<th>Tax (per epoch)</th>");
+                    html.append("</tr></thead><tbody>\n");
+                    
+                    for (java.util.Map.Entry<String, org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.WalletStorage> entry : sortedWallets) {
+                        org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.WalletStorage storage = entry.getValue();
+                        java.math.BigInteger tax = context.walletStorageMetrics.calculateStorageTax(storage.walletAddress);
+                        String taxDisplay = tax.equals(java.math.BigInteger.ZERO) ? "0 ETH" : formatWeiToEth(tax) + " ETH";
+                        
+                        String walletDisplay = storage.walletAddress;
+                        if (walletDisplay.length() > 20) {
+                            walletDisplay = walletDisplay.substring(0, 20) + "...";
+                        }
+                        
+                        html.append("<tr>");
+                        html.append("<td><code style='font-size: 0.85em;'>").append(FormatUtils.escapeHtml(walletDisplay)).append("</code></td>");
+                        html.append("<td>").append(FormatUtils.formatBytes(storage.bytesOwned)).append("</td>");
+                        html.append("<td>").append(String.format("%.3f%%", storage.percentageOfTotal)).append("</td>");
+                        html.append("<td>").append(String.format("%,d", storage.nodeCount)).append("</td>");
+                        html.append("<td>").append(taxDisplay).append("</td>");
+                        html.append("</tr>\n");
+                    }
+                    
+                    html.append("</tbody></table>\n");
+                    
+                    html.append("<div style='margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(148,163,184,0.15);'>");
+                    html.append("<div style='color: #94a3b8; font-size: 0.9em; line-height: 1.6;'>");
+                    html.append("💡 <strong>Tokenomics Model:</strong> Storage tax = 0.000001 ETH per MB per epoch × storage pressure multiplier<br>");
+                    html.append("📊 <strong>Current Multiplier:</strong> ").append(String.format("%.1fx", pressureMultiplier)).append(" (escalates as store approaches 2 TB)<br>");
+                    html.append("🔒 <strong>Delete Tax:</strong> Proportional to % of store deleted × fragmentation penalty");
+                    html.append("</div>");
+                    html.append("</div>\n");
+                    
+                    html.append("</div>\n");
+                } else {
+                    html.append("<div class='card'>\n");
+                    html.append("<h2>💰 Storage Ownership & Tokenomics</h2>\n");
+                    html.append("<div class='empty-state' style='margin-top: 0;'>");
+                    html.append("No wallet storage data available yet. Metrics will appear after first writes.");
+                    html.append("</div>\n");
+                    html.append("</div>\n");
+                }
+            }
+
+            // Epoch Queue & EVM Bridge Status (NEW)
+            if (context.proposalQueueManager != null) {
+                java.util.Map<String, Object> queueStats = context.proposalQueueManager.getQueueStats();
+                
+                long currentEpoch = asLong(queueStats.get("currentEpoch"), -1L);
+                long finalizedEpoch = asLong(queueStats.get("finalizedEpoch"), -1L);
+                long epochsUntilFinality = asLong(queueStats.get("epochsUntilFinality"), 0L);
+                
+                long pendingCount = asLong(queueStats.get("pendingCount"), 0L);
+                long verifiedCount = asLong(queueStats.get("verifiedCount"), 0L);
+                long rejectedCount = asLong(queueStats.get("rejectedCount"), 0L);
+                
+                boolean backpressureActive = Boolean.TRUE.equals(queueStats.get("backpressureActive"));
+                long backpressurePending = asLong(queueStats.get("backpressurePendingCount"), 0L);
+                
+                html.append("<div class='card' style='background: rgba(15,23,42,0.85); border-left: 3px solid #8b5cf6;'>\n");
+                html.append("<h2>⛓️  Ethereum Epoch Finality Queue</h2>\n");
+                html.append("<div style='margin-bottom: 16px; color: #94a3b8;'>");
+                html.append("Epoch-based batching: writes finalize after 2 Ethereum epochs (~12.8 min)");
+                html.append("</div>\n");
+                
+                // Epoch timeline visual
+                html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 20px 0;'>\n");
+                
+                // Current Epoch
+                html.append("<div style='background: rgba(59, 130, 246, 0.15); padding: 16px; border-radius: 8px; border-left: 3px solid #60a5fa;'>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-bottom: 8px;'>📡 Current Epoch</div>\n");
+                html.append("<div style='font-size: 1.8em; font-weight: 600; color: #60a5fa;'>").append(currentEpoch).append("</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-top: 8px;'>Live from beaconscan.com</div>\n");
+                html.append("</div>\n");
+                
+                // Finalized Epoch
+                html.append("<div style='background: rgba(52, 211, 153, 0.15); padding: 16px; border-radius: 8px; border-left: 3px solid #34d399;'>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-bottom: 8px;'>✅ Finalized Epoch</div>\n");
+                html.append("<div style='font-size: 1.8em; font-weight: 600; color: #34d399;'>").append(finalizedEpoch).append("</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-top: 8px;'>Safe to process</div>\n");
+                html.append("</div>\n");
+                
+                // Gap
+                String gapColor = epochsUntilFinality <= 2 ? "#34d399" : "#facc15";
+                html.append("<div style='background: rgba(250, 204, 21, 0.15); padding: 16px; border-radius: 8px; border-left: 3px solid ").append(gapColor).append(";'>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-bottom: 8px;'>⏳ Finality Gap</div>\n");
+                html.append("<div style='font-size: 1.8em; font-weight: 600; color: ").append(gapColor).append(";'>").append(epochsUntilFinality).append(" epochs</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.85em; margin-top: 8px;'>~").append(String.format("%.1f", epochsUntilFinality * 6.4)).append(" min until next batch</div>\n");
+                html.append("</div>\n");
+                
+                html.append("</div>\n");
+                
+                // EVM Verifier Stats
+                html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px;'>\n");
+                appendMiniCard(html, "⏳ Unverified", String.valueOf(pendingCount), "#94a3b8", "Awaiting EVM confirmation");
+                appendMiniCard(html, "✅ Verified", String.valueOf(verifiedCount), "#34d399", "Passed 3-checkpoint security");
+                appendMiniCard(html, "❌ Rejected", String.valueOf(rejectedCount), "#f87171", "Failed security checks");
+                html.append("</div>\n");
+                
+                // Backpressure indicator
+                if (backpressureActive) {
+                    html.append("<div style='margin-top: 16px; padding: 12px; background: rgba(239, 68, 68, 0.15); border-left: 3px solid #ef4444; border-radius: 8px;'>\n");
+                    html.append("<strong style='color: #fca5a5;'>⚠️  Backpressure Active</strong><br>\n");
+                    html.append("<span style='color: #fca5a5; font-size: 0.9em;'>").append(backpressurePending).append(" messages pending replication. System protecting itself from overload.</span>\n");
+                    html.append("</div>\n");
+                } else if (verifiedCount > 0) {
+                    html.append("<div style='margin-top: 16px; padding: 12px; background: rgba(52, 211, 153, 0.15); border-left: 3px solid #34d399; border-radius: 8px;'>\n");
+                    html.append("<strong style='color: #6ee7b7;'>✅ System Healthy</strong><br>\n");
+                    html.append("<span style='color: #6ee7b7; font-size: 0.9em;'>").append(verifiedCount).append(" proposals awaiting epoch finality. Aeron replication operating normally.</span>\n");
+                    html.append("</div>\n");
+                }
+                
+                html.append("</div>\n");
+            }
 
             // Connected Peers Card
             html.append("<div class='card'>\n");
@@ -522,6 +723,14 @@ public class DashboardHandler {
             html.append("<div class='card-caption'>").append(FormatUtils.escapeHtml(caption)).append("</div>");
         }
         html.append("</div>");
+    }
+    
+    private void appendMiniCard(StringBuilder html, String label, String value, String color, String caption) {
+        html.append("<div style='background: rgba(15,23,42,0.6); padding: 12px; border-radius: 6px; border-left: 3px solid ").append(color).append(";'>\n");
+        html.append("<div style='color: #94a3b8; font-size: 0.75em; margin-bottom: 6px;'>").append(FormatUtils.escapeHtml(label)).append("</div>\n");
+        html.append("<div style='font-size: 1.5em; font-weight: 600; color: ").append(color).append(";'>").append(FormatUtils.escapeHtml(value)).append("</div>\n");
+        html.append("<div style='color: #94a3b8; font-size: 0.75em; margin-top: 6px;'>").append(FormatUtils.escapeHtml(caption)).append("</div>\n");
+        html.append("</div>\n");
     }
 
     private String formatTimestamp(long epochMillis) {
