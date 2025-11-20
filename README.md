@@ -15,6 +15,10 @@ web sites and other demanding content applications.
 The Oak effort is a part of the Apache Jackrabbit project.
 Apache Jackrabbit is a project of the Apache Software Foundation.
 
+**Branch Note:** This `feature/blockchain-aem-poc` branch includes experimental
+consensus-based distributed Oak repository features. See `oak-segment-consensus/`
+for implementation details.
+
 Getting Started 
 ---------------
 
@@ -53,21 +57,22 @@ Components
 
 The build consists of the following main components:
 
-  - oak-parent        - parent POM
-  - oak-doc           - Oak documentation
-  - oak-commons       - shared utility code
-  - [oak-core][1]     - Oak repository API and implementation
-  - oak-jcr           - JCR binding for the Oak repository
-  - oak-sling         - integration with Apache Sling
-  - oak-http          - HTTP binding for Oak
-  - oak-lucene        - Lucene-based query index
-  - oak-run           - runnable jar packaging
-  - oak-pojosr        - integration with PojoSR
-  - oak-segment-tar   - TarMK API and implementation
-  - oak-upgrade       - tooling for upgrading Jackrabbit repositories to Oak
-  - oak-it            - integration tests
-    - oak-it/osgi     - integration tests for OSGi
-  - [oak-exercise][2] - Oak training material
+  - oak-parent           - parent POM
+  - oak-doc              - Oak documentation
+  - oak-commons          - shared utility code
+  - [oak-core][1]        - Oak repository API and implementation
+  - oak-jcr              - JCR binding for the Oak repository
+  - oak-sling            - integration with Apache Sling
+  - oak-http             - HTTP binding for Oak
+  - oak-lucene           - Lucene-based query index
+  - oak-run              - runnable jar packaging
+  - oak-pojosr           - integration with PojoSR
+  - oak-segment-tar      - TarMK API and implementation
+  - oak-segment-consensus - Distributed consensus layer (Aeron Cluster + Raft)
+  - oak-upgrade          - tooling for upgrading Jackrabbit repositories to Oak
+  - oak-it               - integration tests
+    - oak-it/osgi        - integration tests for OSGi
+  - [oak-exercise][2]    - Oak training material
 
   [1]: oak-api/README.md
   [2]: oak-exercise/README.md
