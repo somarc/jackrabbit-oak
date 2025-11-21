@@ -788,6 +788,12 @@ public class ConsensusApiHandler {
             contentNode.setProperty("signature", signature != null ? signature : "");
             contentNode.setProperty("source", "aeron-replicated");
             
+            // 🌟 GENESIS: If this is the genesis write, build the elaborate structure on ALL nodes
+            if ("genesis".equals(contentType)) {
+                log.info("🌟 Genesis write detected - building elaborate genesis structure on this node");
+                buildGenesisStructure(contentNode, message);
+            }
+            
             // 🎯 DETERMINISTIC STATE MACHINE: ALL nodes commit identically
             // Aeron guarantees: same messages, same order, on ALL nodes
             // Therefore: same processing = same HEAD (guaranteed!)
@@ -1391,6 +1397,112 @@ public class ConsensusApiHandler {
         
         json.append("]}");
         return json.toString();
+    }
+    
+    /**
+     * Build the elaborate genesis structure with all metadata, economics, innovations, etc.
+     * This is called on ALL nodes when they receive the genesis write through Aeron,
+     * ensuring perfect consistency.
+     * 
+     * @param genesisNode The genesis node to populate with child nodes
+     * @param message The genesis message (contains genesisValidator URL)
+     */
+    private void buildGenesisStructure(org.apache.jackrabbit.oak.spi.state.NodeBuilder genesisNode, String message) {
+        try {
+            // Extract selfUrl from message if available
+            String selfUrl = "http://localhost:8090"; // Default
+            if (message != null && message.contains("genesisValidator")) {
+                try {
+                    // Simple JSON parsing to extract genesisValidator
+                    int start = message.indexOf("genesisValidator\":\"") + 19;
+                    int end = message.indexOf("\"", start);
+                    if (start > 18 && end > start) {
+                        selfUrl = message.substring(start, end);
+                    }
+                } catch (Exception e) {
+                    log.debug("Could not parse genesisValidator from message, using default");
+                }
+            }
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // ECONOMIC MODEL
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder economics = genesisNode.child("economics");
+            economics.setProperty("jcr:primaryType", "nt:unstructured");
+            economics.setProperty("description", "Multi-tier transaction pricing model");
+            
+            // Priority Tier
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder priority = economics.child("priority-tier");
+            priority.setProperty("jcr:primaryType", "nt:unstructured");
+            priority.setProperty("price", "0.01 ETH");
+            priority.setProperty("finality", "~30 seconds");
+            priority.setProperty("delay", "0 epochs");
+            priority.setProperty("use-case", "Emergency updates, time-sensitive content");
+            priority.setProperty("fragmentation-cost", "High - individual commits");
+            
+            // Express Tier
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder express = economics.child("express-tier");
+            express.setProperty("jcr:primaryType", "nt:unstructured");
+            express.setProperty("price", "0.002 ETH");
+            express.setProperty("finality", "~6.4 minutes");
+            express.setProperty("delay", "1 epoch");
+            express.setProperty("use-case", "Regular updates, user-facing content");
+            express.setProperty("fragmentation-cost", "Medium - small batching window");
+            
+            // Standard Tier
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder standard = economics.child("standard-tier");
+            standard.setProperty("jcr:primaryType", "nt:unstructured");
+            standard.setProperty("price", "0.001 ETH");
+            standard.setProperty("finality", "~12.8 minutes");
+            standard.setProperty("delay", "2 epochs");
+            standard.setProperty("use-case", "Bulk content, scheduled updates, archival");
+            standard.setProperty("fragmentation-cost", "Low - maximum batching by wallet");
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // BITCOIN-TIGHT PRINCIPLES
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder bitcoinTight = genesisNode.child("bitcoin-tight-principles");
+            bitcoinTight.setProperty("jcr:primaryType", "nt:unstructured");
+            bitcoinTight.setProperty("philosophy", "Fail Loud, Fail Fast, Never Silently Corrupt");
+            bitcoinTight.setProperty("principle-1", "Singletons: One BeaconChainClient, one truth");
+            bitcoinTight.setProperty("principle-2", "Fail Loud: System.exit(1) on unrecoverable errors");
+            bitcoinTight.setProperty("principle-3", "Immutability: final fields, immutable state");
+            bitcoinTight.setProperty("principle-4", "Defensive Validation: Epochs never go backwards");
+            bitcoinTight.setProperty("principle-5", "Health Monitoring: /health endpoint + metrics");
+            bitcoinTight.setProperty("principle-6", "No Silent Failures: UncaughtExceptionHandler crashes JVM");
+            bitcoinTight.setProperty("inspiration", "Bitcoin Core, Apache Kafka, Ethereum Geth");
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // NETWORK
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder network = genesisNode.child("network");
+            network.setProperty("jcr:primaryType", "nt:unstructured");
+            network.setProperty("genesisValidator", selfUrl);
+            network.setProperty("transport", "Aeron UDP multicast + unicast");
+            network.setProperty("clusterFormation", "Automatic via Raft election");
+            network.setProperty("partition-tolerance", "Majority quorum required for writes");
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // INNOVATION SUMMARY
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder innovations = genesisNode.child("innovations");
+            innovations.setProperty("jcr:primaryType", "nt:unstructured");
+            innovations.setProperty("innovation-1", "First blockchain-backed AEM content repository");
+            innovations.setProperty("innovation-2", "Ethereum epochs as external time oracle for finality");
+            innovations.setProperty("innovation-3", "Wallet-scoped path architecture for segment isolation");
+            innovations.setProperty("innovation-4", "Economic model that incentivizes storage efficiency");
+            innovations.setProperty("innovation-5", "Bitcoin-tight reliability in Java enterprise stack");
+            innovations.setProperty("innovation-6", "Global read-only content via HTTP segment transfer");
+            innovations.setProperty("innovation-7", "Multi-tier transaction pricing with cryptographic payment");
+            innovations.setProperty("demo-date", "Garage Week - December 15, 2025");
+            innovations.setProperty("team", "Marc Hess + Claude Sonnet 4.5 (The Borg Collective)");
+            
+            log.info("✅ Genesis structure built successfully with {} child nodes", 4);
+            
+        } catch (Exception e) {
+            log.error("❌ Failed to build genesis structure", e);
+            // Don't throw - genesis properties are still valid, just missing elaborate structure
+        }
     }
 }
 
