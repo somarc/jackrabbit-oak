@@ -492,19 +492,10 @@ public class AeronConsensusEngine implements ClusteredService {
         } else {
             log.info("Starting fresh (no snapshot)");
             
-            // Deferred: Sync HEAD from leader after genesis is created
-            if (cluster.role() == Cluster.Role.FOLLOWER && peerUrls != null && !peerUrls.isEmpty()) {
-                log.info("Deferring HEAD sync - will check for genesis in background");
-                // Start background task to sync once genesis exists
-                new Thread(() -> {
-                    try {
-                        // Wait for genesis to be created by leader
-                        waitForGenesisAndSync();
-                    } catch (Exception e) {
-                        log.error("Failed deferred HEAD sync", e);
-                    }
-                }, "deferred-head-sync").start();
-            }
+            // Aeron Cluster's Raft replication handles genesis automatically
+            // When leader creates genesis, it's replicated via onSessionMessage() to all followers
+            // No manual HTTP segment sync needed - Aeron's consensus log ensures consistency
+            log.debug("Followers will receive genesis via Aeron replication (no manual sync needed)");
         }
         
         // Map Aeron Cluster role to our ValidatorRole
@@ -738,12 +729,12 @@ public class AeronConsensusEngine implements ClusteredService {
         if (length >= 8) {
             int rawTemplateId = buffer.getShort(offset, java.nio.ByteOrder.LITTLE_ENDIAN);
             int rawVersion = buffer.getShort(offset + 2, java.nio.ByteOrder.LITTLE_ENDIAN);
-            log.info("🔥 RAW INCOMING MESSAGE - templateId: {} (0x{}), version: {}, length: {}, session: {}, role: {}",
+            log.debug("🔥 RAW INCOMING MESSAGE - templateId: {} (0x{}), version: {}, length: {}, session: {}, role: {}",
                 rawTemplateId, Integer.toHexString(rawTemplateId), rawVersion, length, session.id(),
                 cluster != null ? cluster.role() : "UNKNOWN");
         }
         
-        log.info("🔍DEBUG_BATCH [RCV-1]: onSessionMessage() CALLED - session: {}, length: {}, role: {}", 
+        log.debug("🔍DEBUG_BATCH [RCV-1]: onSessionMessage() CALLED - session: {}, length: {}, role: {}", 
             session.id(), length, cluster != null ? cluster.role() : "UNKNOWN");
         log.debug("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}", 
             session.id(), length, cluster != null ? cluster.role() : "UNKNOWN", timestamp);
@@ -761,7 +752,7 @@ public class AeronConsensusEngine implements ClusteredService {
             org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.HeaderInfo headerInfo = 
                 org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.decode(buffer, offset);
             
-            log.info("🔍DEBUG_BATCH [RCV-2]: Header decoded - templateId: {} ({}), blockLength: {}", 
+            log.debug("🔍DEBUG_BATCH [RCV-2]: Header decoded - templateId: {} ({}), blockLength: {}", 
                 headerInfo.templateId,
                 headerInfo.templateId == 100 ? "WRITE_PROPOSAL" : 
                 headerInfo.templateId == 106 ? "WRITE_BATCH" : "UNKNOWN",
@@ -862,29 +853,29 @@ public class AeronConsensusEngine implements ClusteredService {
                     log.error("   Check GlobalStoreServer initialization to ensure callback is set");
                 }
             } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH) {
-                log.info("🔍DEBUG_BATCH [RCV-3]: BATCH BRANCH ENTERED - processing batch message");
+                log.debug("🔍DEBUG_BATCH [RCV-3]: BATCH BRANCH ENTERED - processing batch message");
                 
                 // Read JSON batch array from buffer
                 byte[] jsonBytes = new byte[headerInfo.blockLength];
                 buffer.getBytes(offset, jsonBytes);
                 String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
                 
-                log.info("🔍DEBUG_BATCH [RCV-4]: JSON read from buffer - size: {} bytes, first 100 chars: {}", 
+                log.debug("🔍DEBUG_BATCH [RCV-4]: JSON read from buffer - size: {} bytes, first 100 chars: {}", 
                     jsonBytes.length, json.substring(0, Math.min(100, json.length())));
                 
                 log.info("✈️  Processing replicated write BATCH via Aeron (templateId: {}, size: {} bytes)", headerInfo.templateId, headerInfo.blockLength);
                 
-                log.info("🔍DEBUG_BATCH [RCV-5]: Parsing batch JSON...");
+                log.debug("🔍DEBUG_BATCH [RCV-5]: Parsing batch JSON...");
                 
                 // Parse batch JSON: {"batch":[{...},{...}]}
                 int batchStart = json.indexOf("[");
                 int batchEnd = json.lastIndexOf("]");
                 
-                log.info("🔍DEBUG_BATCH [RCV-6]: JSON parse indices - batchStart: {}, batchEnd: {}", 
+                log.debug("🔍DEBUG_BATCH [RCV-6]: JSON parse indices - batchStart: {}, batchEnd: {}", 
                     batchStart, batchEnd);
                 
                 if (batchStart < 0 || batchEnd < 0) {
-                    log.error("🔍DEBUG_BATCH [RCV-7]: ❌ Invalid batch format - ABORTING");
+                    log.debug("🔍DEBUG_BATCH [RCV-7]: ❌ Invalid batch format - ABORTING");
                     log.error("❌ Invalid batch format: {}", json);
                     return;
                 }
@@ -893,7 +884,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 String batchContent = json.substring(batchStart + 1, batchEnd);
                 java.util.List<String> proposals = new java.util.ArrayList<>();
                 
-                log.info("🔍DEBUG_BATCH [RCV-8]: batchContent length: {} chars", batchContent.length());
+                log.debug("🔍DEBUG_BATCH [RCV-8]: batchContent length: {} chars", batchContent.length());
                 
                 int depth = 0;
                 StringBuilder currentProposal = new StringBuilder();
@@ -914,12 +905,12 @@ public class AeronConsensusEngine implements ClusteredService {
                     }
                 }
                 
-                log.info("🔍DEBUG_BATCH [RCV-9]: Batch parsing COMPLETE - found {} proposals", proposals.size());
+                log.debug("🔍DEBUG_BATCH [RCV-9]: Batch parsing COMPLETE - found {} proposals", proposals.size());
                 log.debug("   Batch contains {} proposals", proposals.size());
                 
                 // Process each proposal in the batch
                 int processed = 0;
-                log.info("🔍DEBUG_BATCH [RCV-10]: Starting to process {} proposals...", proposals.size());
+                log.debug("🔍DEBUG_BATCH [RCV-10]: Starting to process {} proposals...", proposals.size());
                 
                 for (String proposalJson : proposals) {
                     String walletAddress = extractJsonField(proposalJson, "walletAddress");
@@ -933,37 +924,37 @@ public class AeronConsensusEngine implements ClusteredService {
                         continue;
                     }
                     
-                    log.info("🔍DEBUG_BATCH [RCV-11]: Processing proposal {} of {} - wallet: {}, path: {}", 
+                    log.debug("🔍DEBUG_BATCH [RCV-11]: Processing proposal {} of {} - wallet: {}, path: {}", 
                         processed + 1, proposals.size(), walletAddress, path);
                     
                     // Apply write to FileStore via callback
                     if (writeCallback != null) {
-                        log.info("🔍DEBUG_BATCH [RCV-12]: Calling writeCallback.applyWrite()...");
+                        log.debug("🔍DEBUG_BATCH [RCV-12]: Calling writeCallback.applyWrite()...");
                         writeCallback.applyWrite(walletAddress, path, contentType, message, signature);
-                        log.info("🔍DEBUG_BATCH [RCV-13]: writeCallback.applyWrite() COMPLETE");
+                        log.debug("🔍DEBUG_BATCH [RCV-13]: writeCallback.applyWrite() COMPLETE");
                         
                         // Track acknowledgment for backpressure management
                         backpressureManager.incrementAcknowledged();
                         
                         processed++;
                     } else {
-                        log.error("🔍DEBUG_BATCH [RCV-14]: ❌ writeCallback is NULL!");
+                        log.debug("🔍DEBUG_BATCH [RCV-14]: ❌ writeCallback is NULL!");
                     }
                 }
                 
-                log.info("🔍DEBUG_BATCH [RCV-15]: ✅ ALL PROPOSALS PROCESSED - processed: {}, total: {}", 
+                log.debug("🔍DEBUG_BATCH [RCV-15]: ✅ ALL PROPOSALS PROCESSED - processed: {}, total: {}", 
                     processed, proposals.size());
                 
                 // 📊 Track replication latency for the batch
                 Long ingressTimestampNanos = ingressTimestamps.poll();
                 if (ingressTimestampNanos != null) {
                     performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
-                    log.info("🔍DEBUG_BATCH [RCV-16]: Tracked replication latency");
+                    log.debug("🔍DEBUG_BATCH [RCV-16]: Tracked replication latency");
                 }
                 
                 // Track write throughput
                 long currentWriteCount = totalWritesProcessed.addAndGet(processed);
-                log.info("🔍DEBUG_BATCH [RCV-17]: Updated metrics - currentWriteCount: {}", currentWriteCount);
+                log.debug("🔍DEBUG_BATCH [RCV-17]: Updated metrics - currentWriteCount: {}", currentWriteCount);
                 long currentTime = System.currentTimeMillis();
                 
                 // Update queue depths for metrics
@@ -1708,13 +1699,13 @@ public class AeronConsensusEngine implements ClusteredService {
             return 0;
         }
         
-        log.info("🔍DEBUG_BATCH [1]: sendWriteBatchThroughIngress() ENTRY - batch size: {}, role: {}", 
+        log.debug("🔍DEBUG_BATCH [1]: sendWriteBatchThroughIngress() ENTRY - batch size: {}, role: {}", 
             proposals.size(), cluster != null ? cluster.role() : "NO_CLUSTER");
         
         // Ensure internal cluster client is created (lazy initialization)
         ensureInternalClusterClient();
         
-        log.info("🔍DEBUG_BATCH [2]: After ensureInternalClusterClient() - client available: {}", 
+        log.debug("🔍DEBUG_BATCH [2]: After ensureInternalClusterClient() - client available: {}", 
             internalClusterClient != null);
         
         // 🔍 GROK DIAGNOSTIC: Check client/session state for BATCH path
@@ -1726,12 +1717,12 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         
         if (internalClusterClient == null) {
-            log.error("🔍DEBUG_BATCH [3]: ❌ ABORTING - internalClusterClient is NULL");
+            log.debug("🔍DEBUG_BATCH [3]: ❌ ABORTING - internalClusterClient is NULL");
             log.error("❌ Internal AeronCluster client not available - cannot send batch write through ingress");
             return 0;
         }
         
-        log.info("🔍DEBUG_BATCH [4]: Building JSON batch with {} proposals", proposals.size());
+        log.debug("🔍DEBUG_BATCH [4]: Building JSON batch with {} proposals", proposals.size());
         
         try {
             // Build JSON array of write proposals
@@ -1758,14 +1749,14 @@ public class AeronConsensusEngine implements ClusteredService {
             
             byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
             
-            log.info("🔍DEBUG_BATCH [5]: JSON built - size: {} bytes, first 100 chars: {}", 
+            log.debug("🔍DEBUG_BATCH [5]: JSON built - size: {} bytes, first 100 chars: {}", 
                 jsonBytes.length, json.substring(0, Math.min(100, json.length())));
             
             // ✈️ AERON SBE MESSAGE FORMAT: Encode message with SBE header
             int blockLength = jsonBytes.length;
             int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH; // New template ID for batches
             
-            log.info("🔍DEBUG_BATCH [6]: Encoding SBE header - blockLength: {}, templateId: {} (WRITE_BATCH)", 
+            log.debug("🔍DEBUG_BATCH [6]: Encoding SBE header - blockLength: {}, templateId: {} (WRITE_BATCH)", 
                 blockLength, templateId);
             
             // Allocate buffer: SBE header (8 bytes) + JSON payload
@@ -1782,17 +1773,17 @@ public class AeronConsensusEngine implements ClusteredService {
             messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
             
             // ✈️ AERON CLUSTER: Send batch message through internal AeronCluster client
-            log.info("🔍DEBUG_BATCH [7]: About to call internalClusterClient.offer() - totalLength: {} bytes", totalLength);
+            log.debug("🔍DEBUG_BATCH [7]: About to call internalClusterClient.offer() - totalLength: {} bytes", totalLength);
             
             try {
                 // Send message through AeronCluster client ingress
                 idleStrategy.reset();
                 long result;
                 int retries = 0;
-                log.info("🔍DEBUG_BATCH [8]: Entering offer loop...");
+                log.debug("🔍DEBUG_BATCH [8]: Entering offer loop...");
                 
                 while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
-                    log.info("🔍DEBUG_BATCH [9]: offer() returned: {}, retry: {}", result, retries);
+                    log.debug("🔍DEBUG_BATCH [9]: offer() returned: {}, retry: {}", result, retries);
                     if (result == io.aeron.Publication.BACK_PRESSURED) {
                         idleStrategy.idle();
                         retries++;
@@ -1814,20 +1805,20 @@ public class AeronConsensusEngine implements ClusteredService {
                     }
                 }
                 
-                log.info("🔍DEBUG_BATCH [10]: offer() SUCCESS - result: {}", result);
+                log.debug("🔍DEBUG_BATCH [10]: offer() SUCCESS - result: {}", result);
                 
                 // 📊 Track ingress timestamp for Raft latency calculation
                 ingressTimestamps.offer(System.nanoTime());
                 performanceMetrics.recordMessageIngressed();
                 
-                log.info("🔍DEBUG_BATCH [11]: Tracked ingress timestamp and metrics");
+                log.debug("🔍DEBUG_BATCH [11]: Tracked ingress timestamp and metrics");
                 
                 // 🚦 BACKPRESSURE: Do NOT increment here - ProposalQueueManagerOptimized
                 // already calls incrementSent() for each proposal before calling this method
                 // (see ProposalQueueManagerOptimized line 507)
                 // Double-counting would cause false backpressure!
                 
-                log.info("🔍DEBUG_BATCH [12]: ✅ COMPLETE - Batch sent to Aeron ingress, {} proposals will replicate via Raft", proposals.size());
+                log.debug("🔍DEBUG_BATCH [12]: ✅ COMPLETE - Batch sent to Aeron ingress, {} proposals will replicate via Raft", proposals.size());
                 log.debug("✅ Batch write sent through AeronCluster.offer() - {} proposals will replicate via Raft", proposals.size());
                 return proposals.size();
             } catch (Exception e) {
@@ -3655,8 +3646,9 @@ public class AeronConsensusEngine implements ClusteredService {
             
             log.info("Genesis created successfully - HEAD: {}, Network ready for wallet-owned writes", newHead);
             
-            // Broadcast HEAD to followers so they know to sync
-            broadcastHeadToFollowers(newHead);
+            // Aeron Cluster's Raft replication handles state sync automatically
+            // Followers will receive the genesis write via onSessionMessage() replication
+            // No manual HEAD broadcast needed - Aeron's consensus log ensures consistency
             
         } catch (Exception e) {
             log.error("Exception during genesis creation", e);
