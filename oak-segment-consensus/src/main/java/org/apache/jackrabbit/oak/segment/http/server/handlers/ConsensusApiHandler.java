@@ -16,16 +16,11 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
-import org.apache.jackrabbit.oak.segment.consensus.Vote;
-import org.apache.jackrabbit.oak.segment.consensus.WriteProposal;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
-import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
-import org.apache.jackrabbit.oak.segment.http.server.model.WriteMetadata;
-import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusState;
 import org.slf4j.Logger;
@@ -36,9 +31,9 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
 /**
- * Handler for consensus API endpoints (`/v1/propose`, `/v1/vote`, `/v1/propose-write`, `/v1/propose-delete`).
- * This class encapsulates the logic for handling write proposals, votes, and signed write/delete transactions
- * in the consensus network.
+ * Handler for consensus API endpoints (`/v1/propose-write`, `/v1/consensus/status`, `/v1/proposals/*`).
+ * This class encapsulates the logic for handling signed write transactions, proposal status queries,
+ * and GC cost estimation in the Aeron-based consensus network.
  */
 public class ConsensusApiHandler {
 
@@ -50,22 +45,6 @@ public class ConsensusApiHandler {
         this.context = context;
     }
 
-    /**
-     * Handle POST /v1/propose - Receive write proposal from peer
-     * @deprecated This endpoint was specific to the removed ConsensusEngine. Use Aeron or Leader consensus instead.
-     */
-    public void handleWriteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        response.sendError(HttpServletResponse.SC_GONE, "This endpoint is no longer supported. ConsensusEngine has been removed. Use Aeron or Leader consensus.");
-    }
-    
-    /**
-     * Handle POST /v1/vote - Receive vote from peer
-     * @deprecated This endpoint was specific to the removed ConsensusEngine. Use Aeron or Leader consensus instead.
-     */
-    public void handleVote(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        response.sendError(HttpServletResponse.SC_GONE, "This endpoint is no longer supported. ConsensusEngine has been removed. Use Aeron or Leader consensus.");
-    }
-    
     /**
      * Handle POST /v1/propose-write - Signed write transaction endpoint
      * 
@@ -209,10 +188,12 @@ public class ConsensusApiHandler {
                     log.warn("🚫 Write rejected: Wallet mismatch for client {}", clientId);
                     log.warn("   Requested wallet: {}", normalizedWallet);
                     log.warn("   Registered wallet: {}", registeredWallet);
+                    String registeredShard = WalletPathUtil.getShardRoot(registeredWallet);
+                    String attemptedShard = WalletPathUtil.getShardRoot(normalizedWallet);
                     response.sendError(HttpServletResponse.SC_FORBIDDEN, 
-                        String.format("Path enforcement violation: Client %s can only write to /oak-chain/content/%s/, " +
-                                     "but attempted to write to /oak-chain/content/%s/", 
-                                     clientId, registeredWallet, normalizedWallet));
+                        String.format("Path enforcement violation: Client %s can only write to shard %s, " +
+                                     "but attempted to write to shard %s", 
+                                     clientId, registeredShard, attemptedShard));
                     return;
                 }
             } else {
@@ -278,15 +259,14 @@ public class ConsensusApiHandler {
                 return;
             }
             
-            // Build sharded path
-            String shardedPath = WalletPathUtil.toShardedPath(wallet.toLowerCase());
-            log.debug("🪣 Using sharded path: {}", shardedPath);
+            // Build wallet-scoped content path
+            String shardId = WalletPathUtil.getShardId(normalizedWallet);
+            String contentRoot = WalletPathUtil.getContentPath(normalizedWallet);
+            log.debug("🪣 Using wallet shard: {} (contentRoot: {})", shardId, contentRoot);
             
-            String addr = normalizedWallet.replace("0x", "");
+            // Generate content ID and full path
             String contentId = contentType + "-" + System.currentTimeMillis();
-            String fullPath = "/oak-chain/content/" + addr.substring(0, 2) + "/" + 
-                            addr.substring(2, 4) + "/" + addr.substring(4, 6) + "/" + 
-                            normalizedWallet + "/" + contentId;
+            String fullPath = contentRoot + "/" + contentId;
             
             // Generate proposal ID
             String proposalId = java.util.UUID.randomUUID().toString();
@@ -423,12 +403,19 @@ public class ConsensusApiHandler {
      * 
      * <p>Allows Sling authors to propose deletion of content they own.
      * Ownership is verified by checking that the content path is under
-     * /oak-chain/content/{wallet}/ and that the wallet matches the registered client.</p>
+     * the wallet's shard root (/oak-chain/{shard}/) and that the wallet matches the registered client.</p>
+     * 
+     * <p><strong>Path Structure:</strong>
+     * <pre>
+     * /oak-chain/{shard}/content/...  ← Wallet-owned content
+     * /oak-chain/{shard}/conf/...     ← Wallet-owned config
+     * /oak-chain/{shard}/apps/...     ← Wallet-owned apps (future)
+     * </pre>
      * 
      * <p>Parameters:
      *   - wallet: Ethereum wallet address (must match registered client)
      *   - signature: Signed message (wallet:deleteId:contentPath)
-     *   - contentPath: Path to content to delete (must be under /oak-chain/content/{wallet}/)
+     *   - contentPath: Path to content to delete (must be under /oak-chain/{shard}/)
      *   - clientId: Client identifier (from X-Client-Id header or parameter)</p>
      */
     public void handleDeleteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -535,16 +522,16 @@ public class ConsensusApiHandler {
                 }
             }
             
-            // Verify path ownership: must be under /oak-chain/content/{wallet}/
-            String expectedPrefix = "/oak-chain/content/" + normalizedWallet + "/";
-            if (!contentPath.toLowerCase().startsWith(expectedPrefix)) {
+            // Verify path ownership: must be under /oak-chain/{shard}/
+            String shardRoot = WalletPathUtil.getShardRoot(normalizedWallet);
+            if (!contentPath.toLowerCase().startsWith(shardRoot + "/")) {
                 log.warn("🚫 Delete proposal rejected: Path ownership violation");
                 log.warn("   Content path: {}", contentPath);
-                log.warn("   Expected prefix: {}", expectedPrefix);
+                log.warn("   Expected shard root: {}", shardRoot);
                 response.sendError(HttpServletResponse.SC_FORBIDDEN, 
                     String.format("Path ownership violation: Content at %s does not belong to wallet %s. " +
-                                 "Only content under /oak-chain/content/%s/ can be deleted.",
-                                 contentPath, wallet, wallet));
+                                 "Only content under %s/ can be deleted.",
+                                 contentPath, wallet, shardRoot));
                 return;
             }
             
@@ -573,67 +560,6 @@ public class ConsensusApiHandler {
             log.error("❌ Delete proposal failed", e);
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Delete proposal failed: " + e.getMessage());
         }
-    }
-    
-    /**
-     * Parse a WriteProposal from JSON.
-     */
-    private WriteProposal parseProposal(String json) {
-        WriteProposal proposal = new WriteProposal();
-        
-        // Extract fields (simple string parsing for Phase 1)
-        proposal.setProposalId(JsonParser.extractField(json, "proposalId"));
-        proposal.setProposerUrl(JsonParser.extractField(json, "proposerUrl"));
-        proposal.setPreviousHead(JsonParser.extractField(json, "previousHead"));
-        proposal.setNewHead(JsonParser.extractField(json, "newHead"));
-        proposal.setAuthor(JsonParser.extractField(json, "author"));
-        
-        String timestamp = JsonParser.extractField(json, "timestamp");
-        if (timestamp != null) {
-            proposal.setTimestamp(Long.parseLong(timestamp));
-        }
-        
-        String mockPayment = JsonParser.extractField(json, "mockPaymentVerified");
-        proposal.setMockPaymentVerified(mockPayment == null || "true".equals(mockPayment));
-        
-        // TODO: Parse segments array
-        
-        return proposal;
-    }
-    
-    /**
-     * Parse a Vote from JSON.
-     */
-    private Vote parseVote(String json) {
-        Vote vote = new Vote();
-        
-        vote.setProposalId(JsonParser.extractField(json, "proposalId"));
-        vote.setValidatorUrl(JsonParser.extractField(json, "validatorUrl"));
-        
-        String voteType = JsonParser.extractField(json, "voteType");
-        vote.setVoteType("ACCEPT".equals(voteType) ? Vote.VoteType.ACCEPT : Vote.VoteType.REJECT);
-        
-        vote.setReason(JsonParser.extractField(json, "reason"));
-        
-        String timestamp = JsonParser.extractField(json, "timestamp");
-        if (timestamp != null) {
-            vote.setTimestamp(Long.parseLong(timestamp));
-        }
-        
-        return vote;
-    }
-    
-    /**
-     * Convert a Vote to JSON string.
-     */
-    private String voteToJson(Vote v) {
-        return "{" +
-            "\"proposalId\":\"" + v.getProposalId() + "\"," +
-            "\"validatorUrl\":\"" + v.getValidatorUrl() + "\"," +
-            "\"voteType\":\"" + v.getVoteType() + "\"," +
-            "\"reason\":\"" + (v.getReason() != null ? v.getReason() : "") + "\"," +
-            "\"timestamp\":" + v.getTimestamp() +
-            "}";
     }
     
     /**
@@ -815,26 +741,43 @@ public class ConsensusApiHandler {
             String previousHead = context.fileStore.getHead().getRecordId().toString();
             log.debug("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
             
-            // Parse path: /oak-chain/content/{L1}/{L2}/{L3}/{wallet}/{contentId}
+            // Parse path: /oak-chain/{shard}/content/{contentId}
+            // Example: /oak-chain/74-2d-35/content/page-1234567890
             String[] pathParts = path.split("/");
-            if (pathParts.length < 6) {
-                log.error("❌ Invalid path format: {}", path);
+            if (pathParts.length < 4) {
+                log.error("❌ Invalid path format: {} (expected: /oak-chain/{shard}/content/...)", path);
                 return;
             }
             
-            // Build node structure
+            // Build node structure using wallet-scoped paths
             org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = context.nodeStore.getRoot().builder();
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder walletPath = rootBuilder
-                .child("oak-chain")
-                .child("content")
-                .child(pathParts[3])  // L1
-                .child(pathParts[4])  // L2
-                .child(pathParts[5])  // L3
-                .child(pathParts[6]); // Wallet
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder current = rootBuilder;
             
-            // Create content node
-            String contentId = pathParts.length > 7 ? pathParts[7] : (contentType + "-" + System.currentTimeMillis());
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder contentNode = walletPath.child(contentId);
+            // Navigate to parent path (all parts except the last one)
+            // Track wallet node for metadata enrichment
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder walletNode = null;
+            String walletNodeName = null;
+            
+            for (int i = 1; i < pathParts.length - 1; i++) {
+                if (!pathParts[i].isEmpty()) {
+                    current = current.child(pathParts[i]);
+                    
+                    // Detect wallet node (matches pattern: 0x[a-f0-9]{40})
+                    if (pathParts[i].matches("0x[a-f0-9]{40}")) {
+                        walletNode = current;
+                        walletNodeName = pathParts[i];
+                    }
+                }
+            }
+            
+            // Enrich wallet node with metadata (if this is the first time we're seeing it)
+            if (walletNode != null && walletNodeName != null) {
+                enrichWalletNode(walletNode, walletNodeName, walletAddress);
+            }
+            
+            // Create content node (last path part)
+            String contentId = pathParts[pathParts.length - 1];
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder contentNode = current.child(contentId);
             
             // Set properties
             contentNode.setProperty("jcr:primaryType", "nt:unstructured");
@@ -882,6 +825,76 @@ public class ConsensusApiHandler {
         } catch (Exception e) {
             log.error("❌ Failed to apply replicated write", e);
             throw new RuntimeException("Failed to apply replicated write", e);
+        }
+    }
+    
+    /**
+     * Enrich wallet node with metadata about the wallet owner.
+     * 
+     * This method adds rich metadata to the wallet node itself (the node representing
+     * the Ethereum address) including:
+     * - Wallet address
+     * - Creation timestamp
+     * - Last updated timestamp
+     * - Content statistics (number of content items created)
+     * - Owner information (ENS name, if available - future feature)
+     * 
+     * Path example: /oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148
+     * 
+     * @param walletNode The NodeBuilder for the wallet node
+     * @param walletNodeName The wallet address (0x...)
+     * @param walletAddress The normalized wallet address from the proposal
+     */
+    private void enrichWalletNode(org.apache.jackrabbit.oak.spi.state.NodeBuilder walletNode, 
+                                   String walletNodeName, String walletAddress) {
+        try {
+            // Check if this is a new wallet node (no properties set yet)
+            boolean isNewWallet = !walletNode.hasProperty("wallet");
+            
+            if (isNewWallet) {
+                log.info("🆕 Creating new wallet node with metadata: {}", walletNodeName);
+                
+                // Set wallet metadata
+                walletNode.setProperty("jcr:primaryType", "nt:unstructured");
+                walletNode.setProperty("wallet", walletAddress);
+                walletNode.setProperty("walletCreated", System.currentTimeMillis());
+                walletNode.setProperty("nodeType", "wallet-root");
+                walletNode.setProperty("description", "Wallet-scoped content root for " + walletAddress);
+                
+                // Initialize statistics
+                walletNode.setProperty("contentCount", 0L);
+                walletNode.setProperty("totalWrites", 0L);
+                walletNode.setProperty("lastWrite", System.currentTimeMillis());
+                
+                // Future: ENS name lookup
+                // walletNode.setProperty("ensName", lookupENS(walletAddress));
+                
+                // Future: On-chain verification
+                // walletNode.setProperty("verifiedOnChain", false);
+                
+                log.debug("✅ Wallet node metadata initialized: {}", walletAddress);
+            } else {
+                // Update existing wallet node metadata
+                long contentCount = walletNode.getProperty("contentCount") != null 
+                    ? walletNode.getProperty("contentCount").getValue(org.apache.jackrabbit.oak.api.Type.LONG) 
+                    : 0L;
+                long totalWrites = walletNode.getProperty("totalWrites") != null 
+                    ? walletNode.getProperty("totalWrites").getValue(org.apache.jackrabbit.oak.api.Type.LONG) 
+                    : 0L;
+                
+                // Increment counters
+                walletNode.setProperty("contentCount", contentCount + 1);
+                walletNode.setProperty("totalWrites", totalWrites + 1);
+                walletNode.setProperty("lastWrite", System.currentTimeMillis());
+                
+                log.debug("📊 Wallet node updated: {} (contentCount: {}, totalWrites: {})", 
+                    walletAddress, contentCount + 1, totalWrites + 1);
+            }
+        } catch (Exception e) {
+            // Don't fail the write if metadata enrichment fails
+            // This is nice-to-have, not critical
+            log.warn("⚠️  Failed to enrich wallet node metadata for {}: {}", 
+                walletAddress, e.getMessage());
         }
     }
     
@@ -1163,6 +1176,221 @@ public class ConsensusApiHandler {
         } catch (Exception e) {
             log.warn("Failed to track fragmentation for entity {}: {}", walletAddress, e.getMessage());
         }
+    }
+    
+    /**
+     * Query wallet statistics - GET /v1/wallets/stats
+     * Returns aggregated stats for all wallets or specific wallet
+     */
+    public void handleWalletStats(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String wallet = request.getParameter("wallet");
+        
+        try {
+            response.setContentType("application/json");
+            StringBuilder json = new StringBuilder();
+            
+            if (wallet != null && !wallet.isEmpty()) {
+                // Single wallet stats
+                json.append(queryWalletNode(wallet));
+            } else {
+                // All wallets (top 100 by contentCount)
+                json.append(queryTopWallets());
+            }
+            
+            response.getWriter().write(json.toString());
+            
+        } catch (Exception e) {
+            log.error("Failed to query wallet stats", e);
+            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            response.getWriter().write("{\"error\":\"" + FormatUtils.escapeJson(e.getMessage()) + "\"}");
+        }
+    }
+    
+    /**
+     * Query content by wallet - GET /v1/wallets/{wallet}/content
+     * Returns content items for a specific wallet
+     */
+    public void handleWalletContent(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String wallet = request.getParameter("wallet");
+        
+        if (wallet == null || wallet.isEmpty()) {
+            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            response.getWriter().write("{\"error\":\"Missing wallet parameter\"}");
+            return;
+        }
+        
+        try {
+            response.setContentType("application/json");
+            String json = queryWalletContent(wallet);
+            response.getWriter().write(json);
+            
+        } catch (Exception e) {
+            log.error("Failed to query wallet content", e);
+            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            response.getWriter().write("{\"error\":\"" + FormatUtils.escapeJson(e.getMessage()) + "\"}");
+        }
+    }
+    
+    /**
+     * Query a single wallet node and return its metadata
+     */
+    private String queryWalletNode(String walletAddress) {
+        try {
+            // Build wallet path
+            String[] levels = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.getShardLevels(walletAddress);
+            String walletPath = String.format("/oak-chain/%s/%s/%s/%s", levels[0], levels[1], levels[2], walletAddress);
+            
+            // Get wallet node
+            org.apache.jackrabbit.oak.spi.state.NodeState root = context.nodeStore.getRoot();
+            org.apache.jackrabbit.oak.spi.state.NodeState walletNode = root.getChildNode("oak-chain")
+                .getChildNode(levels[0])
+                .getChildNode(levels[1])
+                .getChildNode(levels[2])
+                .getChildNode(walletAddress);
+            
+            if (!walletNode.exists()) {
+                return "{\"error\":\"Wallet not found\"}";
+            }
+            
+            // Build JSON
+            StringBuilder json = new StringBuilder("{");
+            json.append("\"wallet\":\"").append(FormatUtils.escapeJson(walletAddress)).append("\",");
+            json.append("\"path\":\"").append(FormatUtils.escapeJson(walletPath)).append("\",");
+            
+            if (walletNode.hasProperty("nodeType")) {
+                json.append("\"nodeType\":\"").append(FormatUtils.escapeJson(walletNode.getProperty("nodeType").getValue(org.apache.jackrabbit.oak.api.Type.STRING))).append("\",");
+            }
+            if (walletNode.hasProperty("walletCreated")) {
+                json.append("\"walletCreated\":").append(walletNode.getProperty("walletCreated").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+            }
+            if (walletNode.hasProperty("lastWrite")) {
+                json.append("\"lastWrite\":").append(walletNode.getProperty("lastWrite").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+            }
+            if (walletNode.hasProperty("contentCount")) {
+                json.append("\"contentCount\":").append(walletNode.getProperty("contentCount").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+            }
+            if (walletNode.hasProperty("totalWrites")) {
+                json.append("\"totalWrites\":").append(walletNode.getProperty("totalWrites").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+            }
+            if (walletNode.hasProperty("description")) {
+                json.append("\"description\":\"").append(FormatUtils.escapeJson(walletNode.getProperty("description").getValue(org.apache.jackrabbit.oak.api.Type.STRING))).append("\"");
+            }
+            
+            json.append("}");
+            return json.toString();
+            
+        } catch (Exception e) {
+            log.error("Failed to query wallet node: {}", walletAddress, e);
+            return "{\"error\":\"" + FormatUtils.escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+    
+    /**
+     * Query top wallets by content count
+     */
+    private String queryTopWallets() {
+        StringBuilder json = new StringBuilder("{\"wallets\":[");
+        boolean first = true;
+        
+        try {
+            // Traverse /oak-chain tree and collect wallet metadata
+            org.apache.jackrabbit.oak.spi.state.NodeState root = context.nodeStore.getRoot();
+            org.apache.jackrabbit.oak.spi.state.NodeState oakChain = root.getChildNode("oak-chain");
+            
+            if (oakChain.exists()) {
+                // Level 1
+                for (org.apache.jackrabbit.oak.spi.state.ChildNodeEntry l1 : oakChain.getChildNodeEntries()) {
+                    // Level 2
+                    for (org.apache.jackrabbit.oak.spi.state.ChildNodeEntry l2 : l1.getNodeState().getChildNodeEntries()) {
+                        // Level 3
+                        for (org.apache.jackrabbit.oak.spi.state.ChildNodeEntry l3 : l2.getNodeState().getChildNodeEntries()) {
+                            // Wallets
+                            for (org.apache.jackrabbit.oak.spi.state.ChildNodeEntry wallet : l3.getNodeState().getChildNodeEntries()) {
+                                String walletName = wallet.getName();
+                                if (walletName.startsWith("0x")) {
+                                    org.apache.jackrabbit.oak.spi.state.NodeState walletNode = wallet.getNodeState();
+                                    
+                                    if (!first) json.append(",");
+                                    first = false;
+                                    
+                                    json.append("{");
+                                    json.append("\"wallet\":\"").append(FormatUtils.escapeJson(walletName)).append("\",");
+                                    
+                                    if (walletNode.hasProperty("contentCount")) {
+                                        json.append("\"contentCount\":").append(walletNode.getProperty("contentCount").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+                                    }
+                                    if (walletNode.hasProperty("totalWrites")) {
+                                        json.append("\"totalWrites\":").append(walletNode.getProperty("totalWrites").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+                                    }
+                                    if (walletNode.hasProperty("lastWrite")) {
+                                        json.append("\"lastWrite\":").append(walletNode.getProperty("lastWrite").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
+                                    }
+                                    json.append("}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            log.error("Failed to query top wallets", e);
+        }
+        
+        json.append("]}");
+        return json.toString();
+    }
+    
+    /**
+     * Query content items for a wallet
+     */
+    private String queryWalletContent(String walletAddress) {
+        StringBuilder json = new StringBuilder("{\"content\":[");
+        boolean first = true;
+        
+        try {
+            // Build wallet path
+            String[] levels = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.getShardLevels(walletAddress);
+            
+            // Get wallet content node
+            org.apache.jackrabbit.oak.spi.state.NodeState root = context.nodeStore.getRoot();
+            org.apache.jackrabbit.oak.spi.state.NodeState contentNode = root.getChildNode("oak-chain")
+                .getChildNode(levels[0])
+                .getChildNode(levels[1])
+                .getChildNode(levels[2])
+                .getChildNode(walletAddress)
+                .getChildNode("content");
+            
+            if (contentNode.exists()) {
+                // Traverse content children
+                for (org.apache.jackrabbit.oak.spi.state.ChildNodeEntry entry : contentNode.getChildNodeEntries()) {
+                    org.apache.jackrabbit.oak.spi.state.NodeState item = entry.getNodeState();
+                    
+                    if (!first) json.append(",");
+                    first = false;
+                    
+                    json.append("{");
+                    json.append("\"name\":\"").append(FormatUtils.escapeJson(entry.getName())).append("\"");
+                    
+                    if (item.hasProperty("contentType")) {
+                        json.append(",\"contentType\":\"").append(FormatUtils.escapeJson(item.getProperty("contentType").getValue(org.apache.jackrabbit.oak.api.Type.STRING))).append("\"");
+                    }
+                    if (item.hasProperty("timestamp")) {
+                        json.append(",\"timestamp\":").append(item.getProperty("timestamp").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
+                    }
+                    if (item.hasProperty("message")) {
+                        json.append(",\"message\":\"").append(FormatUtils.escapeJson(item.getProperty("message").getValue(org.apache.jackrabbit.oak.api.Type.STRING))).append("\"");
+                    }
+                    json.append("}");
+                }
+            }
+            
+        } catch (Exception e) {
+            log.error("Failed to query wallet content: {}", walletAddress, e);
+        }
+        
+        json.append("]}");
+        return json.toString();
     }
 }
 

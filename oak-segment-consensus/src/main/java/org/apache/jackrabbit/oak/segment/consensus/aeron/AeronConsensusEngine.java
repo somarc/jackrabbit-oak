@@ -130,8 +130,10 @@ public class AeronConsensusEngine implements ClusteredService {
     private IdleStrategy idleStrategy;
     
     // ✈️ AERON NATIVE: Ingress channel URI for client connections
-    // For same-process communication, we use IPC (more efficient than UDP)
-    private String ingressChannelUri = "aeron:ipc?term-length=64k";
+    // For distributed cluster communication, we use UDP
+    // Using default term length (128MB) for production WAN compatibility
+    // Sufficient for high-throughput, concurrent write workloads
+    private String ingressChannelUri = "aeron:udp";
     
     // ✈️ AERON NATIVE: Media driver directory name (needed for client connections)
     private String aeronDirectoryName = null;
@@ -231,14 +233,8 @@ public class AeronConsensusEngine implements ClusteredService {
         // Build node ID to URL mapping (will be populated when cluster starts)
         // This allows us to map Aeron Cluster leaderMemberId to validator URL
         
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("🚀 Aeron Consensus Engine Initializing");
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("   Consensus: Aeron Cluster (Raft)");
-        log.info("   Self URL: {}", selfUrl);
-        log.info("   Peers: {}", peerUrls.size());
-        log.info("   Wallet: {}", wallet.getWalletAddress());
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("Aeron Consensus Engine initializing - Consensus: Aeron Cluster (Raft), Self: {}, Peers: {}, Wallet: {}", 
+            selfUrl, peerUrls.size(), wallet.getWalletAddress());
     }
     
     /**
@@ -264,9 +260,9 @@ public class AeronConsensusEngine implements ClusteredService {
      * ✈️ AERON NATIVE: Set ingress channel URI for client connections.
      * 
      * This is the channel URI that clients use to connect to the cluster's ingress.
-     * For same-process communication, IPC is recommended (more efficient than UDP).
+     * For distributed cluster communication, UDP is required for multi-node Raft consensus.
      * 
-     * @param ingressChannelUri The ingress channel URI (e.g., "aeron:ipc?term-length=64k" or "aeron:udp?endpoint=localhost:8010")
+     * @param ingressChannelUri The ingress channel URI (e.g., "aeron:udp" or "aeron:udp?endpoint=localhost:8010")
      */
     public void setIngressChannelUri(String ingressChannelUri) {
         this.ingressChannelUri = ingressChannelUri;
@@ -316,9 +312,7 @@ public class AeronConsensusEngine implements ClusteredService {
             running = true;
             startHeadBroadcastTimer();
             
-            log.info("✅ Aeron Consensus Engine started");
-            log.info("   Status: Ready (Phase 2 - structure complete)");
-            log.info("   Next: Full Aeron Cluster integration");
+            log.info("Aeron Consensus Engine started - Status: Ready");
             
         } catch (Exception e) {
             log.error("❌ Failed to start Aeron Consensus Engine", e);
@@ -366,18 +360,14 @@ public class AeronConsensusEngine implements ClusteredService {
      * @param beaconApiUrl Beacon Chain API URL (e.g., https://beaconcha.in/api)
      */
     public void initializeEthereumIntegration(String beaconApiUrl) {
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("🔗 Initializing Ethereum Integration");
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("Initializing Ethereum integration - Beacon API: {}, Current epoch: {}", beaconApiUrl, currentEthereumEpoch);
         
         this.beaconClient = new BeaconChainClient(beaconApiUrl);
         
-        // Start polling for Ethereum epochs
-        startEthereumEpochPolling();
+        // Start unified epoch polling (single source of truth)
+        beaconClient.startBackgroundPolling();
         
-        log.info("✅ Ethereum integration initialized");
-        log.info("   Beacon API: {}", beaconApiUrl);
-        log.info("   Current epoch: {}", currentEthereumEpoch);
+        log.info("Ethereum integration initialized with unified epoch polling");
     }
     
     /**
@@ -417,13 +407,8 @@ public class AeronConsensusEngine implements ClusteredService {
                 }
                 
                 if (epochData.epochNumber > currentEthereumEpoch) {
-                    log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    log.info("🔗 Ethereum Epoch Update");
-                    log.info("   Old epoch: {}", currentEthereumEpoch);
-                    log.info("   New epoch: {} (finalized)", epochData.epochNumber);
-                    log.info("   Finalized: {} ✅", epochData.finalized);
-                    log.info("   Source: Ethereum Beacon Chain");
-                    log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    log.info("Ethereum epoch update: {} -> {} (finalized: {}, source: Beacon Chain)", 
+                        currentEthereumEpoch, epochData.epochNumber, epochData.finalized);
                     
                     currentEthereumEpoch = (int) epochData.epochNumber;
                     
@@ -445,10 +430,15 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * Get current Ethereum epoch (for leader rotation timing).
      * 
-     * @return Current Ethereum Beacon Chain epoch, or -1 if not initialized
+     * <p>🎯 Uses cached value from BeaconChainClient (single source of truth).
+     * 
+     * @return Current finalized Ethereum Beacon Chain epoch, or -1 if not initialized
      */
     public int getCurrentEthereumEpoch() {
-        return currentEthereumEpoch;
+        if (beaconClient != null) {
+            return (int) beaconClient.getCachedFinalizedEpoch();
+        }
+        return currentEthereumEpoch; // Fallback to old cached value
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -457,43 +447,29 @@ public class AeronConsensusEngine implements ClusteredService {
     
     @Override
     public void onStart(Cluster cluster, Image snapshotImage) {
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("🎯 Aeron Cluster Service Starting");
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("   Cluster Dir: {}", cluster.context().clusterDir());
-        log.info("   Role: {}", cluster.role());
-        log.info("   Snapshot Image: {}", snapshotImage != null ? "present" : "none");
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("Aeron Cluster service starting - Dir: {}, Role: {}, Snapshot: {}", 
+            cluster.context().clusterDir(), cluster.role(), snapshotImage != null ? "present" : "none");
         
         this.cluster = cluster;
         this.idleStrategy = cluster.idleStrategy();
         
-        // ✈️ AERON NATIVE: Load snapshot if present (ensures consistent initial state)
+        // Load snapshot if present (ensures consistent initial state)
         if (snapshotImage != null) {
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("📥 Loading snapshot from image");
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("Loading snapshot from image");
             
             try {
                 SnapshotState snapshotState = loadSnapshotFromImage(snapshotImage);
                 
                 if (snapshotState != null) {
-                    log.info("   Snapshot HEAD: {}", snapshotState.head);
-                    log.info("   Snapshot Ethereum epoch: {}", snapshotState.ethereumEpoch);
-                    log.info("   Snapshot timestamp: {}", snapshotState.timestamp);
+                    log.info("Snapshot metadata - HEAD: {}, Epoch: {}, Timestamp: {}", 
+                        snapshotState.head, snapshotState.ethereumEpoch, snapshotState.timestamp);
                     
                     // Verify FileStore HEAD matches snapshot HEAD
                     String fileStoreHead = fileStore.getHead().getRecordId().toString();
                     if (!snapshotState.head.equals(fileStoreHead)) {
-                        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                        log.error("❌ CRITICAL: HEAD MISMATCH DETECTED");
-                        log.error("   Snapshot HEAD: {}", snapshotState.head);
-                        log.error("   FileStore HEAD: {}", fileStoreHead);
-                        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                        log.error("   This indicates the FileStore state doesn't match the cluster state.");
-                        log.error("   Validators must start from identical state to maintain consistency.");
-                        log.error("   Solution: Copy segmentstore from validator-0 to other validators before starting.");
-                        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        log.error("CRITICAL: HEAD mismatch - Snapshot: {}, FileStore: {}. Validators must start from identical state. " +
+                            "Solution: Copy segmentstore from validator-0 before starting.", 
+                            snapshotState.head, fileStoreHead);
                         
                         throw new IllegalStateException(
                             String.format("FileStore HEAD (%s) doesn't match snapshot HEAD (%s). " +
@@ -505,29 +481,27 @@ public class AeronConsensusEngine implements ClusteredService {
                     // Restore state
                     currentEthereumEpoch = snapshotState.ethereumEpoch;
                     
-                    log.info("✅ Snapshot loaded successfully - HEAD verified: {}", snapshotState.head);
-                    log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    log.info("Snapshot loaded successfully - HEAD verified: {}", snapshotState.head);
                 } else {
-                    log.warn("⚠️  Snapshot image present but no snapshot data found - starting fresh");
+                    log.warn("Snapshot image present but no snapshot data found - starting fresh");
                 }
             } catch (Exception e) {
-                log.error("❌ Failed to load snapshot", e);
+                log.error("Failed to load snapshot", e);
                 throw new RuntimeException("Snapshot load failed - cannot start with inconsistent state", e);
             }
         } else {
-            log.info("🆕 Starting fresh (no snapshot)");
+            log.info("Starting fresh (no snapshot)");
             
-            // 🔄 DEFERRED: Sync HEAD from leader AFTER genesis is created
-            // We'll trigger this in a background task that waits for genesis to exist
+            // Deferred: Sync HEAD from leader after genesis is created
             if (cluster.role() == Cluster.Role.FOLLOWER && peerUrls != null && !peerUrls.isEmpty()) {
-                log.info("⏳ Deferring HEAD sync - will check for genesis in background");
+                log.info("Deferring HEAD sync - will check for genesis in background");
                 // Start background task to sync once genesis exists
                 new Thread(() -> {
                     try {
                         // Wait for genesis to be created by leader
                         waitForGenesisAndSync();
                     } catch (Exception e) {
-                        log.error("❌ Failed deferred HEAD sync", e);
+                        log.error("Failed deferred HEAD sync", e);
                     }
                 }, "deferred-head-sync").start();
             }
@@ -566,31 +540,29 @@ public class AeronConsensusEngine implements ClusteredService {
                 log.info("   Will use UDP with localhost endpoints for same-process communication");
                 // Don't create client here - create it lazily on first write attempt
             } catch (Exception e) {
-                log.error("❌ Failed to create internal AeronCluster client", e);
+                log.error("Failed to create internal AeronCluster client", e);
                 // Continue without internal client - writes will fail but service can still start
             }
         } else {
-            log.warn("⚠️  Aeron directory name or peer URLs not set - cannot create internal cluster client");
+            log.warn("Aeron directory name or peer URLs not set - cannot create internal cluster client");
         }
         
-        log.info("✅ Aeron Cluster Service started successfully");
+        log.info("Aeron Cluster service started successfully");
     }
     
     @Override
     public void onSessionOpen(ClientSession session, long timestamp) {
-        log.info("📥 Client session opened: {} (timestamp: {})", session.id(), timestamp);
+        log.info("Client session opened: {} (timestamp: {})", session.id(), timestamp);
     }
     
     @Override
     public void onSessionClose(ClientSession session, long timestamp, CloseReason closeReason) {
-        log.info("📤 Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
+        log.info("Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
     }
     
     @Override
     public void onTakeSnapshot(io.aeron.ExclusivePublication snapshotPublication) {
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("📸 Taking FileStore Snapshot (Aeron Native)");
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("Taking FileStore snapshot");
         
         try {
             // Get current state
@@ -598,9 +570,7 @@ public class AeronConsensusEngine implements ClusteredService {
             int currentEpoch = currentEthereumEpoch;
             long timestamp = System.currentTimeMillis();
             
-            log.info("   Current HEAD: {}", currentHead);
-            log.info("   Current Ethereum epoch: {}", currentEpoch);
-            log.info("   Store directory: {}", storeDirectory);
+            log.info("Snapshot state - HEAD: {}, Epoch: {}, Dir: {}", currentHead, currentEpoch, storeDirectory);
             
             // Use idleStrategy if available
             org.agrona.concurrent.IdleStrategy strategy = idleStrategy != null 
@@ -616,10 +586,9 @@ public class AeronConsensusEngine implements ClusteredService {
             // 3. Stream journal.log
             streamJournal(snapshotPublication, strategy);
             
-            log.info("✅ FileStore snapshot complete: HEAD={}, epoch={}", currentHead, currentEpoch);
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("FileStore snapshot complete - HEAD: {}, Epoch: {}", currentHead, currentEpoch);
         } catch (Exception e) {
-            log.error("❌ Failed to take snapshot", e);
+            log.error("Failed to take snapshot", e);
         }
     }
     
@@ -643,7 +612,7 @@ public class AeronConsensusEngine implements ClusteredService {
         buffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
         
         offerWithRetry(pub, buffer, 0, totalLength, strategy, "metadata");
-        log.info("   📤 Sent snapshot metadata: {} bytes", totalLength);
+        log.info("Sent snapshot metadata ({} bytes)", totalLength);
     }
     
     private void streamTarFiles(io.aeron.ExclusivePublication pub, org.agrona.concurrent.IdleStrategy strategy) throws Exception {
@@ -651,11 +620,11 @@ public class AeronConsensusEngine implements ClusteredService {
         java.io.File[] tarFiles = storeDir.listFiles((dir, name) -> name.endsWith(".tar"));
         
         if (tarFiles == null || tarFiles.length == 0) {
-            log.warn("⚠️  No TAR files found in {}", storeDirectory);
+            log.warn("No TAR files found in {}", storeDirectory);
             return;
         }
         
-        log.info("   📦 Streaming {} TAR files...", tarFiles.length);
+        log.info("Streaming {} TAR files", tarFiles.length);
         
         for (java.io.File tarFile : tarFiles) {
             streamFile(pub, tarFile, "tar", strategy);
@@ -665,11 +634,11 @@ public class AeronConsensusEngine implements ClusteredService {
     private void streamJournal(io.aeron.ExclusivePublication pub, org.agrona.concurrent.IdleStrategy strategy) throws Exception {
         java.io.File journalFile = new java.io.File(storeDirectory, "journal.log");
         if (!journalFile.exists()) {
-            log.warn("⚠️  journal.log not found in {}", storeDirectory);
+            log.warn("journal.log not found in {}", storeDirectory);
             return;
         }
         
-        log.info("   📄 Streaming journal.log...");
+        log.info("Streaming journal.log");
         streamFile(pub, journalFile, "journal", strategy);
     }
     
@@ -678,7 +647,7 @@ public class AeronConsensusEngine implements ClusteredService {
         String fileName = file.getName();
         long fileSize = file.length();
         
-        log.info("      📤 Streaming {}: {} ({} bytes)", fileType, fileName, fileSize);
+        log.info("Streaming {} file: {} ({} bytes)", fileType, fileName, fileSize);
         
         // Send file header
         String headerJson = String.format(
@@ -722,12 +691,12 @@ public class AeronConsensusEngine implements ClusteredService {
                 chunkIndex++;
                 
                 if (chunkIndex % 10 == 0) {
-                    log.debug("         Streamed {}/{} bytes ({} chunks)", bytesStreamed, fileSize, chunkIndex);
+                    log.debug("Streamed {}/{} bytes ({} chunks)", bytesStreamed, fileSize, chunkIndex);
                 }
             }
         }
         
-        log.info("      ✅ Streamed {}: {} bytes in {} chunks", fileName, bytesStreamed, chunkIndex);
+        log.info("Streamed {}: {} bytes in {} chunks", fileName, bytesStreamed, chunkIndex);
     }
     
     private void offerWithRetry(io.aeron.ExclusivePublication pub, org.agrona.concurrent.UnsafeBuffer buffer, 
@@ -763,6 +732,19 @@ public class AeronConsensusEngine implements ClusteredService {
         // ✈️ AERON NATIVE: Handle replicated write proposals
         // This callback is invoked on ALL nodes after Aeron replicates the message via Raft
         // Deterministic state machine: ALL nodes process messages in same order
+        
+        // 🔥 RAW MESSAGE INSPECTION (GROK DEBUG) - BEFORE ANY DECODING
+        // Read template ID directly from buffer to see if batch messages (106) arrive at all
+        if (length >= 8) {
+            int rawTemplateId = buffer.getShort(offset, java.nio.ByteOrder.LITTLE_ENDIAN);
+            int rawVersion = buffer.getShort(offset + 2, java.nio.ByteOrder.LITTLE_ENDIAN);
+            log.info("🔥 RAW INCOMING MESSAGE - templateId: {} (0x{}), version: {}, length: {}, session: {}, role: {}",
+                rawTemplateId, Integer.toHexString(rawTemplateId), rawVersion, length, session.id(),
+                cluster != null ? cluster.role() : "UNKNOWN");
+        }
+        
+        log.info("🔍DEBUG_BATCH [RCV-1]: onSessionMessage() CALLED - session: {}, length: {}, role: {}", 
+            session.id(), length, cluster != null ? cluster.role() : "UNKNOWN");
         log.debug("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}", 
             session.id(), length, cluster != null ? cluster.role() : "UNKNOWN", timestamp);
         
@@ -778,6 +760,12 @@ public class AeronConsensusEngine implements ClusteredService {
             // ✈️ AERON MESSAGE DECODING: Decode SBE message header
             org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.HeaderInfo headerInfo = 
                 org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.decode(buffer, offset);
+            
+            log.info("🔍DEBUG_BATCH [RCV-2]: Header decoded - templateId: {} ({}), blockLength: {}", 
+                headerInfo.templateId,
+                headerInfo.templateId == 100 ? "WRITE_PROPOSAL" : 
+                headerInfo.templateId == 106 ? "WRITE_BATCH" : "UNKNOWN",
+                headerInfo.blockLength);
             
             log.debug("📨 SBE Header decoded - templateId: {}, blockLength: {}, schemaId: {}, version: {}", 
                 headerInfo.templateId, headerInfo.blockLength, headerInfo.schemaId, headerInfo.version);
@@ -874,18 +862,29 @@ public class AeronConsensusEngine implements ClusteredService {
                     log.error("   Check GlobalStoreServer initialization to ensure callback is set");
                 }
             } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH) {
+                log.info("🔍DEBUG_BATCH [RCV-3]: BATCH BRANCH ENTERED - processing batch message");
+                
                 // Read JSON batch array from buffer
                 byte[] jsonBytes = new byte[headerInfo.blockLength];
                 buffer.getBytes(offset, jsonBytes);
                 String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
                 
-                log.debug("✈️  Processing replicated write BATCH via Aeron (templateId: {})", headerInfo.templateId);
+                log.info("🔍DEBUG_BATCH [RCV-4]: JSON read from buffer - size: {} bytes, first 100 chars: {}", 
+                    jsonBytes.length, json.substring(0, Math.min(100, json.length())));
+                
+                log.info("✈️  Processing replicated write BATCH via Aeron (templateId: {}, size: {} bytes)", headerInfo.templateId, headerInfo.blockLength);
+                
+                log.info("🔍DEBUG_BATCH [RCV-5]: Parsing batch JSON...");
                 
                 // Parse batch JSON: {"batch":[{...},{...}]}
                 int batchStart = json.indexOf("[");
                 int batchEnd = json.lastIndexOf("]");
                 
+                log.info("🔍DEBUG_BATCH [RCV-6]: JSON parse indices - batchStart: {}, batchEnd: {}", 
+                    batchStart, batchEnd);
+                
                 if (batchStart < 0 || batchEnd < 0) {
+                    log.error("🔍DEBUG_BATCH [RCV-7]: ❌ Invalid batch format - ABORTING");
                     log.error("❌ Invalid batch format: {}", json);
                     return;
                 }
@@ -893,6 +892,8 @@ public class AeronConsensusEngine implements ClusteredService {
                 // Split batch into individual proposals (simple JSON parsing)
                 String batchContent = json.substring(batchStart + 1, batchEnd);
                 java.util.List<String> proposals = new java.util.ArrayList<>();
+                
+                log.info("🔍DEBUG_BATCH [RCV-8]: batchContent length: {} chars", batchContent.length());
                 
                 int depth = 0;
                 StringBuilder currentProposal = new StringBuilder();
@@ -913,10 +914,13 @@ public class AeronConsensusEngine implements ClusteredService {
                     }
                 }
                 
+                log.info("🔍DEBUG_BATCH [RCV-9]: Batch parsing COMPLETE - found {} proposals", proposals.size());
                 log.debug("   Batch contains {} proposals", proposals.size());
                 
                 // Process each proposal in the batch
                 int processed = 0;
+                log.info("🔍DEBUG_BATCH [RCV-10]: Starting to process {} proposals...", proposals.size());
+                
                 for (String proposalJson : proposals) {
                     String walletAddress = extractJsonField(proposalJson, "walletAddress");
                     String path = extractJsonField(proposalJson, "path");
@@ -929,25 +933,37 @@ public class AeronConsensusEngine implements ClusteredService {
                         continue;
                     }
                     
+                    log.info("🔍DEBUG_BATCH [RCV-11]: Processing proposal {} of {} - wallet: {}, path: {}", 
+                        processed + 1, proposals.size(), walletAddress, path);
+                    
                     // Apply write to FileStore via callback
                     if (writeCallback != null) {
+                        log.info("🔍DEBUG_BATCH [RCV-12]: Calling writeCallback.applyWrite()...");
                         writeCallback.applyWrite(walletAddress, path, contentType, message, signature);
+                        log.info("🔍DEBUG_BATCH [RCV-13]: writeCallback.applyWrite() COMPLETE");
                         
                         // Track acknowledgment for backpressure management
                         backpressureManager.incrementAcknowledged();
                         
                         processed++;
+                    } else {
+                        log.error("🔍DEBUG_BATCH [RCV-14]: ❌ writeCallback is NULL!");
                     }
                 }
+                
+                log.info("🔍DEBUG_BATCH [RCV-15]: ✅ ALL PROPOSALS PROCESSED - processed: {}, total: {}", 
+                    processed, proposals.size());
                 
                 // 📊 Track replication latency for the batch
                 Long ingressTimestampNanos = ingressTimestamps.poll();
                 if (ingressTimestampNanos != null) {
                     performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
+                    log.info("🔍DEBUG_BATCH [RCV-16]: Tracked replication latency");
                 }
                 
                 // Track write throughput
                 long currentWriteCount = totalWritesProcessed.addAndGet(processed);
+                log.info("🔍DEBUG_BATCH [RCV-17]: Updated metrics - currentWriteCount: {}", currentWriteCount);
                 long currentTime = System.currentTimeMillis();
                 
                 // Update queue depths for metrics
@@ -1536,7 +1552,7 @@ public class AeronConsensusEngine implements ClusteredService {
                     internalClusterClient = io.aeron.cluster.client.AeronCluster.connect(
                         new io.aeron.cluster.client.AeronCluster.Context()
                             .aeronDirectoryName(aeronDirectoryName)
-                            .ingressChannel("aeron:udp")  // Must match cluster's ingress channel (UDP)
+                            .ingressChannel("aeron:udp?term-length=128m")  // CRITICAL: Must match cluster's log term-length (128MB)
                             .ingressEndpoints(ingressEndpointsStr)  // Required for UDP (distributed network endpoints)
                             .egressChannel("aeron:udp?endpoint=" + egressHostname + ":0")  // UDP egress (distributed network binding)
                             .egressListener(egressListener)
@@ -1581,6 +1597,12 @@ public class AeronConsensusEngine implements ClusteredService {
             log.error("❌ Internal AeronCluster client not available - cannot send write through ingress");
             return false;
         }
+        
+        // 🔍 GROK DIAGNOSTIC: Check client/session state for PRIORITY path
+        log.info("🔍 PRIORITY PATH: client={}, sessionId={}, isClosed={}", 
+            System.identityHashCode(internalClusterClient),
+            internalClusterClient.clusterSessionId(),
+            internalClusterClient.isClosed());
         
         try {
             // Build JSON write proposal
@@ -1651,6 +1673,11 @@ public class AeronConsensusEngine implements ClusteredService {
                 ingressTimestamps.offer(System.nanoTime());
                 performanceMetrics.recordMessageIngressed();
                 
+                // 🚦 BACKPRESSURE: Increment sent counter for backpressure tracking
+                // This MUST be called after successful offer to Aeron
+                // Will be matched with incrementAcknowledged() in onSessionMessage()
+                backpressureManager.incrementSent();
+                
                 log.debug("✅ Write sent through AeronCluster.offer() - will replicate to all nodes via Raft");
                 return true;
             } catch (Exception e) {
@@ -1681,13 +1708,30 @@ public class AeronConsensusEngine implements ClusteredService {
             return 0;
         }
         
+        log.info("🔍DEBUG_BATCH [1]: sendWriteBatchThroughIngress() ENTRY - batch size: {}, role: {}", 
+            proposals.size(), cluster != null ? cluster.role() : "NO_CLUSTER");
+        
         // Ensure internal cluster client is created (lazy initialization)
         ensureInternalClusterClient();
         
+        log.info("🔍DEBUG_BATCH [2]: After ensureInternalClusterClient() - client available: {}", 
+            internalClusterClient != null);
+        
+        // 🔍 GROK DIAGNOSTIC: Check client/session state for BATCH path
+        if (internalClusterClient != null) {
+            log.info("🔍 BATCH PATH: client={}, sessionId={}, isClosed={}", 
+                System.identityHashCode(internalClusterClient),
+                internalClusterClient.clusterSessionId(),
+                internalClusterClient.isClosed());
+        }
+        
         if (internalClusterClient == null) {
+            log.error("🔍DEBUG_BATCH [3]: ❌ ABORTING - internalClusterClient is NULL");
             log.error("❌ Internal AeronCluster client not available - cannot send batch write through ingress");
             return 0;
         }
+        
+        log.info("🔍DEBUG_BATCH [4]: Building JSON batch with {} proposals", proposals.size());
         
         try {
             // Build JSON array of write proposals
@@ -1714,9 +1758,15 @@ public class AeronConsensusEngine implements ClusteredService {
             
             byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
             
+            log.info("🔍DEBUG_BATCH [5]: JSON built - size: {} bytes, first 100 chars: {}", 
+                jsonBytes.length, json.substring(0, Math.min(100, json.length())));
+            
             // ✈️ AERON SBE MESSAGE FORMAT: Encode message with SBE header
             int blockLength = jsonBytes.length;
             int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH; // New template ID for batches
+            
+            log.info("🔍DEBUG_BATCH [6]: Encoding SBE header - blockLength: {}, templateId: {} (WRITE_BATCH)", 
+                blockLength, templateId);
             
             // Allocate buffer: SBE header (8 bytes) + JSON payload
             int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
@@ -1732,12 +1782,17 @@ public class AeronConsensusEngine implements ClusteredService {
             messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
             
             // ✈️ AERON CLUSTER: Send batch message through internal AeronCluster client
+            log.info("🔍DEBUG_BATCH [7]: About to call internalClusterClient.offer() - totalLength: {} bytes", totalLength);
+            
             try {
                 // Send message through AeronCluster client ingress
                 idleStrategy.reset();
                 long result;
                 int retries = 0;
+                log.info("🔍DEBUG_BATCH [8]: Entering offer loop...");
+                
                 while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
+                    log.info("🔍DEBUG_BATCH [9]: offer() returned: {}, retry: {}", result, retries);
                     if (result == io.aeron.Publication.BACK_PRESSURED) {
                         idleStrategy.idle();
                         retries++;
@@ -1759,10 +1814,20 @@ public class AeronConsensusEngine implements ClusteredService {
                     }
                 }
                 
+                log.info("🔍DEBUG_BATCH [10]: offer() SUCCESS - result: {}", result);
+                
                 // 📊 Track ingress timestamp for Raft latency calculation
                 ingressTimestamps.offer(System.nanoTime());
                 performanceMetrics.recordMessageIngressed();
                 
+                log.info("🔍DEBUG_BATCH [11]: Tracked ingress timestamp and metrics");
+                
+                // 🚦 BACKPRESSURE: Do NOT increment here - ProposalQueueManagerOptimized
+                // already calls incrementSent() for each proposal before calling this method
+                // (see ProposalQueueManagerOptimized line 507)
+                // Double-counting would cause false backpressure!
+                
+                log.info("🔍DEBUG_BATCH [12]: ✅ COMPLETE - Batch sent to Aeron ingress, {} proposals will replicate via Raft", proposals.size());
                 log.debug("✅ Batch write sent through AeronCluster.offer() - {} proposals will replicate via Raft", proposals.size());
                 return proposals.size();
             } catch (Exception e) {
@@ -1801,9 +1866,7 @@ public class AeronConsensusEngine implements ClusteredService {
     
     @Override
     public void onRoleChange(Cluster.Role newRole) {
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("🔄 Role Change: {} → {}", currentRole, newRole.name());
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("Role change: {} -> {}", currentRole, newRole.name());
         
         // ✈️ AERON NATIVE: Track leadership rotation history
         // Note: onRoleChange() is called with the NEW role, so we need to track previous role
@@ -1838,41 +1901,36 @@ public class AeronConsensusEngine implements ClusteredService {
         // Increment term on role change (Aeron handles this internally, but we track it)
         if (newRole == Cluster.Role.LEADER && previousRole != Cluster.Role.LEADER) {
             currentTerm++;
-            log.info("📈 Term incremented to: {}", currentTerm);
+            log.info("Term incremented to: {}", currentTerm);
         }
         
-        log.info("📊 Leadership History: {} total changes", leadershipHistory.size());
+        log.debug("Leadership history: {} total changes", leadershipHistory.size());
         
         // Invalidate leader cache on any role change
         cachedLeaderUrl = null;
         cachedLeaderTimestamp = 0;
         
         if (newRole == Cluster.Role.LEADER) {
-            log.info("👑 Leadership Rotation: I am now LEADER (term: {})", currentTerm);
+            log.info("Leadership rotation: Now LEADER (term: {})", currentTerm);
             
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // NEW GENESIS ARCHITECTURE: Create genesis as FIRST consensus write
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // NEW GENESIS ARCHITECTURE: Create genesis as first consensus write
             // Check if genesis exists - if not, create it as first consensus write
             if (nodeStore != null) {
                 try {
-                    // Check if genesis node exists (more reliable than fileStore.size())
+                    // Check if genesis node exists at wallet-scoped path
+                    // Path: /oak-chain/00/00/00/0x0000.../content/genesis
                     org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
                     boolean genesisExists = root.getChildNode("oak-chain")
-                        .getChildNode("content")
                         .getChildNode("00")
                         .getChildNode("00")
                         .getChildNode("00")
                         .getChildNode("0x0000000000000000000000000000000000000000")
+                        .getChildNode("content")
                         .getChildNode("genesis")
                         .exists();
                     
                     if (!genesisExists) {
-                        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                        log.info("🎂 NETWORK GENESIS: No genesis detected on new leader");
-                        log.info("   Creating genesis as FIRST consensus write");
-                        log.info("   This ensures all validators have identical state");
-                        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        log.info("Network genesis: No genesis detected on new leader - creating genesis as first consensus write");
                         
                         // Trigger genesis creation in background thread
                         // (don't block onRoleChange callback)
@@ -1885,14 +1943,14 @@ public class AeronConsensusEngine implements ClusteredService {
                             }
                         }, "genesis-creator").start();
                     } else {
-                        log.info("ℹ️  Genesis already exists, skipping creation");
+                        log.debug("Genesis already exists, skipping creation");
                     }
                 } catch (Exception e) {
                     log.warn("Failed to check for genesis existence: {}", e.getMessage());
                 }
             }
         } else if (previousRole == Cluster.Role.LEADER) {
-            log.info("📉 Leadership Rotation: Stepped down from LEADER (term: {})", currentTerm);
+            log.info("Leadership rotation: Stepped down from LEADER (term: {})", currentTerm);
         }
         
         updateRoleFromCluster(newRole);
@@ -1919,15 +1977,15 @@ public class AeronConsensusEngine implements ClusteredService {
     
     @Override
     public void onTerminate(Cluster cluster) {
-        log.info("🛑 Aeron Cluster service terminating (role: {})", cluster.role());
+        log.info("Aeron Cluster service terminating (role: {})", cluster.role());
         
         // Close internal cluster client
         if (internalClusterClient != null) {
             try {
                 internalClusterClient.close();
-                log.info("✅ Internal AeronCluster client closed");
+                log.info("Internal AeronCluster client closed");
             } catch (Exception e) {
-                log.error("❌ Error closing internal cluster client", e);
+                log.error("Error closing internal cluster client", e);
             }
         }
         
@@ -1949,15 +2007,11 @@ public class AeronConsensusEngine implements ClusteredService {
             case LEADER:
                 this.currentRole = ValidatorRole.LEADER;
                 this.currentLeader = selfUrl;
-                log.info("👑 I am now LEADER");
+                log.info("Now LEADER");
                 break;
             case FOLLOWER:
                 this.currentRole = ValidatorRole.FOLLOWER;
-                // 🛡️ RESILIENCE: If we're a follower but can't see a leader, we may be in a partition
-                // Aeron Cluster will handle leader election, but we log this for monitoring
-                log.info("📡 I am now FOLLOWER - waiting for leader election");
-                log.info("   → Aeron Cluster will elect leader when quorum forms");
-                log.info("   → If isolated, this node may reform cluster with available nodes");
+                log.info("Now FOLLOWER - Aeron Cluster will elect leader when quorum forms");
                 
                 // Try to discover leader from cluster membership via nodeIdToUrl mapping
                 // For now, set to null - will be discovered via periodic checks or API queries
@@ -1968,7 +2022,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 break;
             default:
                 this.currentRole = ValidatorRole.FOLLOWER;
-                log.info("📡 Role: {}", aeronRole);
+                log.info("Role: {}", aeronRole);
                 this.currentLeader = null;
         }
     }
@@ -2429,12 +2483,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * </ul>
      */
     private void syncHeadFromLeaderOnStartup() {
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("🔄 Syncing HEAD from leader on startup");
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("   CRITICAL: All validators must have same HEAD for consensus");
-        log.info("   Aeron replicates writes, but FileStore HEAD sync is separate");
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("Syncing HEAD from leader on startup - All validators must have same HEAD for consensus");
         
         // Try to find leader via Aeron cluster state API (most reliable)
         String leaderUrl = null;
@@ -2469,7 +2518,7 @@ public class AeronConsensusEngine implements ClusteredService {
                             if (quoteEnd > quoteStart) {
                                 leaderUrl = jsonStr.substring(quoteStart + 1, quoteEnd);
                                 if (leaderUrl != null && !leaderUrl.isEmpty() && !"null".equals(leaderUrl)) {
-                                    log.info("📍 Found leader via cluster state: {}", leaderUrl);
+                                    log.info("Found leader via cluster state: {}", leaderUrl);
                                     break;
                                 }
                             }
@@ -2483,7 +2532,7 @@ public class AeronConsensusEngine implements ClusteredService {
         
         // Fallback: Try all peers if leader not found via cluster state
         if (leaderUrl == null || leaderUrl.isEmpty()) {
-            log.info("📍 Leader not found via cluster state, trying all peers...");
+            log.info("Leader not found via cluster state, trying all peers");
             leaderUrl = peerUrls.get(0); // Use first peer as fallback
         }
         
@@ -2595,42 +2644,37 @@ public class AeronConsensusEngine implements ClusteredService {
                             if (leaderCommittedEpochStr != null && !leaderCommittedEpochStr.isEmpty()) {
                                 try {
                                     lastCommittedEpoch = Integer.parseInt(leaderCommittedEpochStr);
-                                    log.info("   Updated committed epoch: {}", lastCommittedEpoch);
+                                    log.info("Updated committed epoch: {}", lastCommittedEpoch);
                                 } catch (NumberFormatException e) {
                                     log.debug("Could not parse committed epoch: {}", leaderCommittedEpochStr);
                                 }
                             }
                         }
                         
-                        log.info("📥 Syncing segments from leader: {}", leaderUrl);
+                        log.info("Syncing segments from leader: {}", leaderUrl);
                         
                         // Pull segments for leader's HEAD (use segment portion for lookup)
                         try {
                             int segmentsFetched = pullSegmentsForHead(leaderHeadSegment, leaderUrl);
-                            log.info("✅ Synced {} segments from leader", segmentsFetched);
+                            log.info("Synced {} segments from leader", segmentsFetched);
                             
                             // Verify HEAD matches now
                             String newLocalHead = fileStore.getHead().getRecordId().toString();
                             String newLocalHeadSegment = newLocalHead.split(" ")[0];
                             if (newLocalHeadSegment.equals(leaderHeadSegment)) {
-                                log.info("✅ HEAD synchronized successfully!");
-                                log.info("   Local HEAD now: {}", newLocalHead);
-                                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                                log.info("HEAD synchronized successfully - Local HEAD: {}", newLocalHead);
                             } else {
-                                log.warn("⚠️  HEAD still doesn't match after sync");
-                                log.warn("   Local:  {}...", newLocalHead.substring(0, Math.min(40, newLocalHead.length())));
-                                log.warn("   Leader: {}...", leaderHeadTrimmed.substring(0, Math.min(40, leaderHeadTrimmed.length())));
-                                log.warn("   This may indicate a deeper sync issue");
+                                log.warn("HEAD still doesn't match after sync - Local: {}, Leader: {}. This may indicate a deeper sync issue.", 
+                                    newLocalHead.substring(0, Math.min(40, newLocalHead.length())), 
+                                    leaderHeadTrimmed.substring(0, Math.min(40, leaderHeadTrimmed.length())));
                             }
                         } catch (Exception e) {
-                            log.error("❌ Failed to sync HEAD from leader: {}", e.getMessage());
-                            log.error("   Validators may have inconsistent HEAD - manual sync may be required");
-                            log.error("   Recommendation: Copy segmentstore from validator-0 (8091) to other validators");
+                            log.error("Failed to sync HEAD from leader: {}. Validators may have inconsistent HEAD. " +
+                                "Recommendation: Copy segmentstore from validator-0 (8091) to other validators", e.getMessage());
                             // Don't throw - allow startup to continue (may sync later via writes)
                         }
                     } else {
-                        log.info("✅ HEAD fully matches leader - no sync needed");
-                        log.info("   HEAD: {}", localHead);
+                        log.info("HEAD fully matches leader - no sync needed. HEAD: {}", localHead);
                         
                         // If we synced committed HEAD, update tracking even if HEAD already matched
                         if (syncCommittedHead && leaderCommittedHead != null && !leaderCommittedHead.isEmpty()) {
@@ -2638,28 +2682,22 @@ public class AeronConsensusEngine implements ClusteredService {
                             if (leaderCommittedEpochStr != null && !leaderCommittedEpochStr.isEmpty()) {
                                 try {
                                     lastCommittedEpoch = Integer.parseInt(leaderCommittedEpochStr);
-                                    log.info("   Updated committed epoch: {}", lastCommittedEpoch);
+                                    log.info("Updated committed epoch: {}", lastCommittedEpoch);
                                 } catch (NumberFormatException e) {
                                     log.debug("Could not parse committed epoch: {}", leaderCommittedEpochStr);
                                 }
                             }
                         }
-                        
-                        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                     }
                     return; // Success or already synced
                 }
             }
         } catch (Exception e) {
-            log.warn("⚠️  Failed to sync HEAD from leader {}: {}", leaderUrl, e.getMessage());
+            log.warn("Failed to sync HEAD from leader {}: {}", leaderUrl, e.getMessage());
         }
         
-        log.warn("⚠️  Could not sync HEAD from any peer - validators may have inconsistent state");
-        log.warn("   Recommendation for distributed deployment:");
-        log.warn("   1. Start leader validator first (establishes initial HEAD)");
-        log.warn("   2. Copy leader's segmentstore directory to follower validators before starting");
-        log.warn("   3. OR: Wait for first write - Aeron will replicate writes across network");
-        log.warn("   Note: This sync works across distributed networks - peer URLs can be remote IPs/hostnames");
+        log.warn("Could not sync HEAD from any peer - validators may have inconsistent state. " +
+            "Recommendation: (1) Start leader first, (2) Copy segmentstore to followers, OR (3) Wait for first write");
     }
     
     /**
@@ -2668,7 +2706,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * before the leader has created genesis.
      */
     private void waitForGenesisAndSync() {
-        log.info("⏳ Waiting for genesis to be created by leader before syncing HEAD...");
+        log.info("Waiting for genesis to be created by leader before syncing HEAD");
         
         int maxAttempts = 20; // Try for up to 2 minutes (20 * 6 seconds)
         int attempt = 0;
@@ -2682,7 +2720,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 // Check if we can find a leader
                 String leaderUrl = discoverLeaderFromAeronClusterState();
                 if (leaderUrl == null) {
-                    log.debug("⏳ No leader found yet (attempt {}/{}), waiting...", attempt, maxAttempts);
+                    log.debug("No leader found yet (attempt {}/{}), waiting", attempt, maxAttempts);
                     continue;
                 }
                 
@@ -2711,11 +2749,11 @@ public class AeronConsensusEngine implements ClusteredService {
                                 if (!offsetStr.isEmpty()) {
                                     int offset = Integer.parseInt(offsetStr);
                                     if (offset > 10) {
-                                        log.info("✅ Leader has genesis (HEAD offset: {}), starting sync now!", offset);
+                                        log.info("Leader has genesis (HEAD offset: {}), starting sync", offset);
                                         syncHeadFromLeaderOnStartup();
                                         return; // Success!
                                     } else {
-                                        log.debug("⏳ Leader HEAD offset too small ({}), genesis not ready yet (attempt {}/{})", 
+                                        log.debug("Leader HEAD offset too small ({}), genesis not ready yet (attempt {}/{})", 
                                                  offset, attempt, maxAttempts);
                                     }
                                 }
@@ -2723,20 +2761,19 @@ public class AeronConsensusEngine implements ClusteredService {
                         }
                     }
                 } catch (Exception e) {
-                    log.debug("⏳ Could not check leader HEAD (attempt {}/{}): {}", attempt, maxAttempts, e.getMessage());
+                    log.debug("Could not check leader HEAD (attempt {}/{}): {}", attempt, maxAttempts, e.getMessage());
                 }
                 
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                log.warn("⚠️  Deferred HEAD sync interrupted");
+                log.warn("Deferred HEAD sync interrupted");
                 return;
             } catch (Exception e) {
-                log.debug("⏳ Error during deferred sync check (attempt {}/{}): {}", attempt, maxAttempts, e.getMessage());
+                log.debug("Error during deferred sync check (attempt {}/{}): {}", attempt, maxAttempts, e.getMessage());
             }
         }
         
-        log.warn("⚠️  Gave up waiting for genesis after {} attempts", maxAttempts);
-        log.warn("   Validators may have inconsistent state - consider manual intervention");
+        log.warn("Gave up waiting for genesis after {} attempts. Validators may have inconsistent state - consider manual intervention", maxAttempts);
     }
     
     /**
@@ -2749,14 +2786,14 @@ public class AeronConsensusEngine implements ClusteredService {
      * @throws Exception if replication fails
      */
     public int pullSegmentsForHead(String headStr, String leaderUrl) throws Exception {
-        log.info("📥 Pulling segments for HEAD from leader: {}", leaderUrl);
-        log.info("   HEAD: {}...", headStr.substring(0, Math.min(16, headStr.length())));
+        log.info("Pulling segments for HEAD from leader: {} (HEAD: {}...)", 
+            leaderUrl, headStr.substring(0, Math.min(16, headStr.length())));
         
         int segmentCount = replicator.fetchMissingSegmentsForHead(headStr, leaderUrl);
         
-        log.info("✅ Replicated {} segments for HEAD", segmentCount);
+        log.info("Replicated {} segments for HEAD", segmentCount);
         
-        // 🔄 CRITICAL: Update HEAD after fetching segments (like syncGenesisFromPeer pattern)
+        // Update HEAD after fetching segments (like syncGenesisFromPeer pattern)
         try {
             org.apache.jackrabbit.oak.segment.RecordId newHead = 
                 org.apache.jackrabbit.oak.segment.RecordId.fromString(
@@ -2769,33 +2806,24 @@ public class AeronConsensusEngine implements ClusteredService {
             boolean updated = fileStore.getRevisions().setHead(currentHead, newHead);
             
             if (updated) {
-                log.info("✅ Updated HEAD to match leader (CAS success)");
-                // Force flush to persist the journal update
+                log.info("Updated HEAD to match leader (CAS success)");
                 fileStore.flush();
-                
-                // 🔄 CRITICAL FIX: Update latestHead cache so /v1/head API returns correct value
-                // This is the same variable that /v1/head endpoint reads from
                 latestHead = headStr;
-                log.debug("   Updated latestHead cache for API consistency");
+                log.debug("Updated latestHead cache for API consistency");
             } else {
-                log.warn("⚠️  HEAD CAS failed - current HEAD has changed (may have advanced)");
-                // This is okay - it means HEAD has already advanced or another thread updated it
-                // Verify we're at least at the target HEAD or beyond
+                log.warn("HEAD CAS failed - current HEAD has changed (may have advanced)");
                 org.apache.jackrabbit.oak.segment.RecordId actualHead = fileStore.getHead().getRecordId();
                 if (actualHead.toString().equals(headStr)) {
-                    log.info("✅ HEAD already matches target (no update needed)");
-                    // Update latestHead even if CAS failed but we're at the target
+                    log.info("HEAD already matches target (no update needed)");
                     latestHead = headStr;
                 } else {
-                    log.debug("   Current HEAD: {}...", actualHead.toString().substring(0, Math.min(16, actualHead.toString().length())));
-                    // Still update latestHead to actual HEAD (we may be ahead)
+                    log.debug("Current HEAD: {}...", actualHead.toString().substring(0, Math.min(16, actualHead.toString().length())));
                     latestHead = actualHead.toString10();
                 }
             }
             
         } catch (Exception e) {
-            log.error("❌ Failed to update HEAD after replication: {}", e.getMessage());
-            log.error("   Segments are replicated, but HEAD may not match leader");
+            log.error("Failed to update HEAD after replication: {}. Segments replicated but HEAD may not match leader", e.getMessage());
             throw e; // Re-throw so caller knows sync may be incomplete
         }
         
@@ -3011,6 +3039,82 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
+     * Get current node's member ID in the cluster.
+     * @return Member ID (0-based node index) or -1 if cluster not initialized
+     */
+    public int getMemberId() {
+        return cluster != null ? cluster.memberId() : -1;
+    }
+    
+    /**
+     * Get cluster size (number of nodes configured).
+     * @return Number of nodes in cluster
+     */
+    public int getClusterSize() {
+        return nodeIdToUrl != null ? nodeIdToUrl.size() : 0;
+    }
+    
+    /**
+     * Get leader member ID.
+     * @return Leader's member ID or -1 if unknown
+     */
+    public int getLeaderMemberId() {
+        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
+            return cluster.memberId();
+        }
+        
+        // Try to find leader from current leader URL
+        if (currentLeader != null && nodeIdToUrl != null) {
+            for (java.util.Map.Entry<Integer, String> entry : nodeIdToUrl.entrySet()) {
+                if (entry.getValue().equals(currentLeader)) {
+                    return entry.getKey();
+                }
+            }
+        }
+        
+        return -1; // Leader unknown
+    }
+    
+    /**
+     * Step down as leader to trigger a new election.
+     * Only works if this node is currently the leader.
+     * 
+     * @return true if step-down initiated, false otherwise
+     */
+    public boolean stepDownAsLeader() {
+        if (cluster == null || cluster.role() != Cluster.Role.LEADER) {
+            log.warn("Cannot step down - not currently leader (role: {})", 
+                cluster != null ? cluster.role() : "null");
+            return false;
+        }
+        
+        try {
+            // ✈️ AERON CLUSTER: Request leadership resignation
+            // This triggers a new election among followers
+            log.info("🔄 Stepping down as leader to trigger election (current memberId: {})", 
+                cluster.memberId());
+            
+            // Aeron Cluster doesn't have a direct stepDown() API in the ClusteredService
+            // Instead, we can close and reopen the session, which triggers re-election
+            // For POC, we'll use a workaround: log the step-down request
+            // In production, this would integrate with ClusterControl API
+            
+            // TODO: Integrate with Aeron ClusterControl for proper step-down:
+            // ClusterControl control = ...;
+            // control.stepDown();
+            
+            log.warn("⚠️  Step-down requested but not yet implemented in Aeron integration");
+            log.warn("   For now, elections will happen naturally via timeout/failure detection");
+            
+            return false; // Not yet implemented
+            
+        } catch (Exception e) {
+            log.error("Failed to step down as leader", e);
+            return false;
+        }
+    }
+    
+    /**
      * Discover leader using tracked state + cache, minimizing HTTP queries to peers.
      * 
      * ✈️ AERON CLUSTER SOURCE OF TRUTH:
@@ -3022,36 +3126,29 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     private String discoverLeaderFromAeronClusterState() {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // STEP 1: Use tracked currentLeader (set by onRoleChange) - NO HTTP CALLS!
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // STEP 1: Use tracked currentLeader (set by onRoleChange)
         if (currentLeader != null && currentLeader.equals(selfUrl)) {
-            // We are the leader
-            log.trace("✅ I am the leader (tracked state) - NO HTTP CALLS");
             cachedLeaderUrl = currentLeader;
             cachedLeaderTimestamp = System.currentTimeMillis();
             return currentLeader;
         }
         
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // STEP 2: Check cache before making HTTP calls
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         long now = System.currentTimeMillis();
         if (cachedLeaderUrl != null && (now - cachedLeaderTimestamp) < LEADER_CACHE_TTL_MS) {
             log.trace("Using cached leader: {} (age: {}ms)", cachedLeaderUrl, now - cachedLeaderTimestamp);
             return cachedLeaderUrl;
         }
         
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // STEP 3: FALLBACK - Query peers via HTTP (only during cluster formation)
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        log.debug("⚠️  Falling back to HTTP peer queries (leader not yet discovered)");
+        // STEP 3: Fallback - query peers via HTTP (only during cluster formation)
+        log.debug("Falling back to HTTP peer queries (leader not yet discovered)");
         
         // ✈️ AERON CLUSTER STATE API: Query /v1/aeron/cluster-state from peers
         // This endpoint reflects Aeron's internal Raft state and is the authoritative source
         java.util.List<String> allUrls = new java.util.ArrayList<>(peerUrls);
         allUrls.add(selfUrl);
         
-        log.debug("🔍 Querying Aeron Cluster state from {} nodes: {} (cache miss)", allUrls.size(), allUrls);
+        log.debug("Querying Aeron Cluster state from {} nodes (cache miss)", allUrls.size());
         
         for (String url : allUrls) {
             try {
@@ -3092,7 +3189,7 @@ public class AeronConsensusEngine implements ClusteredService {
                                     int urlEnd = response.indexOf("\"", urlStart);
                                     if (urlEnd != -1) {
                                         String leaderUrl = response.substring(urlStart, urlEnd);
-                                        log.debug("✅ Found leader via Aeron Cluster state: {} (from {})", leaderUrl, url);
+                                        log.debug("Found leader via Aeron Cluster state: {} (from {})", leaderUrl, url);
                                         // Update cache
                                         cachedLeaderUrl = leaderUrl;
                                         cachedLeaderTimestamp = System.currentTimeMillis();
@@ -3101,7 +3198,7 @@ public class AeronConsensusEngine implements ClusteredService {
                                 }
                             }
                             // Fallback: if we found isLeader:true, return the queried URL
-                            log.info("✅ Found leader (isLeader:true): {} (from {})", url, url);
+                            log.info("Found leader (isLeader:true): {} (from {})", url, url);
                             return url;
                         }
                     } catch (Exception parseEx) {
@@ -3189,19 +3286,19 @@ public class AeronConsensusEngine implements ClusteredService {
         executor.submit(() -> {
             try {
                 Thread.sleep(3000); // Wait 3s for cluster to stabilize
-                log.debug("🔍 Starting Aeron Cluster leader discovery...");
+                log.debug("Starting Aeron Cluster leader discovery");
                 String leaderUrl = discoverLeaderFromAeronClusterState();
                 if (leaderUrl != null) {
                     this.currentLeader = leaderUrl;
-                    log.info("✅ Discovered leader via Aeron Cluster state: {} (background discovery)", leaderUrl);
+                    log.info("Discovered leader via Aeron Cluster state: {} (background discovery)", leaderUrl);
                 } else {
-                    log.debug("⚠️  Could not discover leader from Aeron Cluster state (will retry on next API call)");
+                    log.debug("Could not discover leader from Aeron Cluster state (will retry)");
                     // Try again after a longer delay
                     Thread.sleep(5000);
                     leaderUrl = discoverLeaderFromAeronClusterState();
                     if (leaderUrl != null) {
                         this.currentLeader = leaderUrl;
-                        log.info("✅ Discovered leader via Aeron Cluster state: {} (retry)", leaderUrl);
+                        log.info("Discovered leader via Aeron Cluster state: {} (retry)", leaderUrl);
                     }
                 }
             } catch (Exception e) {
@@ -3334,9 +3431,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * since we need access to NodeStore write operations.
      */
     private void createGenesisViaConsensus() {
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("🎂 Creating NETWORK GENESIS on leader");
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("Creating network genesis on leader");
         
         try {
             // Create genesis directly in NodeStore
@@ -3345,24 +3440,20 @@ public class AeronConsensusEngine implements ClusteredService {
             
             // Use zero address for genesis (Ethereum convention)
             String GENESIS_ADDRESS = "0x0000000000000000000000000000000000000000";
-            String genesisPath = "/oak-chain/content/00/00/00/" + GENESIS_ADDRESS + "/genesis";
+            String genesisPath = "/oak-chain/00/00/00/" + GENESIS_ADDRESS + "/content/genesis";
             
-            log.info("   Genesis Path: {}", genesisPath);
-            log.info("   Genesis Wallet: {}", GENESIS_ADDRESS);
-            log.info("   Creating genesis in NodeStore...");
+            log.info("Creating genesis - Path: {}, Wallet: {}", genesisPath, GENESIS_ADDRESS);
             
             // Create genesis using NodeStore directly
             org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
             org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = root.builder();
             
-            // Navigate/create path: oak-chain/content/00/00/00/0x0000.../genesis
+            // Navigate/create path: oak-chain/00/00/00/0x0000.../content/genesis
+            // Deep tree structure tied to wallet identity - critical for segment isolation
             org.apache.jackrabbit.oak.spi.state.NodeBuilder oakChain = rootBuilder.child("oak-chain");
             oakChain.setProperty("jcr:primaryType", "nt:unstructured");
             
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder content = oakChain.child("content");
-            content.setProperty("jcr:primaryType", "nt:unstructured");
-            
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder level1 = content.child("00");
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder level1 = oakChain.child("00");
             level1.setProperty("jcr:primaryType", "nt:unstructured");
             
             org.apache.jackrabbit.oak.spi.state.NodeBuilder level2 = level1.child("00");
@@ -3375,12 +3466,27 @@ public class AeronConsensusEngine implements ClusteredService {
             genesisWallet.setProperty("jcr:primaryType", "nt:unstructured");
             genesisWallet.setProperty("wallet", GENESIS_ADDRESS);
             genesisWallet.setProperty("role", "genesis");
+            genesisWallet.setProperty("walletCreated", System.currentTimeMillis());
+            genesisWallet.setProperty("nodeType", "wallet-root");
+            genesisWallet.setProperty("description", "Genesis wallet - Network bootstrap identity");
+            genesisWallet.setProperty("contentCount", 1L);  // Genesis content
+            genesisWallet.setProperty("totalWrites", 1L);
+            genesisWallet.setProperty("lastWrite", System.currentTimeMillis());
+            genesisWallet.setProperty("owner", "OakChain Network");
+            genesisWallet.setProperty("verified", true);
             
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesis = genesisWallet.child("genesis");
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder content = genesisWallet.child("content");
+            content.setProperty("jcr:primaryType", "nt:unstructured");
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesis = content.child("genesis");
             genesis.setProperty("jcr:primaryType", "nt:unstructured");
             genesis.setProperty("jcr:created", System.currentTimeMillis());
+            genesis.setProperty("jcr:title", "OakChain Genesis Block");
+            genesis.setProperty("tagline", "Persistence is Futile - The Borg Collective");
             
-            // Protocol
+            // ═══════════════════════════════════════════════════════════════════
+            // PROTOCOL
+            // ═══════════════════════════════════════════════════════════════════
             org.apache.jackrabbit.oak.spi.state.NodeBuilder protocol = genesis.child("protocol");
             protocol.setProperty("jcr:primaryType", "nt:unstructured");
             protocol.setProperty("message", "DO IT LIVE!");
@@ -3388,17 +3494,154 @@ public class AeronConsensusEngine implements ClusteredService {
             protocol.setProperty("chainId", "oak-blockchain-aem-poc");
             protocol.setProperty("genesisTimestamp", System.currentTimeMillis());
             protocol.setProperty("genesisDate", new java.util.Date().toString());
+            protocol.setProperty("philosophy", "Bitcoin-tight reliability meets AEM content management");
             
-            // Consensus
+            // ═══════════════════════════════════════════════════════════════════
+            // CONSENSUS
+            // ═══════════════════════════════════════════════════════════════════
             org.apache.jackrabbit.oak.spi.state.NodeBuilder consensus = genesis.child("consensus");
             consensus.setProperty("jcr:primaryType", "nt:unstructured");
             consensus.setProperty("model", "aeron-raft");
             consensus.setProperty("quorumType", "majority");
+            consensus.setProperty("implementation", "io.aeron.cluster (battle-tested Raft)");
+            consensus.setProperty("features", "election-safety,log-matching,leader-completeness,partition-tolerance");
             
-            // Network
+            // ═══════════════════════════════════════════════════════════════════
+            // ETHEREUM INTEGRATION
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder ethereum = genesis.child("ethereum");
+            ethereum.setProperty("jcr:primaryType", "nt:unstructured");
+            ethereum.setProperty("network", "Ethereum Mainnet Beacon Chain");
+            ethereum.setProperty("epochDuration", "6.4 minutes (384 seconds)");
+            ethereum.setProperty("finalityDelay", "2 epochs (~12.8 minutes)");
+            ethereum.setProperty("integration", "Epoch-based finality for transaction batching");
+            ethereum.setProperty("pollingInterval", "3 minutes");
+            ethereum.setProperty("purpose", "External time oracle + cryptographic payment verification");
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // ARCHITECTURE
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder architecture = genesis.child("architecture");
+            architecture.setProperty("jcr:primaryType", "nt:unstructured");
+            
+            // Wallet-Scoped Paths
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder paths = architecture.child("wallet-scoped-paths");
+            paths.setProperty("jcr:primaryType", "nt:unstructured");
+            paths.setProperty("structure", "/oak-chain/{shard}/content/{contentId}");
+            paths.setProperty("shardFormat", "First 3 bytes of wallet address (XX-YY-ZZ)");
+            paths.setProperty("example", "/oak-chain/74-2d-35/content/page-12345");
+            paths.setProperty("benefit-isolation", "Each wallet gets isolated TarMK segment tree");
+            paths.setProperty("benefit-gc", "Garbage collection per wallet namespace");
+            paths.setProperty("benefit-scalability", "Natural sharding boundaries at each level");
+            paths.setProperty("benefit-performance", "Oak optimized for deep trees, not wide flat structures");
+            
+            // Deep Tree Sharding
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder sharding = architecture.child("deep-tree-sharding");
+            sharding.setProperty("jcr:primaryType", "nt:unstructured");
+            sharding.setProperty("purpose", "Mitigate TarMK segment-not-found issues at architectural level");
+            sharding.setProperty("implementation", "3-level hierarchy from wallet address");
+            sharding.setProperty("rationale", "Deep trees provide segment isolation critical for distributed consensus");
+            
+            // HTTP Segment Transfer
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder httpTransfer = architecture.child("http-segment-transfer");
+            httpTransfer.setProperty("jcr:primaryType", "nt:unstructured");
+            httpTransfer.setProperty("protocol", "HTTP/1.1 REST API");
+            httpTransfer.setProperty("endpoints", "GET /journal.log, GET /segments/{id}, GET /manifest");
+            httpTransfer.setProperty("purpose", "Global read-only replication across Sling authors");
+            httpTransfer.setProperty("pattern", "Cold Standby inspired");
+            httpTransfer.setProperty("benefit", "Content available globally without full validator deployment");
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // ECONOMICS
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder economics = genesis.child("economics");
+            economics.setProperty("jcr:primaryType", "nt:unstructured");
+            economics.setProperty("model", "3-Tier Transaction Pricing");
+            economics.setProperty("philosophy", "Fragmentation costs more - incentivize batching");
+            
+            // Priority Tier
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder priority = economics.child("priority-tier");
+            priority.setProperty("jcr:primaryType", "nt:unstructured");
+            priority.setProperty("price", "0.01 ETH");
+            priority.setProperty("finality", "Immediate (~30 seconds)");
+            priority.setProperty("delay", "0 epochs");
+            priority.setProperty("use-case", "Breaking news, live events, critical updates");
+            priority.setProperty("fragmentation-cost", "High - no batching optimization");
+            
+            // Express Tier
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder express = economics.child("express-tier");
+            express.setProperty("jcr:primaryType", "nt:unstructured");
+            express.setProperty("price", "0.002 ETH");
+            express.setProperty("finality", "~6.4 minutes");
+            express.setProperty("delay", "1 epoch");
+            express.setProperty("use-case", "Time-sensitive content, same-day updates");
+            express.setProperty("fragmentation-cost", "Medium - some batching opportunity");
+            
+            // Standard Tier
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder standard = economics.child("standard-tier");
+            standard.setProperty("jcr:primaryType", "nt:unstructured");
+            standard.setProperty("price", "0.001 ETH");
+            standard.setProperty("finality", "~12.8 minutes");
+            standard.setProperty("delay", "2 epochs");
+            standard.setProperty("use-case", "Bulk content, scheduled updates, archival");
+            standard.setProperty("fragmentation-cost", "Low - maximum batching by wallet");
+            
+            // Intelligent Batching
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder batching = economics.child("intelligent-batching");
+            batching.setProperty("jcr:primaryType", "nt:unstructured");
+            batching.setProperty("strategy", "Group by wallet address + sort by path/timestamp");
+            batching.setProperty("purpose", "Minimize TarMK DAG fragmentation");
+            batching.setProperty("benefit-gc", "Wallet-scoped segments easier to garbage collect");
+            batching.setProperty("benefit-performance", "Sequential writes to same segment tree");
+            batching.setProperty("economic-rationale", "Slower tiers batch more = cheaper storage costs");
+            
+            // Fragmentation Tax
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder fragTax = economics.child("fragmentation-tax");
+            fragTax.setProperty("jcr:primaryType", "nt:unstructured");
+            fragTax.setProperty("concept", "DELETE operations cost more for fragmented content");
+            fragTax.setProperty("measurement", "Track segments touched per wallet");
+            fragTax.setProperty("pricing", "DELETE cost = base + (fragmentation_score * multiplier)");
+            fragTax.setProperty("incentive", "Users who batch efficiently pay less for cleanup");
+            fragTax.setProperty("status", "Designed - implementation in progress");
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // BITCOIN-TIGHT PRINCIPLES
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder bitcoinTight = genesis.child("bitcoin-tight-principles");
+            bitcoinTight.setProperty("jcr:primaryType", "nt:unstructured");
+            bitcoinTight.setProperty("philosophy", "Fail Loud, Fail Fast, Never Silently Corrupt");
+            bitcoinTight.setProperty("principle-1", "Singletons: One BeaconChainClient, one truth");
+            bitcoinTight.setProperty("principle-2", "Fail Loud: System.exit(1) on unrecoverable errors");
+            bitcoinTight.setProperty("principle-3", "Immutability: final fields, immutable state");
+            bitcoinTight.setProperty("principle-4", "Defensive Validation: Epochs never go backwards");
+            bitcoinTight.setProperty("principle-5", "Health Monitoring: /health endpoint + metrics");
+            bitcoinTight.setProperty("principle-6", "No Silent Failures: UncaughtExceptionHandler crashes JVM");
+            bitcoinTight.setProperty("inspiration", "Bitcoin Core, Apache Kafka, Ethereum Geth");
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // NETWORK
+            // ═══════════════════════════════════════════════════════════════════
             org.apache.jackrabbit.oak.spi.state.NodeBuilder network = genesis.child("network");
             network.setProperty("jcr:primaryType", "nt:unstructured");
             network.setProperty("genesisValidator", selfUrl);
+            network.setProperty("transport", "Aeron UDP multicast + unicast");
+            network.setProperty("clusterFormation", "Automatic via Raft election");
+            network.setProperty("partition-tolerance", "Majority quorum required for writes");
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // INNOVATION SUMMARY
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder innovations = genesis.child("innovations");
+            innovations.setProperty("jcr:primaryType", "nt:unstructured");
+            innovations.setProperty("innovation-1", "First blockchain-backed AEM content repository");
+            innovations.setProperty("innovation-2", "Ethereum epochs as external time oracle for finality");
+            innovations.setProperty("innovation-3", "Wallet-scoped path architecture for segment isolation");
+            innovations.setProperty("innovation-4", "Economic model that incentivizes storage efficiency");
+            innovations.setProperty("innovation-5", "Bitcoin-tight reliability in Java enterprise stack");
+            innovations.setProperty("innovation-6", "Global read-only content via HTTP segment transfer");
+            innovations.setProperty("innovation-7", "Multi-tier transaction pricing with cryptographic payment");
+            innovations.setProperty("demo-date", "Garage Week - December 15, 2025");
+            innovations.setProperty("team", "Marc Hess + Claude Sonnet 4.5 (The Borg Collective)");
             
             // Merge (commit)
             ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore).merge(
@@ -3410,21 +3653,14 @@ public class AeronConsensusEngine implements ClusteredService {
             // Get new HEAD after commit
             String newHead = fileStore.getHead().getRecordId().toString10();
             
-            log.info("✅ Genesis created successfully on leader");
-            log.info("   Genesis HEAD: {}", newHead);
-            log.info("   Followers will pull genesis segments via HTTP segment transfer");
-            log.info("   All validators will have identical genesis state");
-            log.info("   Network is ready for wallet-owned writes");
+            log.info("Genesis created successfully - HEAD: {}, Network ready for wallet-owned writes", newHead);
             
             // Broadcast HEAD to followers so they know to sync
             broadcastHeadToFollowers(newHead);
             
         } catch (Exception e) {
-            log.error("❌ Exception during genesis creation", e);
-            e.printStackTrace();
+            log.error("Exception during genesis creation", e);
         }
-        
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
     
     /**

@@ -372,6 +372,19 @@ public class RequestRouter {
                 return;
             }
             
+            // Query APIs
+            if ("/v1/wallets/stats".equals(path) && "GET".equals(method)) {
+                consensusApiHandler.handleWalletStats(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/wallets/content".equals(path) && "GET".equals(method)) {
+                consensusApiHandler.handleWalletContent(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
             // Follower HEAD update endpoint (used by leader to broadcast HEAD to followers)
             if ("/v1/follower/head-update".equals(path) && "POST".equals(method)) {
                 leaderConsensusHandler.handleFollowerHeadUpdate(request, response);

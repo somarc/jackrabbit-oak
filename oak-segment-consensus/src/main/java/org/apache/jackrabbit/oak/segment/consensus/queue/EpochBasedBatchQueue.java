@@ -170,36 +170,47 @@ public class EpochBasedBatchQueue {
     /**
      * Get the current Ethereum epoch from Beacon Chain.
      * 
+     * <p>🎯 Uses cached value from BeaconChainClient (single source of truth).
+     * 
      * <p>This queries the real Ethereum Beacon Chain to get the current epoch number.
      * The current epoch is typically 2 epochs ahead of the finalized epoch due to
      * the Casper FFG finality gadget requiring 2/3 validator attestations.
      * 
-     * @return Current epoch number from Ethereum mainnet
+     * @return Current epoch number from Ethereum mainnet (cached, fast)
      */
     public long getCurrentEpoch() {
-        try {
-            // Beacon client returns finalized epoch, current is +2
-            long finalizedEpoch = beaconClient.getLatestFinalizedEpoch().epochNumber;
-            return finalizedEpoch + FINALITY_EPOCHS;
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to fetch current epoch from Beacon Chain: {}", e.getMessage());
-            // Fallback: Use last known finalized + 2
+        // Use cached value from BeaconChainClient (updated every 3 min by background thread)
+        long currentEpoch = beaconClient.getCachedCurrentEpoch();
+        
+        if (currentEpoch < 0) {
+            log.warn("⚠️  Cached current epoch not available, using fallback");
             return lastFinalizedEpoch >= 0 ? lastFinalizedEpoch + FINALITY_EPOCHS : 0;
         }
+        
+        return currentEpoch;
     }
     
     /**
      * Get the current finalized epoch from Ethereum Beacon Chain.
      * 
-     * @return Finalized epoch number
+     * <p>🎯 Uses cached value from BeaconChainClient (single source of truth).
+     * 
+     * @return Finalized epoch number (cached, fast)
      */
     public long getFinalizedEpoch() {
-        try {
-            return beaconClient.getLatestFinalizedEpoch().epochNumber;
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to fetch finalized epoch from Beacon Chain: {}", e.getMessage());
+        // Use cached value from BeaconChainClient (updated every 3 min by background thread)
+        long finalizedEpoch = beaconClient.getCachedFinalizedEpoch();
+        
+        if (finalizedEpoch < 0) {
+            log.warn("⚠️  Cached finalized epoch not available, using fallback");
             return lastFinalizedEpoch >= 0 ? lastFinalizedEpoch : 0;
         }
+        
+        // NOTE: Do NOT update lastFinalizedEpoch here!
+        // lastFinalizedEpoch tracks the last epoch THIS QUEUE processed,
+        // NOT the Beacon Chain's finalized epoch. It's updated in finalizeEpoch().
+        
+        return finalizedEpoch;
     }
     
     /**
@@ -277,14 +288,21 @@ public class EpochBasedBatchQueue {
         java.util.concurrent.atomic.AtomicInteger expressCount = new java.util.concurrent.atomic.AtomicInteger(0);
         java.util.concurrent.atomic.AtomicInteger standardCount = new java.util.concurrent.atomic.AtomicInteger(0);
         
+        log.info("🔍 DEBUG: Epoch {} has {} wallets in epochMap, currentEpoch={}", 
+            epoch, epochMap.size(), currentEpoch);
+        
         for (Map.Entry<String, List<QueuedProposal>> entry : epochMap.entrySet()) {
             String wallet = entry.getKey();
             List<QueuedProposal> proposals = entry.getValue();
+            
+            log.info("🔍 DEBUG: Wallet {} has {} proposals in epoch {}", wallet, proposals.size(), epoch);
             
             List<QueuedProposal> ready = proposals.stream()
                 .filter(p -> {
                     int requiredDelay = getFinalityDelay(p.getTier());
                     boolean isReady = currentEpoch >= (epoch + requiredDelay);
+                    log.debug("🔍 DEBUG: Proposal {} tier={}, requiredDelay={}, epoch={}, currentEpoch={}, isReady={}", 
+                        p.getProposalId().substring(0, 8), p.getTier(), requiredDelay, epoch, currentEpoch, isReady);
                     if (isReady) {
                         if (p.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS) {
                             expressCount.incrementAndGet();
@@ -296,6 +314,8 @@ public class EpochBasedBatchQueue {
                 })
                 .collect(Collectors.toList());
             
+            log.info("🔍 DEBUG: Wallet {} has {} ready proposals out of {}", wallet, ready.size(), proposals.size());
+            
             if (!ready.isEmpty()) {
                 readyProposals.put(wallet, ready);
                 
@@ -306,8 +326,10 @@ public class EpochBasedBatchQueue {
         
         // Clean up empty wallet lists and remove epoch if completely processed
         epochMap.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+        boolean epochFullyProcessed = false;
         if (epochMap.isEmpty()) {
             pendingEpochWrites.remove(epoch);
+            epochFullyProcessed = true;
         }
         
         if (readyProposals.isEmpty()) {
@@ -315,8 +337,9 @@ public class EpochBasedBatchQueue {
             return Collections.emptyList();
         }
         
-        log.info("📦 Finalizing epoch {} with {} proposals (EXPRESS: {}, STANDARD: {})",
-            epoch, expressCount.get() + standardCount.get(), expressCount.get(), standardCount.get());
+        log.info("📦 Finalizing epoch {} with {} proposals (EXPRESS: {}, STANDARD: {}) - {} remaining",
+            epoch, expressCount.get() + standardCount.get(), expressCount.get(), standardCount.get(),
+            epochFullyProcessed ? "none" : "proposals still queued");
         
         long startTime = System.nanoTime();
         List<List<QueuedProposal>> batches = new ArrayList<>();
@@ -355,18 +378,39 @@ public class EpochBasedBatchQueue {
             }
         }
         
-        lastFinalizedEpoch = epoch;
+        // Only update lastFinalizedEpoch if the epoch is completely processed
+        // AND we're beyond the finality window (no more proposals can arrive for this epoch)
+        // 
+        // CRITICAL: Don't update lastFinalizedEpoch until currentEpoch > (epoch + MAX_DELAY)
+        // Otherwise, proposals arriving after first finalization attempt will be stuck forever!
+        //
+        // Example: currentEpoch=408499, epoch=408498
+        //   - First batch of EXPRESS proposals finalized (1-epoch delay met)
+        //   - epochMap becomes empty, epochFullyProcessed=true
+        //   - BUT: More EXPRESS proposals can still arrive for epoch 408498!
+        //   - If we set lastFinalizedEpoch=408498 now, those proposals get filtered out
+        //   - Solution: Only set lastFinalizedEpoch when currentEpoch > 408498 + 2 (MAX delay)
+        if (epochFullyProcessed && currentEpoch > (epoch + FINALITY_EPOCHS)) {
+            lastFinalizedEpoch = epoch;
+            log.debug("🏁 Epoch {} fully closed (currentEpoch={}, no more proposals can arrive)", 
+                epoch, currentEpoch);
+        } else if (epochFullyProcessed) {
+            log.debug("⏳ Epoch {} processed but not closed (currentEpoch={}, more proposals may arrive)", 
+                epoch, currentEpoch);
+        }
+        
         long durationMs = (System.nanoTime() - startTime) / 1_000_000;
         
-        log.info("✅ Finalized epoch {} in {}ms: {} batches, {} proposals",
+        log.info("✅ Finalized epoch {} in {}ms: {} batches, {} proposals{}",
             epoch, durationMs, batches.size(), 
-            batches.stream().mapToInt(List::size).sum());
+            batches.stream().mapToInt(List::size).sum(),
+            epochFullyProcessed ? " (epoch complete)" : " (more proposals remain)");
         
         return batches;
     }
     
     /**
-     * Get statistics for monitoring.
+     * Get statistics for monitoring (human-readable string).
      */
     public String getStats() {
         long currentEpoch = getCurrentEpoch();
@@ -381,6 +425,27 @@ public class EpochBasedBatchQueue {
             currentEpoch, pendingEpochs, pendingProposals,
             totalProposalsQueued, totalProposalsFinalized, totalBatchesCreated
         );
+    }
+    
+    /**
+     * Get statistics for monitoring (structured data for programmatic access).
+     */
+    public java.util.Map<String, Object> getStatsMap() {
+        long currentEpoch = getCurrentEpoch();
+        int pendingEpochs = pendingEpochWrites.size();
+        int pendingProposals = pendingEpochWrites.values().stream()
+            .mapToInt(m -> m.values().stream().mapToInt(List::size).sum())
+            .sum();
+        
+        java.util.Map<String, Object> stats = new java.util.HashMap<>();
+        stats.put("currentEpoch", currentEpoch);
+        stats.put("pendingEpochs", pendingEpochs);
+        stats.put("pendingProposals", pendingProposals);
+        stats.put("totalProposalsQueued", totalProposalsQueued);
+        stats.put("totalProposalsFinalized", totalProposalsFinalized);
+        stats.put("totalBatchesCreated", totalBatchesCreated);
+        
+        return stats;
     }
     
     /**

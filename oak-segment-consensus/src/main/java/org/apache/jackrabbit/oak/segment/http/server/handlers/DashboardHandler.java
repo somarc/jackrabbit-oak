@@ -192,9 +192,21 @@ public class DashboardHandler {
             appendSummaryCard(html, "Role", role, isLeader ? "This validator currently owns leadership" : "Following elected leader");
             appendSummaryCard(html, "Leader", formatLeaderLabel(leaderUrl), leaderUrl == null ? "Leader discovery pending" : (leaderUrl.equals(context.selfUrl) ? "This node is the leader" : "Tracking elected leader"));
             
-            // Ethereum Epoch - economic finality layer
-            if (ethereumEpoch >= 0) {
-                appendSummaryCard(html, "⛓️ Ethereum Epoch", String.format("%,d", ethereumEpoch), "Current finalized Ethereum Beacon Chain epoch (economic finality layer)");
+            // Ethereum Epoch - show both current and finalized if queue manager is available
+            if (context.proposalQueueManager != null) {
+                java.util.Map<String, Object> queueStats = context.proposalQueueManager.getQueueStats();
+                long currentEpoch = asLong(queueStats.get("currentEpoch"), -1L);
+                long finalizedEpoch = asLong(queueStats.get("finalizedEpoch"), -1L);
+                
+                if (currentEpoch >= 0) {
+                    appendSummaryCard(html, "⛓️ Current Epoch", String.format("%,d", currentEpoch), "Active epoch - new proposals queue here");
+                }
+                if (finalizedEpoch >= 0) {
+                    appendSummaryCard(html, "✅ Finalized Epoch", String.format("%,d", finalizedEpoch), "Finalized epoch - ready for writing to SegmentStore");
+                }
+            } else if (ethereumEpoch >= 0) {
+                // Fallback to cluster state ethereum epoch if queue manager not available
+                appendSummaryCard(html, "⛓️ Ethereum Epoch", String.format("%,d", ethereumEpoch), "Finalized Ethereum Beacon Chain epoch (economic finality layer)");
             }
             
             // Cluster metrics
@@ -506,73 +518,6 @@ public class DashboardHandler {
                 }
                 
                 html.append("</div>\n");
-                
-                // Wallet Storage Ownership Table
-                java.util.Map<String, org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.WalletStorage> allWallets = 
-                    context.walletStorageMetrics.getAllWalletStorage();
-                
-                if (!allWallets.isEmpty()) {
-                    html.append("<div class='card table-card'>\n");
-                    html.append("<h2>💰 Storage Ownership & Tokenomics</h2>\n");
-                    html.append("<div style='margin-bottom: 16px; color: #94a3b8;'>");
-                    html.append("Per-wallet storage ownership % and tax liability (proportional to storage used)");
-                    html.append("</div>\n");
-                    
-                    // Show top 10 wallets by storage
-                    java.util.List<java.util.Map.Entry<String, org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.WalletStorage>> sortedWallets = 
-                        new java.util.ArrayList<>(allWallets.entrySet());
-                    sortedWallets.sort((a, b) -> Long.compare(b.getValue().bytesOwned, a.getValue().bytesOwned));
-                    
-                    if (sortedWallets.size() > 10) {
-                        sortedWallets = sortedWallets.subList(0, 10);
-                    }
-                    
-                    html.append("<table>\n<thead><tr>");
-                    html.append("<th>Wallet Address</th>");
-                    html.append("<th>Storage Used</th>");
-                    html.append("<th>% of Total</th>");
-                    html.append("<th>Nodes</th>");
-                    html.append("<th>Tax (per epoch)</th>");
-                    html.append("</tr></thead><tbody>\n");
-                    
-                    for (java.util.Map.Entry<String, org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.WalletStorage> entry : sortedWallets) {
-                        org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.WalletStorage storage = entry.getValue();
-                        java.math.BigInteger tax = context.walletStorageMetrics.calculateStorageTax(storage.walletAddress);
-                        String taxDisplay = tax.equals(java.math.BigInteger.ZERO) ? "0 ETH" : formatWeiToEth(tax) + " ETH";
-                        
-                        String walletDisplay = storage.walletAddress;
-                        if (walletDisplay.length() > 20) {
-                            walletDisplay = walletDisplay.substring(0, 20) + "...";
-                        }
-                        
-                        html.append("<tr>");
-                        html.append("<td><code style='font-size: 0.85em;'>").append(FormatUtils.escapeHtml(walletDisplay)).append("</code></td>");
-                        html.append("<td>").append(FormatUtils.formatBytes(storage.bytesOwned)).append("</td>");
-                        html.append("<td>").append(String.format("%.3f%%", storage.percentageOfTotal)).append("</td>");
-                        html.append("<td>").append(String.format("%,d", storage.nodeCount)).append("</td>");
-                        html.append("<td>").append(taxDisplay).append("</td>");
-                        html.append("</tr>\n");
-                    }
-                    
-                    html.append("</tbody></table>\n");
-                    
-                    html.append("<div style='margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(148,163,184,0.15);'>");
-                    html.append("<div style='color: #94a3b8; font-size: 0.9em; line-height: 1.6;'>");
-                    html.append("💡 <strong>Tokenomics Model:</strong> Storage tax = 0.000001 ETH per MB per epoch × storage pressure multiplier<br>");
-                    html.append("📊 <strong>Current Multiplier:</strong> ").append(String.format("%.1fx", pressureMultiplier)).append(" (escalates as store approaches 2 TB)<br>");
-                    html.append("🔒 <strong>Delete Tax:</strong> Proportional to % of store deleted × fragmentation penalty");
-                    html.append("</div>");
-                    html.append("</div>\n");
-                    
-                    html.append("</div>\n");
-                } else {
-                    html.append("<div class='card'>\n");
-                    html.append("<h2>💰 Storage Ownership & Tokenomics</h2>\n");
-                    html.append("<div class='empty-state' style='margin-top: 0;'>");
-                    html.append("No wallet storage data available yet. Metrics will appear after first writes.");
-                    html.append("</div>\n");
-                    html.append("</div>\n");
-                }
             }
 
             // Epoch Queue & EVM Bridge Status (REDESIGNED - Triangular Pipeline Visualization)
@@ -597,6 +542,17 @@ public class DashboardHandler {
                     epochProposalCounts = new java.util.HashMap<>();
                 }
                 
+                // Get per-epoch AND per-tier proposal counts
+                @SuppressWarnings("unchecked")
+                java.util.Map<Long, java.util.Map<String, Long>> epochTierCounts = 
+                    (java.util.Map<Long, java.util.Map<String, Long>>) queueStats.get("proposalsByEpochAndTier");
+                if (epochTierCounts == null) {
+                    epochTierCounts = new java.util.HashMap<>();
+                }
+                
+                // Get priority writes sent count (bypassed queue)
+                long priorityWritesSent = asLong(queueStats.get("priorityProposalsSent"), 0L);
+                
                 html.append("<div class='card' style='background: linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(30,41,59,0.95) 100%); border-left: 3px solid #8b5cf6;'>\n");
                 html.append("<h2>⛓️  Ethereum Epoch Finality Pipeline</h2>\n");
                 html.append("<div style='margin-bottom: 20px; color: #94a3b8; line-height: 1.6;'>");
@@ -610,47 +566,109 @@ public class DashboardHandler {
                 // Pipeline stages header
                 html.append("<div style='display: grid; grid-template-columns: 1fr 60px 1fr 60px 1fr; gap: 0; align-items: center; margin-bottom: 24px;'>\n");
                 
-                // Stage 1: Current Epoch (Queuing)
-                long stage1Count = epochProposalCounts.getOrDefault(currentEpoch, 0L);
+                // Stage 1: Proposals targeting current epoch for finality
+                // (Standard from 2 epochs ago, Express from 1 epoch ago)
+                java.util.Map<String, Long> stage1Tiers = epochTierCounts.getOrDefault(currentEpoch, new java.util.HashMap<>());
+                long stage1Standard = stage1Tiers.getOrDefault("STANDARD", 0L);
+                long stage1Express = stage1Tiers.getOrDefault("EXPRESS", 0L);
+                long stage1Total = stage1Standard + stage1Express;
+                
                 html.append("<div style='background: rgba(59, 130, 246, 0.2); padding: 20px; border-radius: 12px; border: 2px solid #60a5fa; position: relative;'>\n");
                 html.append("<div style='position: absolute; top: -12px; left: 12px; background: #0f172a; padding: 0 8px;'>\n");
                 html.append("<span style='color: #60a5fa; font-size: 0.75em; font-weight: 600; text-transform: uppercase;'>Stage 1</span>\n");
                 html.append("</div>\n");
                 html.append("<div style='color: #60a5fa; font-size: 0.9em; margin-bottom: 12px;'>📡 Current Epoch</div>\n");
                 html.append("<div style='font-size: 2.2em; font-weight: 700; color: #60a5fa; margin-bottom: 8px;'>").append(currentEpoch).append("</div>\n");
-                html.append("<div style='color: #cbd5e1; font-size: 0.95em; margin-bottom: 12px;'><strong>").append(stage1Count).append("</strong> proposals queuing</div>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.8em; line-height: 1.4;'>New writes enter here<br>EVM verification in progress</div>\n");
+                html.append("<div style='color: #cbd5e1; font-size: 0.95em; margin-bottom: 12px;'>");
+                html.append("<strong>").append(stage1Total).append("</strong> proposals queuing");
+                html.append("</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.8em; line-height: 1.4;'>");
+                if (stage1Standard > 0 && stage1Express > 0) {
+                    html.append("🥉 ").append(stage1Standard).append(" Standard + 🥈 ").append(stage1Express).append(" Express<br>");
+                } else if (stage1Standard > 0) {
+                    html.append("🥉 ").append(stage1Standard).append(" Standard<br>");
+                } else if (stage1Express > 0) {
+                    html.append("🥈 ").append(stage1Express).append(" Express<br>");
+                }
+                html.append("EVM verification in progress");
+                html.append("</div>\n");
                 html.append("</div>\n");
                 
                 // Arrow 1
                 html.append("<div style='text-align: center; color: #8b5cf6; font-size: 2em; line-height: 1;'>→</div>\n");
                 
-                // Stage 2: Current - 1 (Waiting)
+                // Stage 2: Proposals targeting epoch - 1 for finality
+                // (Standard from 1 epoch ago, Express from current epoch)
                 long stage2Epoch = currentEpoch - 1;
-                long stage2Count = epochProposalCounts.getOrDefault(stage2Epoch, 0L);
+                java.util.Map<String, Long> stage2Tiers = epochTierCounts.getOrDefault(stage2Epoch, new java.util.HashMap<>());
+                long stage2Standard = stage2Tiers.getOrDefault("STANDARD", 0L);
+                long stage2Express = stage2Tiers.getOrDefault("EXPRESS", 0L);
+                long stage2Total = stage2Standard + stage2Express;
+                
                 html.append("<div style='background: rgba(250, 204, 21, 0.2); padding: 20px; border-radius: 12px; border: 2px solid #facc15; position: relative;'>\n");
                 html.append("<div style='position: absolute; top: -12px; left: 12px; background: #0f172a; padding: 0 8px;'>\n");
                 html.append("<span style='color: #facc15; font-size: 0.75em; font-weight: 600; text-transform: uppercase;'>Stage 2</span>\n");
                 html.append("</div>\n");
                 html.append("<div style='color: #facc15; font-size: 0.9em; margin-bottom: 12px;'>⏳ Epoch - 1</div>\n");
                 html.append("<div style='font-size: 2.2em; font-weight: 700; color: #facc15; margin-bottom: 8px;'>").append(stage2Epoch).append("</div>\n");
-                html.append("<div style='color: #cbd5e1; font-size: 0.95em; margin-bottom: 12px;'><strong>").append(stage2Count).append("</strong> proposals waiting</div>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.8em; line-height: 1.4;'>Verified & secured<br>~6.4 min until finality</div>\n");
+                html.append("<div style='color: #cbd5e1; font-size: 0.95em; margin-bottom: 12px;'>");
+                html.append("<strong>").append(stage2Total).append("</strong> proposals waiting");
+                html.append("</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.8em; line-height: 1.4;'>");
+                if (stage2Standard > 0 && stage2Express > 0) {
+                    html.append("🥉 ").append(stage2Standard).append(" Standard + 🥈 ").append(stage2Express).append(" Express<br>");
+                } else if (stage2Standard > 0) {
+                    html.append("🥉 ").append(stage2Standard).append(" Standard<br>");
+                } else if (stage2Express > 0) {
+                    html.append("🥈 ").append(stage2Express).append(" Express<br>");
+                }
+                html.append("Verified & secured • ~6.4 min until finality");
+                html.append("</div>\n");
                 html.append("</div>\n");
                 
                 // Arrow 2
                 html.append("<div style='text-align: center; color: #8b5cf6; font-size: 2em; line-height: 1;'>→</div>\n");
                 
-                // Stage 3: Finalized (Current - 2)
-                long stage3Count = epochProposalCounts.getOrDefault(finalizedEpoch, 0L);
+                // Stage 3: Finalized proposals (batched Standard/Express + immediate Priority)
+                // All proposals that reached their finality target epoch
+                java.util.Map<String, Long> stage3Tiers = epochTierCounts.getOrDefault(finalizedEpoch, new java.util.HashMap<>());
+                long stage3Standard = stage3Tiers.getOrDefault("STANDARD", 0L);
+                long stage3Express = stage3Tiers.getOrDefault("EXPRESS", 0L);
+                long stage3Batched = stage3Standard + stage3Express;
+                
                 html.append("<div style='background: rgba(52, 211, 153, 0.2); padding: 20px; border-radius: 12px; border: 2px solid #34d399; position: relative;'>\n");
                 html.append("<div style='position: absolute; top: -12px; left: 12px; background: #0f172a; padding: 0 8px;'>\n");
                 html.append("<span style='color: #34d399; font-size: 0.75em; font-weight: 600; text-transform: uppercase;'>Stage 3</span>\n");
                 html.append("</div>\n");
                 html.append("<div style='color: #34d399; font-size: 0.9em; margin-bottom: 12px;'>✅ Finalized</div>\n");
                 html.append("<div style='font-size: 2.2em; font-weight: 700; color: #34d399; margin-bottom: 8px;'>").append(finalizedEpoch).append("</div>\n");
-                html.append("<div style='color: #cbd5e1; font-size: 0.95em; margin-bottom: 12px;'><strong>").append(stage3Count > 0 ? stage3Count + " batches" : "Ready").append("</strong> for Aeron</div>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.8em; line-height: 1.4;'>Batched & replicated<br>Writing to SegmentStore</div>\n");
+                html.append("<div style='color: #cbd5e1; font-size: 0.95em; margin-bottom: 12px;'>");
+                if (stage3Batched > 0) {
+                    html.append("<strong>Ready for Aeron</strong>");
+                } else {
+                    html.append("<strong>Ready</strong>");
+                }
+                html.append("</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.8em; line-height: 1.4;'>");
+                
+                // Show tier breakdown
+                java.util.List<String> stage3Parts = new java.util.ArrayList<>();
+                if (stage3Standard > 0) {
+                    stage3Parts.add("🥉 " + stage3Standard + " Standard");
+                }
+                if (stage3Express > 0) {
+                    stage3Parts.add("🥈 " + stage3Express + " Express");
+                }
+                if (priorityWritesSent > 0) {
+                    stage3Parts.add("🥇 " + priorityWritesSent + " Priority");
+                }
+                
+                if (!stage3Parts.isEmpty()) {
+                    html.append(String.join(" + ", stage3Parts)).append("<br>");
+                }
+                
+                html.append("Batched & replicated • Writing to SegmentStore");
+                html.append("</div>\n");
                 html.append("</div>\n");
                 
                 html.append("</div>\n");
@@ -723,20 +741,26 @@ public class DashboardHandler {
             }
 
             // Validator Earnings Card (Economics Simulation)
-            if (context.validatorEarningsTracker != null) {
+            if (context.validatorEarningsTracker != null && context.myValidatorId != null) {
                 java.util.Map<String, org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.ValidatorEarnings> allEarnings = 
                     context.validatorEarningsTracker.getAllValidatorEarnings();
                 
-                if (!allEarnings.isEmpty()) {
+                // Get ONLY this validator's earnings
+                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.ValidatorEarnings myEarnings = 
+                    allEarnings.get(context.myValidatorId);
+                
+                if (myEarnings != null) {
                     html.append("<div class='card' style='background: linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(59,130,246,0.15) 100%); border-left: 3px solid #facc15;'>\n");
-                    html.append("<h2>💰 Validator Earnings (Economic Simulation)</h2>\n");
+                    html.append("<h2>💰 My Validator Earnings</h2>\n");
                     html.append("<div style='margin-bottom: 16px; color: #94a3b8; line-height: 1.6;'>");
                     html.append("Real-world simulation: Validators earn income from write transactions. ");
-                    html.append("<strong style='color: #fbbf24;'>Payments distributed equitably across ALL validators</strong>, regardless of Aeron leader.");
+                    html.append("<strong style='color: #fbbf24;'>Payments distributed equitably across ALL validators</strong> (");
+                    html.append(allEarnings.size()).append(" nodes), regardless of Aeron leader.");
                     html.append("</div>\n");
                     
                     // Network summary
-                    long totalTxCount = allEarnings.values().stream().mapToLong(e -> e.transactionCount).sum();
+                    int clusterSize = allEarnings.size();
+                    long uniqueWrites = myEarnings.transactionCount; // Each validator processes ALL writes (replication)
                     long totalEarningsWei = context.validatorEarningsTracker.getTotalNetworkEarnings();
                     String totalEarningsEth = "0";
                     if (totalEarningsWei > 0) {
@@ -753,50 +777,64 @@ public class DashboardHandler {
                         }
                     }
                     
-                    html.append("<div style='background: rgba(15,23,42,0.6); padding: 16px; border-radius: 8px; margin-bottom: 20px;'>\n");
-                    html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;'>\n");
-                    appendMiniCard(html, "💵 Total Network Revenue", totalEarningsEth + " ETH", "#facc15", "Cumulative earnings from all writes");
-                    appendMiniCard(html, "📝 Total Transactions", String.format("%,d", totalTxCount), "#60a5fa", "Write operations processed");
-                    appendMiniCard(html, "👥 Active Validators", String.valueOf(allEarnings.size()), "#34d399", "Earning validators in cluster");
-                    html.append("</div>\n");
-                    html.append("</div>\n");
-                    
-                    // Per-validator earnings table
-                    html.append("<div style='overflow-x: auto;'>\n");
-                    html.append("<table style='width: 100%; border-collapse: collapse;'>\n");
-                    html.append("<thead><tr style='border-bottom: 2px solid rgba(148,163,184,0.3);'>");
-                    html.append("<th style='text-align: left; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Validator Wallet</th>");
-                    html.append("<th style='text-align: right; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Earnings</th>");
-                    html.append("<th style='text-align: right; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Transactions</th>");
-                    html.append("<th style='text-align: center; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Standard</th>");
-                    html.append("<th style='text-align: center; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Express</th>");
-                    html.append("<th style='text-align: center; padding: 12px; color: #94a3b8; font-size: 0.85em;'>Priority</th>");
-                    html.append("</tr></thead>\n");
-                    html.append("<tbody>\n");
-                    
-                    for (org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.ValidatorEarnings earnings : allEarnings.values()) {
-                        String walletDisplay = earnings.walletAddress;
-                        if (walletDisplay.length() > 15) {
-                            walletDisplay = walletDisplay.substring(0, 12) + "...";
+                    // Calculate my share (1/N of total network revenue)
+                    String myShareEth = "0";
+                    if (totalEarningsWei > 0) {
+                        long myShareWei = totalEarningsWei / clusterSize;
+                        java.math.BigInteger ethBig = java.math.BigInteger.valueOf(myShareWei).divide(java.math.BigInteger.TEN.pow(18));
+                        java.math.BigInteger remainder = java.math.BigInteger.valueOf(myShareWei).remainder(java.math.BigInteger.TEN.pow(18));
+                        if (!remainder.equals(java.math.BigInteger.ZERO)) {
+                            String remainderStr = remainder.toString();
+                            while (remainderStr.length() < 18) {
+                                remainderStr = "0" + remainderStr;
+                            }
+                            myShareEth = ethBig + "." + remainderStr.substring(0, Math.min(6, remainderStr.length()));
+                        } else {
+                            myShareEth = ethBig.toString();
                         }
-                        
-                        html.append("<tr style='border-bottom: 1px solid rgba(148,163,184,0.1);'>");
-                        html.append("<td style='padding: 12px;'><code style='font-size: 0.9em; color: #60a5fa;'>").append(FormatUtils.escapeHtml(walletDisplay)).append("</code></td>");
-                        html.append("<td style='padding: 12px; text-align: right; font-weight: 600; color: #fbbf24;'>").append(FormatUtils.escapeHtml(earnings.getEarningsEth())).append(" ETH</td>");
-                        html.append("<td style='padding: 12px; text-align: right; color: #cbd5e1;'>").append(String.format("%,d", earnings.transactionCount)).append("</td>");
-                        html.append("<td style='padding: 12px; text-align: center; color: #94a3b8;'>").append(String.format("%,d", earnings.standardTierCount)).append("</td>");
-                        html.append("<td style='padding: 12px; text-align: center; color: #facc15;'>").append(String.format("%,d", earnings.expressTierCount)).append("</td>");
-                        html.append("<td style='padding: 12px; text-align: center; color: #a78bfa;'>").append(String.format("%,d", earnings.priorityTierCount)).append("</td>");
-                        html.append("</tr>\n");
                     }
                     
-                    html.append("</tbody></table>\n");
+                    html.append("<div style='background: rgba(15,23,42,0.6); padding: 16px; border-radius: 8px; margin-bottom: 20px;'>\n");
+                    html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;'>\n");
+                    appendMiniCard(html, "💰 My Share", myShareEth + " ETH", "#10b981", "My portion (1/" + clusterSize + " of network)");
+                    appendMiniCard(html, "📝 Network Writes", String.format("%,d", uniqueWrites), "#60a5fa", "Unique write operations (replicated to all " + clusterSize + " nodes)");
+                    appendMiniCard(html, "💵 Total Network Revenue", totalEarningsEth + " ETH", "#facc15", "Sum of all user payments");
+                    html.append("</div>\n");
                     html.append("</div>\n");
                     
-                    html.append("<div style='margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(148,163,184,0.15); color: #94a3b8; font-size: 0.85em; line-height: 1.6;'>");
-                    html.append("💡 <strong>Economic Model:</strong> Even though Aeron Raft has a single leader, ");
-                    html.append("<strong style='color: #fbbf24;'>all validators earn equally</strong> from every write transaction. ");
-                    html.append("This ensures fair compensation for all nodes maintaining consensus and replication.");
+                    // My validator details (single row)
+                    html.append("<div style='background: rgba(15,23,42,0.6); padding: 16px; border-radius: 8px;'>\n");
+                    html.append("<div style='margin-bottom: 8px;'>\n");
+                    html.append("<span style='color: #94a3b8; font-size: 0.85em;'>My Validator Wallet</span><br>\n");
+                    
+                    String walletDisplay = myEarnings.walletAddress;
+                    if (walletDisplay.length() > 50) {
+                        walletDisplay = walletDisplay.substring(0, 10) + "..." + walletDisplay.substring(walletDisplay.length() - 8);
+                    }
+                    html.append("<code style='font-size: 1.1em; color: #60a5fa; font-weight: 600;'>").append(FormatUtils.escapeHtml(walletDisplay)).append("</code>\n");
+                    html.append("</div>\n");
+                    
+                    html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(148,163,184,0.15);'>\n");
+                    html.append("<div style='text-align: center;'>\n");
+                    html.append("<div style='color: #94a3b8; font-size: 0.75em; text-transform: uppercase; margin-bottom: 4px;'>Standard</div>\n");
+                    html.append("<div style='color: #cbd5e1; font-size: 1.2em; font-weight: 600;'>").append(String.format("%,d", myEarnings.standardTierCount)).append("</div>\n");
+                    html.append("</div>\n");
+                    html.append("<div style='text-align: center;'>\n");
+                    html.append("<div style='color: #facc15; font-size: 0.75em; text-transform: uppercase; margin-bottom: 4px;'>Express</div>\n");
+                    html.append("<div style='color: #facc15; font-size: 1.2em; font-weight: 600;'>").append(String.format("%,d", myEarnings.expressTierCount)).append("</div>\n");
+                    html.append("</div>\n");
+                    html.append("<div style='text-align: center;'>\n");
+                    html.append("<div style='color: #a78bfa; font-size: 0.75em; text-transform: uppercase; margin-bottom: 4px;'>Priority</div>\n");
+                    html.append("<div style='color: #a78bfa; font-size: 1.2em; font-weight: 600;'>").append(String.format("%,d", myEarnings.priorityTierCount)).append("</div>\n");
+                    html.append("</div>\n");
+                    html.append("</div>\n");
+                    html.append("</div>\n");
+                    
+                    html.append("<div style='margin-top: 16px; padding: 12px; background: rgba(59,130,246,0.1); border-left: 3px solid #3b82f6; border-radius: 6px; color: #94a3b8; font-size: 0.85em; line-height: 1.6;'>");
+                    html.append("💡 <strong style='color: #60a5fa;'>Economic Model:</strong> Even though Aeron Raft has a single leader, ");
+                    html.append("<strong style='color: #fbbf24;'>all ").append(clusterSize).append(" validators earn equally</strong> from every write. ");
+                    html.append("Each write is replicated to all nodes, and payments are split <code style='color: #10b981;'>1/").append(clusterSize).append("</code> per validator. ");
+                    html.append("This ensures fair compensation for maintaining consensus.");
                     html.append("</div>\n");
                     
                     html.append("</div>\n");
@@ -1246,7 +1284,8 @@ public class DashboardHandler {
         html.append("<div class='category'>\n");
         html.append("<h2>🔄 Consensus APIs</h2>\n");
         addApiEndpoint(html, "GET", "/v1/consensus/status", "Get consensus state (Aeron-aware)", "consensus_status");
-        addApiEndpoint(html, "POST", "/v1/propose-write", "Propose signed write transaction", "propose_write");
+        addApiEndpoint(html, "POST", "/v1/propose-write", "Propose signed write transaction (⚠️ TODO: Full signature verification)", "propose_write");
+        addApiEndpoint(html, "GET", "/v1/head", "Get latest HEAD and committed HEAD with epoch tracking", "head");
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");
@@ -1268,7 +1307,7 @@ public class DashboardHandler {
         html.append("<h2>🗑️ Garbage Collection & Compaction</h2>\n");
         addApiEndpoint(html, "GET", "/v1/gc/estimate", "Estimate GC cost and reclaimable space (JSON)", "gc_estimate");
         addApiEndpoint(html, "GET", "/v1/gc/status", "Get GC proposal status and history (JSON)", "gc_status");
-        addApiEndpoint(html, "POST", "/v1/propose-gc", "Propose a GC operation (requires consensus)", "propose_gc");
+        addApiEndpoint(html, "POST", "/v1/propose-gc", "Propose a GC operation (⚠️ TODO: Aeron replication)", "propose_gc");
         addApiEndpoint(html, "POST", "/v1/gc/execute", "Manually execute an approved GC proposal (auto-executes on approval)", "gc_execute");
         addApiEndpoint(html, "GET", "/v1/compaction/proposals", "Get pending compaction proposals (JSON)", "compaction_proposals");
         html.append("</div>\n");
@@ -1292,12 +1331,19 @@ public class DashboardHandler {
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");
+        html.append("<h2>🔧 Internal / Advanced APIs</h2>\n");
+        addApiEndpoint(html, "POST", "/v1/follower/head-update", "Receive HEAD update from leader (internal cluster sync)", "follower_head_update");
+        html.append("<div style='margin-top: 8px; padding: 8px; background: rgba(251, 191, 36, 0.1); border-left: 2px solid #fbbf24; border-radius: 4px; font-size: 0.85em; color: #fbbf24;'>⚠️ These endpoints are for internal cluster operations. Use with caution.</div>\n");
+        html.append("</div>\n");
+        
+        html.append("<div class='category'>\n");
         html.append("<h2>📄 Oak Files</h2>\n");
         addApiEndpoint(html, "GET", "/journal.log", "Journal file (text)", "journal");
         addApiEndpoint(html, "GET", "/manifest", "Manifest file (text)", "manifest");
+        addApiEndpoint(html, "HEAD", "/manifest", "Check manifest existence (HEAD)", "manifest_head");
         addApiEndpoint(html, "GET", "/gc.log", "Garbage collection log (text)", "gc");
         addApiEndpoint(html, "GET", "/segments/{id}", "Fetch segment by ID (binary)", "segment_get");
-        addApiEndpoint(html, "HEAD", "/segments/{id}", "Check segment existence", "segment_head");
+        addApiEndpoint(html, "HEAD", "/segments/{id}", "Check segment existence (HEAD)", "segment_head");
         html.append("</div>\n");
         
         html.append("</div>\n");
@@ -1352,10 +1398,12 @@ public class DashboardHandler {
         html.append("\n");
         html.append("function getExampleBody(id) {\n");
         html.append("  const examples = {\n");
-        html.append("    'test_write': JSON.stringify({wallet: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb', message: 'Hello Blockchain!', contentType: 'page', signature: '0x...', clientId: 'test-client'}, null, 2),\n");
+        html.append("    'propose_write': JSON.stringify({wallet: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb', message: 'Hello Blockchain!', contentType: 'page', signature: '0x...', clientId: 'test-client', paymentTier: 'STANDARD'}, null, 2),\n");
         html.append("    'register_client': JSON.stringify({clientId: 'sling-author-1', clientUrl: 'http://localhost:8080', walletAddress: '0xabc...def'}, null, 2),\n");
         html.append("    'propose_gc': JSON.stringify({walletAddress: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb', targetRevision: null}, null, 2),\n");
-        html.append("    'gc_execute': JSON.stringify({proposalId: 'uuid-here'}, null, 2)\n");
+        html.append("    'gc_execute': JSON.stringify({proposalId: 'uuid-here'}, null, 2),\n");
+        html.append("    'follower_head_update': JSON.stringify({head: 'abc123...', epoch: 408488, leaderUrl: 'http://validator-1:8090'}, null, 2),\n");
+        html.append("    'chat': JSON.stringify({query: 'What is the current cluster status?'}, null, 2)\n");
         html.append("  };\n");
         html.append("  return examples[id] || '{}';\n");
         html.append("}\n");

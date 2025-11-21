@@ -55,19 +55,29 @@ public class BackpressureManager {
      * Maximum pending (unacknowledged) messages before applying backpressure.
      * Configurable via system property.
      * 
-     * Default: 2000 messages
+     * Default: 10000 messages (increased from 2000 to handle large batch volumes)
+     * 
+     * Rationale: Epoch finalization can create 3000+ proposals at once.
+     * Previous limit (2000) caused immediate backpressure and re-queue loops.
+     * New limit (10000) accommodates large finalization waves while still
+     * protecting against unbounded growth.
      */
     private static final long MAX_PENDING_MESSAGES = 
-        Long.getLong("oak.consensus.max.pending.messages", 2000);
+        Long.getLong("oak.consensus.max.pending.messages", 10000);
     
     /**
      * Timeout in milliseconds for backpressure wait.
      * If pending messages remain above max for this long, throw exception.
      * 
-     * Default: 10000ms (10 seconds)
+     * Default: 30000ms (30 seconds, increased from 10s for large batches)
+     * 
+     * Rationale: Large batches (3000+ proposals) take longer to send through Aeron.
+     * 10 seconds was too short for big finalization waves. 30 seconds gives
+     * Aeron time to process large volumes while still protecting against
+     * infinite waits.
      */
     private static final long BACKPRESSURE_TIMEOUT_MS =
-        Long.getLong("oak.consensus.backpressure.timeout.ms", 10000);
+        Long.getLong("oak.consensus.backpressure.timeout.ms", 30000);
     
     /**
      * Park duration in nanoseconds when waiting for acknowledgments.

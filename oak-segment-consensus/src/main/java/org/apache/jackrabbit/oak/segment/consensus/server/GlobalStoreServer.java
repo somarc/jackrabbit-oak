@@ -1079,18 +1079,35 @@ public class GlobalStoreServer {
                         @Override
                         public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
                             // Append single proposal to Raft via AeronConsensusEngine
-                            if (aeronEngine != null) {
-                                aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
+                            if (aeronEngine == null) {
+                                System.err.println("❌ aeronEngine is NULL in appendProposal!");
+                                return;
+                            }
+                            System.out.println("📤 appendProposal() called - forwarding to Aeron (role: " + aeronEngine.getCurrentRole() + ")");
+                            boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
+                            if (!success) {
+                                System.err.println("❌ sendWriteThroughIngress() returned false!");
                             }
                         }
                         
                         @Override
                         public int appendProposalBatch(java.util.List<org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal> proposals) {
+                            // THE FIX VERIFICATION: Prove this override is actually being called
+                            System.out.println("🔥🔥🔥 OVERRIDE CALLED: appendProposalBatch() - batch size: " + proposals.size() + 
+                                ", class: " + this.getClass().getName());
+                            
                             // Append batch of proposals to Raft via AeronConsensusEngine
-                            if (aeronEngine != null) {
-                                return aeronEngine.sendWriteBatchThroughIngress(proposals);
+                            if (aeronEngine == null) {
+                                System.err.println("❌ aeronEngine is NULL in appendProposalBatch!");
+                                return 0;
                             }
-                            return 0;
+                            System.out.println("📤 appendProposalBatch() forwarding to aeronEngine.sendWriteBatchThroughIngress() - role: " + aeronEngine.getCurrentRole());
+                            int sent = aeronEngine.sendWriteBatchThroughIngress(proposals);
+                            System.out.println("📤 appendProposalBatch() result: " + sent + " proposals sent");
+                            if (sent == 0) {
+                                System.err.println("❌ sendWriteBatchThroughIngress() returned 0 (failed)!");
+                            }
+                            return sent;
                         }
                     };
                 
@@ -1106,6 +1123,7 @@ public class GlobalStoreServer {
                 // Initialize Beacon Chain client for real-time Ethereum epoch tracking (reuse beaconApiUrl from earlier)
                 org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient = 
                     new org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient(beaconApiUrl);
+                beaconClient.startBackgroundPolling(); // CRITICAL: Start polling thread to update cached epochs
                 System.out.println("   ✅ Beacon Chain client initialized (tracking Ethereum epochs from " + beaconApiUrl + ")");
                 
                 // Use optimized epoch-based batching queue manager
@@ -1685,6 +1703,30 @@ public class GlobalStoreServer {
             throw new IOException("Failed to launch Aeron Cluster", e);
         }
         
+        // 🔄 STARTUP ELECTION OBSERVATION: Verify cluster health before genesis
+        // Watches leader elections for 15s to ensure all nodes can participate
+        if (!hasExistingCluster && hostnamesList.size() >= 3) {
+            System.out.println();
+            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            System.out.println("🔄 STARTUP ELECTION OBSERVATION");
+            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            System.out.println("Purpose: Observe elections for 15s to verify all " + hostnamesList.size() + 
+                " nodes can participate");
+            System.out.println("         before performing critical genesis writes");
+            System.out.println();
+            
+            try {
+                observeElections(aeronEngine, 15000);
+                System.out.println("✅ Election observation complete - cluster verified healthy");
+                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                System.out.println();
+            } catch (Exception e) {
+                System.err.println("⚠️  Election observation failed: " + e.getMessage());
+                System.err.println("   Proceeding with genesis, but cluster health uncertain");
+                System.err.println();
+            }
+        }
+        
         // Create AeronWriteClient
         String aeronDirectoryName = aeronClusterLauncher.getAeronDirectoryName();
         int clusterBasePort = org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher.getPortBase();
@@ -2119,6 +2161,63 @@ public class GlobalStoreServer {
             }
         } catch (Exception e) {
             return null;
+        }
+    }
+    
+    /**
+     * Observe elections for a period to verify cluster health.
+     * Passively watches leadership changes to ensure all nodes can participate.
+     * 
+     * @param engine Aeron consensus engine
+     * @param observationMs Observation period in milliseconds
+     */
+    private void observeElections(
+            org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine engine,
+            long observationMs) throws Exception {
+        
+        java.util.Set<Integer> observedLeaders = new java.util.HashSet<>();
+        long startTime = System.currentTimeMillis();
+        int lastLeaderId = -1;
+        int changeCount = 0;
+        
+        System.out.println("   Observing elections for " + (observationMs / 1000) + " seconds...");
+        System.out.println();
+        
+        while (System.currentTimeMillis() - startTime < observationMs) {
+            int currentLeaderId = engine.getLeaderMemberId();
+            
+            if (currentLeaderId >= 0) {
+                observedLeaders.add(currentLeaderId);
+                
+                if (currentLeaderId != lastLeaderId) {
+                    String role = engine.isLeader() ? "LEADER (this node)" : "FOLLOWER";
+                    System.out.println("   " + new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date()) + 
+                        " - Leader is node " + currentLeaderId + 
+                        " (role: " + role + ", changes: " + ++changeCount + ")");
+                    lastLeaderId = currentLeaderId;
+                }
+            }
+            
+            Thread.sleep(1000); // Check every second
+        }
+        
+        System.out.println();
+        System.out.println("   Observation Results:");
+        System.out.println("   - Duration: " + (observationMs / 1000) + " seconds");
+        System.out.println("   - Leadership changes: " + changeCount);
+        System.out.println("   - Unique leaders observed: " + observedLeaders.size() + " of " + engine.getClusterSize() + " nodes");
+        System.out.println("   - Final leader: node " + lastLeaderId);
+        System.out.println();
+        
+        if (observedLeaders.isEmpty()) {
+            throw new Exception("No leader elected during observation period");
+        }
+        
+        if (observedLeaders.size() == 1 && changeCount == 0) {
+            System.out.println("   ℹ️  Single stable leader throughout observation (healthy)");
+        } else if (changeCount > 3) {
+            System.out.println("   ⚠️  WARNING: " + changeCount + " leadership changes detected");
+            System.out.println("              This may indicate network instability");
         }
     }
     

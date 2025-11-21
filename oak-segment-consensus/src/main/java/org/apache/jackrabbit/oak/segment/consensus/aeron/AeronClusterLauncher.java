@@ -67,7 +67,7 @@ public class AeronClusterLauncher {
     private static final int TRANSFER_PORT_OFFSET = 5;
     private static final int LOG_CONTROL_PORT_OFFSET = 6;
     private static final int REPLICATION_PORT_OFFSET = 7;
-    private static final int TERM_LENGTH = 64 * 1024;
+    private static final int TERM_LENGTH = 128 * 1024 * 1024; // 128MB
     
     private final int nodeId;
     private final List<String> hostnames;
@@ -219,10 +219,20 @@ public class AeronClusterLauncher {
         // - Sparse files reduce disk I/O for better performance
         // - Shared threading mode balances latency and resource usage
         // - Error handler provides graceful shutdown on FATAL errors
+        // Socket buffer sizes (configurable via system properties)
+        // Default: 16KB for Mac/Darwin (Aeron best practices)
+        // Can be overridden: -Daeron.socket.so_sndbuf=32768 -Daeron.socket.so_rcvbuf=32768
+        int socketSndbufLength = Integer.getInteger("aeron.socket.so_sndbuf", 16 * 1024);
+        int socketRcvbufLength = Integer.getInteger("aeron.socket.so_rcvbuf", 16 * 1024);
+        log.info("📡 Socket buffer configuration: SO_SNDBUF={}KB, SO_RCVBUF={}KB", 
+            socketSndbufLength / 1024, socketRcvbufLength / 1024);
+        
         MediaDriver.Context mediaDriverContext = new MediaDriver.Context()
                 .aeronDirectoryName(aeronDirName)
                 .threadingMode(ThreadingMode.SHARED)  // Balanced: good latency, efficient resource usage
                 .termBufferSparseFile(true)  // Reduces disk I/O, improves performance
+                .socketSndbufLength(socketSndbufLength)  // Configurable send buffer (default: 16KB for Mac)
+                .socketRcvbufLength(socketRcvbufLength)  // Configurable receive buffer (default: 16KB for Mac)
                 .multicastFlowControlSupplier(new MinMulticastFlowControlSupplier())
                 .terminationHook(barrier::signal)
                 .errorHandler(closingErrorHandler(errorHandler("Media Driver")))
@@ -250,7 +260,7 @@ public class AeronClusterLauncher {
                 .controlChannel(udpChannel(nodeId, myIPAddress, ARCHIVE_CONTROL_PORT_OFFSET))
                 .replicationChannel(logReplicationChannel(myIPAddress))
                 .archiveClientContext(replicationArchiveContext)
-                .localControlChannel("aeron:ipc?term-length=64k")
+                .localControlChannel("aeron:ipc?term-length=64k")  // MUST be IPC (Aeron Archive requirement)
                 .recordingEventsEnabled(false)
                 .threadingMode(ArchiveThreadingMode.SHARED);
         
@@ -271,9 +281,10 @@ public class AeronClusterLauncher {
                 .clusterMemberId(nodeId)
                 .clusterMembers(clusterMembers(ipAddresses))  // Use IPs instead of hostnames
                 .clusterDir(new File(baseDir, "cluster"))
-                .ingressChannel("aeron:udp?term-length=64k")
+                .ingressChannel("aeron:udp?term-length=128m")  // CRITICAL: Explicitly match log term-length (128MB)
                 .logChannel(logControlChannel(nodeId, myIPAddress, LOG_CONTROL_PORT_OFFSET))
                 .replicationChannel(logReplicationChannel(myIPAddress))
+                .sessionTimeoutNs(java.util.concurrent.TimeUnit.MINUTES.toNanos(15))  // CRITICAL: Keep sessions alive during epoch finalization (15 min)
                 .archiveContext(aeronArchiveContext.clone());
         
         // Clustered Service Container Context
@@ -308,15 +319,15 @@ public class AeronClusterLauncher {
         }
         
         // ✈️ AERON NATIVE: Set ingress channel URI and aeron directory for client connections
-        // For same-process communication, use IPC (more efficient than UDP)
-        // The ingress channel configured in ConsensusModule is for cluster-internal use
-        // For client connections from within the same process, IPC is recommended
-        String clientIngressChannel = "aeron:ipc?term-length=64k";
+        // For distributed cluster communication, use UDP for Raft consensus
+        // The ingress channel configured in ConsensusModule must match client connections
+        // UDP is required for multi-node cluster communication
+        String clientIngressChannel = "aeron:udp";
         if (clusteredService instanceof AeronConsensusEngine) {
             AeronConsensusEngine engine = (AeronConsensusEngine) clusteredService;
             engine.setIngressChannelUri(clientIngressChannel);
             engine.setAeronDirectoryName(aeronDirName);
-            log.info("✈️  Client ingress channel configured: {} (IPC for same-process communication)", clientIngressChannel);
+            log.info("✈️  Client ingress channel configured: {} (UDP for distributed cluster)", clientIngressChannel);
             log.info("✈️  Aeron directory configured: {}", aeronDirName);
         }
         

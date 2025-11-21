@@ -74,7 +74,12 @@ public class ProposalQueueManagerOptimized {
     // Configuration
     private static final long CONFIRMATION_TIMEOUT_MS = 300_000; // 5 minutes
     private static final int MAX_MESSAGE_BATCH = 10; // Process up to 10 messages per Aeron cycle
-    private static final int FINALIZATION_CHUNK_SIZE = 500; // Chunk finalized epochs to avoid backpressure
+    // 🌐 PRODUCTION WAN: Aeron default MTU = 1408 bytes (safe for AWS/GCP/Azure)
+    // maxPayloadLength = 1408 - 32 (frame header) = 1376 bytes
+    // Each proposal ~366 bytes: 3 proposals = 1098 bytes + overhead (~20 bytes) = ~1118 bytes
+    // Keeps batches safely under 1376-byte limit for global distributed deployment
+    // See: Blockchain-AEM/06-test-results/2025-11-21-BATCH-UDP-MTU-LIMIT.md
+    private static final int FINALIZATION_CHUNK_SIZE = 3; // Production WAN safe (was 100)
     
     // Queues
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
@@ -212,14 +217,24 @@ public class ProposalQueueManagerOptimized {
         stats.put("processedCount", processed);
         
         // Per-epoch proposal counts (for triangular pipeline visualization)
+        // Group by SUBMISSION EPOCH (simpler, shows when proposals entered the queue)
         java.util.Map<Long, Long> proposalsByEpoch = new java.util.HashMap<>();
+        java.util.Map<Long, java.util.Map<String, Long>> proposalsByEpochAndTier = new java.util.HashMap<>();
+        
         for (QueuedProposal proposal : allProposals.values()) {
             if (proposal.getState() == ProposalState.VERIFIED || proposal.getState() == ProposalState.PENDING) {
                 long epoch = proposal.getEpoch();
                 proposalsByEpoch.merge(epoch, 1L, Long::sum);
+                
+                // Track by tier
+                String tierName = proposal.getTier() != null ? proposal.getTier().name() : "STANDARD";
+                proposalsByEpochAndTier
+                    .computeIfAbsent(epoch, k -> new java.util.HashMap<>())
+                    .merge(tierName, 1L, Long::sum);
             }
         }
         stats.put("proposalsByEpoch", proposalsByEpoch);
+        stats.put("proposalsByEpochAndTier", proposalsByEpochAndTier);
         
         // Backpressure stats
         stats.put("backpressureActive", backpressureManager.getPendingCount() >= 2000);
@@ -296,7 +311,7 @@ public class ProposalQueueManagerOptimized {
     
     /**
      * Queue a new proposal for verification and epoch-based batching (with payment tier).
-     * This overload calculates the current epoch automatically.
+     * This overload calculates the target epoch automatically based on payment tier.
      * 
      * @param proposalId Unique proposal ID
      * @param ethereumTxHash Ethereum transaction hash (optional)
@@ -317,9 +332,32 @@ public class ProposalQueueManagerOptimized {
             String message,
             String signature,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
-        // Calculate current epoch automatically
+        // Calculate target epoch based on payment tier
         long currentEpoch = epochQueue.getCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch, tier);
+        long targetEpoch;
+        
+        // Map tier to target epoch based on FINALITY DELAY:
+        // 
+        // All tiers queue to currentEpoch. Delays are enforced during finalization
+        // by EpochBasedBatchQueue.getFinalityDelay():
+        //   - PRIORITY: 0 epochs (immediate via fast-path)
+        //   - EXPRESS:  1 epoch delay (~6.4 min)
+        //   - STANDARD: 2 epoch delay (~12.8 min)
+        // 
+        // Example timeline:
+        //   Epoch 100: EXPRESS & STANDARD proposals arrive → queued to epoch 100
+        //   Epoch 101: EXPRESS proposals from E100 finalize (1 transition)
+        //   Epoch 102: STANDARD proposals from E100 finalize (2 transitions)
+        if (tier == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
+            // PRIORITY bypasses epoch queue entirely (handled via priorityQueue in agents)
+            targetEpoch = currentEpoch - 2;  // Marked as "already finalized" for fast-path
+        } else {
+            // EXPRESS and STANDARD both queue to current epoch
+            // Finality delay differentiation happens in EpochBasedBatchQueue.getFinalizableEpochs()
+            targetEpoch = currentEpoch;
+        }
+        
+        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, targetEpoch, tier);
     }
     
     /**
@@ -440,6 +478,13 @@ public class ProposalQueueManagerOptimized {
             
             // Process up to MAX_MESSAGE_BATCH batches per cycle
             int batchesProcessed = 0;
+            int queueDepth = batchQueue.size();
+            
+            // Log queue activity periodically  
+            if (queueDepth > 0) {
+                log.info("🔄 AeronSenderAgent: {} batches waiting in queue", queueDepth);
+            }
+            
             while (batchesProcessed < MAX_MESSAGE_BATCH) {
                 List<QueuedProposal> batch = batchQueue.poll();
                 if (batch == null || batch.isEmpty()) {
@@ -447,8 +492,12 @@ public class ProposalQueueManagerOptimized {
                 }
                 
                 batchesProcessed++;
-                log.debug("📤 Processing batch {}: {} proposals (wallet: {})",
-                    batchesProcessed, batch.size(), batch.get(0).getWalletAddress());
+                QueuedProposal firstProposal = batch.get(0);
+                log.info("📤 AeronSenderAgent: DEQUEUED batch {} of {} | {} proposals | wallet: {} | epoch: {} | remaining in queue: {}",
+                    batchesProcessed, queueDepth, batch.size(), 
+                    firstProposal.getWalletAddress().substring(0, 10),
+                    firstProposal.getEpoch(),
+                    batchQueue.size());
                 
                 // Apply backpressure ONCE per batch (not per proposal)
                 try {
@@ -463,7 +512,28 @@ public class ProposalQueueManagerOptimized {
                 // This is MUCH more efficient than individual sends
                 // Aeron can optimize batched messages at the transport layer
                 try {
-                    int sent = raftAppendCallback.appendProposalBatch(batch);
+                    int sent = 0;
+                    
+                    // 🧪 DIAGNOSTIC: Send single-item batches as individual proposals (templateId 100)
+                    // This isolates whether the issue is queue mechanism vs templateId 106 encoding
+                    if (batch.size() == 1) {
+                        log.info("🧪 DIAGNOSTIC: Sending single-item batch as individual proposal (templateId 100)");
+                        QueuedProposal proposal = batch.get(0);
+                        raftAppendCallback.appendProposal(
+                            proposal.getWalletAddress(),
+                            proposal.getPath(),
+                            proposal.getContentType(),
+                            proposal.getMessage(),
+                            proposal.getSignature()
+                        );
+                        sent = 1; // appendProposal returns void, assume success
+                    } else {
+                        // Multi-proposal batch: use templateId 106
+                        log.info("🔥 CALLING appendProposalBatch on instance of: {}", 
+                            raftAppendCallback.getClass().getName());
+                        sent = raftAppendCallback.appendProposalBatch(batch);
+                        log.info("🔥 appendProposalBatch RETURNED: {}", sent);
+                    }
                     
                     if (sent > 0) {
                         // Mark all proposals in batch as processed
@@ -477,7 +547,8 @@ public class ProposalQueueManagerOptimized {
                             workCount++;
                         }
                         
-                        log.debug("✅ Batch sent to Aeron: {} proposals in 1 message", sent);
+                        log.info("✅ Batch sent to Aeron: {} proposals in 1 message (diagnostic mode: {})", 
+                            sent, batch.size() == 1 ? "templateId 100" : "templateId 106");
                     } else {
                         // Batch send failed - re-queue for retry
                         batchQueue.offer(batch);
@@ -491,13 +562,14 @@ public class ProposalQueueManagerOptimized {
                     log.warn("⚠️  Backpressure timeout - re-queuing batch ({} proposals)", batch.size());
                     break;
                 } catch (Exception e) {
-                    log.error("Error sending batch to Aeron ({} proposals)", batch.size(), e);
-                    // Mark all proposals in batch as rejected
-                    for (QueuedProposal queued : batch) {
-                        queued.setState(ProposalState.REJECTED);
-                        queued.setRejectionReason("Aeron batch send failed: " + e.getMessage());
-                        allProposals.remove(queued.getProposalId());
-                    }
+                    log.error("❌ Error sending batch to Aeron ({} proposals) - re-queuing for retry", batch.size(), e);
+                    
+                    // SAFETY NET: Re-queue for retry instead of immediately rejecting
+                    // Note: For now, re-queue without retry limit (backpressure will prevent infinite loops)
+                    // TODO: Add retry count tracking once QueuedProposal has metadata support
+                    batchQueue.offer(batch);
+                    log.warn("🔄 Re-queuing batch for retry");
+                    break;
                 }
             }
             
@@ -639,10 +711,12 @@ public class ProposalQueueManagerOptimized {
                     // - Path follows sharding rules (wallet can only write to own shard)
                     // ═══════════════════════════════════════════════════════════
                     
-                    // Verify path belongs to wallet's shard
-                    if (!proposal.getPath().contains(proposal.getWalletAddress().toLowerCase())) {
+                    // Verify path belongs to wallet's shard (using WalletPathUtil for wallet-scoped paths)
+                    String expectedShardRoot = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.getShardRoot(proposal.getWalletAddress());
+                    if (!proposal.getPath().startsWith(expectedShardRoot + "/")) {
                         rejectProposal(proposal, "Wallet " + proposal.getWalletAddress() + 
-                            " cannot write to path outside its shard: " + proposal.getPath());
+                            " cannot write to path outside its shard: " + proposal.getPath() + 
+                            " (expected shard root: " + expectedShardRoot + ")");
                         continue;
                     }
                     
@@ -708,6 +782,12 @@ public class ProposalQueueManagerOptimized {
                         String tierLabel = proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS 
                             ? "EXPRESS (1-epoch)" : "STANDARD (2-epoch)";
                         
+                        log.info("📥 Proposal added to epoch queue: {} | wallet: {} | epoch: {} | tier: {}",
+                            proposal.getProposalId().substring(0, 8), 
+                            proposal.getWalletAddress().substring(0, 10),
+                            proposal.getEpoch(),
+                            tierLabel);
+                        
                         log.info("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, tier: {}, wallet: {}) → queued for epoch finality", 
                             proposal.getProposalId(),
                             proof.getTransactionHash().substring(0, Math.min(10, proof.getTransactionHash().length())) + "...",
@@ -768,6 +848,14 @@ public class ProposalQueueManagerOptimized {
      */
     private class EpochFinalizerAgent implements Agent {
         
+        private long lastQueueDepthAlert = 0;
+        private long lastWatchdogCheck = 0;
+        private static final long ALERT_INTERVAL_MS = 60_000; // Alert every 60 seconds max
+        private static final long WATCHDOG_INTERVAL_MS = 30_000; // Check for stale proposals every 30s
+        private static final int QUEUE_DEPTH_WARNING = 1000;  // Warn at 1000 proposals
+        private static final int QUEUE_DEPTH_CRITICAL = 5000; // Critical at 5000 proposals
+        private static final int MAX_TIER_DELAY = 2; // STANDARD tier = max delay (epochs)
+        
         @Override
         public int doWork() {
             if (!running) {
@@ -779,10 +867,36 @@ public class ProposalQueueManagerOptimized {
             // Check for epochs ready to finalize
             List<Long> finalizableEpochs = epochQueue.getFinalizableEpochs();
             
+            // ════════════════════════════════════════════════════════════════
+            // QUEUE DEPTH MONITORING & ALERTING
+            // ════════════════════════════════════════════════════════════════
+            java.util.Map<String, Object> epochStats = epochQueue.getStatsMap();
+            long pendingProposals = epochStats.containsKey("pendingProposals") ? 
+                ((Number) epochStats.get("pendingProposals")).longValue() : 0L;
+            
+            long now = System.currentTimeMillis();
+            if (now - lastQueueDepthAlert > ALERT_INTERVAL_MS) {
+                if (pendingProposals >= QUEUE_DEPTH_CRITICAL) {
+                    log.error("🚨 CRITICAL: Queue depth at {} proposals (threshold: {})! " +
+                        "Finalized epoch: {}, Current epoch: {}, Backlog: {} epochs",
+                        pendingProposals, QUEUE_DEPTH_CRITICAL,
+                        epochQueue.getFinalizedEpoch(), epochQueue.getCurrentEpoch(),
+                        epochQueue.getCurrentEpoch() - epochQueue.getFinalizedEpoch());
+                    lastQueueDepthAlert = now;
+                } else if (pendingProposals >= QUEUE_DEPTH_WARNING) {
+                    log.warn("⚠️  WARNING: Queue depth at {} proposals (threshold: {})! " +
+                        "Finalized epoch: {}, Current epoch: {}",
+                        pendingProposals, QUEUE_DEPTH_WARNING,
+                        epochQueue.getFinalizedEpoch(), epochQueue.getCurrentEpoch());
+                    lastQueueDepthAlert = now;
+                }
+            }
+            
             // DEBUG: Log finalization check every ~10 seconds
             if (finalizableEpochs.isEmpty() && System.currentTimeMillis() % 10000 < 1000) {
-                log.info("🔍 Epoch finalization check: {} finalizable epochs, finalized={}, current={}",
+                log.info("🔍 Epoch finalization check: {} finalizable epochs, pending={}, finalized={}, current={}",
                     finalizableEpochs.size(),
+                    pendingProposals,
                     epochQueue.getFinalizedEpoch(),
                     epochQueue.getCurrentEpoch());
             }
@@ -838,18 +952,94 @@ public class ProposalQueueManagerOptimized {
                             totalChunks++;
                             workCount++;
                             
-                            log.debug("📦 Batch from epoch {} queued: {} proposals, wallet: {}",
+                            log.info("📦 Batch from epoch {} queued for Aeron: {} proposals, wallet: {}, queue depth: {}",
                                 epoch, batch.size(),
-                                batch.isEmpty() ? "?" : batch.get(0).getWalletAddress());
+                                batch.isEmpty() ? "?" : batch.get(0).getWalletAddress(),
+                                batchQueue.size());
                         }
                     }
                     
-                    log.info("✅ Finalized epoch {}: {} proposals → {} chunks (chunk size: {})",
-                        epoch, totalProposals, totalChunks, FINALIZATION_CHUNK_SIZE);
+                    log.info("✅ Finalized epoch {}: {} proposals → {} batches/chunks (chunk size: {}, avg batch: {})",
+                        epoch, totalProposals, totalChunks, FINALIZATION_CHUNK_SIZE,
+                        totalChunks > 0 ? totalProposals / totalChunks : 0);
+                    
+                    // Update batch sent counter
+                    batchedProposalsSent.addAndGet(totalProposals);
                     
                 } catch (Exception e) {
-                    log.error("Error finalizing epoch {}", epoch, e);
+                    log.error("❌ Error finalizing epoch {}", epoch, e);
                 }
+            }
+            
+            // ════════════════════════════════════════════════════════════════
+            // 🛡️ WATCHDOG: Force-finalize stale epochs (defense in depth)
+            // ════════════════════════════════════════════════════════════════
+            // Even with the epoch polling bug fixed, this safeguard catches:
+            // - Logic errors in getFinalizableEpochs()
+            // - Stale epoch data from any source
+            // - Edge cases we haven't thought of
+            // 
+            // Rule: If current epoch >= (proposal epoch + MAX delay), 
+            //       AND it wasn't already finalized, force-finalize it now
+            // ════════════════════════════════════════════════════════════════
+            if (now - lastWatchdogCheck > WATCHDOG_INTERVAL_MS) {
+                lastWatchdogCheck = now;
+                
+                long currentEpoch = epochQueue.getCurrentEpoch();
+                List<Long> allPendingEpochs = epochQueue.getAllPendingEpochs();
+                
+                for (Long pendingEpoch : allPendingEpochs) {
+                    // Check if this epoch is DEFINITELY past due
+                    // (current epoch is at least MAX_TIER_DELAY epochs ahead)
+                    long epochAge = currentEpoch - pendingEpoch;
+                    
+                    if (epochAge >= MAX_TIER_DELAY) {
+                        // This epoch should have been finalized by now
+                        // Check if it was in the finalizable list
+                        if (!finalizableEpochs.contains(pendingEpoch)) {
+                            log.warn("🛡️ WATCHDOG: Detected stale epoch {} (age: {} epochs, current: {}). " +
+                                "Forcing finalization to prevent proposals from being stuck forever!",
+                                pendingEpoch, epochAge, currentEpoch);
+                            
+                            try {
+                                // Force finalize this epoch
+                                List<List<QueuedProposal>> batches = epochQueue.finalizeEpoch(pendingEpoch);
+                                
+                                if (!batches.isEmpty()) {
+                                    int totalProposals = 0;
+                                    for (List<QueuedProposal> batch : batches) {
+                                        totalProposals += batch.size();
+                                        batchQueue.offer(batch);
+                                        workCount++;
+                                    }
+                                    
+                                    log.warn("🛡️ WATCHDOG: Force-finalized stale epoch {}: {} proposals → {} batches",
+                                        pendingEpoch, totalProposals, batches.size());
+                                    
+                                    batchedProposalsSent.addAndGet(totalProposals);
+                                }
+                            } catch (Exception e) {
+                                log.error("🛡️ WATCHDOG: Error force-finalizing stale epoch {}", pendingEpoch, e);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // ════════════════════════════════════════════════════════════════
+            // QUEUE HEALTH REPORTING (periodic)
+            // ════════════════════════════════════════════════════════════════
+            if (!finalizableEpochs.isEmpty() && System.currentTimeMillis() % 30000 < 1000) {
+                java.util.Map<String, Object> healthStats = epochQueue.getStatsMap();
+                long batchesCreated = healthStats.containsKey("totalBatchesCreated") ? 
+                    ((Number) healthStats.get("totalBatchesCreated")).longValue() : 0L;
+                long pendingCount = healthStats.containsKey("pendingProposals") ? 
+                    ((Number) healthStats.get("pendingProposals")).longValue() : 0L;
+                long processedCount = healthStats.containsKey("totalProposalsFinalized") ? 
+                    ((Number) healthStats.get("totalProposalsFinalized")).longValue() : 0L;
+                    
+                log.info("📊 Queue Health: {} batches created, {} proposals pending, {} proposals processed",
+                    batchesCreated, pendingCount, processedCount);
             }
             
             return workCount;
