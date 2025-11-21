@@ -3693,21 +3693,43 @@ public class AeronConsensusEngine implements ClusteredService {
             innovations.setProperty("demo-date", "Garage Week - December 15, 2025");
             innovations.setProperty("team", "Marc Hess + Claude Sonnet 4.5 (The Borg Collective)");
             
-            // Merge (commit)
-            ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore).merge(
-                rootBuilder, 
-                org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
-                org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY
+            // ✈️ AERON REPLICATION: Send genesis through Aeron instead of local merge
+            // This ensures ALL nodes receive and create genesis identically via Raft consensus
+            
+            // Serialize genesis structure to JSON for replication
+            StringBuilder genesisJson = new StringBuilder();
+            genesisJson.append("{");
+            genesisJson.append("\"type\":\"genesis\",");
+            genesisJson.append("\"genesisValidator\":\"").append(selfUrl).append("\",");
+            genesisJson.append("\"timestamp\":").append(System.currentTimeMillis()).append(",");
+            genesisJson.append("\"message\":\"Network genesis - Blockchain AEM initialized - All nodes will create this structure identically\"");
+            genesisJson.append("}");
+            
+            log.info("📡 Sending genesis through Aeron for cluster-wide replication...");
+            
+            // Send through Aeron ingress - Raft will replicate to all nodes
+            boolean sent = sendWriteThroughIngress(
+                "0x0000000000000000000000000000000000000000",
+                "/oak-chain/00/00/00/0x0000000000000000000000000000000000000000/content/genesis",
+                "genesis",
+                genesisJson.toString(),
+                "0x0000000000000000000000000000000000000000000000000000000000000000"  // System signature
             );
             
-            // Get new HEAD after commit
-            String newHead = fileStore.getHead().getRecordId().toString10();
-            
-            log.info("Genesis created successfully - HEAD: {}, Network ready for wallet-owned writes", newHead);
-            
-            // Aeron Cluster's Raft replication handles state sync automatically
-            // Followers will receive the genesis write via onSessionMessage() replication
-            // No manual HEAD broadcast needed - Aeron's consensus log ensures consistency
+            if (sent) {
+                log.info("✅ Genesis sent through Aeron - will be received by all nodes via onSessionMessage()");
+                log.info("   All nodes will create identical genesis structure when they receive this write");
+            } else {
+                log.error("❌ Failed to send genesis through Aeron - falling back to local creation");
+                // Fallback: Create locally if Aeron send fails
+                ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore).merge(
+                    rootBuilder, 
+                    org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
+                    org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY
+                );
+                String newHead = fileStore.getHead().getRecordId().toString10();
+                log.warn("⚠️  Genesis created locally only - HEAD: {}", newHead);
+            }
             
         } catch (Exception e) {
             log.error("Exception during genesis creation", e);
