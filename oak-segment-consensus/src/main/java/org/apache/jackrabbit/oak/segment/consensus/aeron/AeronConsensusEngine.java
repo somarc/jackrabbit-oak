@@ -1379,9 +1379,26 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     private synchronized void ensureInternalClusterClient() {
         log.debug("🔧 ensureInternalClusterClient() called - checking if client exists...");
+        
+        // Check if client exists AND is healthy (not closed)
         if (internalClusterClient != null) {
-            log.debug("✅ Internal cluster client already exists");
-            return; // Already created
+            if (internalClusterClient.isClosed()) {
+                log.warn("⚠️  Internal cluster client is CLOSED - will reconnect");
+                log.warn("   Session closed but messages queued - this causes silent drops!");
+                
+                // Close cleanly to release resources
+                try {
+                    internalClusterClient.close();
+                } catch (Exception e) {
+                    log.debug("Error closing stale client: {}", e.getMessage());
+                }
+                
+                // Set to null to trigger reconnection below
+                internalClusterClient = null;
+            } else {
+                log.debug("✅ Internal cluster client already exists and is healthy (not closed)");
+                return; // Already created and healthy
+            }
         }
         
         log.info("🔧 Internal cluster client is null - checking aeron directory...");
@@ -1632,6 +1649,27 @@ public class AeronConsensusEngine implements ClusteredService {
             // Aeron then replicates the message to ALL nodes via Raft, and onSessionMessage() is called on each node
             
             try {
+                // 🔍 HEALTH CHECK: Verify session is open before offering
+                if (internalClusterClient.isClosed()) {
+                    log.error("❌ Cannot send write - internal cluster client session is CLOSED");
+                    log.error("   This indicates session timeout or connection loss");
+                    log.error("   Attempting reconnection...");
+                    
+                    // Try to reconnect
+                    synchronized (this) {
+                        internalClusterClient = null;
+                        ensureInternalClusterClient();
+                    }
+                    
+                    // If still null or closed after reconnect, fail
+                    if (internalClusterClient == null || internalClusterClient.isClosed()) {
+                        log.error("❌ Reconnection failed - cannot send write");
+                        return false;
+                    }
+                    
+                    log.info("✅ Reconnection successful - retrying write send");
+                }
+                
                 // Send message through AeronCluster client ingress
                 // Aeron will replicate to all nodes via Raft consensus
                 idleStrategy.reset();
@@ -1776,6 +1814,27 @@ public class AeronConsensusEngine implements ClusteredService {
             log.debug("🔍DEBUG_BATCH [7]: About to call internalClusterClient.offer() - totalLength: {} bytes", totalLength);
             
             try {
+                // 🔍 HEALTH CHECK: Verify session is open before offering batch
+                if (internalClusterClient.isClosed()) {
+                    log.error("❌ Cannot send batch - internal cluster client session is CLOSED (batch size: {})", proposals.size());
+                    log.error("   This indicates session timeout or connection loss during epoch queueing");
+                    log.error("   Attempting reconnection...");
+                    
+                    // Try to reconnect
+                    synchronized (this) {
+                        internalClusterClient = null;
+                        ensureInternalClusterClient();
+                    }
+                    
+                    // If still null or closed after reconnect, fail
+                    if (internalClusterClient == null || internalClusterClient.isClosed()) {
+                        log.error("❌ Reconnection failed - cannot send batch (batch size: {})", proposals.size());
+                        return 0;
+                    }
+                    
+                    log.info("✅ Reconnection successful - retrying batch send (batch size: {})", proposals.size());
+                }
+                
                 // Send message through AeronCluster client ingress
                 idleStrategy.reset();
                 long result;

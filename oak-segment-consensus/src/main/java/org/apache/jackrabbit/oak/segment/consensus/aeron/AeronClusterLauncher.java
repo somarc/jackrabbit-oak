@@ -284,7 +284,7 @@ public class AeronClusterLauncher {
                 .ingressChannel("aeron:udp?term-length=128m")  // CRITICAL: Explicitly match log term-length (128MB)
                 .logChannel(logControlChannel(nodeId, myIPAddress, LOG_CONTROL_PORT_OFFSET))
                 .replicationChannel(logReplicationChannel(myIPAddress))
-                .sessionTimeoutNs(java.util.concurrent.TimeUnit.MINUTES.toNanos(15))  // CRITICAL: Keep sessions alive during epoch finalization (15 min)
+                .sessionTimeoutNs(java.util.concurrent.TimeUnit.MINUTES.toNanos(20))  // CRITICAL: 20-min timeout + reconnect logic for robustness
                 .archiveContext(aeronArchiveContext.clone());
         
         // Clustered Service Container Context
