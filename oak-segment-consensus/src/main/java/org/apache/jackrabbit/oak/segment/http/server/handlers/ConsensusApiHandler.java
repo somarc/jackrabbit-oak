@@ -1495,7 +1495,7 @@ public class ConsensusApiHandler {
             innovations.setProperty("innovation-6", "Global read-only content via HTTP segment transfer");
             innovations.setProperty("innovation-7", "Multi-tier transaction pricing with cryptographic payment");
             innovations.setProperty("demo-date", "Garage Week - December 15, 2025");
-            innovations.setProperty("team", "Marc Hess + Claude Sonnet 4.5 (The Borg Collective)");
+            innovations.setProperty("team", "somarc + Cursor (Auto mode + Composer-1) + Grok 4.1 as outside counsel — distributed intelligence building distributed systems");
             
             log.info("✅ Genesis structure built successfully with {} child nodes", 4);
             

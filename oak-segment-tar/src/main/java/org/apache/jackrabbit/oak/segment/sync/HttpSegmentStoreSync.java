@@ -24,6 +24,8 @@ import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
 import org.osgi.service.component.annotations.Deactivate;
 import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.event.Event;
+import org.osgi.service.event.EventAdmin;
 import org.osgi.service.metatype.annotations.AttributeDefinition;
 import org.osgi.service.metatype.annotations.Designate;
 import org.osgi.service.metatype.annotations.ObjectClassDefinition;
@@ -35,6 +37,8 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Background sync service for HTTP-backed composite mounts.
@@ -120,6 +124,14 @@ public class HttpSegmentStoreSync implements Runnable {
     @Reference(target = "(role=composite-mount-oak-chain)")
     private volatile SegmentStoreProvider storeProvider;
     
+    /**
+     * EventAdmin for broadcasting real-time updates to WebSocket clients.
+     * When new content arrives from validators, we emit OSGi events that
+     * the WebSocket endpoint can broadcast to all connected browsers.
+     */
+    @Reference(cardinality = org.osgi.service.component.annotations.ReferenceCardinality.OPTIONAL)
+    private volatile EventAdmin eventAdmin;
+    
     private String globalStoreUrl;
     private boolean enabled;
     private boolean onlyFinalized;
@@ -195,7 +207,7 @@ public class HttpSegmentStoreSync implements Runnable {
             }
             
             // Remote has new data!
-            log.info("New revision detected in global store");
+            log.info("🔄 New revision detected in global store");
             if (lastKnownRevision != null) {
                 log.debug("  Previous: {}", lastKnownRevision.substring(0, Math.min(40, lastKnownRevision.length())));
             }
@@ -206,8 +218,12 @@ public class HttpSegmentStoreSync implements Runnable {
                 boolean refreshSuccess = updateFileStoreHead(remoteRevision);
                 if (refreshSuccess) {
                     refreshSuccessCount++;
-                    log.info("Composite mount HEAD refreshed successfully (success: {}, failure: {})",
+                    log.info("✅ Composite mount HEAD refreshed successfully (success: {}, failure: {})",
                              refreshSuccessCount, refreshFailureCount);
+                    
+                    // 🔥 PHASE 1 WOW: Broadcast real-time update to WebSocket clients!
+                    broadcastRevisionUpdate(lastKnownRevision, remoteRevision);
+                    
                 } else {
                     refreshFailureCount++;
                     log.warn("Failed to refresh composite mount HEAD (success: {}, failure: {})",
@@ -400,6 +416,55 @@ public class HttpSegmentStoreSync implements Runnable {
         } catch (Exception e) {
             log.error("Failed to update FileStore head to revision: {}", newRevision, e);
             return false;
+        }
+    }
+    
+    /**
+     * Broadcasts a revision update event to all connected WebSocket clients.
+     * 
+     * <p><strong>Phase 1 WOW Feature:</strong> Real-time blockchain updates!</p>
+     * 
+     * <p>When validators commit new content, this method posts an OSGi event that
+     * the WebSocket endpoint (BlockchainWebSocketEndpoint) picks up and broadcasts
+     * to all connected browsers. Result: Instant dashboard updates with zero polling!
+     * 
+     * @param oldRevision the previous revision (may be null on first sync)
+     * @param newRevision the new revision from the validator
+     */
+    private void broadcastRevisionUpdate(String oldRevision, String newRevision) {
+        if (eventAdmin == null) {
+            log.debug("EventAdmin not available - skipping real-time broadcast");
+            return;
+        }
+        
+        try {
+            // Create event properties with rich metadata
+            Map<String, Object> properties = new HashMap<>();
+            properties.put("path", "/oak-chain/content");
+            properties.put("changeType", "SEGMENT_SYNC");
+            properties.put("category", "validator");
+            properties.put("oldRevision", oldRevision != null ? oldRevision : "initial");
+            properties.put("newRevision", newRevision);
+            properties.put("timestamp", System.currentTimeMillis());
+            properties.put("syncCount", syncCount);
+            properties.put("updateCount", updateCount);
+            properties.put("source", "HttpSegmentStoreSync");
+            
+            // Extract short revision IDs for display (first 8 chars)
+            String oldShort = oldRevision != null ? oldRevision.substring(0, Math.min(8, oldRevision.length())) : "initial";
+            String newShort = newRevision.substring(0, Math.min(8, newRevision.length()));
+            properties.put("message", 
+                String.format("Validator sync: %s → %s (update #%d)", oldShort, newShort, updateCount));
+            
+            // Post OSGi event - WebSocket endpoint is listening!
+            Event event = new Event("org/apache/sling/api/resource/added", properties);
+            eventAdmin.postEvent(event);
+            
+            log.info("📡 Broadcast to WebSocket clients: revision update #{}", updateCount);
+            
+        } catch (Exception e) {
+            // Non-fatal - don't let broadcast failures break sync
+            log.warn("Failed to broadcast revision update (non-fatal): {}", e.getMessage());
         }
     }
 }

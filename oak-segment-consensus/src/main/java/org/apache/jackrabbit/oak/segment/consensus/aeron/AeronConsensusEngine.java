@@ -3691,7 +3691,7 @@ public class AeronConsensusEngine implements ClusteredService {
             innovations.setProperty("innovation-6", "Global read-only content via HTTP segment transfer");
             innovations.setProperty("innovation-7", "Multi-tier transaction pricing with cryptographic payment");
             innovations.setProperty("demo-date", "Garage Week - December 15, 2025");
-            innovations.setProperty("team", "Marc Hess + Claude Sonnet 4.5 (The Borg Collective)");
+            innovations.setProperty("team", "somarc + Cursor (Auto mode + Composer-1) + Grok 4.1 as outside counsel — distributed intelligence building distributed systems");
             
             // ✈️ AERON REPLICATION: Send genesis through Aeron instead of local merge
             // This ensures ALL nodes receive and create genesis identically via Raft consensus

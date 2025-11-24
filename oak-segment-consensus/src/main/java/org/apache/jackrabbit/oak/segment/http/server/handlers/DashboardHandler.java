@@ -211,7 +211,24 @@ public class DashboardHandler {
             
             // Cluster metrics
             appendSummaryCard(html, "Term", term >= 0 ? String.valueOf(term) : "Not available", "Leadership term reported by Aeron Raft consensus");
-            appendSummaryCard(html, "Members", String.valueOf(memberCount), "Validators participating in this cluster");
+            
+            // Calculate active members (reachable nodes)
+            int activeMembers = 0;
+            for (Map<String, Object> member : members) {
+                String status = safeString(member.get("status"), "ACTIVE");
+                // Count as active if not explicitly INACTIVE/DOWN
+                if (!"INACTIVE".equalsIgnoreCase(status) && !"DOWN".equalsIgnoreCase(status)) {
+                    activeMembers++;
+                }
+            }
+            // Fallback: if no members list, assume all configured members are active
+            if (members.isEmpty() && memberCount > 0) {
+                activeMembers = memberCount;
+            }
+            
+            String membersDisplay = activeMembers + "/" + memberCount + " Active";
+            String membersCaption = activeMembers + " of " + memberCount + " validators currently reachable (quorum: " + ((memberCount / 2) + 1) + ")";
+            appendSummaryCard(html, "Members", membersDisplay, membersCaption);
             
             // Replication metrics
             appendSummaryCard(html, "Messages Replicated", logPosition >= 0 ? String.format("%,d", logPosition) : "Not available", "Total messages replicated through Aeron Raft log (indicates cluster activity)");
