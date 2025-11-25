@@ -18,7 +18,10 @@ package org.apache.jackrabbit.oak.segment.consensus.evm.impl;
 
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.jetbrains.annotations.NotNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigInteger;
 import java.util.Map;
@@ -39,6 +42,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class SimpleEvmBridge implements EvmBridge {
     
+    private static final Logger log = LoggerFactory.getLogger(SimpleEvmBridge.class);
+    
     // Pricing constants (all in wei)
     private static final BigInteger BASE_FEE = new BigInteger("1000000000000000"); // 0.001 ETH
     private static final BigInteger SEGMENT_FEE = new BigInteger("100000000000000"); // 0.0001 ETH per segment
@@ -49,18 +54,33 @@ public class SimpleEvmBridge implements EvmBridge {
     private final String contractAddress;
     private final Map<String, PaymentProof> payments = new ConcurrentHashMap<>();
     private final Map<String, String> addressToWalletMapping = new ConcurrentHashMap<>();
+    private final Map<String, String> proposalToWalletMapping = new ConcurrentHashMap<>(); // proposalId -> walletAddress
     private long currentBlock = 1000000;
     private boolean running = false;
+    private final BlockchainConfig.Mode mode;
     
     /**
      * Create a new EVM bridge.
      *
-     * @param networkName the network (e.g., "mainnet", "polygon")
+     * @param networkName the network (e.g., "mainnet", "sepolia", "mock")
      * @param contractAddress the payment verifier contract address
      */
     public SimpleEvmBridge(@NotNull String networkName, @NotNull String contractAddress) {
         this.networkName = networkName;
         this.contractAddress = contractAddress;
+        this.mode = BlockchainConfig.getInstance().getMode();
+        
+        switch (mode) {
+            case MOCK:
+                log.warn("⚠️  SimpleEvmBridge in MOCK MODE - all payments auto-simulated");
+                break;
+            case SEPOLIA:
+                log.info("✅ SimpleEvmBridge in SEPOLIA MODE - verifying payments on Sepolia testnet");
+                break;
+            case MAINNET:
+                log.info("🔴 SimpleEvmBridge in MAINNET MODE - verifying payments on Ethereum mainnet");
+                break;
+        }
     }
     
     /**
@@ -72,7 +92,64 @@ public class SimpleEvmBridge implements EvmBridge {
     
     @Override
     public PaymentProof verifyPayment(@NotNull String proposalId) {
-        return payments.get(proposalId);
+        // Check if payment already exists
+        PaymentProof existing = payments.get(proposalId);
+        if (existing != null) {
+            return existing;
+        }
+        
+        // In MOCK MODE, auto-simulate payments for any proposal
+        if (mode == BlockchainConfig.Mode.MOCK) {
+            log.debug("🎭 MOCK MODE: Auto-simulating payment for proposal {}", proposalId);
+            
+            // Get the wallet address for this proposal (registered earlier)
+            String walletAddress = proposalToWalletMapping.get(proposalId);
+            if (walletAddress == null) {
+                // SECURITY: Wallet address MUST be registered when proposal is queued
+                // If it's missing, this is a programming error - fail hard
+                String errorMsg = String.format(
+                    "SECURITY VIOLATION: No wallet address registered for proposal %s. " +
+                    "registerProposalWallet() must be called when queuing. " +
+                    "Cannot create payment proof without authenticated wallet.", 
+                    proposalId
+                );
+                log.error("🔒 {}", errorMsg);
+                throw new IllegalStateException(errorMsg);
+            }
+            
+            // Create a simulated payment proof
+            // Generate a 64-char mock tx hash (UUID without dashes is only 32 chars, so double it)
+            String uuidHex = proposalId.replaceAll("-", "");
+            String mockTxHash = "0x" + uuidHex + uuidHex.substring(0, 64 - uuidHex.length());
+            
+            PaymentProof mockPayment = new SimplePaymentProof(
+                mockTxHash, // Mock tx hash (64 chars)
+                currentBlock++, // Increment block
+                walletAddress, // From address (use registered wallet)
+                contractAddress, // To address (contract)
+                proposalId,
+                "1000000000000000", // 0.001 ETH
+                3 // 3 confirmations (instant in mock)
+            );
+            
+            payments.put(proposalId, mockPayment);
+            return mockPayment;
+        }
+        
+        // In SEPOLIA/MAINNET MODE, return null (payment not found - will retry)
+        // In production, this would call Web3j to verify the transaction on-chain
+        return null;
+    }
+    
+    /**
+     * Register a wallet address for a proposal (used in mock mode).
+     * This allows mock payment simulation to use the correct from address.
+     * 
+     * @param proposalId the proposal ID
+     * @param walletAddress the wallet address
+     */
+    public void registerProposalWallet(@NotNull String proposalId, @NotNull String walletAddress) {
+        proposalToWalletMapping.put(proposalId, walletAddress);
     }
     
     @Override

@@ -216,6 +216,17 @@ public class ProposalQueueManagerOptimized {
         stats.put("rejectedCount", rejected);
         stats.put("processedCount", processed);
         
+        // Count proposals by type (WRITE vs DELETE)
+        long writeProposals = allProposals.values().stream()
+            .filter(p -> p.getType() == QueuedProposal.ProposalType.WRITE)
+            .count();
+        long deleteProposals = allProposals.values().stream()
+            .filter(p -> p.getType() == QueuedProposal.ProposalType.DELETE)
+            .count();
+        
+        stats.put("writeProposals", writeProposals);
+        stats.put("deleteProposals", deleteProposals);
+        
         // Per-epoch proposal counts (for triangular pipeline visualization)
         // Group by SUBMISSION EPOCH (simpler, shows when proposals entered the queue)
         java.util.Map<Long, Long> proposalsByEpoch = new java.util.HashMap<>();
@@ -408,8 +419,90 @@ public class ProposalQueueManagerOptimized {
         allProposals.put(proposalId, proposal);
         unverifiedQueue.offer(proposal);
         
+        // Register wallet for mock mode (allows mock payment simulation with correct from address)
+        if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
+            ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
+                .registerProposalWallet(proposalId, walletAddress);
+        }
+        
         log.debug("📥 Queued proposal {} for EVM verification in epoch {} (tier: {}, queue size: {})", 
             proposalId, epoch, tier, unverifiedQueue.size());
+        
+        return proposal;
+    }
+    
+    /**
+     * Queue a DELETE proposal for verification and epoch-based batching.
+     * Deletes flow through same pipeline as writes, just with different type.
+     * 
+     * @param proposalId Unique proposal ID
+     * @param ethereumTxHash Ethereum transaction hash (required)
+     * @param walletAddress Ethereum wallet address
+     * @param path Content path to delete
+     * @param signature Transaction signature
+     * @param tier Payment tier (STANDARD, EXPRESS, or PRIORITY)
+     * @return The queued proposal
+     */
+    public QueuedProposal queueDeleteProposal(
+            String proposalId,
+            String ethereumTxHash,
+            String walletAddress,
+            String path,
+            String signature,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+        
+        // Calculate target epoch based on payment tier (same as writes)
+        long currentEpoch = epochQueue.getCurrentEpoch();
+        long targetEpoch;
+        
+        switch (tier) {
+            case PRIORITY:
+                // Priority: direct ingress, no epoch wait (fastest)
+                targetEpoch = currentEpoch;
+                break;
+            case EXPRESS:
+                // Express: +1 epoch (fast)
+                targetEpoch = currentEpoch + 1;
+                break;
+            case STANDARD:
+            default:
+                // Standard: +2 epochs (economical)
+                targetEpoch = currentEpoch + 2;
+                break;
+        }
+        
+        long now = System.currentTimeMillis();
+        QueuedProposal proposal = new QueuedProposal(
+            proposalId,
+            ethereumTxHash,
+            null, // unused compatibility parameter
+            now,
+            now + CONFIRMATION_TIMEOUT_MS,
+            ProposalState.PENDING
+        );
+        
+        // Set DELETE-specific fields
+        proposal.setType(QueuedProposal.ProposalType.DELETE); // Mark as DELETE
+        proposal.setWalletAddress(walletAddress);
+        proposal.setPath(path);
+        proposal.setContentType("delete"); // Special marker for deletes
+        proposal.setMessage(""); // Not needed for deletes
+        proposal.setSignature(signature);
+        proposal.setEpoch(targetEpoch);
+        proposal.setTier(tier);
+        
+        // Add to tracking map and unverified queue
+        allProposals.put(proposalId, proposal);
+        unverifiedQueue.offer(proposal);
+        
+        // Register wallet for mock mode (allows mock payment simulation with correct from address)
+        if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
+            ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
+                .registerProposalWallet(proposalId, walletAddress);
+        }
+        
+        log.info("🗑️  Queued DELETE proposal {} for EVM verification in epoch {} (tier: {}, path: {}, queue size: {})", 
+            proposalId, targetEpoch, tier, path, unverifiedQueue.size());
         
         return proposal;
     }
@@ -514,19 +607,30 @@ public class ProposalQueueManagerOptimized {
                 try {
                     int sent = 0;
                     
-                    // 🧪 DIAGNOSTIC: Send single-item batches as individual proposals (templateId 100)
+                    // 🧪 DIAGNOSTIC: Send single-item batches as individual proposals (templateId 100/101)
                     // This isolates whether the issue is queue mechanism vs templateId 106 encoding
                     if (batch.size() == 1) {
-                        log.info("🧪 DIAGNOSTIC: Sending single-item batch as individual proposal (templateId 100)");
                         QueuedProposal proposal = batch.get(0);
-                        raftAppendCallback.appendProposal(
-                            proposal.getWalletAddress(),
-                            proposal.getPath(),
-                            proposal.getContentType(),
-                            proposal.getMessage(),
-                            proposal.getSignature()
-                        );
-                        sent = 1; // appendProposal returns void, assume success
+                        
+                        // Check proposal type: WRITE or DELETE
+                        if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
+                            log.info("🗑️  Sending DELETE proposal (templateId 101)");
+                            raftAppendCallback.appendDeleteProposal(
+                                proposal.getWalletAddress(),
+                                proposal.getPath(),
+                                proposal.getSignature()
+                            );
+                        } else {
+                            log.info("📝 Sending WRITE proposal (templateId 100)");
+                            raftAppendCallback.appendProposal(
+                                proposal.getWalletAddress(),
+                                proposal.getPath(),
+                                proposal.getContentType(),
+                                proposal.getMessage(),
+                                proposal.getSignature()
+                            );
+                        }
+                        sent = 1; // appendProposal/appendDeleteProposal returns void, assume success
                     } else {
                         // Multi-proposal batch: use templateId 106
                         log.info("🔥 CALLING appendProposalBatch on instance of: {}", 
@@ -744,18 +848,29 @@ public class ProposalQueueManagerOptimized {
                     // PRIORITY TIER: Fast-path directly to Aeron (bypass epoch batching)
                     // ═══════════════════════════════════════════════════════════
                     if (proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
-                        log.info("🚀 PRIORITY TIER: Fast-tracking proposal {} directly to Aeron (bypassing epoch queue)", 
-                            proposal.getProposalId());
+                        log.info("🚀 PRIORITY TIER: Fast-tracking proposal {} directly to Aeron (bypassing epoch queue, type: {})", 
+                            proposal.getProposalId(), proposal.getType());
                         
                         try {
                             // Send directly to Aeron (bypass batch queue)
-                            raftAppendCallback.appendProposal(
-                                proposal.getWalletAddress(),
-                                proposal.getPath(),
-                                proposal.getContentType(),
-                                proposal.getMessage(),
-                                proposal.getSignature()
-                            );
+                            // Check type: WRITE or DELETE
+                            if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
+                                log.info("🗑️  PRIORITY DELETE: Sending directly to Aeron");
+                                raftAppendCallback.appendDeleteProposal(
+                                    proposal.getWalletAddress(),
+                                    proposal.getPath(),
+                                    proposal.getSignature()
+                                );
+                            } else {
+                                log.info("📝 PRIORITY WRITE: Sending directly to Aeron");
+                                raftAppendCallback.appendProposal(
+                                    proposal.getWalletAddress(),
+                                    proposal.getPath(),
+                                    proposal.getContentType(),
+                                    proposal.getMessage(),
+                                    proposal.getSignature()
+                                );
+                            }
                             
                             proposal.setState(ProposalState.PROCESSED);
                             allProposals.remove(proposal.getProposalId());

@@ -93,11 +93,54 @@ public class DashboardHandler {
         html.append(".action-card a:hover { transform: scale(1.05); }\n");
         html.append(".client-list { margin-top: 12px; font-size: 0.85em; }\n");
         html.append(".client-item { padding: 6px 0; color: #cbd5e1; }\n");
+        html.append(".mode-banner { margin-bottom: 24px; padding: 16px 24px; border-radius: 12px; border: 2px solid; display: flex; align-items: center; justify-content: space-between; font-weight: 600; }\n");
+        html.append(".mode-mock { background: rgba(139,92,246,0.15); border-color: rgba(139,92,246,0.5); color: #a78bfa; }\n");
+        html.append(".mode-sepolia { background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.5); color: #60a5fa; }\n");
+        html.append(".mode-mainnet { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.5); color: #f87171; }\n");
+        html.append(".mode-label { font-size: 1.1em; display: flex; align-items: center; gap: 8px; }\n");
+        html.append(".mode-detail { font-size: 0.85em; opacity: 0.8; }\n");
         html.append("</style>\n");
         html.append("</head>\n<body>\n");
         html.append("<div class='container'>\n");
         html.append("<h1>🔗 Oak Segment Consensus</h1>\n");
         html.append("<div class='subtitle'>Global P2P Oak Repository</div>\n");
+        
+        // Blockchain Mode Banner
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig = 
+            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.Mode mode = blockchainConfig.getMode();
+        
+        String modeClass, modeIcon, modeLabel, modeDetail;
+        switch (mode) {
+            case MOCK:
+                modeClass = "mode-mock";
+                modeIcon = "🎭";
+                modeLabel = "MOCK MODE";
+                modeDetail = "Instant payment simulation • No blockchain verification";
+                break;
+            case SEPOLIA:
+                modeClass = "mode-sepolia";
+                modeIcon = "🧪";
+                modeLabel = "SEPOLIA TESTNET";
+                modeDetail = "Real blockchain verification • Test ETH • Contract: " + blockchainConfig.getContractAddress();
+                break;
+            case MAINNET:
+                modeClass = "mode-mainnet";
+                modeIcon = "🔴";
+                modeLabel = "ETHEREUM MAINNET";
+                modeDetail = "PRODUCTION • Real ETH • Contract: " + blockchainConfig.getContractAddress();
+                break;
+            default:
+                modeClass = "mode-mock";
+                modeIcon = "❓";
+                modeLabel = "UNKNOWN MODE";
+                modeDetail = "Configuration error";
+        }
+        
+        html.append("<div class='mode-banner ").append(modeClass).append("'>\n");
+        html.append("<div class='mode-label'>").append(modeIcon).append(" ").append(modeLabel).append("</div>\n");
+        html.append("<div class='mode-detail'>").append(modeDetail).append("</div>\n");
+        html.append("</div>\n");
 
         if (clusterState == null) {
             html.append("<div class='empty-state'>");
@@ -237,6 +280,19 @@ public class DashboardHandler {
             // Storage metrics
             appendSummaryCard(html, "Store Size", FormatUtils.formatBytes(fileStoreStats.size), fileStoreStats.segmentCount + " segments");
             appendSummaryCard(html, "Connected Peers", String.valueOf(clientCount), "AEM/Sling author instances");
+            
+            // Proposal Type Breakdown (WRITE vs DELETE)
+            if (context.proposalQueueManager != null) {
+                java.util.Map<String, Object> queueStats = context.proposalQueueManager.getQueueStats();
+                long writeProposals = asLong(queueStats.get("writeProposals"), 0L);
+                long deleteProposals = asLong(queueStats.get("deleteProposals"), 0L);
+                long totalTypeProposals = writeProposals + deleteProposals;
+                
+                String proposalTypeDisplay = "✏️  " + writeProposals + " / 🗑️  " + deleteProposals;
+                String proposalTypeCaption = totalTypeProposals + " total proposals: " + 
+                    writeProposals + " writes, " + deleteProposals + " deletes (both flow through same consensus pipeline)";
+                appendSummaryCard(html, "Proposal Types", proposalTypeDisplay, proposalTypeCaption);
+            }
             
             // Shard Router metrics (Phase 1)
             if (context.shardRouter != null) {
@@ -1327,6 +1383,14 @@ public class DashboardHandler {
         addApiEndpoint(html, "POST", "/v1/propose-gc", "Propose a GC operation (⚠️ TODO: Aeron replication)", "propose_gc");
         addApiEndpoint(html, "POST", "/v1/gc/execute", "Manually execute an approved GC proposal (auto-executes on approval)", "gc_execute");
         addApiEndpoint(html, "GET", "/v1/compaction/proposals", "Get pending compaction proposals (JSON)", "compaction_proposals");
+        html.append("</div>\n");
+        
+        html.append("<div class='category'>\n");
+        html.append("<h2>💰 GC Account Management</h2>\n");
+        addApiEndpoint(html, "GET", "/v1/gc/account/{walletAddress}", "Get GC account status for entity (JSON)", "gc_account_status");
+        addApiEndpoint(html, "POST", "/v1/gc/account/{walletAddress}/pay?amount=X", "Record payment towards GC debt (JSON)", "gc_account_pay");
+        addApiEndpoint(html, "POST", "/v1/gc/account/{walletAddress}/set-limit?limit=X", "Set GC debt limit for testing (JSON)", "gc_account_limit");
+        addApiEndpoint(html, "POST", "/v1/gc/account/{walletAddress}/execute-pending", "Convert pending debt to executed debt (JSON)", "gc_account_execute");
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");

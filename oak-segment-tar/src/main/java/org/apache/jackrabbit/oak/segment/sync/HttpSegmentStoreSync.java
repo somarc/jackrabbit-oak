@@ -221,7 +221,7 @@ public class HttpSegmentStoreSync implements Runnable {
                     log.info("✅ Composite mount HEAD refreshed successfully (success: {}, failure: {})",
                              refreshSuccessCount, refreshFailureCount);
                     
-                    // 🔥 PHASE 1 WOW: Broadcast real-time update to WebSocket clients!
+                    // 🔥 Broadcast real-time update via OSGi EventAdmin (SSE/WebSocket listeners pick it up)
                     broadcastRevisionUpdate(lastKnownRevision, remoteRevision);
                     
                 } else {
@@ -420,13 +420,18 @@ public class HttpSegmentStoreSync implements Runnable {
     }
     
     /**
-     * Broadcasts a revision update event to all connected WebSocket clients.
+     * Broadcasts a revision update event via OSGi EventAdmin for real-time client updates.
      * 
-     * <p><strong>Phase 1 WOW Feature:</strong> Real-time blockchain updates!</p>
+     * <p><strong>Architecture:</strong> Decoupled event broadcasting using OSGi EventAdmin pattern.</p>
      * 
-     * <p>When validators commit new content, this method posts an OSGi event that
-     * the WebSocket endpoint (BlockchainWebSocketEndpoint) picks up and broadcasts
-     * to all connected browsers. Result: Instant dashboard updates with zero polling!
+     * <p>When the validator's global store has new content, this method posts an OSGi event that
+     * listening servlets (e.g., BlockchainEventStreamServlet) can pick up and stream to clients
+     * via SSE, WebSocket, or any other transport. This decoupling allows multiple consumers
+     * and transport mechanisms without modifying this sync component.</p>
+     * 
+     * <p><strong>Frequency:</strong> Events are emitted only when the remote HEAD changes,
+     * typically once per validator write. Polling happens every 60s, but events are emitted
+     * only on actual changes (not on every poll).</p>
      * 
      * @param oldRevision the previous revision (may be null on first sync)
      * @param newRevision the new revision from the validator
@@ -456,11 +461,11 @@ public class HttpSegmentStoreSync implements Runnable {
             properties.put("message", 
                 String.format("Validator sync: %s → %s (update #%d)", oldShort, newShort, updateCount));
             
-            // Post OSGi event - WebSocket endpoint is listening!
+            // Post OSGi event - SSE/WebSocket endpoints are listening!
             Event event = new Event("org/apache/sling/api/resource/added", properties);
             eventAdmin.postEvent(event);
             
-            log.info("📡 Broadcast to WebSocket clients: revision update #{}", updateCount);
+            log.info("📡 Broadcast via OSGi EventAdmin: revision update #{}", updateCount);
             
         } catch (Exception e) {
             // Non-fatal - don't let broadcast failures break sync

@@ -142,9 +142,10 @@ public class AeronConsensusEngine implements ClusteredService {
     // This client connects to the same media driver (via IPC) to send messages
     private io.aeron.cluster.client.AeronCluster internalClusterClient = null;
     
-    // ✈️ AERON NATIVE: Callback interface for applying replicated writes
+    // ✈️ AERON NATIVE: Callback interface for applying replicated writes and deletes
     public interface WriteApplicationCallback {
         void applyWrite(String walletAddress, String path, String contentType, String message, String signature);
+        void applyDelete(String walletAddress, String path, String signature);
     }
     private WriteApplicationCallback writeCallback;
     
@@ -989,8 +990,49 @@ public class AeronConsensusEngine implements ClusteredService {
                 log.debug("✅ Batch replicated and applied: {}/{} proposals successful", processed, proposals.size());
                 
             } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL) {
-                log.info("✈️  Delete proposal received (templateId: {}) - not yet implemented", headerInfo.templateId);
-                // TODO: Implement delete proposal handling
+                // Read JSON string from buffer
+                byte[] jsonBytes = new byte[headerInfo.blockLength];
+                buffer.getBytes(offset, jsonBytes);
+                String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
+                
+                log.debug("✈️  Processing replicated DELETE proposal via Aeron (templateId: {})", headerInfo.templateId);
+                log.debug("   JSON: {}", json);
+                
+                // Parse delete proposal JSON
+                String walletAddress = extractJsonField(json, "walletAddress");
+                String path = extractJsonField(json, "path");
+                String signature = extractJsonField(json, "signature");
+                
+                if (walletAddress == null || path == null) {
+                    log.error("❌ Invalid delete proposal: missing required fields (walletAddress: {}, path: {})", 
+                        walletAddress != null, path != null);
+                    return;
+                }
+                
+                // Apply delete to FileStore via callback
+                // This ensures the delete is applied on ALL nodes after replication
+                if (writeCallback != null) {
+                    log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
+                    writeCallback.applyDelete(walletAddress, path, signature);
+                    log.info("✅ Replicated delete applied successfully on node {}", 
+                        cluster != null ? cluster.memberId() : "?");
+                    
+                    // Track acknowledgment for backpressure management
+                    backpressureManager.incrementAcknowledged();
+                    log.debug("   Backpressure stats: {}", backpressureManager.getStats());
+                    
+                    // Track metrics (same as writes)
+                    Long ingressTimestampNanos = ingressTimestamps.poll();
+                    if (ingressTimestampNanos != null) {
+                        performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
+                    } else {
+                        performanceMetrics.recordMessageReplicated(System.nanoTime());
+                    }
+                    
+                    totalWritesProcessed.incrementAndGet(); // Count deletes in throughput metrics
+                } else {
+                    log.error("❌ Write callback not set - cannot apply replicated delete");
+                }
             } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL) {
                 // Read JSON string from buffer
                 byte[] jsonBytes = new byte[headerInfo.blockLength];
@@ -1716,6 +1758,111 @@ public class AeronConsensusEngine implements ClusteredService {
             
         } catch (Exception e) {
             log.error("❌ Exception sending write through ingress", e);
+            return false;
+        }
+    }
+    
+    /**
+     * Send a DELETE proposal through Aeron ingress for consensus replication.
+     * Same flow as writes, just different template ID and simpler JSON.
+     * 
+     * @param walletAddress Ethereum wallet address of content owner
+     * @param path Content path to delete
+     * @param signature Transaction signature
+     * @return true if successfully sent
+     */
+    public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature) {
+        if (cluster == null) {
+            log.error("❌ Cluster not initialized - cannot send delete through ingress");
+            return false;
+        }
+        
+        // Ensure internal cluster client is created (lazy initialization)
+        ensureInternalClusterClient();
+        
+        if (internalClusterClient == null) {
+            log.error("❌ Internal AeronCluster client not available - cannot send delete through ingress");
+            return false;
+        }
+        
+        log.info("🗑️  SENDING DELETE through ingress: wallet={}, path={}", walletAddress, path);
+        
+        try {
+            // Build JSON delete proposal (simpler than write)
+            StringBuilder json = new StringBuilder();
+            json.append("{");
+            json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
+            json.append("\"path\":\"").append(escapeJson(path)).append("\",");
+            json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
+            json.append("}");
+            
+            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            
+            // Encode message with SBE header (DELETE template ID)
+            int blockLength = jsonBytes.length;
+            int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL;
+            
+            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
+            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
+                new byte[totalLength]
+            );
+            
+            // Encode SBE header
+            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
+                messageBuffer, 0, blockLength, templateId);
+            
+            // Write JSON payload
+            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+            
+            // Check session health
+            if (internalClusterClient.isClosed()) {
+                log.error("❌ Cannot send delete - internal cluster client session is CLOSED");
+                synchronized (this) {
+                    internalClusterClient = null;
+                    ensureInternalClusterClient();
+                }
+                if (internalClusterClient == null || internalClusterClient.isClosed()) {
+                    log.error("❌ Reconnection failed - cannot send delete");
+                    return false;
+                }
+                log.info("✅ Reconnection successful - retrying delete send");
+            }
+            
+            // Send through Aeron with back-pressure handling
+            idleStrategy.reset();
+            long result;
+            int retries = 0;
+            while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
+                if (result == io.aeron.Publication.BACK_PRESSURED) {
+                    idleStrategy.idle();
+                    retries++;
+                    if (retries > 100) {
+                        log.error("❌ Delete ingress back-pressured after {} retries", retries);
+                        return false;
+                    }
+                } else if (result == io.aeron.Publication.NOT_CONNECTED) {
+                    log.warn("⚠️  Delete ingress not connected - waiting...");
+                    idleStrategy.idle();
+                    retries++;
+                    if (retries > 100) {
+                        log.error("❌ Delete ingress not connected after {} retries", retries);
+                        return false;
+                    }
+                } else {
+                    log.error("❌ Failed to send delete through ingress: {}", result);
+                    return false;
+                }
+            }
+            
+            // Track metrics (same as writes)
+            ingressTimestamps.offer(System.nanoTime());
+            performanceMetrics.recordMessageIngressed();
+            backpressureManager.incrementSent();
+            
+            log.info("✅ DELETE sent through AeronCluster.offer() - will replicate to all nodes via Raft");
+            return true;
+        } catch (Exception e) {
+            log.error("❌ Exception sending delete through ingress", e);
             return false;
         }
     }

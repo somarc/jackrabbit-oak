@@ -23,7 +23,7 @@ import java.util.List;
  */
 public interface RaftAppendCallback {
     /**
-     * Append a verified proposal to Raft log.
+     * Append a verified write proposal to Raft log.
      * 
      * @param walletAddress Ethereum wallet address
      * @param path Shard path
@@ -34,6 +34,20 @@ public interface RaftAppendCallback {
     void appendProposal(String walletAddress, String path, String contentType, String message, String signature);
     
     /**
+     * Append a verified delete proposal to Raft log.
+     * Same flow as writes, but simpler (no content/message).
+     * 
+     * @param walletAddress Ethereum wallet address
+     * @param path Content path to delete
+     * @param signature Transaction signature
+     */
+    default void appendDeleteProposal(String walletAddress, String path, String signature) {
+        // Default implementation: not implemented
+        // Implementations should override this to support deletes
+        throw new UnsupportedOperationException("Delete proposals not supported by this Raft callback implementation");
+    }
+    
+    /**
      * Append a batch of verified proposals to Raft log as a single message.
      * This is more efficient than individual appends as Aeron can optimize batched messages.
      * 
@@ -41,17 +55,27 @@ public interface RaftAppendCallback {
      * @return number of proposals successfully sent
      */
     default int appendProposalBatch(List<QueuedProposal> proposals) {
-        // Default implementation: fall back to individual appends
+        // Default implementation: fall back to individual appends based on type
         // Implementations should override this for true batch support
         int sent = 0;
         for (QueuedProposal proposal : proposals) {
-            appendProposal(
-                proposal.getWalletAddress(),
-                proposal.getPath(),
-                proposal.getContentType(),
-                proposal.getMessage(),
-                proposal.getSignature()
-            );
+            if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
+                // DELETE proposal: send via appendDeleteProposal
+                appendDeleteProposal(
+                    proposal.getWalletAddress(),
+                    proposal.getPath(),
+                    proposal.getSignature()
+                );
+            } else {
+                // WRITE proposal: send via appendProposal
+                appendProposal(
+                    proposal.getWalletAddress(),
+                    proposal.getPath(),
+                    proposal.getContentType(),
+                    proposal.getMessage(),
+                    proposal.getSignature()
+                );
+            }
             sent++;
         }
         return sent;

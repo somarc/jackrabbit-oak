@@ -60,6 +60,8 @@ public class ServerContext {
     public volatile ConsensusStateService consensusStateService;
     public volatile GCCostEstimator gcCostEstimator;
     public volatile GCProposalManager gcProposalManager;
+    public volatile org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager gcAccountManager;
+    public volatile org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob periodicGCJob;
     public volatile ProposalQueueManagerOptimized proposalQueueManager;
     public volatile FragmentationTracker fragmentationTracker;
     public volatile org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics;

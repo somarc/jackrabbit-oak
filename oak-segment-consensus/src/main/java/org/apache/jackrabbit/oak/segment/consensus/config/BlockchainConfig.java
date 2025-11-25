@@ -20,10 +20,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Unified configuration for blockchain/mock mode settings.
+ * Unified configuration for blockchain mode settings.
  * 
- * <p>Consolidates all mock/test mode flags behind environment variables and system properties.
- * This allows easy switching between mock and real blockchain functionality.
+ * <p>Supports three distinct blockchain modes:
+ * <ul>
+ *   <li><strong>MOCK</strong> - Pure simulation (instant, no blockchain verification)</li>
+ *   <li><strong>SEPOLIA</strong> - Sepolia testnet (real verification, test ETH)</li>
+ *   <li><strong>MAINNET</strong> - Ethereum mainnet (real verification, real ETH)</li>
+ * </ul>
  * 
  * <p>Configuration Priority:
  * <ol>
@@ -34,16 +38,14 @@ import org.slf4j.LoggerFactory;
  * 
  * <p>Environment Variables:
  * <ul>
- *   <li>{@code OAK_BLOCKCHAIN_MOCK_MODE} - Enable mock mode (default: true for POC)</li>
- *   <li>{@code OAK_BLOCKCHAIN_NETWORK} - Blockchain network (default: "sepolia")</li>
- *   <li>{@code OAK_BLOCKCHAIN_CONTRACT_ADDRESS} - Contract address (default: testnet address)</li>
- *   <li>{@code OAK_BLOCKCHAIN_RPC_URL} - RPC URL for Web3j (default: null)</li>
+ *   <li>{@code OAK_BLOCKCHAIN_MODE} - Mode: "mock", "sepolia", "mainnet" (default: "mock")</li>
+ *   <li>{@code OAK_BLOCKCHAIN_CONTRACT_ADDRESS} - Contract address (optional, has defaults)</li>
+ *   <li>{@code OAK_BLOCKCHAIN_RPC_URL} - RPC URL for Web3j (required for sepolia/mainnet)</li>
  * </ul>
  * 
  * <p>System Properties (alternative to env vars):
  * <ul>
- *   <li>{@code oak.blockchain.mockMode}</li>
- *   <li>{@code oak.blockchain.network}</li>
+ *   <li>{@code oak.blockchain.mode}</li>
  *   <li>{@code oak.blockchain.contractAddress}</li>
  *   <li>{@code oak.blockchain.rpcUrl}</li>
  * </ul>
@@ -52,28 +54,61 @@ public class BlockchainConfig {
     
     private static final Logger log = LoggerFactory.getLogger(BlockchainConfig.class);
     
+    /**
+     * Blockchain mode enumeration.
+     */
+    public enum Mode {
+        /** Pure mock mode - instant payment simulation, no blockchain */
+        MOCK("mock"),
+        
+        /** Sepolia testnet - real blockchain verification with test ETH */
+        SEPOLIA("sepolia"),
+        
+        /** Ethereum mainnet - real blockchain verification with real ETH */
+        MAINNET("mainnet");
+        
+        private final String key;
+        
+        Mode(String key) {
+            this.key = key;
+        }
+        
+        public String getKey() {
+            return key;
+        }
+        
+        public static Mode fromString(String str) {
+            if (str == null) {
+                return MOCK; // Default
+            }
+            String lower = str.toLowerCase().trim();
+            for (Mode mode : values()) {
+                if (mode.key.equals(lower)) {
+                    return mode;
+                }
+            }
+            return MOCK; // Default
+        }
+    }
+    
     // Environment variable names
-    private static final String ENV_MOCK_MODE = "OAK_BLOCKCHAIN_MOCK_MODE";
-    private static final String ENV_NETWORK = "OAK_BLOCKCHAIN_NETWORK";
+    private static final String ENV_MODE = "OAK_BLOCKCHAIN_MODE";
     private static final String ENV_CONTRACT_ADDRESS = "OAK_BLOCKCHAIN_CONTRACT_ADDRESS";
     private static final String ENV_RPC_URL = "OAK_BLOCKCHAIN_RPC_URL";
     
     // System property names (alternative to env vars)
-    private static final String PROP_MOCK_MODE = "oak.blockchain.mockMode";
-    private static final String PROP_NETWORK = "oak.blockchain.network";
+    private static final String PROP_MODE = "oak.blockchain.mode";
     private static final String PROP_CONTRACT_ADDRESS = "oak.blockchain.contractAddress";
     private static final String PROP_RPC_URL = "oak.blockchain.rpcUrl";
     
-    // Default values
-    private static final boolean DEFAULT_MOCK_MODE = true; // Default to mock for POC
-    private static final String DEFAULT_NETWORK = "sepolia";
-    private static final String DEFAULT_CONTRACT_ADDRESS = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0"; // Testnet address
+    // Default contract addresses
+    private static final String SEPOLIA_CONTRACT = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0";
+    private static final String MAINNET_CONTRACT = "0x0000000000000000000000000000000000000000"; // TODO: Deploy mainnet contract
     
     // Singleton instance
     private static volatile BlockchainConfig instance;
     
-    private final boolean mockMode;
-    private final String network;
+    private final Mode mode;
     private final String contractAddress;
     private final String rpcUrl;
     
@@ -95,14 +130,15 @@ public class BlockchainConfig {
      * Create configuration from environment variables and system properties.
      */
     private BlockchainConfig() {
-        // Read mock mode (env var > system property > default)
-        this.mockMode = readBooleanConfig(ENV_MOCK_MODE, PROP_MOCK_MODE, DEFAULT_MOCK_MODE);
+        // Read mode (env var > system property > default)
+        String modeStr = readStringConfig(ENV_MODE, PROP_MODE, "mock");
+        this.mode = Mode.fromString(modeStr);
         
-        // Read network (env var > system property > default)
-        this.network = readStringConfig(ENV_NETWORK, PROP_NETWORK, DEFAULT_NETWORK);
+        // Determine default contract address based on mode
+        String defaultContract = mode == Mode.MAINNET ? MAINNET_CONTRACT : SEPOLIA_CONTRACT;
         
-        // Read contract address (env var > system property > default)
-        this.contractAddress = readStringConfig(ENV_CONTRACT_ADDRESS, PROP_CONTRACT_ADDRESS, DEFAULT_CONTRACT_ADDRESS);
+        // Read contract address (env var > system property > mode-based default)
+        this.contractAddress = readStringConfig(ENV_CONTRACT_ADDRESS, PROP_CONTRACT_ADDRESS, defaultContract);
         
         // Read RPC URL (env var > system property > null)
         this.rpcUrl = readStringConfig(ENV_RPC_URL, PROP_RPC_URL, null);
@@ -110,42 +146,38 @@ public class BlockchainConfig {
         // Log configuration
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         log.info("🔧 Blockchain Configuration");
-        log.info("   Mock Mode: {} ({})", mockMode, mockMode ? "TESTING" : "PRODUCTION");
-        log.info("   Network: {}", network);
-        log.info("   Contract Address: {}", contractAddress);
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("   Mode: {}", mode);
+        log.info("   Contract: {}", contractAddress);
         log.info("   RPC URL: {}", rpcUrl != null ? rpcUrl : "not configured");
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
-        if (mockMode) {
-            log.warn("⚠️  MOCK MODE ENABLED - Blockchain verification disabled");
-            log.warn("   Set {}={} to enable real blockchain mode", ENV_MOCK_MODE, "false");
-        } else {
-            log.info("✅ REAL MODE ENABLED - Blockchain verification active");
-            if (rpcUrl == null) {
-                log.warn("⚠️  RPC URL not configured - Web3j connections may fail");
-                log.warn("   Set {} to configure RPC endpoint", ENV_RPC_URL);
-            }
+        switch (mode) {
+            case MOCK:
+                log.warn("⚠️  MOCK MODE - Instant payment simulation (no blockchain)");
+                log.warn("   Set {}=sepolia or {}=mainnet for real verification", ENV_MODE, ENV_MODE);
+                break;
+                
+            case SEPOLIA:
+                log.info("✅ SEPOLIA MODE - Testnet verification (test ETH)");
+                if (rpcUrl == null) {
+                    log.warn("⚠️  RPC URL not configured - Web3j connections may fail");
+                    log.warn("   Set {} to configure RPC endpoint", ENV_RPC_URL);
+                }
+                break;
+                
+            case MAINNET:
+                log.info("🔴 MAINNET MODE - Production verification (REAL ETH)");
+                if (rpcUrl == null) {
+                    log.error("❌ RPC URL REQUIRED for mainnet mode!");
+                    log.error("   Set {} to configure RPC endpoint", ENV_RPC_URL);
+                }
+                if (MAINNET_CONTRACT.equals("0x0000000000000000000000000000000000000000")) {
+                    log.error("❌ MAINNET CONTRACT NOT DEPLOYED!");
+                    log.error("   Deploy contract and set {} env var", ENV_CONTRACT_ADDRESS);
+                }
+                break;
         }
-    }
-    
-    /**
-     * Read boolean configuration (env var > system property > default).
-     */
-    private boolean readBooleanConfig(String envVar, String sysProp, boolean defaultValue) {
-        // Check environment variable first
-        String envValue = System.getenv(envVar);
-        if (envValue != null) {
-            return parseBoolean(envValue, defaultValue);
-        }
-        
-        // Check system property
-        String propValue = System.getProperty(sysProp);
-        if (propValue != null) {
-            return parseBoolean(propValue, defaultValue);
-        }
-        
-        // Return default
-        return defaultValue;
     }
     
     /**
@@ -169,32 +201,30 @@ public class BlockchainConfig {
     }
     
     /**
-     * Parse boolean string (case-insensitive: "true", "1", "yes" = true).
+     * Get the configured blockchain mode.
+     * 
+     * @return MOCK, SEPOLIA, or MAINNET
      */
-    private boolean parseBoolean(String value, boolean defaultValue) {
-        if (value == null) {
-            return defaultValue;
-        }
-        String lower = value.toLowerCase().trim();
-        return lower.equals("true") || lower.equals("1") || lower.equals("yes");
+    public Mode getMode() {
+        return mode;
     }
     
     /**
-     * Check if mock mode is enabled.
+     * Check if mock mode is enabled (for backwards compatibility).
      * 
-     * @return true if mock mode (testing), false if real mode (production)
+     * @return true if MOCK mode, false otherwise
      */
     public boolean isMockMode() {
-        return mockMode;
+        return mode == Mode.MOCK;
     }
     
     /**
-     * Get blockchain network name.
+     * Get blockchain network name (for backwards compatibility).
      * 
-     * @return network name (e.g., "mainnet", "polygon", "sepolia")
+     * @return network name (e.g., "mainnet", "sepolia", "mock")
      */
     public String getNetwork() {
-        return network;
+        return mode.getKey();
     }
     
     /**
@@ -226,8 +256,8 @@ public class BlockchainConfig {
     
     @Override
     public String toString() {
-        return String.format("BlockchainConfig{mockMode=%s, network=%s, contractAddress=%s, rpcUrl=%s}",
-            mockMode, network, contractAddress, rpcUrl != null ? "configured" : "null");
+        return String.format("BlockchainConfig{mode=%s, contractAddress=%s, rpcUrl=%s}",
+            mode, contractAddress, rpcUrl != null ? "configured" : "null");
     }
 }
 

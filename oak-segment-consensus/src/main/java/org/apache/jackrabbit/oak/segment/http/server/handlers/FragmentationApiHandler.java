@@ -589,5 +589,257 @@ public class FragmentationApiHandler {
         }
         return context.fragmentationTracker;
     }
+    
+    /**
+     * Handle GET /v1/gc/account/{walletAddress} - Get GC account status for entity.
+     * 
+     * @param request HTTP request
+     * @param response HTTP response
+     * @param walletAddress Ethereum wallet address
+     */
+    public void handleGetGCAccount(HttpServletRequest request, HttpServletResponse response, String walletAddress) throws IOException {
+        response.setContentType("application/json");
+        
+        try {
+            if (context.gcAccountManager == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                return;
+            }
+            
+            org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
+                context.gcAccountManager.getAccount(walletAddress);
+            
+            // Build JSON response
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"walletAddress\": \"").append(account.walletAddress).append("\",\n");
+            json.append("  \"totalDebt\": \"").append(account.totalDebt).append("\",\n");
+            json.append("  \"pendingDebt\": \"").append(account.getPendingDebt()).append("\",\n");
+            json.append("  \"executedDebt\": \"").append(account.executedDebt).append("\",\n");
+            json.append("  \"debtLimit\": \"").append(account.debtLimit).append("\",\n");
+            json.append("  \"writesBlocked\": ").append(account.writesBlocked).append(",\n");
+            json.append("  \"lastDeleteTime\": ").append(account.lastDeleteTime).append(",\n");
+            json.append("  \"deleteCount\": ").append(account.deletes.size()).append(",\n");
+            json.append("  \"paymentCount\": ").append(account.payments.size()).append("\n");
+            json.append("}\n");
+            
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(json.toString());
+            
+        } catch (Exception e) {
+            log.error("Error getting GC account", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
+    
+    /**
+     * Handle POST /v1/gc/account/{walletAddress}/pay - Record debt payment (manual for MVP).
+     * 
+     * @param request HTTP request
+     * @param response HTTP response
+     * @param walletAddress Ethereum wallet address
+     */
+    public void handlePayGCDebt(HttpServletRequest request, HttpServletResponse response, String walletAddress) throws IOException {
+        response.setContentType("application/json");
+        
+        try {
+            if (context.gcAccountManager == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                return;
+            }
+            
+            // Get payment amount
+            String amountStr = request.getParameter("amount");
+            if (amountStr == null || amountStr.isEmpty()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "amount parameter required");
+                return;
+            }
+            
+            java.math.BigDecimal amount = new java.math.BigDecimal(amountStr);
+            String txHash = request.getParameter("txHash");  // Optional
+            
+            // Record payment
+            context.gcAccountManager.recordPayment(walletAddress, amount, txHash);
+            
+            // Get updated account
+            org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
+                context.gcAccountManager.getAccount(walletAddress);
+            
+            // Build response
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"success\": true,\n");
+            json.append("  \"amountPaid\": \"").append(amount).append("\",\n");
+            json.append("  \"remainingDebt\": \"").append(account.executedDebt).append("\",\n");
+            json.append("  \"writesBlocked\": ").append(account.writesBlocked).append(",\n");
+            json.append("  \"message\": \"Payment recorded. ");
+            if (account.writesBlocked) {
+                json.append("Debt still exceeds limit - pay more to resume writes.");
+            } else {
+                json.append("Writes resumed.");
+            }
+            json.append("\"\n");
+            json.append("}\n");
+            
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(json.toString());
+            
+        } catch (Exception e) {
+            log.error("Error recording payment", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
+    
+    /**
+     * Handle POST /v1/gc/account/{walletAddress}/set-limit - Set debt limit (for testing).
+     * 
+     * @param request HTTP request
+     * @param response HTTP response
+     * @param walletAddress Ethereum wallet address
+     */
+    public void handleSetDebtLimit(HttpServletRequest request, HttpServletResponse response, String walletAddress) throws IOException {
+        response.setContentType("application/json");
+        
+        try {
+            if (context.gcAccountManager == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                return;
+            }
+            
+            // Get limit
+            String limitStr = request.getParameter("limit");
+            if (limitStr == null || limitStr.isEmpty()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "limit parameter required");
+                return;
+            }
+            
+            java.math.BigDecimal limit = new java.math.BigDecimal(limitStr);
+            
+            // Set limit
+            context.gcAccountManager.setDebtLimit(walletAddress, limit);
+            
+            // Get updated account
+            org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
+                context.gcAccountManager.getAccount(walletAddress);
+            
+            // Build response
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"success\": true,\n");
+            json.append("  \"debtLimit\": \"").append(account.debtLimit).append("\",\n");
+            json.append("  \"writesBlocked\": ").append(account.writesBlocked).append("\n");
+            json.append("}\n");
+            
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(json.toString());
+            
+        } catch (Exception e) {
+            log.error("Error setting debt limit", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
+    
+    /**
+     * Handle POST /v1/gc/account/{walletAddress}/execute-pending - Convert pending to executed debt (simulate GC).
+     * 
+     * @param request HTTP request
+     * @param response HTTP response
+     * @param walletAddress Ethereum wallet address
+     */
+    public void handleExecutePendingDebt(HttpServletRequest request, HttpServletResponse response, String walletAddress) throws IOException {
+        response.setContentType("application/json");
+        
+        try {
+            if (context.gcAccountManager == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                return;
+            }
+            
+            // Get account
+            org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
+                context.gcAccountManager.getAccount(walletAddress);
+            
+            java.math.BigDecimal pending = account.getPendingDebt();
+            
+            // Convert pending to executed
+            account.convertPendingToExecuted(pending);
+            
+            // Build response
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"success\": true,\n");
+            json.append("  \"converted\": \"").append(pending).append("\",\n");
+            json.append("  \"executedDebt\": \"").append(account.executedDebt).append("\",\n");
+            json.append("  \"writesBlocked\": ").append(account.writesBlocked).append(",\n");
+            json.append("  \"message\": \"Pending debt converted to executed. ");
+            if (account.writesBlocked) {
+                json.append("Writes now BLOCKED - pay to resume.");
+            } else {
+                json.append("Debt under limit.");
+            }
+            json.append("\"\n");
+            json.append("}\n");
+            
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(json.toString());
+            
+        } catch (Exception e) {
+            log.error("Error executing pending debt", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
+    
+    /**
+     * Handle POST /v1/gc/trigger - Manually trigger periodic GC cycle (for testing).
+     * 
+     * @param request HTTP request
+     * @param response HTTP response
+     */
+    public void handleTriggerGC(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        
+        try {
+            if (context.gcAccountManager == null) {
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                return;
+            }
+            
+            // Call convertAllPendingToExecuted (simulates periodic GC)
+            context.gcAccountManager.convertAllPendingToExecuted();
+            
+            // Get stats
+            java.util.List<org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount> blocked = 
+                context.gcAccountManager.getBlockedAccounts();
+            java.util.List<org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount> withExecutedDebt = 
+                context.gcAccountManager.getAccountsWithExecutedDebt();
+            
+            // Build response
+            StringBuilder json = new StringBuilder();
+            json.append("{\n");
+            json.append("  \"success\": true,\n");
+            json.append("  \"message\": \"GC cycle executed - pending debt converted to executed\",\n");
+            json.append("  \"entitiesWithExecutedDebt\": ").append(withExecutedDebt.size()).append(",\n");
+            json.append("  \"entitiesBlocked\": ").append(blocked.size());
+            if (!blocked.isEmpty()) {
+                json.append(",\n  \"blockedWallets\": [");
+                for (int i = 0; i < blocked.size(); i++) {
+                    if (i > 0) json.append(", ");
+                    json.append("\"").append(blocked.get(i).walletAddress).append("\"");
+                }
+                json.append("]");
+            }
+            json.append("\n}\n");
+            
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(json.toString());
+            
+            log.info("🧹 Manual GC triggered - {} entities with executed debt, {} blocked", 
+                     withExecutedDebt.size(), blocked.size());
+            
+        } catch (Exception e) {
+            log.error("Error triggering GC", e);
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
 }
 

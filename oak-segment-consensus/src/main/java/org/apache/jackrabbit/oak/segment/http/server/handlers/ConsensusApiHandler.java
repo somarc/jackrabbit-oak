@@ -209,6 +209,49 @@ public class ConsensusApiHandler {
             log.debug("Client lookup: wallet={}, clientId={}, registeredClients.size()={}", 
                 normalizedWallet, clientId, context.registeredClients.size());
             
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // WRITE BLOCKING: Check if entity has exceeded GC debt limit
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            if (context.gcAccountManager != null) {
+                if (!context.gcAccountManager.canWrite(normalizedWallet)) {
+                    org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
+                        context.gcAccountManager.getAccount(normalizedWallet);
+                    
+                    log.warn("🚫 Write BLOCKED: wallet={}, debt=${}, limit=${}", 
+                             normalizedWallet, account.totalDebt, account.debtLimit);
+                    
+                    response.setContentType("application/json");
+                    response.setStatus(402); // 402 Payment Required
+                    
+                    String errorJson = String.format(
+                        "{\"error\":\"WRITE_BLOCKED_GC_DEBT\"," +
+                        "\"message\":\"Writes blocked due to unpaid GC debt. Please pay debt to resume.\"," +
+                        "\"wallet\":\"%s\"," +
+                        "\"totalDebt\":\"%s\"," +
+                        "\"executedDebt\":\"%s\"," +
+                        "\"pendingDebt\":\"%s\"," +
+                        "\"debtLimit\":\"%s\"," +
+                        "\"amountOverLimit\":\"%s\"," +
+                        "\"paymentUrl\":\"/v1/gc/account/%s/pay\"," +
+                        "\"statusUrl\":\"/v1/gc/account/%s\"}",
+                        normalizedWallet,
+                        account.totalDebt.toString(),
+                        account.executedDebt.toString(),
+                        account.getPendingDebt().toString(),
+                        account.debtLimit.toString(),
+                        account.totalDebt.subtract(account.debtLimit).toString(),
+                        normalizedWallet,
+                        normalizedWallet
+                    );
+                    
+                    response.getWriter().write(errorJson);
+                    
+                    log.info("💳 PAYMENT REQUIRED: Rejected write from {} (debt: ${})", 
+                             normalizedWallet, account.totalDebt);
+                    return;
+                }
+            }
+            
             // Default values for optional parameters
             if (message == null || message.isEmpty()) {
                 message = "Test content at " + System.currentTimeMillis();
@@ -286,7 +329,7 @@ public class ConsensusApiHandler {
                     fullPath,
                     contentType != null ? contentType : "page",
                     message != null ? message : "",
-                    signature != null ? signature : ""
+                    signature // Already validated - no fallback needed
                 );
                 
                 if (!success) {
@@ -373,7 +416,7 @@ public class ConsensusApiHandler {
                 fullPath,
                 contentType != null ? contentType : "page",
                 message != null ? message : "",
-                signature != null ? signature : "",
+                signature, // Already validated - no fallback needed
                 tier  // Pass payment tier for priority handling
             );
             
@@ -537,24 +580,93 @@ public class ConsensusApiHandler {
             
             log.debug("🗑️  DELETE PROPOSAL: client={}, wallet={}, path={}", clientId, wallet, contentPath);
             
-            // TODO: Verify signature matches wallet address
-            // TODO: Check if content actually exists at the path
-            // TODO: Verify content was created by this wallet (check node properties)
-            // TODO: Propose delete to Aeron Cluster consensus
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // ETHEREUM PAYMENT REQUIRED: Deletes flow through same pipeline as writes
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            String ethereumTxHash = request.getParameter("ethereumTxHash");
+            if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST,
+                    "Missing ethereumTxHash parameter. Deletes require Ethereum payment (like writes). " +
+                    "Tiers: STANDARD (+2 epochs), EXPRESS (+1 epoch), PRIORITY (direct).");
+                return;
+            }
             
-            // For now, return success (delete proposal accepted, will be processed)
-            // In future: This will create a delete proposal and submit to Aeron Cluster
-            String result = String.format(
-                "{\"success\":true,\"message\":\"Delete proposal accepted\",\"contentPath\":\"%s\",\"wallet\":\"%s\",\"clientId\":\"%s\"}",
-                contentPath.replace("\"", "\\\""),
-                wallet.replace("\"", "\\\""),
-                clientId.replace("\"", "\\\"")
+            // Determine payment tier from Ethereum transaction
+            // For MVP: Simple heuristic based on tx hash (in production, query chain)
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier = 
+                determineTierFromEthereumTx(ethereumTxHash);
+            
+            // Generate unique proposal ID for this delete
+            String proposalId = java.util.UUID.randomUUID().toString();
+            
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // GC DEBT TRACKING: Track debt when content is deleted (deferred cost)
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            java.math.BigDecimal gcDebtIncurred = java.math.BigDecimal.ZERO;
+            java.math.BigDecimal totalDebt = java.math.BigDecimal.ZERO;
+            java.math.BigDecimal pendingDebt = java.math.BigDecimal.ZERO;
+            boolean writesBlocked = false;
+            
+            if (context.gcAccountManager != null) {
+                try {
+                    // Estimate content size (TODO: get actual size from Oak NodeStore)
+                    // For now, use a heuristic: 1MB per content item
+                    long estimatedSizeMB = 1L;
+                    
+                    // Add debt to account (pending until GC executes)
+                    java.math.BigDecimal debtCost = context.gcAccountManager.addDebt(normalizedWallet, contentPath, estimatedSizeMB);
+                    
+                    // Get updated account state
+                    org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
+                        context.gcAccountManager.getAccount(normalizedWallet);
+                    
+                    gcDebtIncurred = debtCost;
+                    totalDebt = account.totalDebt;
+                    pendingDebt = account.getPendingDebt();
+                    writesBlocked = account.writesBlocked;
+                    
+                    log.info("💰 GC debt added: wallet={}, path={}, debt=${}, total=${}, pending=${}, blocked={}", 
+                             normalizedWallet, contentPath, gcDebtIncurred, totalDebt, pendingDebt, writesBlocked);
+                    
+                } catch (Exception e) {
+                    log.warn("⚠️  Failed to track GC debt for delete: {}", e.getMessage());
+                }
+            }
+            
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // QUEUE DELETE PROPOSAL: Same flow as writes, just different type
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            log.debug("📥 Queuing DELETE proposal {} (tx: {}, tier: {}), waiting for Ethereum confirmation", 
+                proposalId, ethereumTxHash, tier);
+            
+            context.proposalQueueManager.queueDeleteProposal(
+                proposalId,
+                ethereumTxHash,
+                normalizedWallet,
+                contentPath,
+                signature,
+                tier
             );
             
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(result);
-            
-            log.info("✅ Delete proposal accepted (implementation pending)");
+            // Return 202 Accepted (queued for processing)
+            response.setContentType("application/json");
+            response.setStatus(HttpServletResponse.SC_ACCEPTED);
+            String resultJson = "{" +
+                "\"proposalId\":\"" + proposalId + "\"," +
+                "\"type\":\"DELETE\"," +
+                "\"state\":\"PENDING\"," +
+                "\"message\":\"Delete proposal queued, waiting for Ethereum confirmation\"," +
+                "\"ethereumTxHash\":\"" + ethereumTxHash + "\"," +
+                "\"tier\":\"" + tier + "\"," +
+                "\"timeoutTimestamp\":" + (System.currentTimeMillis() + 300_000) + "," +
+                "\"wallet\":\"" + wallet + "\"," +
+                "\"contentPath\":\"" + contentPath.replace("\"", "\\\"") + "\"," +
+                "\"gcDebtIncurred\":\"" + gcDebtIncurred + "\"," +
+                "\"totalDebt\":\"" + totalDebt + "\"," +
+                "\"pendingDebt\":\"" + pendingDebt + "\"," +
+                "\"writesBlocked\":" + writesBlocked + "}";
+            response.getWriter().write(resultJson);
+            log.info("✅ DELETE proposal {} queued successfully (tier: {}, path: {})", proposalId, tier, contentPath);
             
         } catch (Exception e) {
             log.error("❌ Delete proposal failed", e);
@@ -780,12 +892,22 @@ public class ConsensusApiHandler {
             org.apache.jackrabbit.oak.spi.state.NodeBuilder contentNode = current.child(contentId);
             
             // Set properties
+            // SECURITY: All fields should be non-null after Aeron replication
+            // If any are null, fail hard - indicates corruption or programming error
+            if (signature == null) {
+                throw new IllegalStateException(
+                    "SECURITY VIOLATION: Signature is null in replicated write. " +
+                    "This indicates Aeron message corruption or validation bypass. " +
+                    "Path: " + path + ", Wallet: " + walletAddress
+                );
+            }
+            
             contentNode.setProperty("jcr:primaryType", "nt:unstructured");
             contentNode.setProperty("contentType", contentType != null ? contentType : "page");
             contentNode.setProperty("message", message != null ? message : "");
             contentNode.setProperty("timestamp", System.currentTimeMillis());
             contentNode.setProperty("wallet", walletAddress);
-            contentNode.setProperty("signature", signature != null ? signature : "");
+            contentNode.setProperty("signature", signature); // Already validated - no fallback
             contentNode.setProperty("source", "aeron-replicated");
             
             // 🌟 GENESIS: If this is the genesis write, build the elaborate structure on ALL nodes
@@ -831,6 +953,90 @@ public class ConsensusApiHandler {
         } catch (Exception e) {
             log.error("❌ Failed to apply replicated write", e);
             throw new RuntimeException("Failed to apply replicated write", e);
+        }
+    }
+    
+    /**
+     * ✈️ AERON NATIVE: Apply replicated delete to FileStore.
+     * This is called from AeronConsensusEngine.onSessionMessage() after Aeron replicates the delete.
+     * 
+     * Delete in Oak = Remove node from tree (writes new segment saying "path no longer exists")
+     * Old segments remain until GC/compaction runs
+     */
+    public void applyReplicatedDelete(String walletAddress, String path, String signature) {
+        try {
+            log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
+            
+            // Get current HEAD
+            String previousHead = context.fileStore.getHead().getRecordId().toString();
+            log.debug("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
+            
+            // Parse path: /oak-chain/{shard}/content/{contentId}
+            String[] pathParts = path.split("/");
+            if (pathParts.length < 2) {
+                log.error("❌ Invalid path format: {} (expected: /oak-chain/...)", path);
+                return;
+            }
+            
+            // Build node structure and navigate to target
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = context.nodeStore.getRoot().builder();
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder current = rootBuilder;
+            
+            // Navigate to parent of node to delete
+            boolean pathExists = true;
+            for (int i = 1; i < pathParts.length - 1; i++) {
+                if (!pathParts[i].isEmpty()) {
+                    if (!current.hasChildNode(pathParts[i])) {
+                        log.warn("⚠️  Path does not exist: {} (stopping at segment: {})", path, pathParts[i]);
+                        pathExists = false;
+                        break;
+                    }
+                    current = current.getChildNode(pathParts[i]);
+                }
+            }
+            
+            if (!pathExists) {
+                log.warn("⚠️  Delete skipped - path doesn't exist: {}", path);
+                // Not an error - idempotent delete (already gone)
+                return;
+            }
+            
+            // Remove target node
+            String targetNodeName = pathParts[pathParts.length - 1];
+            if (current.hasChildNode(targetNodeName)) {
+                current.getChildNode(targetNodeName).remove();
+                log.info("✅ Node removed: {}", targetNodeName);
+            } else {
+                log.warn("⚠️  Target node doesn't exist: {} (idempotent delete)", targetNodeName);
+                // Not an error - already deleted
+                return;
+            }
+            
+            // Commit the deletion (deterministic on all nodes)
+            org.apache.jackrabbit.oak.spi.commit.CommitInfo commitInfo = 
+                new org.apache.jackrabbit.oak.spi.commit.CommitInfo(
+                    "aeron-replication-delete", 
+                    null, 
+                    java.util.Collections.singletonMap("replicated", "true")
+                );
+            
+            context.nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, commitInfo);
+            context.fileStore.flush();
+            
+            // Get new HEAD (all nodes have same HEAD after deterministic delete)
+            String newHead = context.fileStore.getHead().getRecordId().toString10();
+            log.info("✅ DELETE applied, HEAD: {}...", newHead.substring(0, Math.min(20, newHead.length())));
+            
+            // Update latest HEAD cache
+            if (context.aeronConsensusEngine != null) {
+                context.aeronConsensusEngine.updateLatestHead(newHead);
+            }
+            
+            log.info("✅ Deterministic delete applied successfully - old segments remain until GC");
+            
+        } catch (Exception e) {
+            log.error("❌ Failed to apply replicated delete", e);
+            throw new RuntimeException("Failed to apply replicated delete", e);
         }
     }
     
@@ -1502,6 +1708,42 @@ public class ConsensusApiHandler {
         } catch (Exception e) {
             log.error("❌ Failed to build genesis structure", e);
             // Don't throw - genesis properties are still valid, just missing elaborate structure
+        }
+    }
+    
+    /**
+     * Determine payment tier from Ethereum transaction hash.
+     * 
+     * <p>For MVP: Simple heuristic based on tx hash characters.
+     * In production, this would query the Ethereum chain to check the payment amount
+     * and determine tier from ValidatorPaymentV3_2.sol events.</p>
+     * 
+     * @param ethereumTxHash Ethereum transaction hash
+     * @return Payment tier (STANDARD, EXPRESS, or PRIORITY)
+     */
+    private org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier 
+    determineTierFromEthereumTx(String ethereumTxHash) {
+        // MVP heuristic: check tx hash pattern
+        // In production, this would:
+        // 1. Query Sepolia/mainnet for tx details
+        // 2. Check ProposalPaid event amount
+        // 3. Map amount to tier (e.g., 0.001 ETH = STANDARD, 0.005 = EXPRESS, 0.01 = PRIORITY)
+        
+        if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
+            return org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
+        }
+        
+        // Simple heuristic for demo: last char determines tier
+        char lastChar = ethereumTxHash.toLowerCase().charAt(ethereumTxHash.length() - 1);
+        if (lastChar >= 'a' && lastChar <= 'f') {
+            // High hex digit = PRIORITY
+            return org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY;
+        } else if (lastChar >= '5' && lastChar <= '9') {
+            // Mid-range digit = EXPRESS
+            return org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS;
+        } else {
+            // Low digit = STANDARD
+            return org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
         }
     }
 }

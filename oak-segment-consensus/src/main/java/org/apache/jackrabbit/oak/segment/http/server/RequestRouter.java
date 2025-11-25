@@ -317,6 +317,13 @@ public class RequestRouter {
                 return;
             }
             
+            // Delete Proposal API
+            if ("/v1/propose-delete".equals(path) && "POST".equals(method)) {
+                consensusApiHandler.handleDeleteProposal(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
             // HEAD endpoint - returns JSON with committedHead vs latestHead
             if ("/v1/head".equals(path) && "GET".equals(method)) {
                 response.setContentType("application/json");
@@ -497,6 +504,42 @@ public class RequestRouter {
             
             if ("/v1/gc/execute".equals(path) && "POST".equals(method)) {
                 fragmentationApiHandler.handleExecuteGC(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // GC Account Management
+            if (path != null && path.startsWith("/v1/gc/account/")) {
+                // Extract wallet address from path
+                String remaining = path.substring("/v1/gc/account/".length());
+                
+                // Check for sub-paths
+                if (remaining.contains("/pay") && "POST".equals(method)) {
+                    String walletAddress = remaining.substring(0, remaining.indexOf("/pay"));
+                    fragmentationApiHandler.handlePayGCDebt(request, response, walletAddress);
+                    baseRequest.setHandled(true);
+                    return;
+                } else if (remaining.contains("/set-limit") && "POST".equals(method)) {
+                    String walletAddress = remaining.substring(0, remaining.indexOf("/set-limit"));
+                    fragmentationApiHandler.handleSetDebtLimit(request, response, walletAddress);
+                    baseRequest.setHandled(true);
+                    return;
+                } else if (remaining.contains("/execute-pending") && "POST".equals(method)) {
+                    String walletAddress = remaining.substring(0, remaining.indexOf("/execute-pending"));
+                    fragmentationApiHandler.handleExecutePendingDebt(request, response, walletAddress);
+                    baseRequest.setHandled(true);
+                    return;
+                } else if ("GET".equals(method) && !remaining.contains("/")) {
+                    // GET /v1/gc/account/{walletAddress}
+                    fragmentationApiHandler.handleGetGCAccount(request, response, remaining);
+                    baseRequest.setHandled(true);
+                    return;
+                }
+            }
+            
+            // Manual GC trigger endpoint (for testing)
+            if ("/v1/gc/trigger".equals(path) && "POST".equals(method)) {
+                fragmentationApiHandler.handleTriggerGC(request, response);
                 baseRequest.setHandled(true);
                 return;
             }

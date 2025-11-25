@@ -456,6 +456,30 @@ public class GlobalStoreServer {
                 System.out.println("   - Total validators: " + totalValidators);
                 System.out.println("   - Quorum required: " + ((totalValidators * 2 / 3) + 1) + "/" + totalValidators);
                 System.out.println("   - Tracks GC proposals, voting, and execution");
+                
+                // Initialize GC Account Manager (Account Tax Model)
+                org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager gcAccountManager = 
+                    new org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager();
+                
+                httpServer.getContext().gcAccountManager = gcAccountManager;
+                
+                System.out.println("✅ GC Account Manager initialized");
+                System.out.println("   - Tracks GC debt per entity (wallet address)");
+                System.out.println("   - Default debt limit: $100.00");
+                System.out.println("   - Enforces write blocking when debt exceeds limit");
+                
+                // Initialize Periodic GC Job (Account Tax Model)
+                org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob periodicGCJob = 
+                    new org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob(gcAccountManager);
+                
+                periodicGCJob.start();
+                httpServer.getContext().periodicGCJob = periodicGCJob;
+                
+                System.out.println("✅ Periodic GC Job started");
+                System.out.println("   - Interval: 5 minutes");
+                System.out.println("   - Action: Converts pending debt → executed debt");
+                System.out.println("   - Blocks writes when executed debt > limit");
+                
             } catch (Exception e) {
                 System.err.println("⚠️  Failed to initialize GC Proposal Manager: " + e.getMessage());
                 System.err.println("   GC consensus will not be available");
@@ -884,12 +908,22 @@ public class GlobalStoreServer {
                 // ✈️ CRITICAL: Set write application callback BEFORE launching cluster
                 // Set write callback BEFORE launching cluster to ensure it's ready for incoming messages
                 // IMPORTANT: Callback must be set before ClusteredServiceContainer.launch()
-                aeronEngine.setWriteApplicationCallback((walletAddress, path, contentType, message, signature) -> {
-                    httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                        walletAddress, path, contentType, message, signature
-                    );
+                aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
+                    @Override
+                    public void applyWrite(String walletAddress, String path, String contentType, String message, String signature) {
+                        httpServer.getConsensusApiHandler().applyReplicatedWrite(
+                            walletAddress, path, contentType, message, signature
+                        );
+                    }
+                    
+                    @Override
+                    public void applyDelete(String walletAddress, String path, String signature) {
+                        httpServer.getConsensusApiHandler().applyReplicatedDelete(
+                            walletAddress, path, signature
+                        );
+                    }
                 });
-                System.out.println("   ✅ Write application callback configured (before cluster launch)");
+                System.out.println("   ✅ Write/Delete application callback configured (before cluster launch)");
                 
                 // Wire Aeron engine to HTTP server context (needed for callback to access ConsensusApiHandler)
                 // This must be done before setting callback so callback can access httpServer
@@ -1078,7 +1112,7 @@ public class GlobalStoreServer {
                     new org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback() {
                         @Override
                         public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
-                            // Append single proposal to Raft via AeronConsensusEngine
+                            // Append single write proposal to Raft via AeronConsensusEngine
                             if (aeronEngine == null) {
                                 System.err.println("❌ aeronEngine is NULL in appendProposal!");
                                 return;
@@ -1087,6 +1121,20 @@ public class GlobalStoreServer {
                             boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
                             if (!success) {
                                 System.err.println("❌ sendWriteThroughIngress() returned false!");
+                            }
+                        }
+                        
+                        @Override
+                        public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                            // Append delete proposal to Raft via AeronConsensusEngine
+                            if (aeronEngine == null) {
+                                System.err.println("❌ aeronEngine is NULL in appendDeleteProposal!");
+                                return;
+                            }
+                            System.out.println("🗑️  appendDeleteProposal() called - forwarding to Aeron (role: " + aeronEngine.getCurrentRole() + ")");
+                            boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature);
+                            if (!success) {
+                                System.err.println("❌ sendDeleteThroughIngress() returned false!");
                             }
                         }
                         
@@ -1664,11 +1712,21 @@ public class GlobalStoreServer {
         }
         aeronEngine.setNodeIdMapping(nodeIdToUrl);
         
-        // Set write application callback BEFORE launching cluster
-        aeronEngine.setWriteApplicationCallback((walletAddress, path, contentType, message, signature) -> {
-            httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                walletAddress, path, contentType, message, signature
-            );
+        // Set write/delete application callback BEFORE launching cluster
+        aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
+            @Override
+            public void applyWrite(String walletAddress, String path, String contentType, String message, String signature) {
+                httpServer.getConsensusApiHandler().applyReplicatedWrite(
+                    walletAddress, path, contentType, message, signature
+                );
+            }
+            
+            @Override
+            public void applyDelete(String walletAddress, String path, String signature) {
+                httpServer.getConsensusApiHandler().applyReplicatedDelete(
+                    walletAddress, path, signature
+                );
+            }
         });
         System.out.println("   ✅ Write application callback configured");
         

@@ -20,6 +20,13 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
  * Queued proposal waiting for Ethereum confirmation.
  */
 public class QueuedProposal {
+    
+    /** Proposal type (WRITE or DELETE) */
+    public enum ProposalType {
+        WRITE,
+        DELETE
+    }
+    
     private final String proposalId;
     private final String ethereumTxHash;
     private final long timestamp;
@@ -28,7 +35,8 @@ public class QueuedProposal {
     private volatile Long confirmedBlock;
     private volatile String rejectionReason;
     
-    // Wallet-based write fields
+    // Wallet-based write/delete fields
+    private volatile ProposalType type = ProposalType.WRITE; // Default to WRITE for backward compatibility
     private volatile String walletAddress;
     private volatile String path;
     private volatile String contentType;
@@ -146,6 +154,14 @@ public class QueuedProposal {
     
     public void setTier(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
         this.tier = tier;
+    }
+    
+    public ProposalType getType() {
+        return type;
+    }
+    
+    public void setType(ProposalType type) {
+        this.type = type;
     }
 }
 
