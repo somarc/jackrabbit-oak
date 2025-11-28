@@ -46,6 +46,7 @@ public class RequestRouter {
     private final AeronApiHandler aeronApiHandler;
     private final FragmentationApiHandler fragmentationApiHandler;
     private final LeaderConsensusHandler leaderConsensusHandler;
+    private final BinaryUploadHandler binaryUploadHandler;
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
     
@@ -90,6 +91,14 @@ public class RequestRouter {
         this.aeronApiHandler = new AeronApiHandler(context);
         this.fragmentationApiHandler = new FragmentationApiHandler(context);
         this.leaderConsensusHandler = new LeaderConsensusHandler(context);
+        
+        // Binary upload handler (ADR 020 - lazy upload on confirmation)
+        org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager sessionManager = 
+            new org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager();
+        this.binaryUploadHandler = new BinaryUploadHandler(sessionManager);
+        
+        // Make session manager available in context for dashboard metrics
+        context.setUploadSessionManager(sessionManager);
         
         // Chat handler will be initialized lazily on first use (after selfUrl is set)
         this.chatHandler = null;
@@ -324,6 +333,46 @@ public class RequestRouter {
                 return;
             }
             
+            // Binary Upload API (ADR 020 - Lazy upload on confirmation)
+            if ("/v1/binary/declare-intent".equals(path) && "POST".equals(method)) {
+                binaryUploadHandler.handleDeclareIntent(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if (path.startsWith("/v1/binary/check-intent/") && "GET".equals(method)) {
+                binaryUploadHandler.handleCheckIntent(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/binary/complete-upload".equals(path) && "POST".equals(method)) {
+                binaryUploadHandler.handleCompleteUpload(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // Mock Epoch Control API (only works in MOCK mode)
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            if ("/api/mock/advance-epoch".equals(path) && "POST".equals(method)) {
+                handleMockAdvanceEpoch(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/api/mock/set-epoch-offset".equals(path) && "POST".equals(method)) {
+                handleMockSetEpochOffset(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/api/mock/epoch-status".equals(path) && "GET".equals(method)) {
+                handleMockEpochStatus(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
             // HEAD endpoint - returns JSON with committedHead vs latestHead
             if ("/v1/head".equals(path) && "GET".equals(method)) {
                 response.setContentType("application/json");
@@ -435,6 +484,13 @@ public class RequestRouter {
             
             if ("/v1/ngrok-url".equals(path) && "GET".equals(method)) {
                 peerDiscoveryHandler.handleNgrokUrl(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // Blockchain configuration endpoint
+            if ("/v1/blockchain/config".equals(path) && "GET".equals(method)) {
+                new BlockchainConfigApiHandler(context).handle(response);
                 baseRequest.setHandled(true);
                 return;
             }
@@ -601,6 +657,164 @@ public class RequestRouter {
             response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
             baseRequest.setHandled(true);
         }
+    }
+    
+    /**
+     * Get the binary upload handler (for integration with other components).
+     * 
+     * @return the binary upload handler
+     */
+    public BinaryUploadHandler getBinaryUploadHandler() {
+        return binaryUploadHandler;
+    }
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MOCK EPOCH CONTROL HANDLERS
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    /**
+     * Advance mock epoch by N epochs (POST /api/mock/advance-epoch?epochs=N)
+     */
+    private void handleMockAdvanceEpoch(javax.servlet.http.HttpServletRequest request, 
+                                        javax.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig config = 
+            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+        
+        if (config.getMode() != org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.Mode.MOCK) {
+            response.setStatus(400);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\":\"Mock epoch control only available in MOCK mode. Current mode: " + config.getMode() + "\"}");
+            return;
+        }
+        
+        int epochs = 1; // Default: advance by 1
+        String epochsParam = request.getParameter("epochs");
+        if (epochsParam != null) {
+            try {
+                epochs = Integer.parseInt(epochsParam);
+            } catch (NumberFormatException e) {
+                response.setStatus(400);
+                response.setContentType("application/json");
+                response.getWriter().write("{\"error\":\"Invalid epochs parameter: " + epochsParam + "\"}");
+                return;
+            }
+        }
+        
+        // Get BeaconChainClient from EpochQueue
+        if (context.proposalQueueManager != null && context.proposalQueueManager.getEpochQueue() != null) {
+            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient = 
+                context.proposalQueueManager.getEpochQueue().getBeaconClient();
+            if (beaconClient != null) {
+                boolean success = beaconClient.advanceMockEpoch(epochs);
+                if (success) {
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"success\":true,\"advanced\":" + epochs + 
+                        ",\"currentEpoch\":" + beaconClient.getCachedCurrentEpoch() + 
+                        ",\"finalizedEpoch\":" + beaconClient.getCachedFinalizedEpoch() + "}");
+                    return;
+                }
+            }
+        }
+        
+        response.setStatus(500);
+        response.setContentType("application/json");
+        response.getWriter().write("{\"error\":\"Failed to advance epoch - BeaconChainClient not available\"}");
+    }
+    
+    /**
+     * Set mock epoch offset (POST /api/mock/set-epoch-offset?offset=N)
+     */
+    private void handleMockSetEpochOffset(javax.servlet.http.HttpServletRequest request, 
+                                          javax.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig config = 
+            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+        
+        if (config.getMode() != org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.Mode.MOCK) {
+            response.setStatus(400);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\":\"Mock epoch control only available in MOCK mode. Current mode: " + config.getMode() + "\"}");
+            return;
+        }
+        
+        String offsetParam = request.getParameter("offset");
+        if (offsetParam == null) {
+            response.setStatus(400);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\":\"Missing required parameter: offset\"}");
+            return;
+        }
+        
+        long offset;
+        try {
+            offset = Long.parseLong(offsetParam);
+        } catch (NumberFormatException e) {
+            response.setStatus(400);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\":\"Invalid offset parameter: " + offsetParam + "\"}");
+            return;
+        }
+        
+        // Get BeaconChainClient from EpochQueue
+        if (context.proposalQueueManager != null && context.proposalQueueManager.getEpochQueue() != null) {
+            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient = 
+                context.proposalQueueManager.getEpochQueue().getBeaconClient();
+            if (beaconClient != null) {
+                boolean success = beaconClient.setMockEpochOffset(offset);
+                if (success) {
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"success\":true,\"offset\":" + offset + 
+                        ",\"currentEpoch\":" + beaconClient.getCachedCurrentEpoch() + 
+                        ",\"finalizedEpoch\":" + beaconClient.getCachedFinalizedEpoch() + "}");
+                    return;
+                }
+            }
+        }
+        
+        response.setStatus(500);
+        response.setContentType("application/json");
+        response.getWriter().write("{\"error\":\"Failed to set epoch offset - BeaconChainClient not available\"}");
+    }
+    
+    /**
+     * Get mock epoch status (GET /api/mock/epoch-status)
+     */
+    private void handleMockEpochStatus(javax.servlet.http.HttpServletRequest request, 
+                                       javax.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig config = 
+            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+        
+        response.setContentType("application/json");
+        
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"mode\":\"").append(config.getMode()).append("\",");
+        
+        if (context.proposalQueueManager != null && context.proposalQueueManager.getEpochQueue() != null) {
+            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient = 
+                context.proposalQueueManager.getEpochQueue().getBeaconClient();
+            if (beaconClient != null) {
+                java.util.Map<String, Object> health = beaconClient.getHealthStatus();
+                json.append("\"currentEpoch\":").append(beaconClient.getCachedCurrentEpoch()).append(",");
+                json.append("\"finalizedEpoch\":").append(beaconClient.getCachedFinalizedEpoch()).append(",");
+                json.append("\"fresh\":").append(beaconClient.isEpochDataFresh()).append(",");
+                json.append("\"timeSinceUpdateMs\":").append(beaconClient.getMillisSinceLastUpdate());
+                
+                if (config.getMode() == org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.Mode.MOCK) {
+                    json.append(",\"mockEpochOffset\":").append(beaconClient.getMockEpochOffset());
+                    json.append(",\"mockControls\":{");
+                    json.append("\"advanceEpoch\":\"POST /api/mock/advance-epoch?epochs=N\",");
+                    json.append("\"setOffset\":\"POST /api/mock/set-epoch-offset?offset=N\"");
+                    json.append("}");
+                }
+            } else {
+                json.append("\"error\":\"BeaconChainClient not available\"");
+            }
+        } else {
+            json.append("\"error\":\"ProposalQueueManager or EpochQueue not available\"");
+        }
+        
+        json.append("}");
+        response.getWriter().write(json.toString());
     }
 }
 

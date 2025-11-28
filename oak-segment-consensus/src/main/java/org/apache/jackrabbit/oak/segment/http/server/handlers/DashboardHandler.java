@@ -236,20 +236,43 @@ public class DashboardHandler {
             appendSummaryCard(html, "Leader", formatLeaderLabel(leaderUrl), leaderUrl == null ? "Leader discovery pending" : (leaderUrl.equals(context.selfUrl) ? "This node is the leader" : "Tracking elected leader"));
             
             // Ethereum Epoch - show both current and finalized if queue manager is available
+            // Now MODE-AWARE: shows actual source (MOCK/SEPOLIA/MAINNET)
             if (context.proposalQueueManager != null) {
                 java.util.Map<String, Object> queueStats = context.proposalQueueManager.getQueueStats();
                 long currentEpoch = asLong(queueStats.get("currentEpoch"), -1L);
                 long finalizedEpoch = asLong(queueStats.get("finalizedEpoch"), -1L);
                 
+                // Get epoch source from BlockchainConfig (reuse mode from earlier in method)
+                String epochIcon = "⛓️";
+                String epochSource = "beaconcha.in API";
+                String epochModeLabel = mode.toString();
+                
+                switch (mode) {
+                    case MOCK:
+                        epochIcon = "🧪";
+                        epochSource = "Synthetic (30s/epoch)";
+                        break;
+                    case SEPOLIA:
+                        epochIcon = "🔵";
+                        epochSource = "Sepolia testnet";
+                        break;
+                    case MAINNET:
+                        epochIcon = "🟢";
+                        epochSource = "Mainnet";
+                        break;
+                }
+                
                 if (currentEpoch >= 0) {
-                    appendSummaryCard(html, "⛓️ Current Epoch", String.format("%,d", currentEpoch), "Active epoch - new proposals queue here");
+                    appendSummaryCard(html, epochIcon + " Current Epoch", String.format("%,d", currentEpoch), 
+                        epochModeLabel + " - " + epochSource);
                 }
                 if (finalizedEpoch >= 0) {
-                    appendSummaryCard(html, "✅ Finalized Epoch", String.format("%,d", finalizedEpoch), "Finalized epoch - ready for writing to SegmentStore");
+                    appendSummaryCard(html, "✅ Finalized Epoch", String.format("%,d", finalizedEpoch), 
+                        "Finalized - ready for SegmentStore writes");
                 }
             } else if (ethereumEpoch >= 0) {
                 // Fallback to cluster state ethereum epoch if queue manager not available
-                appendSummaryCard(html, "⛓️ Ethereum Epoch", String.format("%,d", ethereumEpoch), "Finalized Ethereum Beacon Chain epoch (economic finality layer)");
+                appendSummaryCard(html, "⛓️ Ethereum Epoch", String.format("%,d", ethereumEpoch), "Ethereum Beacon Chain epoch");
             }
             
             // Cluster metrics
@@ -309,6 +332,36 @@ public class DashboardHandler {
                     "Shards registered in directory");
             } else {
                 appendSummaryCard(html, "🔀 Shard Router", "Disabled", "Shard routing not initialized");
+            }
+            
+            // Binary Storage Backend (ADR 015/020)
+            String blobStoreIcon = "📦";
+            String blobStoreName = "Default";
+            String blobStoreDesc = "FileDataStore (local filesystem)";
+            if ("ipfs".equals(context.blobStoreType)) {
+                blobStoreIcon = "🌐";
+                blobStoreName = "IPFS";
+                blobStoreDesc = "Decentralized P2P storage (ADR 015)";
+            } else if ("s3".equals(context.blobStoreType)) {
+                blobStoreIcon = "☁️";
+                blobStoreName = "S3";
+                blobStoreDesc = "Amazon S3 compatible";
+            } else if ("azure".equals(context.blobStoreType)) {
+                blobStoreIcon = "☁️";
+                blobStoreName = "Azure";
+                blobStoreDesc = "Azure Blob Storage";
+            }
+            appendSummaryCard(html, blobStoreIcon + " Binary Store", blobStoreName, blobStoreDesc);
+            
+            // Lazy Binary Upload Stats (ADR 020)
+            if (context.uploadSessionManager != null) {
+                org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager.SessionStats uploadStats = 
+                    context.uploadSessionManager.getStats();
+                
+                String uploadDisplay = "📋 " + uploadStats.pending + " / ⏳ " + uploadStats.readyForUpload + " / ✅ " + uploadStats.completed;
+                String uploadCaption = uploadStats.total + " total: " + uploadStats.pending + " pending, " + 
+                    uploadStats.readyForUpload + " awaiting upload, " + uploadStats.completed + " complete";
+                appendSummaryCard(html, "📤 Lazy Uploads", uploadDisplay, uploadCaption);
             }
             
             html.append("</div>\n");
@@ -754,36 +807,36 @@ public class DashboardHandler {
                 
                 html.append("</div>\n");
                 
-                // Economic Finality Tiers (Future Feature Preview)
+                // Economic Finality Tiers (Active)
                 html.append("<div style='margin-top: 24px; padding: 20px; background: rgba(139, 92, 246, 0.1); border-radius: 12px; border: 1px solid rgba(139, 92, 246, 0.3);'>\n");
-                html.append("<h3 style='color: #a78bfa; margin-bottom: 16px; font-size: 1.1em;'>💎 Economic Finality Tiers <span style='color: #64748b; font-size: 0.75em; font-weight: normal;'>(Future Feature)</span></h3>\n");
+                html.append("<h3 style='color: #a78bfa; margin-bottom: 16px; font-size: 1.1em;'>💎 Economic Finality Tiers</h3>\n");
                 html.append("<div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;'>\n");
                 
                 // Standard Tier
                 html.append("<div style='background: rgba(15,23,42,0.6); padding: 14px; border-radius: 8px; border-left: 3px solid #64748b;'>\n");
                 html.append("<div style='color: #94a3b8; font-size: 0.8em; margin-bottom: 6px;'>🥉 STANDARD</div>\n");
                 html.append("<div style='color: #cbd5e1; font-size: 1.1em; font-weight: 600; margin-bottom: 6px;'>~12.8 min</div>\n");
-                html.append("<div style='color: #64748b; font-size: 0.75em;'>Base rate: 0.000001 ETH/MB<br>2 epoch safety</div>\n");
+                html.append("<div style='color: #64748b; font-size: 0.75em;'>Cost: 0.001 ETH<br>2 epoch safety</div>\n");
                 html.append("</div>\n");
                 
                 // Express Tier
                 html.append("<div style='background: rgba(15,23,42,0.6); padding: 14px; border-radius: 8px; border-left: 3px solid #facc15;'>\n");
                 html.append("<div style='color: #fbbf24; font-size: 0.8em; margin-bottom: 6px;'>🥈 EXPRESS</div>\n");
                 html.append("<div style='color: #fde047; font-size: 1.1em; font-weight: 600; margin-bottom: 6px;'>~6.4 min</div>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.75em;'>2x rate: 0.000002 ETH/MB<br>1 epoch safety</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.75em;'>Cost: 0.002 ETH (2×)<br>1 epoch safety</div>\n");
                 html.append("</div>\n");
                 
                 // Priority Tier
                 html.append("<div style='background: rgba(15,23,42,0.6); padding: 14px; border-radius: 8px; border-left: 3px solid #8b5cf6;'>\n");
                 html.append("<div style='color: #a78bfa; font-size: 0.8em; margin-bottom: 6px;'>🥇 PRIORITY</div>\n");
                 html.append("<div style='color: #c4b5fd; font-size: 1.1em; font-weight: 600; margin-bottom: 6px;'>~30 sec</div>\n");
-                html.append("<div style='color: #94a3b8; font-size: 0.75em;'>10x rate: 0.00001 ETH/MB<br>Immediate inclusion</div>\n");
+                html.append("<div style='color: #94a3b8; font-size: 0.75em;'>Cost: 0.01 ETH (10×)<br>Immediate inclusion</div>\n");
                 html.append("</div>\n");
                 
                 html.append("</div>\n");
                 html.append("<div style='margin-top: 12px; color: #94a3b8; font-size: 0.8em; line-height: 1.6;'>");
-                html.append("💡 <strong>Economics:</strong> Higher tiers pay premium for faster finality. Standard tier enforces 2-epoch safety. ");
-                html.append("Priority tier bypasses queue for time-sensitive operations (e.g., emergency content updates).");
+                html.append("💡 <strong>Economics:</strong> Users choose their latency-cost tradeoff. Standard tier maximizes batching efficiency (2-epoch safety). ");
+                html.append("Express tier balances speed and cost (1-epoch safety). Priority tier provides immediate inclusion for time-critical updates.");
                 html.append("</div>\n");
                 html.append("</div>\n");
                 
@@ -1355,10 +1408,22 @@ public class DashboardHandler {
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");
+        html.append("<h2>⚙️ Configuration</h2>\n");
+        addApiEndpoint(html, "GET", "/v1/blockchain/config", "Get blockchain mode and network config (MOCK/SEPOLIA/MAINNET)", "blockchain_config");
+        html.append("</div>\n");
+        
+        html.append("<div class='category'>\n");
         html.append("<h2>🔄 Consensus APIs</h2>\n");
         addApiEndpoint(html, "GET", "/v1/consensus/status", "Get consensus state (Aeron-aware)", "consensus_status");
         addApiEndpoint(html, "POST", "/v1/propose-write", "Propose signed write transaction (⚠️ TODO: Full signature verification)", "propose_write");
-        addApiEndpoint(html, "GET", "/v1/head", "Get latest HEAD and committed HEAD with epoch tracking", "head");
+        addApiEndpoint(html, "POST", "/v1/propose-delete", "Propose signed delete transaction", "propose_delete");
+        addApiEndpoint(html, "GET", "/v1/head", "Get latest HEAD ⚠️ DEPRECATED - use /v1/consensus/status instead (ADR-012)", "head");
+        html.append("</div>\n");
+        
+        html.append("<div class='category'>\n");
+        html.append("<h2>💰 Wallet Analytics</h2>\n");
+        addApiEndpoint(html, "GET", "/v1/wallets/stats", "Get wallet statistics (write counts, sizes, costs)", "wallet_stats");
+        addApiEndpoint(html, "GET", "/v1/wallets/content?wallet=0x...", "Get content by wallet address", "wallet_content");
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");
@@ -1381,6 +1446,7 @@ public class DashboardHandler {
         addApiEndpoint(html, "GET", "/v1/gc/estimate", "Estimate GC cost and reclaimable space (JSON)", "gc_estimate");
         addApiEndpoint(html, "GET", "/v1/gc/status", "Get GC proposal status and history (JSON)", "gc_status");
         addApiEndpoint(html, "POST", "/v1/propose-gc", "Propose a GC operation (⚠️ TODO: Aeron replication)", "propose_gc");
+        addApiEndpoint(html, "POST", "/v1/gc/trigger", "Trigger automated GC check (testing/manual override)", "gc_trigger");
         addApiEndpoint(html, "POST", "/v1/gc/execute", "Manually execute an approved GC proposal (auto-executes on approval)", "gc_execute");
         addApiEndpoint(html, "GET", "/v1/compaction/proposals", "Get pending compaction proposals (JSON)", "compaction_proposals");
         html.append("</div>\n");

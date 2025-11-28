@@ -214,6 +214,15 @@ public class EpochBasedBatchQueue {
     }
     
     /**
+     * Get the BeaconChainClient (for mock mode control and health monitoring).
+     * 
+     * @return The beacon chain client
+     */
+    public BeaconChainClient getBeaconClient() {
+        return beaconClient;
+    }
+    
+    /**
      * Get epochs that are ready for finalization.
      * An epoch is finalizable if proposals within it have passed their tier-based finality delay.
      * 

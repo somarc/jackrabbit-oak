@@ -68,6 +68,8 @@ public class ServerContext {
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
     public volatile ShardRouter shardRouter; // Optional - for sharded routing
     public volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker validatorEarningsTracker;
+    public volatile org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager; // ADR 020 lazy binary upload
+    public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
     
     // Shared state
     public final Map<String, ClientRegistration> registeredClients;
@@ -189,6 +191,11 @@ public class ServerContext {
     public void setValidatorEarningsTracker(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker validatorEarningsTracker) {
         this.validatorEarningsTracker = validatorEarningsTracker;
         log.info("✅ Validator Earnings Tracker initialized");
+    }
+    
+    public void setUploadSessionManager(org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager) {
+        this.uploadSessionManager = uploadSessionManager;
+        log.info("✅ Upload Session Manager initialized (ADR 020 lazy binary upload)");
     }
 }
 

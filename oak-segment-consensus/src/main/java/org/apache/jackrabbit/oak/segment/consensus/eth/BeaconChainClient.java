@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.eth;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,50 +29,49 @@ import java.nio.charset.StandardCharsets;
 /**
  * Client for fetching Ethereum Beacon Chain epoch data.
  * 
- * <p>SINGLE SOURCE OF TRUTH for Ethereum epoch data across oak-segment-consensus.
- * 
- * <p>This client maintains a background polling thread that fetches the latest finalized
- * epoch from Ethereum Beacon Chain every 3 minutes. All components query cached values
- * instead of making redundant API calls.
- * 
- * <p>Architecture:
- * <pre>
- * BeaconChainClient (polls every 3 min)
- *   ├── Cached: finalizedEpoch (direct from Beacon Chain)
- *   ├── Cached: currentEpoch (finalized + 2)
- *   └── All components query THIS, not direct calculations
- * </pre>
- * 
- * <p>Benefits:
+ * <p><strong>MODE-AWARE</strong>: Behavior depends on blockchain mode:
  * <ul>
- *   <li>Single source of truth - no inconsistent views</li>
- *   <li>Fast cached access - no redundant API calls</li>
- *   <li>Fresh data - polls every 3 min (< 6.4 min epoch)</li>
+ *   <li><strong>MAINNET</strong>: Fetches real epochs from beaconcha.in mainnet API</li>
+ *   <li><strong>SEPOLIA</strong>: Fetches real epochs from beaconcha.in Sepolia API</li>
+ *   <li><strong>MOCK</strong>: Uses synthetic epochs for fast iteration without Ethereum</li>
  * </ul>
  * 
- * <p>For the POC, we use a simplified approach with mock data for some fields,
- * but the epoch numbers and timestamps are real.
+ * <p>SINGLE SOURCE OF TRUTH for Ethereum epoch data across oak-segment-consensus.
  * 
- * <p>In production, this would integrate with a full Beacon Chain node or
- * use multiple API endpoints to fetch complete epoch details.
- * 
- * @see <a href="https://ethereum.github.io/beacon-APIs/">Beacon Chain API Spec</a>
+ * @see <a href="https://beaconcha.in/api/v1/docs">Beaconcha.in API Docs</a>
  */
 public class BeaconChainClient {
     private static final Logger log = LoggerFactory.getLogger(BeaconChainClient.class);
     
-    private static final long BEACON_GENESIS_TIME = 1606824023000L; // Dec 1, 2020 12:00:23 PM UTC
-    private static final long EPOCH_DURATION_MS = 384000L; // 6.4 minutes (32 slots × 12 seconds)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // API ENDPOINTS (beaconcha.in provides both mainnet and Sepolia)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    private static final String MAINNET_API = "https://beaconcha.in/api/v1";
+    private static final String SEPOLIA_API = "https://sepolia.beaconcha.in/api/v1";
     
-    // Poll every 3 minutes (< 6.4 min epoch duration)
-    private static final long POLL_INTERVAL_MS = 180_000L; // 3 minutes
+    // Epoch duration is 6.4 minutes on all networks
+    private static final long EPOCH_DURATION_MS = 384000L; // 32 slots × 12 seconds
     
-    private final String beaconApiUrl;
+    // Mock mode: faster epochs for testing (30 seconds per epoch)
+    private static final long MOCK_EPOCH_DURATION_MS = 30_000L;
+    
+    // Poll intervals
+    private static final long REAL_POLL_INTERVAL_MS = 60_000L;  // 1 minute for real chains
+    private static final long MOCK_POLL_INTERVAL_MS = 5_000L;   // 5 seconds for mock
+    
+    // Network mode
+    private final BlockchainConfig.Mode networkMode;
+    private final String apiBaseUrl;
     
     // Cached epoch state (single source of truth)
     private volatile long cachedFinalizedEpoch = -1;
     private volatile long cachedCurrentEpoch = -1;
     private volatile long lastUpdateTime = 0;
+    private volatile String lastError = null;
+    
+    // Mock mode state
+    private final long mockStartTime;
+    private volatile long mockEpochOffset = 0; // Can be set via API for testing
     
     // Background polling thread
     private java.util.concurrent.ScheduledExecutorService pollingExecutor;
@@ -79,24 +79,54 @@ public class BeaconChainClient {
     // Track last logged epoch to avoid spamming logs
     private long lastLoggedEpoch = -1;
     
+    // API call statistics
+    private volatile long apiCallCount = 0;
+    private volatile long apiErrorCount = 0;
+    
     /**
-     * Create a new Beacon Chain client.
+     * Create a new Beacon Chain client (mode-aware).
      * 
-     * @param beaconApiUrl Base URL for Beacon Chain API (e.g., "https://beaconcha.in")
+     * @param beaconApiUrl Ignored - we use mode-specific URLs now
      */
     public BeaconChainClient(String beaconApiUrl) {
-        this.beaconApiUrl = beaconApiUrl;
-        // Initialize immediately with calculated epoch
+        BlockchainConfig config = BlockchainConfig.getInstance();
+        this.networkMode = config.getMode();
+        this.mockStartTime = System.currentTimeMillis();
+        
+        // Select API URL based on mode
+        switch (networkMode) {
+            case MAINNET:
+                this.apiBaseUrl = MAINNET_API;
+                break;
+            case SEPOLIA:
+                this.apiBaseUrl = SEPOLIA_API;
+                break;
+            case MOCK:
+            default:
+                this.apiBaseUrl = null; // Mock mode doesn't use API
+                break;
+        }
+        
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("🔗 Beacon Chain Client Initialized");
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("   Mode: {}", networkMode);
+        
+        if (networkMode == BlockchainConfig.Mode.MOCK) {
+            log.info("   📝 MOCK MODE - Synthetic epochs (30s/epoch)");
+            log.info("   📝 Use /api/mock/set-epoch to control epoch");
+        } else {
+            log.info("   API: {}", apiBaseUrl);
+            log.info("   📡 REAL API - Fetching from beaconcha.in");
+        }
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        // Initialize immediately
         updateCachedEpochs();
     }
     
     /**
      * Start background polling thread to keep epoch data fresh.
-     * 
-     * <p>Call this once during initialization to start the unified epoch polling.
-     * 
-     * <p><strong>BITCOIN-TIGHT</strong>: This thread will crash the validator on ANY failure.
-     * Better to restart clean than run with stale epoch data (persistence is futile without truth).
      */
     public void startBackgroundPolling() {
         if (pollingExecutor != null) {
@@ -104,37 +134,35 @@ public class BeaconChainClient {
             return;
         }
         
+        long pollInterval = (networkMode == BlockchainConfig.Mode.MOCK) 
+            ? MOCK_POLL_INTERVAL_MS 
+            : REAL_POLL_INTERVAL_MS;
+        
         pollingExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "beacon-chain-epoch-poller");
             t.setDaemon(true);
-            
-            // BITCOIN-TIGHT: Crash validator on uncaught exceptions
-            t.setUncaughtExceptionHandler((thread, throwable) -> {
-                log.error("FATAL: Beacon Chain epoch polling thread crashed! Validator cannot continue safely.", throwable);
-                log.error("EXITING: Orchestration will restart this validator with fresh state.");
-                System.exit(1); // CRASH LOUD - Docker/K8s will restart us
-            });
-            
             return t;
         });
         
         pollingExecutor.scheduleAtFixedRate(() -> {
             try {
-                log.debug("Epoch update cycle starting (interval: {}s)", POLL_INTERVAL_MS / 1000);
                 updateCachedEpochs();
-                log.debug("Epoch update cycle completed successfully");
-            } catch (Throwable t) { // Catch EVERYTHING (including Errors)
-                log.error("FATAL: Epoch update failed! Validator cannot continue with stale epoch data.", t);
-                log.error("EXITING: This is a critical failure. Orchestration will restart us.");
-                System.exit(1); // CRASH LOUD - Better to die than run with stale data
+            } catch (Exception e) {
+                log.error("Epoch update failed: {}", e.getMessage());
+                lastError = e.getMessage();
+                apiErrorCount++;
+                // Don't crash in mock mode - just log and continue
+                if (networkMode != BlockchainConfig.Mode.MOCK) {
+                    log.error("Real mode epoch failure - this may impact finality tracking!");
+                }
             }
-        }, POLL_INTERVAL_MS, POLL_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        }, pollInterval, pollInterval, java.util.concurrent.TimeUnit.MILLISECONDS);
         
-        log.info("✅ Beacon Chain epoch polling started successfully");
-        log.info("   - Poll interval: {}s", POLL_INTERVAL_MS / 1000);
+        log.info("✅ Beacon Chain epoch polling started");
+        log.info("   - Mode: {}", networkMode);
+        log.info("   - Poll interval: {}s", pollInterval / 1000);
         log.info("   - Initial finalized epoch: {}", cachedFinalizedEpoch);
         log.info("   - Initial current epoch: {}", cachedCurrentEpoch);
-        log.info("   - Crash-on-failure: ENABLED (Bitcoin-tight reliability)");
     }
     
     /**
@@ -149,218 +177,174 @@ public class BeaconChainClient {
     }
     
     /**
-     * Update cached epoch values (called by polling thread).
-     * 
-     * <p><strong>BITCOIN-TIGHT</strong>: Validates all data before updating.
-     * Crashes validator if epochs go backwards or other invariants are violated.
+     * Update cached epoch values based on mode.
      */
     private void updateCachedEpochs() {
         long startTime = System.nanoTime();
-        long currentTimeMs = System.currentTimeMillis();
         
-        log.debug("Epoch update: currentTime={}, lastUpdate={}ms ago", 
-            currentTimeMs, currentTimeMs - lastUpdateTime);
-        
-        // Calculate epochs from Beacon Chain genesis
-        long msSinceGenesis = currentTimeMs - BEACON_GENESIS_TIME;
-        long calculatedCurrentEpoch = msSinceGenesis / EPOCH_DURATION_MS;
-        long calculatedFinalizedEpoch = calculatedCurrentEpoch - 2;
-        
-        // BITCOIN-TIGHT: Defensive validation (epochs can never go backwards)
-        if (calculatedCurrentEpoch < 0) {
-            throw new IllegalStateException(
-                "FATAL: Invalid current epoch calculated: " + calculatedCurrentEpoch);
+        if (networkMode == BlockchainConfig.Mode.MOCK) {
+            updateMockEpochs();
+        } else {
+            updateRealEpochs();
         }
         
-        if (calculatedFinalizedEpoch < 0) {
-            throw new IllegalStateException(
-                "FATAL: Invalid finalized epoch calculated: " + calculatedFinalizedEpoch);
-        }
+        long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+        log.debug("Epoch update completed in {}ms: finalized={}, current={}", 
+            durationMs, cachedFinalizedEpoch, cachedCurrentEpoch);
+    }
+    
+    /**
+     * Mock mode: Calculate synthetic epochs for testing.
+     * 
+     * <p>Epochs increment every 30 seconds, starting from a reasonable base.
+     * Use setMockEpoch() to control the epoch for specific test scenarios.
+     */
+    private void updateMockEpochs() {
+        long elapsed = System.currentTimeMillis() - mockStartTime;
+        long baseEpoch = elapsed / MOCK_EPOCH_DURATION_MS;
         
-        if (calculatedCurrentEpoch < calculatedFinalizedEpoch) {
-            throw new IllegalStateException(
-                "FATAL: Current epoch (" + calculatedCurrentEpoch + 
-                ") is less than finalized epoch (" + calculatedFinalizedEpoch + ")");
-        }
+        // Start at epoch 1000 so it looks realistic, plus any manual offset
+        long currentEpoch = 1000 + baseEpoch + mockEpochOffset;
+        long finalizedEpoch = currentEpoch - 2;
         
-        // Epochs can only advance, never go backwards (blockchain immutability)
-        if (calculatedFinalizedEpoch < cachedFinalizedEpoch) {
-            throw new IllegalStateException(
-                "FATAL: Epoch went backwards! " + cachedFinalizedEpoch + 
-                " -> " + calculatedFinalizedEpoch + " (This should be impossible!)");
-        }
-        
-        // Check if epoch advanced
-        boolean epochAdvanced = (calculatedFinalizedEpoch != cachedFinalizedEpoch);
+        boolean epochAdvanced = (finalizedEpoch != cachedFinalizedEpoch);
         
         if (epochAdvanced) {
-            log.info("🔄 Ethereum epoch advanced: {} -> {} (current: {}, took: {}ms)", 
-                cachedFinalizedEpoch, calculatedFinalizedEpoch, calculatedCurrentEpoch,
-                (System.nanoTime() - startTime) / 1_000_000);
-        } else {
-            log.debug("✓ Epoch unchanged: finalized={}, current={} (took: {}ms)", 
-                calculatedFinalizedEpoch, calculatedCurrentEpoch,
-                (System.nanoTime() - startTime) / 1_000_000);
+            log.info("🧪 MOCK epoch advanced: {} -> {} (current: {})", 
+                cachedFinalizedEpoch, finalizedEpoch, currentEpoch);
         }
         
-        // Update cached values atomically (all-or-nothing)
-        cachedFinalizedEpoch = calculatedFinalizedEpoch;
-        cachedCurrentEpoch = calculatedCurrentEpoch;
-        lastUpdateTime = currentTimeMs;
-        
-        log.debug("✅ Epoch update completed: finalized={}, current={}", 
-            cachedFinalizedEpoch, cachedCurrentEpoch);
+        cachedFinalizedEpoch = finalizedEpoch;
+        cachedCurrentEpoch = currentEpoch;
+        lastUpdateTime = System.currentTimeMillis();
+        lastError = null;
     }
     
     /**
-     * Get cached finalized epoch (fast - no calculation).
-     * 
-     * <p>This is the primary method all components should use.
-     * Returns the last finalized epoch from Ethereum Beacon Chain.
-     * 
-     * @return Finalized epoch number (cached, updated every 3 min)
+     * Real mode: Fetch epochs from beaconcha.in API.
      */
-    public long getCachedFinalizedEpoch() {
-        return cachedFinalizedEpoch;
-    }
-    
-    /**
-     * Get cached current epoch (fast - no calculation).
-     * 
-     * <p>This is the primary method all components should use.
-     * Returns finalized epoch + 2 (current epoch where new proposals queue).
-     * 
-     * @return Current epoch number (cached, updated every 3 min)
-     */
-    public long getCachedCurrentEpoch() {
-        return cachedCurrentEpoch;
-    }
-    
-    /**
-     * Get time since last epoch update (for monitoring).
-     * 
-     * @return Milliseconds since last update
-     */
-    public long getMillisSinceLastUpdate() {
-        return System.currentTimeMillis() - lastUpdateTime;
-    }
-    
-    /**
-     * Fetch the latest finalized epoch from Beacon Chain.
-     * 
-     * <p>DEPRECATED: Use {@link #getCachedFinalizedEpoch()} instead for better performance.
-     * 
-     * <p>This method is kept for backwards compatibility but performs unnecessary
-     * calculations on every call. The cached methods are updated by background polling
-     * and provide the same accuracy with zero overhead.
-     * 
-     * <p>For POC, we calculate the current epoch based on time elapsed since genesis.
-     * In production, this would query the actual Beacon Chain API.
-     * 
-     * @return Latest finalized epoch data
-     * @throws Exception if unable to fetch epoch data
-     * @deprecated Use {@link #getCachedFinalizedEpoch()} instead
-     */
-    @Deprecated
-    public EpochData getLatestFinalizedEpoch() throws Exception {
-        // Return cached epoch details instead of recalculating
-        return getEpochDetails(cachedFinalizedEpoch);
-    }
-    
-    /**
-     * Fetch detailed epoch data for a specific epoch number.
-     * 
-     * <p>For POC, we use calculated/mock data. In production, this would
-     * query actual Beacon Chain endpoints like:
-     * - /eth/v1/beacon/blocks/{slot} for block data
-     * - /eth/v1/beacon/states/{state_id}/validators for validator data
-     * - /eth/v1/beacon/states/{state_id}/finality_checkpoints for finality
-     * 
-     * @param epochNumber Epoch number to fetch
-     * @return Epoch data with metadata
-     */
-    public EpochData getEpochDetails(long epochNumber) {
-        // Only log at INFO level when we see a NEW epoch
-        // This reduces log spam from ~3 lines every 1-5 seconds to once per epoch (~6.4 minutes)
-        boolean isNewEpoch = (epochNumber != lastLoggedEpoch);
-        
-        if (isNewEpoch) {
-            log.info("Fetching new Ethereum epoch: {}", epochNumber);
-        } else {
-            log.debug("Re-fetching Ethereum epoch: {} (no change)", epochNumber);
+    private void updateRealEpochs() {
+        try {
+            // Fetch latest finalized epoch from API
+            String endpoint = "/epoch/finalized";
+            String response = httpGet(apiBaseUrl + endpoint);
+            apiCallCount++;
+            
+            // Parse response: {"status":"OK","data":{"epoch":12345,...}}
+            long finalizedEpoch = parseEpochFromResponse(response);
+            
+            if (finalizedEpoch < 0) {
+                throw new RuntimeException("Failed to parse epoch from API response");
+            }
+            
+            // Current epoch is typically finalized + 2 (can verify with /epoch/latest)
+            long currentEpoch = finalizedEpoch + 2;
+            
+            // Validate epochs
+            if (cachedFinalizedEpoch > 0 && finalizedEpoch < cachedFinalizedEpoch) {
+                log.warn("⚠️  Epoch went backwards? {} -> {} (API glitch?)", 
+                    cachedFinalizedEpoch, finalizedEpoch);
+                // Don't crash - could be API issue, just log and continue
+            }
+            
+            boolean epochAdvanced = (finalizedEpoch != cachedFinalizedEpoch);
+            
+            if (epochAdvanced) {
+                log.info("🔗 {} epoch advanced: {} -> {} (current: {})", 
+                    networkMode, cachedFinalizedEpoch, finalizedEpoch, currentEpoch);
+            }
+            
+            cachedFinalizedEpoch = finalizedEpoch;
+            cachedCurrentEpoch = currentEpoch;
+            lastUpdateTime = System.currentTimeMillis();
+            lastError = null;
+            
+        } catch (Exception e) {
+            apiErrorCount++;
+            lastError = e.getMessage();
+            log.error("Failed to fetch epoch from {}: {}", apiBaseUrl, e.getMessage());
+            
+            // If we have no cached data, try fallback calculation
+            if (cachedFinalizedEpoch < 0) {
+                log.warn("Using calculated epoch as fallback (no cached data)");
+                fallbackCalculateEpochs();
+            }
         }
+    }
+    
+    /**
+     * Fallback: Calculate epochs from genesis time (if API fails).
+     */
+    private void fallbackCalculateEpochs() {
+        long genesisTime = (networkMode == BlockchainConfig.Mode.MAINNET) 
+            ? 1606824023000L  // Mainnet: Dec 1, 2020
+            : 1655733600000L; // Sepolia: June 20, 2022
         
-        // Calculate epoch timestamp
-        long timestamp = BEACON_GENESIS_TIME + (epochNumber * EPOCH_DURATION_MS);
-        
-        // Calculate current epoch to determine finality status
-        long currentTimeMs = System.currentTimeMillis();
-        long msSinceGenesis = currentTimeMs - BEACON_GENESIS_TIME;
+        long msSinceGenesis = System.currentTimeMillis() - genesisTime;
         long currentEpoch = msSinceGenesis / EPOCH_DURATION_MS;
+        long finalizedEpoch = currentEpoch - 2;
         
-        EpochData data = new EpochData();
-        data.epochNumber = epochNumber;
-        data.timestamp = timestamp;
+        cachedFinalizedEpoch = finalizedEpoch;
+        cachedCurrentEpoch = currentEpoch;
+        lastUpdateTime = System.currentTimeMillis();
         
-        // Finality determination: epochs are finalized after 2 epoch delay
-        // This ensures 2/3 validator consensus has been achieved
-        data.epochsBehindCurrent = (int)(currentEpoch - epochNumber);
-        data.finalized = data.epochsBehindCurrent >= 2;
-        data.finalizedAt = data.finalized ? timestamp + (2 * EPOCH_DURATION_MS) : 0;
-        
-        // Generate mock block root (in production: fetch from Beacon Chain API)
-        data.blockRoot = String.format("0x%064x", epochNumber);
-        
-        // For POC: Use realistic mock data
-        // In production: Fetch from actual Beacon Chain API
-        data.blocksProposed = 32; // Always 32 slots per epoch
-        data.blocksSkipped = (int) (Math.random() * 3); // 0-2 skipped blocks (realistic)
-        data.attestations = 150 + (int) (Math.random() * 50); // ~150-200 attestations
-        
-        // Current Ethereum validator counts (as of Nov 2025)
-        // Source: https://beaconscan.com
-        data.totalValidators = 2127176L;
-        data.activeValidators = 2126153L;
-        
-        // Slashings and exits are rare
-        data.slashings = (Math.random() < 0.01) ? 1 : 0; // 1% chance
-        data.deposits = (int) (Math.random() * 5); // 0-4 new deposits
-        data.voluntaryExits = (Math.random() < 0.05) ? 1 : 0; // 5% chance
-        
-        // Only log at INFO level for NEW epochs
-        if (isNewEpoch) {
-            log.info("Fetched epoch {} (finalized: {}, blocks: {}/{}, attestations: {})", 
-                epochNumber, data.finalized, 
-                data.blocksProposed - data.blocksSkipped, data.blocksProposed, data.attestations);
-            lastLoggedEpoch = epochNumber;
-        } else {
-            log.debug("Re-fetched epoch {} (finalized: {}, blocks: {}/{}, attestations: {})", 
-                epochNumber, data.finalized, 
-                data.blocksProposed - data.blocksSkipped, data.blocksProposed, data.attestations);
-        }
-        
-        return data;
+        log.warn("⚠️  Using CALCULATED epoch (API failed): finalized={}, current={}", 
+            finalizedEpoch, currentEpoch);
     }
     
     /**
-     * Utility method to make HTTP GET request (for future API integration).
+     * Parse epoch number from beaconcha.in API response.
      * 
-     * @param endpoint API endpoint URL
-     * @return Response body as string
-     * @throws Exception if request fails
+     * Expected format: {"status":"OK","data":{"epoch":12345,...}}
      */
-    @SuppressWarnings("unused")
+    private long parseEpochFromResponse(String json) {
+        try {
+            // Simple parsing - find "epoch": followed by number
+            int epochIdx = json.indexOf("\"epoch\"");
+            if (epochIdx < 0) {
+                // Try alternate format: {"status":"OK","data":12345}
+                int dataIdx = json.indexOf("\"data\"");
+                if (dataIdx > 0) {
+                    int colonIdx = json.indexOf(":", dataIdx);
+                    int endIdx = json.indexOf(",", colonIdx);
+                    if (endIdx < 0) endIdx = json.indexOf("}", colonIdx);
+                    if (colonIdx > 0 && endIdx > colonIdx) {
+                        String numStr = json.substring(colonIdx + 1, endIdx).trim();
+                        return Long.parseLong(numStr);
+                    }
+                }
+                return -1;
+            }
+            
+            int colonIdx = json.indexOf(":", epochIdx);
+            int endIdx = json.indexOf(",", colonIdx);
+            if (endIdx < 0) endIdx = json.indexOf("}", colonIdx);
+            
+            if (colonIdx > 0 && endIdx > colonIdx) {
+                String numStr = json.substring(colonIdx + 1, endIdx).trim();
+                return Long.parseLong(numStr);
+            }
+        } catch (Exception e) {
+            log.error("Failed to parse epoch from JSON: {}", e.getMessage());
+        }
+        return -1;
+    }
+    
+    /**
+     * Make HTTP GET request to Beacon Chain API.
+     */
     private String httpGet(String endpoint) throws Exception {
-        URL url = new URL(beaconApiUrl + endpoint);
+        URL url = new URL(endpoint);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
         conn.setConnectTimeout(10000);
         conn.setReadTimeout(10000);
         conn.setRequestProperty("Accept", "application/json");
+        conn.setRequestProperty("User-Agent", "OakSegmentConsensus/1.0");
         
         int responseCode = conn.getResponseCode();
         if (responseCode != 200) {
-            throw new Exception("HTTP error: " + responseCode);
+            throw new Exception("HTTP error: " + responseCode + " from " + endpoint);
         }
         
         try (BufferedReader reader = new BufferedReader(
@@ -375,73 +359,169 @@ public class BeaconChainClient {
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // HEALTH MONITORING (Bitcoin-Tight Observability)
+    // PUBLIC GETTERS (SINGLE SOURCE OF TRUTH)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
     /**
-     * Get timestamp of last successful epoch update.
-     * 
-     * <p>Used for health monitoring. If this timestamp is too old (> 5 minutes),
-     * the validator should be considered unhealthy.
-     * 
-     * @return Timestamp in milliseconds (System.currentTimeMillis())
+     * Get cached finalized epoch (fast - no API call).
      */
-    public long getLastUpdateTime() {
-        return lastUpdateTime;
+    public long getCachedFinalizedEpoch() {
+        return cachedFinalizedEpoch;
     }
     
     /**
-     * Check if epoch data is fresh (updated recently).
+     * Get cached current epoch (fast - no API call).
+     */
+    public long getCachedCurrentEpoch() {
+        return cachedCurrentEpoch;
+    }
+    
+    /**
+     * Get network mode.
+     */
+    public BlockchainConfig.Mode getNetworkMode() {
+        return networkMode;
+    }
+    
+    /**
+     * Get time since last epoch update.
+     */
+    public long getMillisSinceLastUpdate() {
+        return System.currentTimeMillis() - lastUpdateTime;
+    }
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MOCK MODE CONTROL (for testing)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    /**
+     * Set mock epoch offset (only works in MOCK mode).
      * 
-     * <p><strong>BITCOIN-TIGHT</strong>: Epoch data older than 5 minutes is considered stale.
-     * This indicates the polling thread may have died or is failing silently.
+     * <p>Use this to simulate specific epoch scenarios for testing.
      * 
-     * @return true if data was updated in the last 5 minutes, false otherwise
+     * @param offset Number of epochs to add to the base mock epoch
+     * @return true if set successfully (mock mode), false otherwise
+     */
+    public boolean setMockEpochOffset(long offset) {
+        if (networkMode != BlockchainConfig.Mode.MOCK) {
+            log.warn("Cannot set mock epoch in {} mode", networkMode);
+            return false;
+        }
+        
+        log.info("🧪 Setting mock epoch offset: {} (was: {})", offset, mockEpochOffset);
+        mockEpochOffset = offset;
+        updateMockEpochs(); // Update immediately
+        return true;
+    }
+    
+    /**
+     * Advance mock epoch by N epochs (only works in MOCK mode).
+     * 
+     * @param epochs Number of epochs to advance
+     * @return true if advanced successfully
+     */
+    public boolean advanceMockEpoch(int epochs) {
+        if (networkMode != BlockchainConfig.Mode.MOCK) {
+            log.warn("Cannot advance mock epoch in {} mode", networkMode);
+            return false;
+        }
+        
+        log.info("🧪 Advancing mock epoch by {}", epochs);
+        mockEpochOffset += epochs;
+        updateMockEpochs();
+        return true;
+    }
+    
+    /**
+     * Get current mock epoch offset.
+     */
+    public long getMockEpochOffset() {
+        return mockEpochOffset;
+    }
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // HEALTH & MONITORING
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    /**
+     * Check if epoch data is fresh.
      */
     public boolean isEpochDataFresh() {
-        long timeSinceUpdate = System.currentTimeMillis() - lastUpdateTime;
-        return timeSinceUpdate < (5 * 60 * 1000); // Fresh if < 5 minutes old
+        long maxStale = (networkMode == BlockchainConfig.Mode.MOCK) 
+            ? 60_000L   // 1 minute for mock
+            : 300_000L; // 5 minutes for real
+        return (System.currentTimeMillis() - lastUpdateTime) < maxStale;
     }
     
     /**
-     * Check epoch data freshness and throw exception if stale.
-     * 
-     * <p><strong>BITCOIN-TIGHT</strong>: Call this before critical operations that depend
-     * on epoch data. Better to crash than operate with stale data.
-     * 
-     * @throws IllegalStateException if epoch data is stale (> 5 minutes old)
-     */
-    public void checkEpochFreshness() {
-        if (!isEpochDataFresh()) {
-            long staleness = (System.currentTimeMillis() - lastUpdateTime) / 1000;
-            throw new IllegalStateException(
-                "CRITICAL: Epoch data is stale! Last update: " + staleness + 
-                "s ago (max allowed: 300s). Background polling may have failed.");
-        }
-    }
-    
-    /**
-     * Get health status for monitoring/observability.
-     * 
-     * @return Map with health metrics (for /health endpoint, Prometheus, etc.)
+     * Get health status for monitoring.
      */
     public java.util.Map<String, Object> getHealthStatus() {
         java.util.Map<String, Object> health = new java.util.HashMap<>();
         
-        long now = System.currentTimeMillis();
-        long timeSinceUpdate = now - lastUpdateTime;
-        boolean fresh = isEpochDataFresh();
-        
-        health.put("fresh", fresh);
+        health.put("mode", networkMode.toString());
+        health.put("apiUrl", apiBaseUrl);
+        health.put("fresh", isEpochDataFresh());
         health.put("currentEpoch", cachedCurrentEpoch);
         health.put("finalizedEpoch", cachedFinalizedEpoch);
         health.put("lastUpdateTime", lastUpdateTime);
-        health.put("timeSinceUpdate", timeSinceUpdate);
-        health.put("timeSinceUpdateSeconds", timeSinceUpdate / 1000);
-        health.put("maxAllowedStaleness", 300); // 5 minutes
-        health.put("status", fresh ? "HEALTHY" : "STALE");
+        health.put("timeSinceUpdateMs", System.currentTimeMillis() - lastUpdateTime);
+        health.put("apiCallCount", apiCallCount);
+        health.put("apiErrorCount", apiErrorCount);
+        health.put("lastError", lastError);
+        
+        if (networkMode == BlockchainConfig.Mode.MOCK) {
+            health.put("mockEpochOffset", mockEpochOffset);
+            health.put("mockEpochDurationMs", MOCK_EPOCH_DURATION_MS);
+        }
         
         return health;
     }
+    
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // LEGACY COMPATIBILITY
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    /**
+     * Get latest finalized epoch (legacy compatibility).
+     * 
+     * @deprecated Use getCachedFinalizedEpoch() instead
+     */
+    @Deprecated
+    public EpochData getLatestFinalizedEpoch() throws Exception {
+        return getEpochDetails(cachedFinalizedEpoch);
+    }
+    
+    /**
+     * Get epoch details (for compatibility).
+     */
+    public EpochData getEpochDetails(long epochNumber) {
+        EpochData data = new EpochData();
+        data.epochNumber = epochNumber;
+        data.timestamp = System.currentTimeMillis();
+        data.finalized = (epochNumber <= cachedFinalizedEpoch);
+        data.epochsBehindCurrent = (int)(cachedCurrentEpoch - epochNumber);
+        
+        // Mock data for other fields
+        data.blocksProposed = 32;
+        data.blocksSkipped = 0;
+        data.attestations = 150;
+        data.totalValidators = 2127176L;
+        data.activeValidators = 2126153L;
+        data.slashings = 0;
+        data.deposits = 0;
+        data.voluntaryExits = 0;
+        
+        return data;
+    }
+    
+    public long getLastUpdateTime() {
+        return lastUpdateTime;
+    }
+    
+    public void checkEpochFreshness() {
+        if (!isEpochDataFresh()) {
+            throw new IllegalStateException("Epoch data is stale!");
+        }
+    }
 }
-

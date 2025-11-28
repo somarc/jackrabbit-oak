@@ -299,6 +299,7 @@ public class GlobalStoreServer {
             org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = null;
             String blobStoreType = System.getProperty("blobstore.type", 
                 System.getenv().getOrDefault("BLOBSTORE_TYPE", ""));
+            String activeBlobStoreType = "default"; // Track for dashboard display
             
             if ("ipfs".equalsIgnoreCase(blobStoreType)) {
                 System.out.println("📦 Configuring IPFS BlobStore for binaries...");
@@ -322,6 +323,9 @@ public class GlobalStoreServer {
                     System.out.println("   - Min size: 16 KB (smaller binaries inline in segments)");
                     System.out.println("   - Storage: Decentralized (P2P replication)");
                     System.out.println("   - Strategy: Oak segments (AEM compatible) + IPFS binaries (blockchain-native)");
+                    
+                    // Mark blobstore type for dashboard (set after httpServer init)
+                    activeBlobStoreType = "ipfs";
                 } catch (Exception e) {
                     System.err.println("⚠️  Failed to initialize IPFS BlobStore: " + e.getMessage());
                     System.err.println("   Falling back to default FileDataStore");
@@ -403,6 +407,9 @@ public class GlobalStoreServer {
             if (gcCostEstimator != null) {
                 httpServer.getContext().setGCCostEstimator(gcCostEstimator);
             }
+            
+            // Set BlobStore type for dashboard display
+            httpServer.getContext().blobStoreType = activeBlobStoreType;
             
             // ===========================================================================
             // Initialize Fragmentation Tracker (for fragmentation metrics and tax)
