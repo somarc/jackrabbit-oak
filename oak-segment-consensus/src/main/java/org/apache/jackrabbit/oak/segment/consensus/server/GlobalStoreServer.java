@@ -292,10 +292,53 @@ public class GlobalStoreServer {
             // FUTURE: Could be eliminated by modifying Oak core to support
             //         "deferred genesis" mode, but out of scope for POC.
             
-            fileStore = FileStoreBuilder.fileStoreBuilder(storeDir)
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // IPFS BLOBSTORE: Decentralized Binary Storage (ADR 015)
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // Configure IPFS DataStore if enabled via environment variable
+            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = null;
+            String blobStoreType = System.getProperty("blobstore.type", 
+                System.getenv().getOrDefault("BLOBSTORE_TYPE", ""));
+            
+            if ("ipfs".equalsIgnoreCase(blobStoreType)) {
+                System.out.println("📦 Configuring IPFS BlobStore for binaries...");
+                try {
+                    // Get IPFS API endpoint from environment (default: localhost:5001)
+                    String ipfsEndpoint = System.getProperty("ipfs.api.endpoint",
+                        System.getenv().getOrDefault("IPFS_API_ENDPOINT", "/ip4/127.0.0.1/tcp/5001"));
+                    
+                    // Create IPFS DataStore
+                    org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfsDataStore = 
+                        new org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore();
+                    ipfsDataStore.setIpfsApiEndpoint(ipfsEndpoint);
+                    ipfsDataStore.setMinRecordLength(16 * 1024); // 16KB threshold
+                    ipfsDataStore.init(storeDir.getAbsolutePath()); // HomeDir for local cache
+                    
+                    blobStore = ipfsDataStore; // Implicit cast (AbstractSharedCachingDataStore implements BlobStore)
+                    
+                    System.out.println("✅ IPFS BlobStore initialized");
+                    System.out.println("   - IPFS API: " + ipfsEndpoint);
+                    System.out.println("   - Min size: 16 KB (smaller binaries inline in segments)");
+                    System.out.println("   - Storage: Decentralized (P2P replication)");
+                    System.out.println("   - Strategy: Oak segments (AEM compatible) + IPFS binaries (blockchain-native)");
+                } catch (Exception e) {
+                    System.err.println("⚠️  Failed to initialize IPFS BlobStore: " + e.getMessage());
+                    System.err.println("   Falling back to default FileDataStore");
+                    e.printStackTrace();
+                    blobStore = null; // Fall back to default
+                }
+            }
+            
+            // Build FileStore (with optional IPFS BlobStore)
+            FileStoreBuilder fsBuilder = FileStoreBuilder.fileStoreBuilder(storeDir)
                 .withMaxFileSize(256)  // 256 MB per TAR file
-                .withMemoryMapping(false)  // Disable for Docker
-                .build();
+                .withMemoryMapping(false);  // Disable for Docker
+            
+            if (blobStore != null) {
+                fsBuilder = fsBuilder.withBlobStore(blobStore);
+            }
+            
+            fileStore = fsBuilder.build();
             
             // Build SegmentNodeStore
             nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
@@ -910,9 +953,9 @@ public class GlobalStoreServer {
                 // IMPORTANT: Callback must be set before ClusteredServiceContainer.launch()
                 aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
                     @Override
-                    public void applyWrite(String walletAddress, String path, String contentType, String message, String signature) {
+                    public void applyWrite(String walletAddress, String path, String contentType, String message, String signature, String intentToken) {
                         httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                            walletAddress, path, contentType, message, signature
+                            walletAddress, path, contentType, message, signature, intentToken
                         );
                     }
                     
@@ -1715,9 +1758,9 @@ public class GlobalStoreServer {
         // Set write/delete application callback BEFORE launching cluster
         aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
             @Override
-            public void applyWrite(String walletAddress, String path, String contentType, String message, String signature) {
+            public void applyWrite(String walletAddress, String path, String contentType, String message, String signature, String intentToken) {
                 httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                    walletAddress, path, contentType, message, signature
+                    walletAddress, path, contentType, message, signature, intentToken
                 );
             }
             

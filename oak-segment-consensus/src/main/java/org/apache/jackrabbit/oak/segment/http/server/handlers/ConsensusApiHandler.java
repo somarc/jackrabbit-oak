@@ -302,6 +302,9 @@ public class ConsensusApiHandler {
                 return;
             }
             
+            // Extract intentToken (optional - for lazy binary upload, ADR 020)
+            String intentToken = request.getParameter("intentToken");
+            
             // Build wallet-scoped content path
             String shardId = WalletPathUtil.getShardId(normalizedWallet);
             String contentRoot = WalletPathUtil.getContentPath(normalizedWallet);
@@ -408,7 +411,8 @@ public class ConsensusApiHandler {
             }
             
             // Queue proposal (waiting for Ethereum confirmation)
-            log.debug("📥 Queuing proposal {} (tx: {}, tier: {}), waiting for Ethereum confirmation", proposalId, ethereumTxHash, tier);
+            log.debug("📥 Queuing proposal {} (tx: {}, tier: {}, intentToken: {}), waiting for Ethereum confirmation", 
+                proposalId, ethereumTxHash, tier, intentToken != null ? intentToken : "none");
             context.proposalQueueManager.queueProposal(
                 proposalId,
                 ethereumTxHash,
@@ -417,7 +421,8 @@ public class ConsensusApiHandler {
                 contentType != null ? contentType : "page",
                 message != null ? message : "",
                 signature, // Already validated - no fallback needed
-                tier  // Pass payment tier for priority handling
+                tier,  // Pass payment tier for priority handling
+                intentToken  // Pass intentToken for lazy binary upload (ADR 020)
             );
             
             // Return queued status (202 Accepted)
@@ -845,7 +850,7 @@ public class ConsensusApiHandler {
      * This is called from AeronConsensusEngine.onSessionMessage() after Aeron replicates the write.
      */
     public void applyReplicatedWrite(String walletAddress, String path, String contentType, 
-                                     String message, String signature) {
+                                     String message, String signature, String intentToken) {
         try {
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}", walletAddress, path);
             
@@ -909,6 +914,15 @@ public class ConsensusApiHandler {
             contentNode.setProperty("wallet", walletAddress);
             contentNode.setProperty("signature", signature); // Already validated - no fallback
             contentNode.setProperty("source", "aeron-replicated");
+            
+            // 🔗 ADR 020: Store intentToken for lazy binary upload
+            // If intentToken is present, it means this write is associated with a pending binary upload
+            // The client will upload the binary to IPFS after seeing this node replicate, then complete the upload
+            if (intentToken != null && !intentToken.isEmpty()) {
+                contentNode.setProperty("jcr:intentToken", intentToken);
+                contentNode.setProperty("jcr:pendingBinary", true);
+                log.debug("📎 Intent token stored for lazy binary upload: {}", intentToken);
+            }
             
             // 🌟 GENESIS: If this is the genesis write, build the elaborate structure on ALL nodes
             if ("genesis".equals(contentType)) {

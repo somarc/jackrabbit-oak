@@ -144,7 +144,7 @@ public class AeronConsensusEngine implements ClusteredService {
     
     // ✈️ AERON NATIVE: Callback interface for applying replicated writes and deletes
     public interface WriteApplicationCallback {
-        void applyWrite(String walletAddress, String path, String contentType, String message, String signature);
+        void applyWrite(String walletAddress, String path, String contentType, String message, String signature, String intentToken);
         void applyDelete(String walletAddress, String path, String signature);
     }
     private WriteApplicationCallback writeCallback;
@@ -789,6 +789,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 String contentType = extractJsonField(json, "contentType");
                 String message = extractJsonField(json, "message");
                 String signature = extractJsonField(json, "signature");
+                String intentToken = extractJsonField(json, "intentToken"); // ADR 020
                 
                 if (walletAddress == null || path == null) {
                     log.error("❌ Invalid write proposal: missing required fields (walletAddress: {}, path: {})", 
@@ -799,8 +800,9 @@ public class AeronConsensusEngine implements ClusteredService {
                 // Apply write to FileStore via callback
                 // This ensures the write is applied on ALL nodes after replication
                 if (writeCallback != null) {
-                    log.debug("✅ APPLYING REPLICATED WRITE: wallet={}, path={}", walletAddress, path);
-                    writeCallback.applyWrite(walletAddress, path, contentType, message, signature);
+                    log.debug("✅ APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}", 
+                        walletAddress, path, intentToken != null ? intentToken : "none");
+                    writeCallback.applyWrite(walletAddress, path, contentType, message, signature, intentToken);
                     log.debug("✅ Replicated write applied successfully on node {}", 
                         cluster != null ? cluster.memberId() : "?");
                     
@@ -919,19 +921,20 @@ public class AeronConsensusEngine implements ClusteredService {
                     String contentType = extractJsonField(proposalJson, "contentType");
                     String message = extractJsonField(proposalJson, "message");
                     String signature = extractJsonField(proposalJson, "signature");
+                    String intentToken = extractJsonField(proposalJson, "intentToken"); // ADR 020
                     
                     if (walletAddress == null || path == null) {
                         log.error("❌ Invalid proposal in batch: missing required fields");
                         continue;
                     }
                     
-                    log.debug("🔍DEBUG_BATCH [RCV-11]: Processing proposal {} of {} - wallet: {}, path: {}", 
-                        processed + 1, proposals.size(), walletAddress, path);
+                    log.debug("🔍DEBUG_BATCH [RCV-11]: Processing proposal {} of {} - wallet: {}, path: {}, intentToken: {}", 
+                        processed + 1, proposals.size(), walletAddress, path, intentToken != null ? intentToken : "none");
                     
                     // Apply write to FileStore via callback
                     if (writeCallback != null) {
                         log.debug("🔍DEBUG_BATCH [RCV-12]: Calling writeCallback.applyWrite()...");
-                        writeCallback.applyWrite(walletAddress, path, contentType, message, signature);
+                        writeCallback.applyWrite(walletAddress, path, contentType, message, signature, intentToken);
                         log.debug("🔍DEBUG_BATCH [RCV-13]: writeCallback.applyWrite() COMPLETE");
                         
                         // Track acknowledgment for backpressure management
@@ -1927,6 +1930,12 @@ public class AeronConsensusEngine implements ClusteredService {
                 json.append("\"contentType\":\"").append(escapeJson(proposal.getContentType() != null ? proposal.getContentType() : "page")).append("\",");
                 json.append("\"message\":\"").append(escapeJson(proposal.getMessage() != null ? proposal.getMessage() : "")).append("\",");
                 json.append("\"signature\":\"").append(escapeJson(proposal.getSignature() != null ? proposal.getSignature() : "")).append("\"");
+                
+                // Add intentToken if present (ADR 020 - lazy binary upload)
+                if (proposal.getIntentToken() != null && !proposal.getIntentToken().isEmpty()) {
+                    json.append(",\"intentToken\":\"").append(escapeJson(proposal.getIntentToken())).append("\"");
+                }
+                
                 json.append("}");
             }
             

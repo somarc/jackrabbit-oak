@@ -317,7 +317,7 @@ public class ProposalQueueManagerOptimized {
         // Calculate current epoch automatically
         long currentEpoch = epochQueue.getCurrentEpoch();
         return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch, 
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD, null);
     }
     
     /**
@@ -332,6 +332,7 @@ public class ProposalQueueManagerOptimized {
      * @param message Content message
      * @param signature Transaction signature
      * @param tier Payment tier (STANDARD, EXPRESS, or PRIORITY)
+     * @param intentToken Intent token for lazy binary upload (optional, ADR 020)
      * @return The queued proposal
      */
     public QueuedProposal queueProposal(
@@ -342,7 +343,8 @@ public class ProposalQueueManagerOptimized {
             String contentType,
             String message,
             String signature,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
+            String intentToken) {
         // Calculate target epoch based on payment tier
         long currentEpoch = epochQueue.getCurrentEpoch();
         long targetEpoch;
@@ -368,7 +370,7 @@ public class ProposalQueueManagerOptimized {
             targetEpoch = currentEpoch;
         }
         
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, targetEpoch, tier);
+        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, targetEpoch, tier, intentToken);
     }
     
     /**
@@ -383,6 +385,7 @@ public class ProposalQueueManagerOptimized {
      * @param ethereumTxHash Ethereum transaction hash (optional)
      * @param epoch Ethereum epoch when transaction was seen (for finality tracking)
      * @param tier Payment tier (STANDARD, EXPRESS, or PRIORITY) for priority handling
+     * @param intentToken Intent token for lazy binary upload (optional, ADR 020)
      * @return The queued proposal
      */
     public QueuedProposal queueProposal(
@@ -394,7 +397,8 @@ public class ProposalQueueManagerOptimized {
             String signature,
             String ethereumTxHash,
             long epoch,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
+            String intentToken) {
         
         long now = System.currentTimeMillis();
         QueuedProposal proposal = new QueuedProposal(
@@ -414,6 +418,7 @@ public class ProposalQueueManagerOptimized {
         proposal.setSignature(signature);
         proposal.setEpoch(epoch); // NEW: Track epoch for finality
         proposal.setTier(tier); // Set payment tier for priority handling
+        proposal.setIntentToken(intentToken); // Set intent token for lazy binary upload (ADR 020)
         
         // Add to tracking map and unverified queue
         allProposals.put(proposalId, proposal);

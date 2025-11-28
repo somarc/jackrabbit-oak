@@ -45,6 +45,7 @@ public class QueuedProposal {
     private volatile long epoch; // Ethereum epoch when transaction was seen
     private volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier = 
         org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD; // Payment tier for priority handling
+    private volatile String intentToken; // Intent token for lazy binary upload (ADR 020)
     
     public QueuedProposal(
             String proposalId,
@@ -162,6 +163,14 @@ public class QueuedProposal {
     
     public void setType(ProposalType type) {
         this.type = type;
+    }
+    
+    public String getIntentToken() {
+        return intentToken;
+    }
+    
+    public void setIntentToken(String intentToken) {
+        this.intentToken = intentToken;
     }
 }
 
