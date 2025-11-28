@@ -4,6 +4,11 @@
 **Purpose**: Distributed consensus layer for Oak Segment Store - Blockchain AEM proof of concept  
 **Garage Week Deadline**: December 15, 2025
 
+## 📖 Quick Links
+
+- **[CONFIGURATION.md](CONFIGURATION.md)** - Complete environment variables & system properties reference
+- **[IPFS-DATASTORE.md](IPFS-DATASTORE.md)** - IPFS binary storage guide (ADR 015)
+
 ## Overview
 
 `oak-segment-consensus` implements a **distributed consensus layer** for Apache Jackrabbit Oak Segment Store, enabling blockchain-backed AEM content repositories with:
@@ -183,10 +188,18 @@ java -jar oak-segment-consensus.jar \
 ```
 
 ### Environment Variables
-- `CONSENSUS_MODE`: `aeron` (only fully implemented mode)
-- `PORT`: HTTP server port (default: 8090)
-- `AERON_NODE_ID`: Aeron Cluster node ID (0, 1, 2, ...)
-- `AERON_CLUSTER_MEMBERS`: Comma-separated list of cluster members
+
+**See [CONFIGURATION.md](CONFIGURATION.md) for complete reference.**
+
+**Quick essentials:**
+- `OAK_BLOCKCHAIN_MODE`: `mock` | `sepolia` | `mainnet`
+- `BLOBSTORE_TYPE`: `ipfs` (optional - enables IPFS binary storage)
+- `IPFS_API_ENDPOINT`: `/ip4/127.0.0.1/tcp/5001` (IPFS API)
+- `CONSENSUS_MODE`: `aeron` (multi-validator Raft consensus)
+- `AERON_NODE_ID`: `0`, `1`, `2`, ... (unique per validator)
+- `AERON_CLUSTER_MEMBERS`: `"0=host:port,1=host:port,..."`
+- `PORT`: HTTP server port (default: `8090`)
+- `OAK_VALIDATOR_AUTH_TOKEN`: Secret token for API authentication (optional)
 
 ### Access Dashboard
 Once running, access the dashboard at:

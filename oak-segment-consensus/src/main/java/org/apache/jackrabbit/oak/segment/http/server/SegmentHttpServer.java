@@ -598,6 +598,23 @@ public class SegmentHttpServer {
             
             log.debug("HTTP {} {}", method, path);
             
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // CORS Headers - Garage Week MVP (Wildcard for demo)
+            // TODO: Replace with wallet-based registration post-Garage Week (see ADR-010)
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            response.setHeader("Access-Control-Allow-Origin", "*");
+            response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+            response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+            response.setHeader("Access-Control-Max-Age", "3600");
+            
+            // Handle preflight OPTIONS requests
+            if ("OPTIONS".equals(method)) {
+                response.setStatus(HttpServletResponse.SC_OK);
+                baseRequest.setHandled(true);
+                return;
+            }
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            
             try {
                 // Delegate to RequestRouter
                 router.route(baseRequest, request, response);
