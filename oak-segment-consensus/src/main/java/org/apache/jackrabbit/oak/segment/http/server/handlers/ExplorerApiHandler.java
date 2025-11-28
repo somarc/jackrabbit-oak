@@ -113,7 +113,22 @@ public class ExplorerApiHandler {
                     try {
                         String value;
                         if (prop.getType() == Type.BINARY) {
-                            value = "[Binary: " + prop.size() + " bytes]";
+                            long binarySize = prop.size();
+                            // Try to get blob ID which might be an IPFS CID
+                            try {
+                                org.apache.jackrabbit.oak.api.Blob blob = prop.getValue(Type.BINARY);
+                                String blobId = blob.getContentIdentity();
+                                if (blobId != null && (blobId.startsWith("Qm") || blobId.startsWith("bafy"))) {
+                                    // IPFS CID detected!
+                                    value = "ipfs://" + blobId;
+                                } else if (blobId != null) {
+                                    value = "[Binary: " + binarySize + " bytes, id=" + blobId + "]";
+                                } else {
+                                    value = "[Binary: " + binarySize + " bytes]";
+                                }
+                            } catch (Exception blobEx) {
+                                value = "[Binary: " + binarySize + " bytes]";
+                            }
                         } else if (prop.getType() == Type.BOOLEAN) {
                             value = String.valueOf(prop.getValue(Type.BOOLEAN));
                         } else if (prop.getType() == Type.LONG) {

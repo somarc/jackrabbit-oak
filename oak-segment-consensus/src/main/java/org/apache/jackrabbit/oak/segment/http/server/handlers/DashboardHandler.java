@@ -1163,7 +1163,8 @@ public class DashboardHandler {
     }
     
     /**
-     * Handle blockchain explorer UI - Etherscan-like interface.
+     * Handle blockchain explorer UI - Rich Etherscan-like interface.
+     * Enhanced with IPFS links, property type indicators, and better visualization.
      */
     public void handleExplorerUI(HttpServletResponse response) throws IOException {
         response.setStatus(HttpServletResponse.SC_OK);
@@ -1180,140 +1181,358 @@ public class DashboardHandler {
         html.append(".header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; ");
         html.append("box-shadow: 0 4px 6px rgba(0,0,0,0.3); }\n");
         html.append(".header h1 { font-size: 2em; margin-bottom: 5px; }\n");
-        html.append(".container { max-width: 1400px; margin: 0 auto; padding: 20px; }\n");
-        html.append(".panel { background: #1e293b; border-radius: 10px; padding: 20px; margin: 20px 0; ");
+        html.append(".header-subtitle { opacity: 0.9; }\n");
+        html.append(".header-nav { margin-top: 10px; }\n");
+        html.append(".header-nav a { color: white; text-decoration: none; margin-right: 20px; opacity: 0.8; }\n");
+        html.append(".header-nav a:hover { opacity: 1; text-decoration: underline; }\n");
+        html.append(".container { max-width: 1600px; margin: 0 auto; padding: 20px; }\n");
+        html.append(".main-grid { display: grid; grid-template-columns: 1fr 400px; gap: 20px; }\n");
+        html.append("@media (max-width: 1200px) { .main-grid { grid-template-columns: 1fr; } }\n");
+        html.append(".panel { background: #1e293b; border-radius: 10px; padding: 20px; margin-bottom: 20px; ");
         html.append("border: 1px solid #334155; }\n");
-        html.append(".panel h2 { color: #a78bfa; margin-bottom: 15px; font-size: 1.3em; }\n");
-        html.append(".tree-node { padding: 8px; margin: 4px 0; background: #0f172a; border-radius: 5px; ");
-        html.append("cursor: pointer; transition: all 0.2s; }\n");
-        html.append(".tree-node:hover { background: #1e293b; transform: translateX(5px); }\n");
-        html.append(".node-name { color: #60a5fa; font-weight: 500; }\n");
-        html.append(".node-type { color: #94a3b8; font-size: 0.9em; margin-left: 10px; }\n");
-        html.append(".property { padding: 5px; margin: 3px 0; font-family: monospace; font-size: 0.9em; }\n");
-        html.append(".prop-name { color: #fbbf24; }\n");
-        html.append(".prop-value { color: #34d399; }\n");
-        html.append(".breadcrumb { padding: 10px; background: #0f172a; border-radius: 5px; margin-bottom: 15px; }\n");
-        html.append(".breadcrumb a { color: #60a5fa; text-decoration: none; margin: 0 5px; }\n");
-        html.append(".breadcrumb a:hover { text-decoration: underline; }\n");
-        html.append(".segment-entry { background: #0f172a; padding: 12px; margin: 8px 0; border-radius: 5px; ");
+        html.append(".panel h2 { color: #a78bfa; margin-bottom: 15px; font-size: 1.2em; display: flex; align-items: center; gap: 8px; }\n");
+        html.append(".panel h3 { color: #94a3b8; margin: 20px 0 10px 0; font-size: 1em; }\n");
+        
+        // Breadcrumb styling
+        html.append(".breadcrumb { padding: 12px 15px; background: #0f172a; border-radius: 8px; margin-bottom: 15px; ");
+        html.append("font-family: monospace; font-size: 0.95em; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }\n");
+        html.append(".breadcrumb a { color: #60a5fa; text-decoration: none; padding: 2px 6px; border-radius: 4px; }\n");
+        html.append(".breadcrumb a:hover { background: #334155; text-decoration: underline; }\n");
+        html.append(".breadcrumb .sep { color: #475569; }\n");
+        
+        // Node stats bar
+        html.append(".node-stats { display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap; }\n");
+        html.append(".stat-badge { background: #0f172a; padding: 8px 12px; border-radius: 6px; font-size: 0.85em; }\n");
+        html.append(".stat-badge .label { color: #94a3b8; }\n");
+        html.append(".stat-badge .value { color: #60a5fa; font-weight: 600; margin-left: 5px; }\n");
+        
+        // Tree nodes with better icons
+        html.append(".tree-node { padding: 10px 12px; margin: 4px 0; background: #0f172a; border-radius: 6px; ");
+        html.append("cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 10px; border-left: 3px solid transparent; }\n");
+        html.append(".tree-node:hover { background: #1e293b; border-left-color: #8b5cf6; transform: translateX(3px); }\n");
+        html.append(".tree-node .icon { font-size: 1.1em; }\n");
+        html.append(".tree-node .name { color: #60a5fa; font-weight: 500; flex: 1; }\n");
+        html.append(".tree-node .meta { color: #64748b; font-size: 0.8em; }\n");
+        html.append(".tree-node.wallet { border-left-color: #10b981; }\n");
+        html.append(".tree-node.content { border-left-color: #f59e0b; }\n");
+        html.append(".tree-node.file { border-left-color: #ec4899; }\n");
+        
+        // Properties with type indicators
+        html.append(".property { padding: 10px 12px; margin: 6px 0; background: #0f172a; border-radius: 6px; ");
+        html.append("font-family: monospace; font-size: 0.9em; display: flex; align-items: flex-start; gap: 10px; }\n");
+        html.append(".prop-icon { font-size: 1em; min-width: 20px; text-align: center; }\n");
+        html.append(".prop-content { flex: 1; min-width: 0; }\n");
+        html.append(".prop-name { color: #fbbf24; font-weight: 500; }\n");
+        html.append(".prop-value { color: #34d399; word-break: break-all; }\n");
+        html.append(".prop-type { color: #64748b; font-size: 0.75em; margin-left: 8px; }\n");
+        
+        // Special property types
+        html.append(".prop-ipfs { background: linear-gradient(135deg, #0f172a 0%, #1a1a2e 100%); border-left: 3px solid #06b6d4; }\n");
+        html.append(".prop-ipfs .prop-value { color: #06b6d4; }\n");
+        html.append(".prop-ipfs a { color: #06b6d4; text-decoration: none; }\n");
+        html.append(".prop-ipfs a:hover { text-decoration: underline; }\n");
+        html.append(".prop-wallet { border-left: 3px solid #10b981; }\n");
+        html.append(".prop-wallet .prop-value { color: #10b981; }\n");
+        html.append(".prop-binary { border-left: 3px solid #ec4899; }\n");
+        html.append(".prop-binary .prop-value { color: #ec4899; }\n");
+        html.append(".prop-timestamp { border-left: 3px solid #f59e0b; }\n");
+        
+        // Segment entries
+        html.append(".segment-entry { background: #0f172a; padding: 12px; margin: 8px 0; border-radius: 6px; ");
         html.append("border-left: 3px solid #8b5cf6; }\n");
-        html.append(".segment-id { font-family: monospace; color: #60a5fa; }\n");
-        html.append(".timestamp { color: #94a3b8; font-size: 0.9em; }\n");
-        html.append(".tabs { display: flex; gap: 10px; margin-bottom: 20px; }\n");
-        html.append(".tab { padding: 10px 20px; background: #1e293b; border-radius: 5px; cursor: pointer; ");
-        html.append("border: 2px solid transparent; }\n");
-        html.append(".tab.active { border-color: #8b5cf6; background: #2d3748; }\n");
+        html.append(".segment-id { font-family: monospace; color: #60a5fa; font-size: 0.9em; }\n");
+        html.append(".timestamp { color: #94a3b8; font-size: 0.85em; }\n");
+        
+        // Empty state
+        html.append(".empty-state { text-align: center; padding: 30px; color: #64748b; }\n");
+        html.append(".empty-state .icon { font-size: 2em; margin-bottom: 10px; }\n");
+        
+        // Loading spinner
         html.append(".loading { text-align: center; padding: 40px; color: #94a3b8; }\n");
+        html.append(".loading::after { content: ''; display: inline-block; width: 20px; height: 20px; ");
+        html.append("border: 2px solid #8b5cf6; border-top-color: transparent; border-radius: 50%; ");
+        html.append("animation: spin 1s linear infinite; margin-left: 10px; vertical-align: middle; }\n");
+        html.append("@keyframes spin { to { transform: rotate(360deg); } }\n");
+        
+        // Copy button
+        html.append(".copy-btn { background: #334155; border: none; color: #94a3b8; padding: 4px 8px; ");
+        html.append("border-radius: 4px; cursor: pointer; font-size: 0.75em; margin-left: 8px; }\n");
+        html.append(".copy-btn:hover { background: #475569; color: #e2e8f0; }\n");
+        
         html.append("</style>\n");
+        
+        // JavaScript
         html.append("<script>\n");
-        html.append("let currentPath = '/';\n\n");
+        html.append("let currentPath = '/';\n");
+        html.append("let nodeData = null;\n\n");
+        
         html.append("async function loadNode(path) {\n");
         html.append("  currentPath = path;\n");
         html.append("  document.getElementById('loading').style.display = 'block';\n");
         html.append("  document.getElementById('node-content').style.display = 'none';\n");
-        html.append("  const response = await fetch('/api/explore?path=' + encodeURIComponent(path));\n");
-        html.append("  const data = await response.json();\n");
-        html.append("  displayNode(data);\n");
+        html.append("  try {\n");
+        html.append("    const response = await fetch('/api/explore?path=' + encodeURIComponent(path));\n");
+        html.append("    nodeData = await response.json();\n");
+        html.append("    if (nodeData.error) {\n");
+        html.append("      displayError(nodeData.error);\n");
+        html.append("    } else {\n");
+        html.append("      displayNode(nodeData);\n");
+        html.append("    }\n");
+        html.append("  } catch (e) {\n");
+        html.append("    displayError(e.message);\n");
+        html.append("  }\n");
         html.append("  document.getElementById('loading').style.display = 'none';\n");
         html.append("  document.getElementById('node-content').style.display = 'block';\n");
         html.append("}\n\n");
+        
+        html.append("function displayError(msg) {\n");
+        html.append("  document.getElementById('children').innerHTML = '<div class=\"empty-state\"><div class=\"icon\">⚠️</div><div>' + msg + '</div></div>';\n");
+        html.append("  document.getElementById('properties').innerHTML = '';\n");
+        html.append("  document.getElementById('node-stats').innerHTML = '';\n");
+        html.append("}\n\n");
+        
         html.append("function displayNode(node) {\n");
+        // Breadcrumb
         html.append("  const breadcrumb = document.getElementById('breadcrumb');\n");
         html.append("  const parts = currentPath.split('/').filter(p => p);\n");
         html.append("  let path = '';\n");
-        html.append("  breadcrumb.innerHTML = '<a href=\"#\" onclick=\"loadNode(\\'/\\'); return false;\">root</a>';\n");
-        html.append("  parts.forEach(part => {\n");
+        html.append("  breadcrumb.innerHTML = '<a href=\"#\" onclick=\"loadNode(\\'/\\'); return false;\">🏠 root</a>';\n");
+        html.append("  parts.forEach((part, idx) => {\n");
         html.append("    path += '/' + part;\n");
-        html.append("    breadcrumb.innerHTML += ' / <a href=\"#\" onclick=\"loadNode(\\'' + path + '\\'); return false;\">' + part + '</a>';\n");
+        html.append("    const isLast = idx === parts.length - 1;\n");
+        html.append("    const icon = getNodeIcon(part);\n");
+        html.append("    breadcrumb.innerHTML += '<span class=\"sep\">/</span><a href=\"#\" onclick=\"loadNode(\\'' + path + '\\'); return false;\">' + icon + ' ' + part + '</a>';\n");
         html.append("  });\n\n");
+        
+        // Node stats
+        html.append("  const stats = document.getElementById('node-stats');\n");
+        html.append("  const childCount = node.children ? node.children.length : 0;\n");
+        html.append("  const propCount = node.properties ? Object.keys(node.properties).length : 0;\n");
+        html.append("  stats.innerHTML = '<div class=\"stat-badge\"><span class=\"label\">Children:</span><span class=\"value\">' + childCount + '</span></div>';\n");
+        html.append("  stats.innerHTML += '<div class=\"stat-badge\"><span class=\"label\">Properties:</span><span class=\"value\">' + propCount + '</span></div>';\n");
+        html.append("  if (node.properties && node.properties['jcr:primaryType']) {\n");
+        html.append("    stats.innerHTML += '<div class=\"stat-badge\"><span class=\"label\">Type:</span><span class=\"value\">' + node.properties['jcr:primaryType'] + '</span></div>';\n");
+        html.append("  }\n\n");
+        
+        // Children
         html.append("  const children = document.getElementById('children');\n");
         html.append("  children.innerHTML = '';\n");
-        html.append("  node.children.forEach(child => {\n");
-        html.append("    const div = document.createElement('div');\n");
-        html.append("    div.className = 'tree-node';\n");
-        html.append("    div.innerHTML = '<span class=\"node-name\">📁 ' + child + '</span>';\n");
-        html.append("    div.onclick = () => loadNode(currentPath === '/' ? '/' + child : currentPath + '/' + child);\n");
-        html.append("    children.appendChild(div);\n");
-        html.append("  });\n\n");
+        html.append("  if (node.children && node.children.length > 0) {\n");
+        html.append("    node.children.sort().forEach(child => {\n");
+        html.append("      const div = document.createElement('div');\n");
+        html.append("      const nodeClass = getNodeClass(child);\n");
+        html.append("      div.className = 'tree-node ' + nodeClass;\n");
+        html.append("      const icon = getNodeIcon(child);\n");
+        html.append("      div.innerHTML = '<span class=\"icon\">' + icon + '</span><span class=\"name\">' + child + '</span>';\n");
+        html.append("      div.onclick = () => loadNode(currentPath === '/' ? '/' + child : currentPath + '/' + child);\n");
+        html.append("      children.appendChild(div);\n");
+        html.append("    });\n");
+        html.append("  } else {\n");
+        html.append("    children.innerHTML = '<div class=\"empty-state\"><div class=\"icon\">📭</div><div>No child nodes</div></div>';\n");
+        html.append("  }\n\n");
+        
+        // Properties
         html.append("  const props = document.getElementById('properties');\n");
         html.append("  props.innerHTML = '';\n");
-        html.append("  Object.entries(node.properties).forEach(([key, value]) => {\n");
-        html.append("    const div = document.createElement('div');\n");
-        html.append("    div.className = 'property';\n");
-        html.append("    div.innerHTML = '<span class=\"prop-name\">' + key + ':</span> <span class=\"prop-value\">' + JSON.stringify(value) + '</span>';\n");
-        html.append("    props.appendChild(div);\n");
-        html.append("  });\n");
+        html.append("  if (node.properties && Object.keys(node.properties).length > 0) {\n");
+        html.append("    Object.entries(node.properties).sort((a,b) => a[0].localeCompare(b[0])).forEach(([key, value]) => {\n");
+        html.append("      const div = document.createElement('div');\n");
+        html.append("      const propClass = getPropClass(key, value);\n");
+        html.append("      const propIcon = getPropIcon(key, value);\n");
+        html.append("      div.className = 'property ' + propClass;\n");
+        html.append("      const valueHtml = formatPropValue(key, value);\n");
+        html.append("      div.innerHTML = '<span class=\"prop-icon\">' + propIcon + '</span>' +\n");
+        html.append("        '<div class=\"prop-content\"><span class=\"prop-name\">' + key + '</span>' +\n");
+        html.append("        '<span class=\"prop-type\">' + getPropType(value) + '</span><br>' +\n");
+        html.append("        '<span class=\"prop-value\">' + valueHtml + '</span></div>';\n");
+        html.append("      props.appendChild(div);\n");
+        html.append("    });\n");
+        html.append("  } else {\n");
+        html.append("    props.innerHTML = '<div class=\"empty-state\"><div class=\"icon\">📋</div><div>No properties</div></div>';\n");
+        html.append("  }\n");
         html.append("}\n\n");
+        
+        // Helper functions
+        html.append("function getNodeIcon(name) {\n");
+        html.append("  if (name.startsWith('0x')) return '👛';\n");
+        html.append("  if (name === 'oak-chain') return '⛓️';\n");
+        html.append("  if (name === 'content') return '📄';\n");
+        html.append("  if (name.startsWith('file-')) return '🖼️';\n");
+        html.append("  if (name.startsWith('page-')) return '📝';\n");
+        html.append("  if (name === 'ethereum' || name === 'epoch') return '💎';\n");
+        html.append("  if (name.match(/^[0-9a-f]{2}$/)) return '📂';\n");
+        html.append("  return '📁';\n");
+        html.append("}\n\n");
+        
+        html.append("function getNodeClass(name) {\n");
+        html.append("  if (name.startsWith('0x')) return 'wallet';\n");
+        html.append("  if (name === 'content') return 'content';\n");
+        html.append("  if (name.startsWith('file-')) return 'file';\n");
+        html.append("  return '';\n");
+        html.append("}\n\n");
+        
+        html.append("function getPropClass(key, value) {\n");
+        html.append("  if (key === 'wallet' || (typeof value === 'string' && value.startsWith('0x') && value.length === 42)) return 'prop-wallet';\n");
+        html.append("  if (key === 'jcr:data' || (typeof value === 'string' && (value.startsWith('ipfs://') || value.startsWith('Qm')))) return 'prop-ipfs';\n");
+        html.append("  if (typeof value === 'string' && value.includes('[Binary:')) return 'prop-binary';\n");
+        html.append("  if (key === 'timestamp' || key.includes('Time') || key.includes('Date')) return 'prop-timestamp';\n");
+        html.append("  return '';\n");
+        html.append("}\n\n");
+        
+        html.append("function getPropIcon(key, value) {\n");
+        html.append("  if (key === 'wallet') return '👛';\n");
+        html.append("  if (key === 'jcr:data') return '📦';\n");
+        html.append("  if (key === 'jcr:primaryType') return '🏷️';\n");
+        html.append("  if (key === 'jcr:mimeType' || key === 'mimeType') return '📎';\n");
+        html.append("  if (key === 'contentType') return '📋';\n");
+        html.append("  if (key === 'message') return '💬';\n");
+        html.append("  if (key === 'signature') return '✍️';\n");
+        html.append("  if (key === 'source') return '🔗';\n");
+        html.append("  if (key === 'timestamp') return '🕐';\n");
+        html.append("  if (key === 'jcr:intentToken' || key === 'intentToken') return '🎫';\n");
+        html.append("  if (key === 'jcr:pendingBinary') return '⏳';\n");
+        html.append("  if (typeof value === 'string' && value.includes('[Binary:')) return '🖼️';\n");
+        html.append("  return '📝';\n");
+        html.append("}\n\n");
+        
+        html.append("function getPropType(value) {\n");
+        html.append("  if (typeof value === 'string' && value.includes('[Binary:')) return 'BINARY';\n");
+        html.append("  if (typeof value === 'boolean') return 'BOOLEAN';\n");
+        html.append("  if (typeof value === 'number') return 'NUMBER';\n");
+        html.append("  if (Array.isArray(value)) return 'ARRAY[' + value.length + ']';\n");
+        html.append("  return 'STRING';\n");
+        html.append("}\n\n");
+        
+        html.append("function formatPropValue(key, value) {\n");
+        html.append("  const strValue = typeof value === 'string' ? value : JSON.stringify(value);\n");
+        // IPFS CID detection
+        html.append("  if (strValue.startsWith('ipfs://')) {\n");
+        html.append("    const cid = strValue.replace('ipfs://', '');\n");
+        html.append("    return '<a href=\"http://127.0.0.1:8080/ipfs/' + cid + '\" target=\"_blank\">🔗 ' + strValue + '</a> <button class=\"copy-btn\" onclick=\"copyText(\\'' + cid + '\\'); event.stopPropagation();\">Copy CID</button>';\n");
+        html.append("  }\n");
+        html.append("  if (strValue.startsWith('Qm') && strValue.length > 40) {\n");
+        html.append("    return '<a href=\"http://127.0.0.1:8080/ipfs/' + strValue + '\" target=\"_blank\">🔗 ipfs://' + strValue + '</a> <button class=\"copy-btn\" onclick=\"copyText(\\'' + strValue + '\\'); event.stopPropagation();\">Copy CID</button>';\n");
+        html.append("  }\n");
+        // Binary data
+        html.append("  if (strValue.includes('[Binary:')) {\n");
+        html.append("    const match = strValue.match(/\\[Binary: (\\d+) bytes\\]/);\n");
+        html.append("    if (match) {\n");
+        html.append("      const bytes = parseInt(match[1]);\n");
+        html.append("      const kb = (bytes / 1024).toFixed(1);\n");
+        html.append("      return '📦 Binary Data (' + kb + ' KB) <span style=\"color:#64748b;font-size:0.85em;\">- stored in BlobStore</span>';\n");
+        html.append("    }\n");
+        html.append("  }\n");
+        // Wallet address
+        html.append("  if (strValue.startsWith('0x') && strValue.length === 42) {\n");
+        html.append("    return strValue + ' <button class=\"copy-btn\" onclick=\"copyText(\\'' + strValue + '\\'); event.stopPropagation();\">Copy</button>';\n");
+        html.append("  }\n");
+        // Timestamp
+        html.append("  if (key === 'timestamp' && /^\\d{13}$/.test(strValue)) {\n");
+        html.append("    const date = new Date(parseInt(strValue));\n");
+        html.append("    return strValue + ' <span style=\"color:#64748b;font-size:0.85em;\">(' + date.toLocaleString() + ')</span>';\n");
+        html.append("  }\n");
+        html.append("  return strValue;\n");
+        html.append("}\n\n");
+        
+        html.append("function copyText(text) {\n");
+        html.append("  navigator.clipboard.writeText(text);\n");
+        html.append("}\n\n");
+        
+        // TAR files and recent segments
         html.append("async function loadTarFiles() {\n");
         html.append("  const response = await fetch('/api/segments/tars');\n");
         html.append("  const tars = await response.json();\n");
         html.append("  const container = document.getElementById('tar-files');\n");
         html.append("  container.innerHTML = '';\n");
         html.append("  if (tars.length === 0) {\n");
-        html.append("    container.innerHTML = '<div style=\"color: #94a3b8; padding: 10px;\">No TAR files found</div>';\n");
+        html.append("    container.innerHTML = '<div class=\"empty-state\"><div class=\"icon\">💾</div><div>No TAR files</div></div>';\n");
         html.append("    return;\n");
         html.append("  }\n");
         html.append("  tars.forEach(tar => {\n");
         html.append("    const div = document.createElement('div');\n");
         html.append("    div.className = 'segment-entry';\n");
-        html.append("    div.style.borderLeft = '3px solid #06b6d4';\n");
-        html.append("    const segmentLabel = tar.estimatedCount ? tar.segmentCount + ' (est.)' : tar.segmentCount;\n");
-        html.append("    div.innerHTML = '<div style=\"display: flex; justify-content: space-between; align-items: center;\">' +\n");
-        html.append("      '<div>' +\n");
-        html.append("        '<div class=\"segment-id\" style=\"margin-bottom: 5px;\">💾 ' + tar.name + '</div>' +\n");
-        html.append("        '<div class=\"timestamp\">Size: ' + tar.sizeFormatted + ' • Segments: ' + segmentLabel + '</div>' +\n");
-        html.append("      '</div>' +\n");
-        html.append("      '<div style=\"text-align: right; font-size: 0.85em; color: #94a3b8;\">' +\n");
-        html.append("        '<div>Created: ' + new Date(tar.created).toLocaleString() + '</div>' +\n");
-        html.append("        '<div>Modified: ' + new Date(tar.modified).toLocaleString() + '</div>' +\n");
-        html.append("      '</div>' +\n");
-        html.append("    '</div>';\n");
+        html.append("    div.style.borderLeftColor = '#06b6d4';\n");
+        html.append("    div.innerHTML = '<div class=\"segment-id\">💾 ' + tar.name + '</div>' +\n");
+        html.append("      '<div class=\"timestamp\">' + tar.sizeFormatted + ' • ~' + tar.segmentCount + ' segments</div>';\n");
         html.append("    container.appendChild(div);\n");
         html.append("  });\n");
         html.append("}\n\n");
+        
         html.append("async function loadRecentSegments() {\n");
         html.append("  const response = await fetch('/api/segments/recent');\n");
         html.append("  const segments = await response.json();\n");
         html.append("  const container = document.getElementById('recent-segments');\n");
         html.append("  container.innerHTML = '';\n");
         html.append("  if (segments.length === 0) {\n");
-        html.append("    container.innerHTML = '<div style=\"color: #94a3b8; padding: 10px;\">No recent segments</div>';\n");
+        html.append("    container.innerHTML = '<div class=\"empty-state\"><div class=\"icon\">📦</div><div>No recent segments</div></div>';\n");
         html.append("    return;\n");
         html.append("  }\n");
-        html.append("  segments.forEach(seg => {\n");
+        html.append("  segments.slice(0, 10).forEach(seg => {\n");
         html.append("    const div = document.createElement('div');\n");
         html.append("    div.className = 'segment-entry';\n");
-        html.append("    div.innerHTML = '<div class=\"segment-id\">Segment: ' + seg.id + '</div>' +\n");
-        html.append("                    '<div class=\"timestamp\">' + seg.timestamp + '</div>';\n");
+        html.append("    div.innerHTML = '<div class=\"segment-id\">' + seg.id.substring(0, 20) + '...</div>' +\n");
+        html.append("      '<div class=\"timestamp\">' + seg.timestamp + '</div>';\n");
         html.append("    container.appendChild(div);\n");
         html.append("  });\n");
         html.append("}\n\n");
-        html.append("window.onload = () => { loadNode('/'); loadTarFiles(); loadRecentSegments(); setInterval(loadRecentSegments, 5000); };\n");
+        
+        html.append("window.onload = () => {\n");
+        html.append("  const urlParams = new URLSearchParams(window.location.search);\n");
+        html.append("  const path = urlParams.get('path') || '/';\n");
+        html.append("  loadNode(path);\n");
+        html.append("  loadTarFiles();\n");
+        html.append("  loadRecentSegments();\n");
+        html.append("  setInterval(loadRecentSegments, 5000);\n");
+        html.append("};\n");
         html.append("</script>\n");
         html.append("</head>\n<body>\n");
+        
+        // Header
         html.append("<div class='header'>\n");
-        html.append("<div class='container'><h1>🔗 Oak Segment Consensus Explorer</h1>\n");
-        html.append("<div>Content Browser & Segment Inspector</div></div>\n");
-        html.append("</div>\n");
         html.append("<div class='container'>\n");
+        html.append("<h1>🔗 Oak Segment Consensus Explorer</h1>\n");
+        html.append("<div class='header-subtitle'>Content Browser & Segment Inspector</div>\n");
+        html.append("<div class='header-nav'>\n");
+        html.append("<a href='/'>← Dashboard</a>\n");
+        html.append("<a href='/api-browser'>API Browser</a>\n");
+        html.append("<a href='/api/explore?path=/'>JSON API</a>\n");
+        html.append("</div>\n");
+        html.append("</div></div>\n");
+        
+        // Main content
+        html.append("<div class='container'>\n");
+        html.append("<div class='main-grid'>\n");
+        
+        // Left column - Content tree
+        html.append("<div>\n");
         html.append("<div class='panel'>\n");
         html.append("<h2>🌳 Content Tree</h2>\n");
         html.append("<div class='breadcrumb' id='breadcrumb'>/</div>\n");
-        html.append("<div id='loading' class='loading' style='display:none'>Loading...</div>\n");
+        html.append("<div class='node-stats' id='node-stats'></div>\n");
+        html.append("<div id='loading' class='loading' style='display:none'>Loading</div>\n");
         html.append("<div id='node-content'>\n");
+        html.append("<h3>📂 Children</h3>\n");
         html.append("<div id='children'></div>\n");
-        html.append("<h3 style='margin-top: 20px; color: #a78bfa;'>Properties</h3>\n");
+        html.append("<h3>📋 Properties</h3>\n");
         html.append("<div id='properties'></div>\n");
         html.append("</div></div>\n");
+        html.append("</div>\n");
+        
+        // Right column - Segments
+        html.append("<div>\n");
         html.append("<div class='panel'>\n");
-        html.append("<h2>💾 TAR Files (Segment Storage Blocks)</h2>\n");
+        html.append("<h2>💾 TAR Files</h2>\n");
         html.append("<div id='tar-files'></div>\n");
         html.append("</div>\n");
         html.append("<div class='panel'>\n");
-        html.append("<h2>📦 Recent Segments (Journal)</h2>\n");
+        html.append("<h2>📦 Recent Segments</h2>\n");
         html.append("<div id='recent-segments'></div>\n");
         html.append("</div>\n");
-        html.append("</div>\n</body>\n</html>");
+        html.append("</div>\n");
+        
+        html.append("</div>\n"); // main-grid
+        html.append("</div>\n"); // container
+        html.append("</body>\n</html>");
         
         response.getWriter().write(html.toString());
     }
