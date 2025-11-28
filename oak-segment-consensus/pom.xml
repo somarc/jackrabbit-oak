@@ -66,6 +66,17 @@
             </excludes>
            </configuration>
         </plugin>
+        <!-- Skip remote-resources plugin (causes issues with JitPack dependencies through corporate Artifactory) -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-remote-resources-plugin</artifactId>
+          <executions>
+            <execution>
+              <id>process-resource-bundles</id>
+              <phase>none</phase>
+            </execution>
+          </executions>
+        </plugin>
         <!-- Build executable uber JAR for GlobalStoreServer -->
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
@@ -151,6 +162,21 @@
             <artifactId>oak-segment-tar</artifactId>
             <version>${project.version}</version>
         </dependency>
+        
+        <!-- IPFS BlobStore for decentralized binary storage (ADR 015) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-blob-cloud-ipfs</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        
+        <!-- DataStoreBlobStore wrapper for converting DataStore to BlobStore -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-blob-plugins</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-store-spi</artifactId>

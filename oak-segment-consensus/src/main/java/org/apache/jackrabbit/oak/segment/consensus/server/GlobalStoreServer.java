@@ -314,7 +314,8 @@ public class GlobalStoreServer {
                     ipfsDataStore.setMinRecordLength(16 * 1024); // 16KB threshold
                     ipfsDataStore.init(storeDir.getAbsolutePath()); // HomeDir for local cache
                     
-                    blobStore = ipfsDataStore; // Implicit cast (AbstractSharedCachingDataStore implements BlobStore)
+                    // Wrap DataStore in DataStoreBlobStore (Oak pattern for DataStore -> BlobStore conversion)
+                    blobStore = new org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore(ipfsDataStore);
                     
                     System.out.println("✅ IPFS BlobStore initialized");
                     System.out.println("   - IPFS API: " + ipfsEndpoint);
