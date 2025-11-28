@@ -360,6 +360,19 @@ public class IPFSBackend extends AbstractSharedBackend {
     }
     
     /**
+     * Get all CID mappings (Oak blob ID → IPFS CID).
+     * 
+     * @return Map of Oak blob IDs (as hex strings) to IPFS CIDs
+     */
+    public Map<String, String> getAllCIDMappings() {
+        Map<String, String> mappings = new HashMap<>();
+        for (Map.Entry<DataIdentifier, String> entry : cidCache.entrySet()) {
+            mappings.put(entry.getKey().toString(), entry.getValue());
+        }
+        return mappings;
+    }
+    
+    /**
      * Inner class for DataRecord implementation
      */
     private static class IPFSDataRecord extends AbstractDataRecord {

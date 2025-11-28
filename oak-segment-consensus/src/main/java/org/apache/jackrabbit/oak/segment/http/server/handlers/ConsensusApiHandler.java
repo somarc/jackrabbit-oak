@@ -305,6 +305,66 @@ public class ConsensusApiHandler {
             // Extract intentToken (optional - for lazy binary upload, ADR 020)
             String intentToken = request.getParameter("intentToken");
             
+            // Extract binary data (optional - for eager binary upload)
+            String binaryData = request.getParameter("binaryData");
+            String mimeType = request.getParameter("mimeType");
+            String blobId = null;
+            
+            // 📦 EAGER BINARY UPLOAD: If binaryData is provided, upload to BlobStore immediately
+            // This is the alternative to ADR 020 lazy upload - client sends binary with proposal
+            if (binaryData != null && !binaryData.isEmpty() && context.blobStore != null) {
+                try {
+                    log.debug("📦 Processing eager binary upload ({} bytes base64)", binaryData.length());
+                    
+                    // Fix URL encoding issues: + becomes space in form encoding, need to convert back
+                    // Also handle any whitespace that might have been introduced
+                    String cleanedBase64 = binaryData.replace(' ', '+').replaceAll("\\s", "");
+                    
+                    // Decode base64
+                    byte[] binaryBytes = java.util.Base64.getDecoder().decode(cleanedBase64);
+                    log.debug("   Decoded to {} bytes", binaryBytes.length);
+                    
+                    // Upload to BlobStore (IPFS or other configured store)
+                    java.io.InputStream binaryStream = new java.io.ByteArrayInputStream(binaryBytes);
+                    blobId = context.blobStore.writeBlob(binaryStream);
+                    
+                    log.info("✅ Binary uploaded to BlobStore: {} ({} bytes, mime: {})", 
+                        blobId, binaryBytes.length, mimeType != null ? mimeType : "unknown");
+                    
+                    // Register CID mapping if IPFS and CidMappingService is available
+                    if (context.cidMappingService != null && "ipfs".equalsIgnoreCase(context.blobStoreType)) {
+                        try {
+                            // Try to get the IPFS CID from the underlying DataStore
+                            if (context.blobStore instanceof org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) {
+                                org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore dsBlobStore = 
+                                    (org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) context.blobStore;
+                                Object dataStore = dsBlobStore.getDataStore();
+                                if (dataStore instanceof org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) {
+                                    org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfsDataStore = 
+                                        (org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) dataStore;
+                                    String ipfsCid = ipfsDataStore.getCID(blobId);
+                                    if (ipfsCid != null) {
+                                        context.cidMappingService.registerMapping(blobId, ipfsCid);
+                                        log.info("📎 Registered CID mapping: {} → {}", blobId, ipfsCid);
+                                    }
+                                }
+                            }
+                        } catch (Exception e) {
+                            log.debug("Could not register CID mapping: {}", e.getMessage());
+                        }
+                    }
+                    
+                } catch (IllegalArgumentException e) {
+                    log.warn("⚠️  Invalid base64 binary data: {}", e.getMessage());
+                    // Continue without binary - don't fail the whole request
+                    blobId = null;
+                } catch (Exception e) {
+                    log.error("❌ Failed to upload binary to BlobStore: {}", e.getMessage());
+                    // Continue without binary - don't fail the whole request
+                    blobId = null;
+                }
+            }
+            
             // Build wallet-scoped content path
             String shardId = WalletPathUtil.getShardId(normalizedWallet);
             String contentRoot = WalletPathUtil.getContentPath(normalizedWallet);
@@ -411,15 +471,23 @@ public class ConsensusApiHandler {
             }
             
             // Queue proposal (waiting for Ethereum confirmation)
-            log.debug("📥 Queuing proposal {} (tx: {}, tier: {}, intentToken: {}), waiting for Ethereum confirmation", 
-                proposalId, ethereumTxHash, tier, intentToken != null ? intentToken : "none");
+            // If we have a blobId, append it to the message for transport through Aeron
+            // Format: message + "\n---BLOB---\nblobId\nmimeType"
+            String messageWithBlob = message != null ? message : "";
+            if (blobId != null) {
+                messageWithBlob = messageWithBlob + "\n---BLOB---\n" + blobId + "\n" + (mimeType != null ? mimeType : "application/octet-stream");
+                log.debug("📎 Binary blob ID embedded in message for Aeron transport: {}", blobId);
+            }
+            
+            log.debug("📥 Queuing proposal {} (tx: {}, tier: {}, intentToken: {}, blobId: {}), waiting for Ethereum confirmation", 
+                proposalId, ethereumTxHash, tier, intentToken != null ? intentToken : "none", blobId != null ? blobId : "none");
             context.proposalQueueManager.queueProposal(
                 proposalId,
                 ethereumTxHash,
                 normalizedWallet,
                 fullPath,
                 contentType != null ? contentType : "page",
-                message != null ? message : "",
+                messageWithBlob,  // Message now includes blob info if present
                 signature, // Already validated - no fallback needed
                 tier,  // Pass payment tier for priority handling
                 intentToken  // Pass intentToken for lazy binary upload (ADR 020)
@@ -909,11 +977,71 @@ public class ConsensusApiHandler {
             
             contentNode.setProperty("jcr:primaryType", "nt:unstructured");
             contentNode.setProperty("contentType", contentType != null ? contentType : "page");
-            contentNode.setProperty("message", message != null ? message : "");
+            
+            // 📦 Extract blob info from message if present (format: message\n---BLOB---\nblobId\nmimeType)
+            // Note: Newlines may be literal \n or escaped \\n depending on JSON encoding
+            String actualMessage = message != null ? message : "";
+            String blobId = null;
+            String mimeType = null;
+            
+            // Check for blob marker (handle both literal newlines and escaped newlines)
+            String blobMarker = "\n---BLOB---\n";
+            String escapedBlobMarker = "\\n---BLOB---\\n";
+            
+            if (actualMessage.contains(blobMarker) || actualMessage.contains(escapedBlobMarker)) {
+                // Normalize to use literal newlines for splitting
+                String normalizedMessage = actualMessage.replace("\\n", "\n");
+                
+                String[] parts = normalizedMessage.split("\n---BLOB---\n", 2);
+                actualMessage = parts[0]; // Original message without blob marker
+                if (parts.length > 1) {
+                    String[] blobParts = parts[1].split("\n", 2);
+                    blobId = blobParts[0].trim();
+                    if (blobParts.length > 1) {
+                        mimeType = blobParts[1].trim();
+                    }
+                    log.info("📦 Extracted blob from message: blobId={}, mimeType={}", blobId, mimeType);
+                }
+            }
+            
+            contentNode.setProperty("message", actualMessage);
             contentNode.setProperty("timestamp", System.currentTimeMillis());
             contentNode.setProperty("wallet", walletAddress);
             contentNode.setProperty("signature", signature); // Already validated - no fallback
             contentNode.setProperty("source", "aeron-replicated");
+            
+            // 📦 Store binary reference as jcr:data (proper Oak BINARY property type)
+            if (blobId != null && !blobId.isEmpty() && context.blobStore != null) {
+                try {
+                    // Create proper Blob object from blob ID using BlobStoreBlob
+                    // This allows Oak to properly handle the binary as a BINARY property
+                    org.apache.jackrabbit.oak.api.Blob blob = 
+                        new org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob(context.blobStore, blobId);
+                    
+                    // Set as proper BINARY type property (not String!)
+                    contentNode.setProperty("jcr:data", blob, org.apache.jackrabbit.oak.api.Type.BINARY);
+                    
+                    if (mimeType != null && !mimeType.isEmpty()) {
+                        contentNode.setProperty("jcr:mimeType", mimeType);
+                    }
+                    
+                    // Also store the raw blob ID for API access (IPFS gateway links, etc.)
+                    String ipfsUri = blobId.startsWith("Qm") || blobId.startsWith("bafy") 
+                        ? "ipfs://" + blobId.split("#")[0]  // Remove length suffix for URI
+                        : blobId;
+                    contentNode.setProperty("jcr:blobId", ipfsUri);
+                    
+                    log.info("✅ Binary stored as BINARY property: jcr:data={}, jcr:mimeType={}, jcr:blobId={}", 
+                        blobId, mimeType, ipfsUri);
+                } catch (Exception e) {
+                    log.error("❌ Failed to create Blob from blobId {}: {}", blobId, e.getMessage());
+                    // Fallback: store as string reference
+                    contentNode.setProperty("jcr:data", blobId);
+                    if (mimeType != null && !mimeType.isEmpty()) {
+                        contentNode.setProperty("jcr:mimeType", mimeType);
+                    }
+                }
+            }
             
             // 🔗 ADR 020: Store intentToken for lazy binary upload
             // If intentToken is present, it means this write is associated with a pending binary upload

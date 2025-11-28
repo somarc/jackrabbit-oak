@@ -130,5 +130,39 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
         }
         return properties != null ? properties.getProperty("ipfsApiEndpoint") : null;
     }
+    
+    /**
+     * Get IPFS CID for an Oak blob ID.
+     * 
+     * This allows coordination between Oak blob IDs (SHA-256 hex) and IPFS CIDs (multihash).
+     * 
+     * @param oakBlobId Oak blob ID (e.g., "ed06f9cb...#22216")
+     * @return IPFS CID (e.g., "Qmf4F3...") or null if not found
+     */
+    public String getCID(String oakBlobId) {
+        if (ipfsBackend == null) {
+            return null;
+        }
+        // Remove size suffix if present
+        String blobIdWithoutSize = oakBlobId.contains("#") 
+            ? oakBlobId.substring(0, oakBlobId.indexOf('#')) 
+            : oakBlobId;
+        
+        org.apache.jackrabbit.core.data.DataIdentifier identifier = 
+            new org.apache.jackrabbit.core.data.DataIdentifier(blobIdWithoutSize);
+        return ipfsBackend.getCID(identifier);
+    }
+    
+    /**
+     * Get all CID mappings.
+     * 
+     * @return Map of Oak blob IDs to IPFS CIDs
+     */
+    public java.util.Map<String, String> getAllCIDMappings() {
+        if (ipfsBackend == null) {
+            return java.util.Collections.emptyMap();
+        }
+        return ipfsBackend.getAllCIDMappings();
+    }
 }
 

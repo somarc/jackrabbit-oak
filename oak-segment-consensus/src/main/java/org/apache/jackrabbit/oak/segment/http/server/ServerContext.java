@@ -70,6 +70,8 @@ public class ServerContext {
     public volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker validatorEarningsTracker;
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager; // ADR 020 lazy binary upload
     public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
+    public volatile org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore; // For eager binary uploads
+    public volatile org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService cidMappingService; // Oak ↔ IPFS CID mapping
     
     // Shared state
     public final Map<String, ClientRegistration> registeredClients;

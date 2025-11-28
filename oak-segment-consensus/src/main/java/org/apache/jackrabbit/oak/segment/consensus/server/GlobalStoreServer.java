@@ -408,8 +408,26 @@ public class GlobalStoreServer {
                 httpServer.getContext().setGCCostEstimator(gcCostEstimator);
             }
             
-            // Set BlobStore type for dashboard display
+            // Set BlobStore type and reference for binary uploads
             httpServer.getContext().blobStoreType = activeBlobStoreType;
+            httpServer.getContext().blobStore = blobStore; // For eager binary uploads
+            
+            // ===========================================================================
+            // Initialize CID Mapping Service (Oak blob ID ↔ IPFS CID coordination)
+            if ("ipfs".equalsIgnoreCase(activeBlobStoreType)) {
+                System.out.println("Initializing CID Mapping Service...");
+                try {
+                    org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService cidMappingService = 
+                        new org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService(storeDir.toPath());
+                    httpServer.getContext().cidMappingService = cidMappingService;
+                    System.out.println("✅ CID Mapping Service initialized");
+                    System.out.println("   - Maps Oak blob IDs ↔ IPFS CIDs");
+                    System.out.println("   - Persistence: " + storeDir.getAbsolutePath() + "/cid-mappings.properties");
+                    System.out.println("   - API: /api/cid/{oakBlobId} → IPFS CID lookup");
+                } catch (Exception e) {
+                    System.err.println("⚠️  Failed to initialize CID Mapping Service: " + e.getMessage());
+                }
+            }
             
             // ===========================================================================
             // Initialize Fragmentation Tracker (for fragmentation metrics and tax)

@@ -47,6 +47,7 @@ public class RequestRouter {
     private final FragmentationApiHandler fragmentationApiHandler;
     private final LeaderConsensusHandler leaderConsensusHandler;
     private final BinaryUploadHandler binaryUploadHandler;
+    private final CidApiHandler cidApiHandler;
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
     
@@ -99,6 +100,9 @@ public class RequestRouter {
         
         // Make session manager available in context for dashboard metrics
         context.setUploadSessionManager(sessionManager);
+        
+        // CID API handler (Oak ↔ IPFS CID mapping)
+        this.cidApiHandler = new CidApiHandler(context);
         
         // Chat handler will be initialized lazily on first use (after selfUrl is set)
         this.chatHandler = null;
@@ -282,6 +286,28 @@ public class RequestRouter {
             
             if ("/api/segments/tars".equals(path) && "GET".equals(method)) {
                 explorerApiHandler.handleTarFiles(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // CID API (Oak blob ID ↔ IPFS CID mapping)
+            if ("/api/cid/stats".equals(path) && "GET".equals(method)) {
+                cidApiHandler.handleStats(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            if (path.startsWith("/api/cid/gateway/") && "GET".equals(method)) {
+                cidApiHandler.handleGatewayRedirect(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            if (path.startsWith("/api/cid/reverse/") && "GET".equals(method)) {
+                cidApiHandler.handleReverseLookup(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            if (path.startsWith("/api/cid/") && "GET".equals(method)) {
+                cidApiHandler.handleGetCid(request, response);
                 baseRequest.setHandled(true);
                 return;
             }
