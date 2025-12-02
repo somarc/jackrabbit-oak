@@ -21,57 +21,66 @@ package org.apache.jackrabbit.oak.run.luke;
 import org.apache.jackrabbit.oak.run.commons.Command;
 
 /**
- * Help command for oak-run-luke.
+ * Help command showing available LUKE commands.
  */
 public class LukeHelpCommand implements Command {
 
     @Override
-    public void execute(String... args) {
-        System.out.println("Apache Jackrabbit Oak - LUKE Integration");
-        System.out.println("=========================================");
+    public void execute(String... args) throws Exception {
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+        System.out.println("LUKE - Lucene Index Explorer for Apache Jackrabbit Oak");
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
         System.out.println();
-        System.out.println("Provides LUKE-based index inspection and analysis capabilities");
-        System.out.println("for Lucene indexes stored in Oak repositories.");
+        System.out.println("Answers the question: 'What's in my Lucene index? What's taking up space?'");
         System.out.println();
-        System.out.println("Available commands:");
+        System.out.println("AVAILABLE COMMANDS:");
         System.out.println();
-        System.out.println("  help       - Display this help message");
-        System.out.println("  list       - List all local index directories in IndexCopier cache");
-        System.out.println("  inspect    - Inspect a specific index and display statistics");
-        System.out.println("  gui        - Launch LUKE GUI for interactive index inspection");
+        System.out.println("  gui       Launch interactive GUI browser (like oak-run explore)");
+        System.out.println("            java -jar oak-run-luke.jar gui [path-to-index]");
         System.out.println();
-        System.out.println("Usage:");
+        System.out.println("  inspect   Analyze a Lucene index from command line");
+        System.out.println("            java -jar oak-run-luke.jar inspect /path/to/index [options]");
         System.out.println();
-        System.out.println("  Standalone CLI (requires running Oak repository):");
-        System.out.println("    - Not recommended for production - use OSGi bundle instead");
-        System.out.println("    - Requires direct filesystem access to segment store or index cache");
+        System.out.println("  list      Find all Lucene indexes in a directory");
+        System.out.println("            java -jar oak-run-luke.jar list /path/to/repository");
         System.out.println();
-        System.out.println("  OSGi Bundle Deployment (recommended for AEM):");
-        System.out.println("    1. Deploy oak-luke-bundle-1.22.24-SNAPSHOT.jar to AEM");
-        System.out.println("    2. Access via JMX Console:");
-        System.out.println("       http://localhost:4502/system/console/jmx");
-        System.out.println("    3. Navigate to: org.apache.jackrabbit.oak:name=LukeIndexStats");
+        System.out.println("  help      Show this help message");
         System.out.println();
-        System.out.println("Examples (JMX Operations):");
+        System.out.println("EXAMPLES:");
         System.out.println();
-        System.out.println("  # List all local index directories");
-        System.out.println("  getLocalIndexDirectories()");
+        System.out.println("  # Launch GUI");
+        System.out.println("  java -jar oak-run-luke.jar gui");
         System.out.println();
-        System.out.println("  # Inspect damAssetLucene index");
-        System.out.println("  getLukeIndexStats(\"/oak:index/damAssetLucene\")");
+        System.out.println("  # Find indexes in AEM");
+        System.out.println("  java -jar oak-run-luke.jar list crx-quickstart/repository/index/");
         System.out.println();
-        System.out.println("  # Get field information (100 fields max)");
-        System.out.println("  getLukeFieldInfo(\"/oak:index/damAssetLucene\", 100)");
+        System.out.println("  # Quick overview of an index");
+        System.out.println("  java -jar oak-run-luke.jar inspect crx-quickstart/repository/index/damAssetLucene-*/data");
         System.out.println();
-        System.out.println("  # Analyze specific field terms");
-        System.out.println("  getLukeTermStats(\"/oak:index/damAssetLucene\", \"jcr:content/metadata/dc:title\", 50)");
+        System.out.println("  # Health check");
+        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --health");
         System.out.println();
-        System.out.println("  # Validate index integrity");
-        System.out.println("  validateLocalIndex(\"/oak:index/damAssetLucene\")");
+        System.out.println("  # Analyze :fulltext field");
+        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --field :fulltext --top-terms 100");
         System.out.println();
-        System.out.println("For offline analysis of segment stores:");
-        System.out.println("  Use oak-run console mode with LUKE functionality (future enhancement)");
+        System.out.println("  # View segment info");
+        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --segments");
         System.out.println();
+        System.out.println("  # Sample documents");
+        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --sample 5");
+        System.out.println();
+        System.out.println("INSPECT OPTIONS:");
+        System.out.println("  --health        Show index health report");
+        System.out.println("  --segments      Show segment information");
+        System.out.println("  --fields        List all fields with term counts");
+        System.out.println("  --field <name>  Analyze specific field");
+        System.out.println("  --top-terms N   Show top N terms (default: 20)");
+        System.out.println("  --doc <id>      Show specific document by ID");
+        System.out.println("  --sample N      Sample N random documents");
+        System.out.println();
+        System.out.println("For detailed help on a specific command:");
+        System.out.println("  java -jar oak-run-luke.jar <command> --help");
+        System.out.println();
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
     }
 }
-

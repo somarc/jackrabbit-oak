@@ -18,6 +18,7 @@
  */
 package org.apache.jackrabbit.oak.plugins.index.lucene.luke.osgi;
 
+import java.io.File;
 import java.lang.management.ManagementFactory;
 
 import javax.management.MBeanServer;
@@ -31,16 +32,28 @@ import org.apache.felix.scr.annotations.ReferenceCardinality;
 import org.apache.felix.scr.annotations.ReferencePolicy;
 import org.apache.jackrabbit.oak.plugins.index.lucene.IndexCopier;
 import org.apache.jackrabbit.oak.plugins.index.lucene.IndexTracker;
-import org.apache.jackrabbit.oak.plugins.index.lucene.luke.LukeIndexStatsMBean;
 import org.apache.jackrabbit.oak.plugins.index.lucene.luke.LukeIndexStatsMBeanImplSimple;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
-
 /**
- * OSGi Component that registers LUKE Index Statistics MBean.
- * Compatible with AEM 6.5.x using Felix SCR annotations.
+ * OSGi Component that registers the LUKE Index Statistics MBean.
+ * 
+ * <p>Provides LUKE-style index inspection capabilities via JMX, answering:</p>
+ * <ul>
+ *   <li>What fields are in my index?</li>
+ *   <li>What's consuming the most space?</li>
+ *   <li>Is my index healthy?</li>
+ * </ul>
+ * 
+ * <p>Compatible with AEM 6.5.x (Oak 1.22.x) using Felix SCR annotations.</p>
+ * 
+ * <h2>For Fulltext Backup</h2>
+ * <p>Use oak-run tika commands (can run while AEM is online):</p>
+ * <pre>
+ * oak-run tika --generate ...
+ * oak-run tika --populate ...
+ * </pre>
  */
 @Component(
     immediate = true,
@@ -53,12 +66,20 @@ public class LukeIndexStatsService {
     private static final Logger log = LoggerFactory.getLogger(LukeIndexStatsService.class);
     private static final String MBEAN_NAME = "org.apache.jackrabbit.oak:name=LukeIndexStats,type=LukeIndexStats";
     
+    /**
+     * IndexTracker is optional - not available in Oak 1.22.x via OSGi.
+     * We use direct filesystem access instead.
+     */
     @Reference(
         cardinality = ReferenceCardinality.OPTIONAL_UNARY,
         policy = ReferencePolicy.DYNAMIC
     )
     private volatile IndexTracker indexTracker;
     
+    /**
+     * IndexCopier provides the local index cache path.
+     * Optional - falls back to repository.home if not available.
+     */
     @Reference(
         cardinality = ReferenceCardinality.OPTIONAL_UNARY,
         policy = ReferencePolicy.DYNAMIC
@@ -75,14 +96,18 @@ public class LukeIndexStatsService {
             log.info("Activating Oak LUKE Index Statistics Service");
             
             if (indexTracker == null) {
-                log.warn("IndexTracker service not available - will use IndexCopier and filesystem only");
+                log.info("IndexTracker not available - using filesystem-only mode (normal for Oak 1.22.x)");
+            }
+            
+            if (indexCopier == null) {
+                log.info("IndexCopier not available - will scan repository/index directory");
             }
             
             // Determine repository home
             File repositoryHome = new File(System.getProperty("repository.home", "crx-quickstart"));
             log.info("Using repository home: {}", repositoryHome.getAbsolutePath());
             
-            // Create the simplified MBean implementation (Oak 1.22.x compatible)
+            // Create the MBean implementation
             lukeMBean = new LukeIndexStatsMBeanImplSimple(indexTracker, indexCopier, repositoryHome);
             
             // Register with JMX
@@ -95,8 +120,9 @@ public class LukeIndexStatsService {
             }
             
             mbeanServer.registerMBean(lukeMBean, mbeanObjectName);
-            log.info("Successfully registered LUKE Index Statistics MBean at: {}", MBEAN_NAME);
-            log.info("Access via JMX Console: http://localhost:4502/system/console/jmx");
+            log.info("✅ LUKE Index Statistics MBean registered: {}", MBEAN_NAME);
+            log.info("   Access via: http://localhost:4502/system/console/jmx");
+            log.info("   Search for: LukeIndexStats");
             
         } catch (Exception e) {
             log.error("Failed to register LUKE Index Statistics MBean", e);
@@ -124,46 +150,29 @@ public class LukeIndexStatsService {
         }
     }
     
-    /**
-     * Bind method for IndexTracker (dynamic reference)
-     */
+    // Dynamic bind/unbind for IndexTracker
     protected void bindIndexTracker(IndexTracker indexTracker) {
         this.indexTracker = indexTracker;
-        log.info("IndexTracker service bound to LUKE Index Statistics");
+        log.info("IndexTracker service bound");
     }
     
-    /**
-     * Unbind method for IndexTracker (dynamic reference)
-     */
     protected void unbindIndexTracker(IndexTracker indexTracker) {
         if (this.indexTracker == indexTracker) {
             this.indexTracker = null;
-            log.warn("IndexTracker service unbound from LUKE Index Statistics");
+            log.info("IndexTracker service unbound");
         }
     }
     
-    /**
-     * Bind method for IndexCopier (dynamic reference)
-     */
+    // Dynamic bind/unbind for IndexCopier
     protected void bindIndexCopier(IndexCopier indexCopier) {
         this.indexCopier = indexCopier;
-        log.info("IndexCopier service bound to LUKE Index Statistics");
-        
-        // Update the MBean if already created
-        if (lukeMBean != null) {
-            log.info("Updating LUKE MBean with new IndexCopier reference");
-            // MBean will use the new indexCopier on next operation
-        }
+        log.info("IndexCopier service bound");
     }
     
-    /**
-     * Unbind method for IndexCopier (dynamic reference)
-     */
     protected void unbindIndexCopier(IndexCopier indexCopier) {
         if (this.indexCopier == indexCopier) {
             this.indexCopier = null;
-            log.warn("IndexCopier service unbound from LUKE Index Statistics");
+            log.info("IndexCopier service unbound");
         }
     }
 }
-

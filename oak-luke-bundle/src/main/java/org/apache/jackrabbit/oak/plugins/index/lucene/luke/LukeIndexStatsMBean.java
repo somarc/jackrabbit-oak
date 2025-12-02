@@ -26,110 +26,234 @@ import org.apache.jackrabbit.oak.api.jmx.Description;
 import org.apache.jackrabbit.oak.api.jmx.Name;
 
 /**
- * MBean interface for LUKE-based index inspection and statistics.
- * Extends the standard LuceneIndexMBean with LUKE-specific capabilities
- * for deep index analysis and inspection.
+ * JMX MBean interface for LUKE-style Lucene index inspection.
+ * 
+ * <h2>Purpose</h2>
+ * Answers the critical question: "I have an enormous Lucene index - what's in it? What's taking up space?"
+ * 
+ * <h2>Design Philosophy</h2>
+ * <ul>
+ *   <li><b>Read-only</b>: Never modifies indexes or repository</li>
+ *   <li><b>Production-safe</b>: All operations are non-blocking with documented O(n) costs</li>
+ *   <li><b>LUKE-inspired</b>: Brings LUKE's inspection power to JMX</li>
+ * </ul>
+ * 
+ * <h2>Performance Warnings</h2>
+ * Operations marked with ⚠️ are expensive. For 100GB+ indexes:
+ * <ul>
+ *   <li>Use field-specific queries instead of scanning all fields</li>
+ *   <li>Consider running during maintenance windows</li>
+ *   <li>Use the standalone JAR for offline analysis</li>
+ * </ul>
+ * 
+ * <h2>For Fulltext Backup</h2>
+ * Use oak-run tika commands for fulltext backup (can run while AEM is online):
+ * <pre>
+ * oak-run tika --generate ...
+ * oak-run tika --populate ...
+ * </pre>
+ * 
+ * @see <a href="https://github.com/DmitryKey/luke">LUKE - Lucene Index Toolbox</a>
  */
 public interface LukeIndexStatsMBean {
     String TYPE = "LukeIndexStats";
 
-    @Description("Lists all available local index directories from the IndexCopier cache")
+    // ============================================================
+    // INDEX DISCOVERY & NAVIGATION
+    // ============================================================
+
+    @Description("Lists all local index directories from the IndexCopier cache. " +
+            "Shows index path, local filesystem path, size, and validity status. " +
+            "Fast operation: O(1).")
     TabularData getLocalIndexDirectories();
 
-    @Description("Gets detailed index statistics using LUKE for a specific index path")
-    TabularData getLukeIndexStats(
-            @Name("indexPath")
-            @Description("Index path to inspect (e.g., /oak:index/damAssetLucene)")
-            String indexPath
-    ) throws IOException;
-
-    @Description("Gets detailed field information for a specific index using LUKE")
-    String[] getLukeFieldInfo(
-            @Name("indexPath")
-            @Description("Index path to inspect")
-            String indexPath,
-            @Name("maxFields")
-            @Description("Maximum number of fields to return (default: 100)")
-            int maxFields
-    ) throws IOException;
-
-    @Description("Gets term statistics for a specific field in an index using LUKE")
-    String[] getLukeTermStats(
-            @Name("indexPath")
-            @Description("Index path to inspect")
-            String indexPath,
-            @Name("fieldName")
-            @Description("Field name to analyze")
-            String fieldName,
-            @Name("maxTerms")
-            @Description("Maximum number of terms to return (default: 100)")
-            int maxTerms
-    ) throws IOException;
-
-    @Description("Gets document count and other basic statistics for an index")
-    String getLukeBasicStats(
-            @Name("indexPath")
-            @Description("Index path to inspect")
-            String indexPath
-    ) throws IOException;
-
-    @Description("Launches LUKE GUI for interactive index inspection")
-    String launchLukeGUI(
-            @Name("indexPath")
-            @Description("Index path to inspect (empty for selection dialog)")
-            String indexPath
-    ) throws IOException;
-
-    @Description("Gets the local filesystem path for a given index path")
+    @Description("Gets the local filesystem path for a given Oak index path. " +
+            "Fast operation: O(1).")
     String getLocalIndexPath(
             @Name("indexPath")
             @Description("Repository index path (e.g., /oak:index/damAssetLucene)")
             String indexPath
     );
 
-    @Description("Validates that a local index directory is readable and contains valid Lucene index files")
+    @Description("Validates that a local index directory exists and contains valid Lucene segments. " +
+            "Fast operation: O(1).")
     String validateLocalIndex(
             @Name("indexPath")
             @Description("Index path to validate")
             String indexPath
     ) throws IOException;
 
-    @Description("⚠️ EXPENSIVE: Analyzes which fields consume the most space (by term count). " +
-            "Runtime: 10s-60min depending on index size. For 100GB+ indexes, use standalone JAR during maintenance windows.")
-    String[] getFieldSizeAnalysis(
+    // ============================================================
+    // BASIC INDEX STATISTICS
+    // ============================================================
+
+    @Description("Gets essential index metrics: document count, deletions, field count, and size. " +
+            "Fast operation: O(1). Start here for quick overview.")
+    String getLukeBasicStats(
             @Name("indexPath")
-            @Description("Index path to analyze")
-            String indexPath,
-            @Name("maxFields")
-            @Description("Maximum number of fields (recommended: 20 for large indexes)")
-            int maxFields
+            @Description("Index path to inspect (e.g., /oak:index/damAssetLucene)")
+            String indexPath
     ) throws IOException;
 
-    @Description("⚠️ VERY EXPENSIVE: Gets top terms by document frequency. " +
-            "Runtime: 1min-2hrs depending on index size. ALWAYS specify fieldName - never use empty string for 100GB+ indexes!")
-    String[] getTopTermsByDocFreq(
-            @Name("indexPath")
-            @Description("Index path to analyze")
-            String indexPath,
-            @Name("fieldName")
-            @Description("⚠️ REQUIRED for large indexes! Specific field name (e.g., 'jcr:primaryType'). Empty = ALL fields (very slow!)")
-            String fieldName,
-            @Name("maxTerms")
-            @Description("Maximum number of terms (recommended: 50-100)")
-            int maxTerms
-    ) throws IOException;
-
-    @Description("⚠️ EXPENSIVE: Comprehensive index analysis including top 10 largest fields. " +
-            "Runtime: 10s-60min. For 100GB+ indexes, use standalone JAR during maintenance windows.")
+    @Description("⚠️ EXPENSIVE: Comprehensive index composition analysis. " +
+            "Shows document stats, field stats, and TOP 10 largest fields by term count. " +
+            "Runtime: 10s-60min for 100GB+ indexes (counts all terms).")
     String getIndexCompositionStats(
             @Name("indexPath")
             @Description("Index path to analyze")
             String indexPath
     ) throws IOException;
 
-    @Description("Get fulltext-specific statistics for an index. " +
-            "Shows stored fulltext size, estimated backup time, and recommendations. " +
-            "Fast operation: < 5 seconds.")
+    // ============================================================
+    // FIELD ANALYSIS
+    // ============================================================
+
+    @Description("Gets field information including term counts, indexed/stored flags, and types. " +
+            "⚠️ Term counting is expensive for large indexes. Runtime: 5s-30min.")
+    String[] getLukeFieldInfo(
+            @Name("indexPath")
+            @Description("Index path to inspect")
+            String indexPath,
+            @Name("maxFields")
+            @Description("Maximum number of fields to return (recommended: 50-100)")
+            int maxFields
+    ) throws IOException;
+
+    @Description("⚠️ EXPENSIVE: Ranks fields by term count with percentage of total. " +
+            "Answers: 'Which fields dominate this index?' " +
+            "Runtime: 10s-60min for 100GB+ indexes.")
+    String[] getFieldSizeAnalysis(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath,
+            @Name("maxFields")
+            @Description("Maximum fields to display (recommended: 20)")
+            int maxFields
+    ) throws IOException;
+
+    @Description("Gets detailed field flags showing indexed/stored/vectored/norms status. " +
+            "Answers: 'Is this field stored? Does it have term vectors?' " +
+            "Fast operation: O(fields).")
+    String[] getFieldFlags(
+            @Name("indexPath")
+            @Description("Index path to inspect")
+            String indexPath
+    ) throws IOException;
+
+    // ============================================================
+    // TERM ANALYSIS
+    // ============================================================
+
+    @Description("Gets term statistics for a specific field: term text, doc frequency, total frequency. " +
+            "Use for understanding what terms exist in a field. " +
+            "Fast operation for single field: O(terms in field).")
+    String[] getLukeTermStats(
+            @Name("indexPath")
+            @Description("Index path to inspect")
+            String indexPath,
+            @Name("fieldName")
+            @Description("Field name to analyze (e.g., 'jcr:primaryType', ':fulltext')")
+            String fieldName,
+            @Name("maxTerms")
+            @Description("Maximum terms to return (recommended: 100-500)")
+            int maxTerms
+    ) throws IOException;
+
+    @Description("⚠️ EXPENSIVE: Finds terms with highest document frequency. " +
+            "Answers: 'What are the most common values in this index?' " +
+            "⚠️ ALWAYS specify fieldName for large indexes! " +
+            "Runtime: 1min-2hrs for all fields.")
+    String[] getTopTermsByDocFreq(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath,
+            @Name("fieldName")
+            @Description("⚠️ REQUIRED for large indexes! Field name (empty = ALL fields - very slow!)")
+            String fieldName,
+            @Name("maxTerms")
+            @Description("Maximum terms to return (recommended: 50-100)")
+            int maxTerms
+    ) throws IOException;
+
+    @Description("Analyzes term frequency distribution for a field (Zipf-style analysis). " +
+            "Shows long-tail vs short-tail distribution. " +
+            "Answers: 'Are my terms evenly distributed or highly skewed?' " +
+            "Runtime: O(unique terms in field).")
+    String[] getTermDistribution(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath,
+            @Name("fieldName")
+            @Description("Field to analyze")
+            String fieldName,
+            @Name("buckets")
+            @Description("Number of histogram buckets (recommended: 20)")
+            int buckets
+    ) throws IOException;
+
+    // ============================================================
+    // SEGMENT ANALYSIS
+    // ============================================================
+
+    @Description("Gets detailed segment information: count, sizes, deletions per segment. " +
+            "Answers: 'Is my index fragmented? Are there many small segments?' " +
+            "Fast operation: O(segments).")
+    String[] getSegmentInfo(
+            @Name("indexPath")
+            @Description("Index path to inspect")
+            String indexPath
+    ) throws IOException;
+
+    // ============================================================
+    // INDEX HEALTH & DIAGNOSTICS
+    // ============================================================
+
+    @Description("Comprehensive index health report with actionable recommendations. " +
+            "Checks: deletion ratio, segment count, field balance, size anomalies. " +
+            "Fast operation: O(segments + fields).")
+    String getIndexHealthReport(
+            @Name("indexPath")
+            @Description("Index path to inspect")
+            String indexPath
+    ) throws IOException;
+
+    // ============================================================
+    // DOCUMENT SAMPLING
+    // ============================================================
+
+    @Description("Samples random documents showing stored field values. " +
+            "Answers: 'What does an actual document look like in this index?' " +
+            "Fast operation: O(sampleSize).")
+    String[] sampleDocuments(
+            @Name("indexPath")
+            @Description("Index path to inspect")
+            String indexPath,
+            @Name("sampleSize")
+            @Description("Number of documents to sample (recommended: 5-10)")
+            int sampleSize,
+            @Name("showFields")
+            @Description("Comma-separated field names to show (empty = all stored fields)")
+            String showFields
+    ) throws IOException;
+
+    @Description("Gets stored field values for a specific document by doc ID. " +
+            "Fast operation: O(1).")
+    String getDocument(
+            @Name("indexPath")
+            @Description("Index path to inspect")
+            String indexPath,
+            @Name("docId")
+            @Description("Lucene document ID (0-based)")
+            int docId
+    ) throws IOException;
+
+    // ============================================================
+    // FULLTEXT-SPECIFIC ANALYSIS
+    // ============================================================
+
+    @Description("Fulltext-specific analysis: term count, estimated size, backup recommendations. " +
+            "Answers: 'How big is my fulltext data? Should I use pre-extracted cache?' " +
+            "Fast operation: O(1) - uses cached stats.")
     String getFulltextStats(
             @Name("indexPath")
             @Description("Index path to analyze (e.g., /oak:index/damAssetLucene)")
@@ -137,37 +261,14 @@ public interface LukeIndexStatsMBean {
     ) throws IOException;
 
     // ============================================================
-    // FULLTEXT BACKUP OPERATIONS (Phase 2)
+    // GUI (PLACEHOLDER)
     // ============================================================
 
-    @Description("⚠️ LONG RUNNING: Start background fulltext backup job. " +
-            "Extracts stored :fulltext from Lucene index and saves to filesystem. " +
-            "Compatible with oak-run tika --populate format. " +
-            "Runtime: 10-60 minutes for 100GB+ indexes. Monitor with getFulltextBackupProgress().")
-    String startFulltextBackup(
-            @Name("storePath")
-            @Description("Local filesystem path to store extracted text (e.g., /opt/aem/fulltext-store)")
-            String storePath,
+    @Description("Placeholder for LUKE GUI launch. JMX MBean cannot launch GUI. " +
+            "Use standalone JAR for GUI access.")
+    String launchLukeGUI(
             @Name("indexPath")
-            @Description("Index path to backup (e.g., /oak:index/damAssetLucene)")
+            @Description("Ignored - GUI not supported in JMX mode")
             String indexPath
     ) throws IOException;
-
-    @Description("Get progress of running fulltext backup job.")
-    String getFulltextBackupProgress(
-            @Name("jobId")
-            @Description("Job ID returned from startFulltextBackup")
-            String jobId
-    ) throws IOException;
-
-    @Description("Cancel a running fulltext backup job.")
-    String cancelFulltextBackup(
-            @Name("jobId")
-            @Description("Job ID to cancel")
-            String jobId
-    ) throws IOException;
-
-    @Description("List all fulltext backup jobs (running and completed).")
-    String[] listFulltextBackupJobs() throws IOException;
 }
-
