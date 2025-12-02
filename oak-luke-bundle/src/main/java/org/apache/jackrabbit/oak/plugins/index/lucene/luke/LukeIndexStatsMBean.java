@@ -96,5 +96,38 @@ public interface LukeIndexStatsMBean {
 
     @Description("Gets information about all indexed paths and their local cache status")
     TabularData getIndexCacheStatus();
+
+    @Description("⚠️ EXPENSIVE: Analyzes which fields consume the most space (by term count). " +
+            "Runtime: 10s-60min depending on index size. For 100GB+ indexes, use standalone JAR during maintenance windows.")
+    String[] getFieldSizeAnalysis(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath,
+            @Name("maxFields")
+            @Description("Maximum number of fields (recommended: 20 for large indexes)")
+            int maxFields
+    ) throws IOException;
+
+    @Description("⚠️ VERY EXPENSIVE: Gets top terms by document frequency. " +
+            "Runtime: 1min-2hrs depending on index size. ALWAYS specify fieldName - never use empty string for 100GB+ indexes!")
+    String[] getTopTermsByDocFreq(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath,
+            @Name("fieldName")
+            @Description("⚠️ REQUIRED for large indexes! Specific field name (e.g., 'jcr:primaryType'). Empty = ALL fields (very slow!)")
+            String fieldName,
+            @Name("maxTerms")
+            @Description("Maximum number of terms (recommended: 50-100)")
+            int maxTerms
+    ) throws IOException;
+
+    @Description("⚠️ EXPENSIVE: Comprehensive index analysis including top 10 largest fields. " +
+            "Runtime: 10s-60min. For 100GB+ indexes, use standalone JAR during maintenance windows.")
+    String getIndexCompositionStats(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath
+    ) throws IOException;
 }
 

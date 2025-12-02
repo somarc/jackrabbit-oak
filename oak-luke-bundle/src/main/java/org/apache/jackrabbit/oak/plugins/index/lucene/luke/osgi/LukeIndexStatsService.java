@@ -32,9 +32,11 @@ import org.apache.felix.scr.annotations.ReferencePolicy;
 import org.apache.jackrabbit.oak.plugins.index.lucene.IndexCopier;
 import org.apache.jackrabbit.oak.plugins.index.lucene.IndexTracker;
 import org.apache.jackrabbit.oak.plugins.index.lucene.luke.LukeIndexStatsMBean;
-import org.apache.jackrabbit.oak.plugins.index.lucene.luke.LukeIndexStatsMBeanImpl;
+import org.apache.jackrabbit.oak.plugins.index.lucene.luke.LukeIndexStatsMBeanImplSimple;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.File;
 
 /**
  * OSGi Component that registers LUKE Index Statistics MBean.
@@ -52,10 +54,10 @@ public class LukeIndexStatsService {
     private static final String MBEAN_NAME = "org.apache.jackrabbit.oak:name=LukeIndexStats,type=LukeIndexStats";
     
     @Reference(
-        cardinality = ReferenceCardinality.MANDATORY_UNARY,
-        policy = ReferencePolicy.STATIC
+        cardinality = ReferenceCardinality.OPTIONAL_UNARY,
+        policy = ReferencePolicy.DYNAMIC
     )
-    private IndexTracker indexTracker;
+    private volatile IndexTracker indexTracker;
     
     @Reference(
         cardinality = ReferenceCardinality.OPTIONAL_UNARY,
@@ -63,7 +65,7 @@ public class LukeIndexStatsService {
     )
     private volatile IndexCopier indexCopier;
     
-    private LukeIndexStatsMBeanImpl lukeMBean;
+    private LukeIndexStatsMBeanImplSimple lukeMBean;
     private ObjectName mbeanObjectName;
     private MBeanServer mbeanServer;
     
@@ -72,8 +74,16 @@ public class LukeIndexStatsService {
         try {
             log.info("Activating Oak LUKE Index Statistics Service");
             
-            // Create the MBean implementation
-            lukeMBean = new LukeIndexStatsMBeanImpl(indexTracker, indexCopier);
+            if (indexTracker == null) {
+                log.warn("IndexTracker service not available - will use IndexCopier and filesystem only");
+            }
+            
+            // Determine repository home
+            File repositoryHome = new File(System.getProperty("repository.home", "crx-quickstart"));
+            log.info("Using repository home: {}", repositoryHome.getAbsolutePath());
+            
+            // Create the simplified MBean implementation (Oak 1.22.x compatible)
+            lukeMBean = new LukeIndexStatsMBeanImplSimple(indexTracker, indexCopier, repositoryHome);
             
             // Register with JMX
             mbeanServer = ManagementFactory.getPlatformMBeanServer();
@@ -111,6 +121,24 @@ public class LukeIndexStatsService {
             
         } catch (Exception e) {
             log.error("Failed to unregister LUKE Index Statistics MBean", e);
+        }
+    }
+    
+    /**
+     * Bind method for IndexTracker (dynamic reference)
+     */
+    protected void bindIndexTracker(IndexTracker indexTracker) {
+        this.indexTracker = indexTracker;
+        log.info("IndexTracker service bound to LUKE Index Statistics");
+    }
+    
+    /**
+     * Unbind method for IndexTracker (dynamic reference)
+     */
+    protected void unbindIndexTracker(IndexTracker indexTracker) {
+        if (this.indexTracker == indexTracker) {
+            this.indexTracker = null;
+            log.warn("IndexTracker service unbound from LUKE Index Statistics");
         }
     }
     
