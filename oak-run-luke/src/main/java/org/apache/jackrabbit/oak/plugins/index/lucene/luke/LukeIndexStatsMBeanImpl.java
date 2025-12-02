@@ -43,6 +43,7 @@ import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.MultiFields;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.BytesRef;
@@ -222,7 +223,7 @@ public class LukeIndexStatsMBeanImpl extends AnnotatedStandardMBean implements L
 
             Terms terms = MultiFields.getTerms(reader, fieldName);
             if (terms != null) {
-                TermsEnum termsEnum = terms.iterator();
+                TermsEnum termsEnum = terms.iterator(null);
                 BytesRef term;
                 int count = 0;
                 while ((term = termsEnum.next()) != null && count++ < maxTerms) {
@@ -320,31 +321,46 @@ public class LukeIndexStatsMBeanImpl extends AnnotatedStandardMBean implements L
 
     @Nullable
     private File getLocalDirectoryForIndex(String indexPath) {
-        if (indexCopier == null) {
-            log.warn("IndexCopier not available");
-            return null;
-        }
-
         LuceneIndexNode indexNode = null;
         try {
             indexNode = indexTracker.acquireIndexNode(indexPath);
             if (indexNode != null) {
-                // Try to get the local directory from IndexCopier
-                File indexRootDir = indexCopier.getIndexRootDirectory().getIndexDir();
-                // Construct expected path based on index path
-                String sanitizedPath = indexPath.replace("/", "_").replace(":", "_");
-                File candidateDir = new File(indexRootDir, sanitizedPath);
-                if (candidateDir.exists()) {
-                    return candidateDir;
+                // Get the searcher and extract directory path from it
+                IndexSearcher searcher = indexNode.getSearcher();
+                if (searcher != null && searcher.getIndexReader() != null) {
+                    IndexReader reader = searcher.getIndexReader();
+                    
+                    // Try to extract filesystem path from the reader
+                    // The directory path is often embedded in the reader's toString()
+                    String readerStr = reader.toString();
+                    if (readerStr.contains("path=")) {
+                        // Extract path from string like "...path=/some/path..."
+                        int pathIdx = readerStr.indexOf("path=");
+                        if (pathIdx > 0) {
+                            String pathPart = readerStr.substring(pathIdx + 5);
+                            int endIdx = pathPart.indexOf(' ');
+                            if (endIdx > 0) {
+                                pathPart = pathPart.substring(0, endIdx);
+                            }
+                            File dir = new File(pathPart.trim());
+                            if (dir.exists()) {
+                                return dir;
+                            }
+                        }
+                    }
                 }
                 
-                // Fallback: scan for directories
-                File[] dirs = indexRootDir.listFiles(File::isDirectory);
-                if (dirs != null) {
-                    for (File dir : dirs) {
-                        if (dir.getName().contains(sanitizedPath)) {
-                            return dir;
+                // Fallback: Use IndexCopier if available
+                if (indexCopier != null) {
+                    try {
+                        org.apache.jackrabbit.oak.plugins.index.lucene.LuceneIndexDefinition definition = 
+                            indexNode.getDefinition();
+                        File indexDir = indexCopier.getIndexDir(definition, indexPath, ":index");
+                        if (indexDir != null && indexDir.exists()) {
+                            return indexDir;
                         }
+                    } catch (Exception e) {
+                        log.debug("Could not get index directory via IndexCopier", e);
                     }
                 }
             }
