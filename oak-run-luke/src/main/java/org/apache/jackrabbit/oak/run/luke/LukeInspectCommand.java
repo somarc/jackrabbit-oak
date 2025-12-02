@@ -57,6 +57,15 @@ public class LukeInspectCommand implements Command {
         OptionSpec<?> segmentsOpt = parser.accepts("segments", "Show segment information");
         OptionSpec<?> healthOpt = parser.accepts("health", "Show health report");
         OptionSpec<?> fieldsOpt = parser.accepts("fields", "List all fields");
+        
+        // NEW: Actionable insight options
+        OptionSpec<?> insightsOpt = parser.accepts("insights", "⭐ Actionable optimization insights with suggestions");
+        OptionSpec<Integer> contentDistOpt = parser.accepts("content-dist", "Content distribution by path (depth)")
+                .withRequiredArg().ofType(Integer.class).defaultsTo(2);
+        OptionSpec<?> cardinalityOpt = parser.accepts("cardinality", "Field cardinality analysis");
+        OptionSpec<String> duplicatesOpt = parser.accepts("duplicates", "Detect duplicate values in field")
+                .withRequiredArg().ofType(String.class);
+        
         OptionSpec<?> helpOpt = parser.accepts("help", "Show help").forHelp();
         OptionSpec<File> nonOptions = parser.nonOptions("index-path").ofType(File.class);
         
@@ -91,7 +100,15 @@ public class LukeInspectCommand implements Command {
         DirectoryReader reader = DirectoryReader.open(dir);
         
         try {
-            if (options.has(healthOpt)) {
+            if (options.has(insightsOpt)) {
+                showInsights(reader, dir, actualIndexDir, 15);
+            } else if (options.has(contentDistOpt) && !options.valuesOf(contentDistOpt).isEmpty()) {
+                showContentDistribution(reader, options.valueOf(contentDistOpt));
+            } else if (options.has(cardinalityOpt)) {
+                showCardinality(reader, 30);
+            } else if (options.has(duplicatesOpt)) {
+                showDuplicates(reader, options.valueOf(duplicatesOpt), 20);
+            } else if (options.has(healthOpt)) {
                 showHealthReport(reader, dir, actualIndexDir);
             } else if (options.has(segmentsOpt)) {
                 showSegmentInfo(dir);
@@ -120,21 +137,35 @@ public class LukeInspectCommand implements Command {
         System.out.println("Usage:");
         System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index [options]");
         System.out.println();
+        System.out.println("ACTIONABLE INSIGHTS (Recommended):");
+        System.out.println("  --insights           ⭐ Actionable optimization suggestions with table output");
+        System.out.println("  --content-dist N     Content distribution by path at depth N (default: 2)");
+        System.out.println("  --cardinality        Field cardinality analysis (find memory hogs)");
+        System.out.println("  --duplicates FIELD   Detect duplicate/variant values in a field");
+        System.out.println();
+        System.out.println("ANALYSIS OPTIONS:");
+        System.out.println("  --health             Health report with score and recommendations");
+        System.out.println("  --segments           Segment analysis with deletion ratios");
+        System.out.println("  --fields             List all fields with term counts");
+        System.out.println("  --field FIELD        Analyze specific field (use with --top-terms)");
+        System.out.println("  --top-terms N        Number of top terms to show (default: 20)");
+        System.out.println();
+        System.out.println("DOCUMENT INSPECTION:");
+        System.out.println("  --doc ID             Show specific document by ID");
+        System.out.println("  --sample N           Sample N random documents");
+        System.out.println();
         System.out.println("Examples:");
-        System.out.println("  # Basic overview");
-        System.out.println("  java -jar oak-run-luke.jar inspect crx-quickstart/repository/index/damAssetLucene-*/data");
+        System.out.println("  # ⭐ Get actionable insights (START HERE!)");
+        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --insights");
         System.out.println();
-        System.out.println("  # Health check");
-        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --health");
+        System.out.println("  # See what content is indexed");
+        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --content-dist 3");
         System.out.println();
-        System.out.println("  # Show all fields");
-        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --fields");
+        System.out.println("  # Find fields with too many unique values");
+        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --cardinality");
         System.out.println();
-        System.out.println("  # Analyze specific field");
-        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --field :fulltext --top-terms 50");
-        System.out.println();
-        System.out.println("  # Sample documents");
-        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --sample 5");
+        System.out.println("  # Find duplicate tag values (e.g., 'urgent', 'URGENT', 'Urgent')");
+        System.out.println("  java -jar oak-run-luke.jar inspect /path/to/index --duplicates tags");
         System.out.println();
     }
     
@@ -508,6 +539,412 @@ public class LukeInspectCommand implements Command {
         System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
     }
     
+    // ============================================================
+    // ACTIONABLE INSIGHTS
+    // ============================================================
+
+    private void showInsights(IndexReader reader, Directory dir, File indexDir, int maxFields) throws IOException {
+        long size = getFolderSize(indexDir);
+        int numDocs = reader.numDocs();
+        int maxDoc = reader.maxDoc();
+        int deletions = maxDoc - numDocs;
+        double deleteRatio = maxDoc > 0 ? (deletions * 100.0 / maxDoc) : 0;
+        
+        // Collect field stats
+        List<FieldInsight> insights = new ArrayList<>();
+        Fields fields = MultiFields.getFields(reader);
+        long totalTerms = 0;
+        
+        if (fields != null) {
+            for (String fieldName : fields) {
+                Terms terms = fields.terms(fieldName);
+                if (terms == null) continue;
+                
+                long termCount = terms.size();
+                if (termCount < 0) termCount = countTermsManually(terms);
+                
+                int docCount = terms.getDocCount();
+                if (docCount < 0) docCount = numDocs;
+                
+                double coverage = numDocs > 0 ? (docCount * 100.0 / numDocs) : 0;
+                double cardinalityRatio = docCount > 0 ? (double) termCount / docCount : 0;
+                
+                // Get top 3 values
+                List<String> topValues = new ArrayList<>();
+                TermsEnum te = terms.iterator(null);
+                List<TermInfo> topTerms = new ArrayList<>();
+                
+                while (te.next() != null) {
+                    topTerms.add(new TermInfo(te.term().utf8ToString(), te.docFreq()));
+                    if (topTerms.size() > 100) {
+                        topTerms.sort((a, b) -> Integer.compare(b.docFreq, a.docFreq));
+                        topTerms = new ArrayList<>(topTerms.subList(0, 10));
+                    }
+                }
+                
+                topTerms.sort((a, b) -> Integer.compare(b.docFreq, a.docFreq));
+                for (int i = 0; i < Math.min(3, topTerms.size()); i++) {
+                    TermInfo ti = topTerms.get(i);
+                    String t = ti.term.length() > 12 ? ti.term.substring(0, 9) + "..." : ti.term;
+                    topValues.add(t + "(" + ti.docFreq + ")");
+                }
+                
+                totalTerms += termCount;
+                insights.add(new FieldInsight(fieldName, termCount, docCount, coverage, cardinalityRatio, topValues));
+            }
+        }
+        
+        // Sort by term count
+        insights.sort((a, b) -> Long.compare(b.termCount, a.termCount));
+        
+        // Calculate percentages and suggestions
+        for (FieldInsight fi : insights) {
+            fi.percentage = totalTerms > 0 ? (fi.termCount * 100.0 / totalTerms) : 0;
+            fi.suggestion = generateSuggestion(fi);
+        }
+        
+        // Output
+        System.out.println("╔═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗");
+        System.out.println("║                              INDEX INSIGHTS - ACTIONABLE OPTIMIZATION GUIDE                                            ║");
+        System.out.println("╠═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
+        System.out.printf("║ Index: %-108s ║%n", indexDir.getAbsolutePath().length() > 108 ? 
+                "..." + indexDir.getAbsolutePath().substring(indexDir.getAbsolutePath().length() - 105) : indexDir.getAbsolutePath());
+        System.out.printf("║ Documents: %,d active | %,d deleted (%.1f%% waste) | Size: %s %52s ║%n", 
+                numDocs, deletions, deleteRatio, humanReadableSize(size), "");
+        System.out.println("╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
+        System.out.println("║                                              TOP FIELDS BY SIZE                                                        ║");
+        System.out.println("╠══════════════════════════╤═══════════════╤══════════╤══════════╤══════════════════════════════╤═══════════════════════╣");
+        System.out.println("║ Field                    │ Terms (Size)  │ Coverage │ Card.    │ Top Values                   │ Suggestion            ║");
+        System.out.println("╠══════════════════════════╪═══════════════╪══════════╪══════════╪══════════════════════════════╪═══════════════════════╣");
+        
+        int displayed = 0;
+        long displayedTerms = 0;
+        for (FieldInsight fi : insights) {
+            if (displayed >= maxFields) break;
+            
+            String truncField = fi.fieldName.length() > 24 ? fi.fieldName.substring(0, 21) + "..." : fi.fieldName;
+            String topVals = fi.topValues.isEmpty() ? "-" : String.join(", ", fi.topValues);
+            if (topVals.length() > 28) topVals = topVals.substring(0, 25) + "...";
+            String truncSug = fi.suggestion.length() > 21 ? fi.suggestion.substring(0, 18) + "..." : fi.suggestion;
+            String cardStr = fi.cardinalityRatio > 1000 ? ">1000" : String.format("%.1f", fi.cardinalityRatio);
+            
+            System.out.printf("║ %-24s │ %,13d │ %6.1f%% │ %8s │ %-28s │ %-21s ║%n",
+                    truncField, fi.termCount, fi.coverage, cardStr, topVals, truncSug);
+            
+            displayed++;
+            displayedTerms += fi.termCount;
+        }
+        
+        System.out.println("╠══════════════════════════╧═══════════════╧══════════╧══════════╧══════════════════════════════╧═══════════════════════╣");
+        double displayedPct = totalTerms > 0 ? (displayedTerms * 100.0 / totalTerms) : 0;
+        System.out.printf("║ Shown: Top %d fields = %,d terms (%.1f%% of total %,d terms) %50s ║%n", 
+                displayed, displayedTerms, displayedPct, totalTerms, "");
+        
+        // Recommendations
+        System.out.println("╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
+        System.out.println("║                                           KEY RECOMMENDATIONS                                                          ║");
+        System.out.println("╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
+        
+        List<String> recs = generateOverallRecommendations(insights, deleteRatio, numDocs);
+        for (String rec : recs) {
+            while (rec.length() > 116) {
+                System.out.printf("║ %-116s ║%n", rec.substring(0, 116));
+                rec = "    " + rec.substring(116);
+            }
+            System.out.printf("║ %-116s ║%n", rec);
+        }
+        
+        System.out.println("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝");
+    }
+    
+    private void showContentDistribution(IndexReader reader, int depth) throws IOException {
+        Fields fields = MultiFields.getFields(reader);
+        Terms pathTerms = fields != null ? fields.terms(":path") : null;
+        
+        if (pathTerms == null) {
+            System.out.println("ERROR: No :path field found in index. Cannot analyze content distribution.");
+            System.out.println("This index may not have path-based content mapping enabled.");
+            return;
+        }
+        
+        Map<String, Integer> pathCounts = new HashMap<>();
+        TermsEnum te = pathTerms.iterator(null);
+        
+        while (te.next() != null) {
+            String path = te.term().utf8ToString();
+            String prefix = getPathPrefix(path, depth);
+            int docFreq = te.docFreq();
+            pathCounts.merge(prefix, docFreq, Integer::sum);
+        }
+        
+        List<Map.Entry<String, Integer>> sorted = new ArrayList<>(pathCounts.entrySet());
+        sorted.sort((a, b) -> b.getValue().compareTo(a.getValue()));
+        
+        int totalDocs = reader.numDocs();
+        
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+        System.out.println("CONTENT DISTRIBUTION ANALYSIS");
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+        System.out.printf("Analysis Depth: %d path segments%n", depth);
+        System.out.printf("Total Documents: %,d%n%n", totalDocs);
+        
+        System.out.printf("%-60s | %10s | %7s | %s%n", "Content Path", "Documents", "% Total", "Bar");
+        System.out.println(repeatChar('-', 60) + "-+-" + repeatChar('-', 10) + "-+-" + repeatChar('-', 7) + "-+-" + repeatChar('-', 20));
+        
+        int shown = 0;
+        for (Map.Entry<String, Integer> entry : sorted) {
+            if (shown >= 25) break;
+            
+            String path = entry.getKey();
+            int count = entry.getValue();
+            double pct = totalDocs > 0 ? (count * 100.0 / totalDocs) : 0;
+            int barLen = (int) (pct / 5);
+            String bar = repeatChar('█', barLen);
+            
+            String truncPath = path.length() > 58 ? "..." + path.substring(path.length() - 55) : path;
+            System.out.printf("%-60s | %,10d | %6.1f%% | %s%n", truncPath, count, pct, bar);
+            shown++;
+        }
+        
+        if (sorted.size() > 25) {
+            System.out.printf("... and %d more paths%n", sorted.size() - 25);
+        }
+        
+        // Insights
+        System.out.println();
+        System.out.println("INSIGHTS:");
+        if (!sorted.isEmpty()) {
+            Map.Entry<String, Integer> top = sorted.get(0);
+            double topPct = totalDocs > 0 ? (top.getValue() * 100.0 / totalDocs) : 0;
+            System.out.printf("• Top content area: %s (%.1f%% of index)%n", top.getKey(), topPct);
+            
+            if (topPct > 80) {
+                System.out.println("  ⚠️ Index is heavily concentrated in one area. Consider splitting indexes.");
+            }
+            
+            for (Map.Entry<String, Integer> entry : sorted) {
+                if (entry.getKey().contains("/dam")) {
+                    double damPct = totalDocs > 0 ? (entry.getValue() * 100.0 / totalDocs) : 0;
+                    System.out.printf("• DAM content: %.1f%% - %s%n", damPct,
+                            damPct > 30 ? "Heavy DAM usage. Ensure pre-extracted cache for re-indexing." : "Moderate DAM content.");
+                    break;
+                }
+            }
+        }
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+    }
+    
+    private void showCardinality(IndexReader reader, int maxFields) throws IOException {
+        int numDocs = reader.numDocs();
+        List<CardinalityInfo> results = new ArrayList<>();
+        
+        Fields fields = MultiFields.getFields(reader);
+        if (fields != null) {
+            for (String fieldName : fields) {
+                Terms terms = fields.terms(fieldName);
+                if (terms == null) continue;
+                
+                long uniqueTerms = terms.size();
+                if (uniqueTerms < 0) uniqueTerms = countTermsManually(terms);
+                
+                int docCount = terms.getDocCount();
+                if (docCount < 0) docCount = numDocs;
+                
+                double coverage = numDocs > 0 ? (docCount * 100.0 / numDocs) : 0;
+                double cardinality = docCount > 0 ? (double) uniqueTerms / docCount : 0;
+                
+                String warning = "";
+                if (cardinality > 100) {
+                    warning = "⚠️ HIGH CARDINALITY";
+                } else if (cardinality > 10) {
+                    warning = "⚡ MODERATE";
+                } else if (coverage < 5 && docCount < 1000) {
+                    warning = "📉 SPARSE";
+                }
+                
+                results.add(new CardinalityInfo(fieldName, uniqueTerms, docCount, coverage, cardinality, warning));
+            }
+        }
+        
+        results.sort((a, b) -> Double.compare(b.cardinality, a.cardinality));
+        
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+        System.out.println("FIELD CARDINALITY ANALYSIS");
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+        System.out.printf("Total Docs: %,d%n%n", numDocs);
+        System.out.println("Cardinality = Unique Values / Documents. High cardinality = memory intensive.");
+        System.out.println();
+        
+        System.out.printf("%-40s | %12s | %10s | %8s | %10s | %s%n", 
+                "Field", "Unique Terms", "Doc Count", "Coverage", "Cardinality", "Status");
+        System.out.println(repeatChar('-', 40) + "-+-" + repeatChar('-', 12) + "-+-" + repeatChar('-', 10) + 
+                   "-+-" + repeatChar('-', 8) + "-+-" + repeatChar('-', 10) + "-+-" + repeatChar('-', 18));
+        
+        int shown = 0;
+        for (CardinalityInfo ci : results) {
+            if (shown >= maxFields) break;
+            
+            String truncField = ci.fieldName.length() > 38 ? ci.fieldName.substring(0, 35) + "..." : ci.fieldName;
+            String cardStr = ci.cardinality > 1000 ? String.format("%,.0f", ci.cardinality) : String.format("%.2f", ci.cardinality);
+            
+            System.out.printf("%-40s | %,12d | %,10d | %6.1f%% | %10s | %s%n",
+                    truncField, ci.uniqueTerms, ci.docCount, ci.coverage, cardStr, ci.warning);
+            shown++;
+        }
+        
+        System.out.println();
+        System.out.println("LEGEND: ⚠️ HIGH CARDINALITY (>100) = Consider faceted search or filtering");
+        System.out.println("        ⚡ MODERATE (>10) = Monitor for growth");
+        System.out.println("        📉 SPARSE (<5% coverage, <1k docs) = Consider if field is needed");
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+    }
+    
+    private void showDuplicates(IndexReader reader, String fieldName, int maxResults) throws IOException {
+        Fields fields = MultiFields.getFields(reader);
+        Terms terms = fields != null ? fields.terms(fieldName) : null;
+        
+        if (terms == null) {
+            System.out.println("ERROR: Field '" + fieldName + "' not found in index");
+            return;
+        }
+        
+        Map<String, List<TermWithCount>> normalizedGroups = new HashMap<>();
+        TermsEnum te = terms.iterator(null);
+        
+        while (te.next() != null) {
+            String termText = te.term().utf8ToString();
+            int docFreq = te.docFreq();
+            String normalized = termText.toLowerCase().trim().replaceAll("\\s+", " ");
+            normalizedGroups.computeIfAbsent(normalized, k -> new ArrayList<>()).add(new TermWithCount(termText, docFreq));
+        }
+        
+        List<DuplicateGroup> duplicates = new ArrayList<>();
+        for (Map.Entry<String, List<TermWithCount>> entry : normalizedGroups.entrySet()) {
+            if (entry.getValue().size() > 1) {
+                int totalDocs = 0;
+                for (TermWithCount twc : entry.getValue()) {
+                    totalDocs += twc.docFreq;
+                }
+                duplicates.add(new DuplicateGroup(entry.getKey(), entry.getValue(), totalDocs));
+            }
+        }
+        
+        duplicates.sort((a, b) -> Integer.compare(b.totalDocs, a.totalDocs));
+        
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+        System.out.println("DUPLICATE VALUE DETECTION");
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+        System.out.printf("Field: %s%n%n", fieldName);
+        
+        if (duplicates.isEmpty()) {
+            System.out.println("✅ No duplicate variations found in this field.");
+            System.out.println("   All values appear to be unique (case-sensitive, whitespace-normalized).");
+        } else {
+            System.out.printf("⚠️ Found %d groups of potential duplicates:%n%n", duplicates.size());
+            
+            int shown = 0;
+            for (DuplicateGroup dg : duplicates) {
+                if (shown >= maxResults) break;
+                
+                String displayNorm = dg.normalized.length() > 40 ? dg.normalized.substring(0, 37) + "..." : dg.normalized;
+                System.out.printf("Group '%s' (%,d total docs):%n", displayNorm, dg.totalDocs);
+                
+                for (TermWithCount twc : dg.variants) {
+                    String display = twc.term.length() > 50 ? twc.term.substring(0, 47) + "..." : twc.term;
+                    System.out.printf("    • \"%s\" (%,d docs)%n", display, twc.docFreq);
+                }
+                System.out.println();
+                shown++;
+            }
+            
+            if (duplicates.size() > maxResults) {
+                System.out.printf("... and %d more duplicate groups%n%n", duplicates.size() - maxResults);
+            }
+            
+            System.out.println("RECOMMENDATION: Consider normalizing these values during indexing");
+            System.out.println("                or implementing a custom analyzer with case-folding.");
+        }
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+    }
+    
+    private String getPathPrefix(String path, int depth) {
+        if (path == null || path.isEmpty()) return "/";
+        String[] parts = path.split("/");
+        StringBuilder prefix = new StringBuilder();
+        for (int i = 0; i < parts.length && i <= depth; i++) {
+            if (!parts[i].isEmpty()) {
+                prefix.append("/").append(parts[i]);
+            }
+        }
+        return prefix.length() > 0 ? prefix.toString() : "/";
+    }
+    
+    private String generateSuggestion(FieldInsight fi) {
+        if (fi.cardinalityRatio > 100) {
+            if (fi.fieldName.contains("fulltext") || fi.fieldName.equals(":fulltext")) {
+                return "Use pre-extracted cache";
+            }
+            return "Consider faceting";
+        }
+        if (fi.termCount > 10_000_000) return "Major bloat - review";
+        if (fi.coverage < 5) return "Sparse - needed?";
+        if (fi.fieldName.contains("fulltext")) {
+            return fi.termCount > 1_000_000 ? "Add stemming/synonyms" : "OK - fulltext";
+        }
+        if (fi.percentage > 30) return "Dominates index";
+        return "OK";
+    }
+    
+    private List<String> generateOverallRecommendations(List<FieldInsight> insights, double deleteRatio, int numDocs) {
+        List<String> recs = new ArrayList<>();
+        
+        if (deleteRatio > 20) {
+            recs.add(String.format("⚠️ HIGH DELETION RATIO (%.1f%%): Consider running compaction/optimization to reclaim space.", deleteRatio));
+        }
+        
+        boolean hasFulltext = false;
+        long fulltextTerms = 0;
+        for (FieldInsight fi : insights) {
+            if (fi.fieldName.contains("fulltext") || fi.fieldName.equals(":fulltext")) {
+                hasFulltext = true;
+                fulltextTerms = fi.termCount;
+                break;
+            }
+        }
+        
+        if (hasFulltext && fulltextTerms > 10_000_000) {
+            recs.add(String.format("📚 LARGE FULLTEXT (%,d terms): Use oak-run tika --generate/--populate for pre-extracted cache before re-indexing.", fulltextTerms));
+        }
+        
+        int highCardCount = 0;
+        for (FieldInsight fi : insights) {
+            if (fi.cardinalityRatio > 100 && !fi.fieldName.contains("fulltext")) highCardCount++;
+        }
+        
+        if (highCardCount > 0) {
+            recs.add(String.format("🔢 %d HIGH-CARDINALITY FIELDS: These consume extra memory. Consider if all need to be indexed.", highCardCount));
+        }
+        
+        if (!insights.isEmpty() && insights.get(0).percentage > 50) {
+            recs.add(String.format("📊 INDEX DOMINATED BY '%s' (%.1f%%): This field drives most of your index size.", 
+                    insights.get(0).fieldName, insights.get(0).percentage));
+        }
+        
+        if (numDocs > 1_000_000) {
+            recs.add("🏗️ LARGE INDEX (>1M docs): Consider async indexing, dedicated index lanes, or split indexes.");
+        }
+        
+        if (recs.isEmpty()) {
+            recs.add("✅ INDEX LOOKS HEALTHY: No major issues detected.");
+        }
+        
+        return recs;
+    }
+
+    // ============================================================
+    // HELPER METHODS
+    // ============================================================
+    
     private long countTermsManually(Terms terms) throws IOException {
         long count = 0;
         TermsEnum te = terms.iterator(null);
@@ -563,6 +1000,69 @@ public class LukeInspectCommand implements Command {
         TermInfo(String term, int docFreq) {
             this.term = term;
             this.docFreq = docFreq;
+        }
+    }
+    
+    private static class FieldInsight {
+        final String fieldName;
+        final long termCount;
+        @SuppressWarnings("unused")
+        final int docCount;
+        final double coverage;
+        final double cardinalityRatio;
+        final List<String> topValues;
+        double percentage;
+        String suggestion;
+        
+        FieldInsight(String fieldName, long termCount, int docCount, double coverage, 
+                     double cardinalityRatio, List<String> topValues) {
+            this.fieldName = fieldName;
+            this.termCount = termCount;
+            this.docCount = docCount;
+            this.coverage = coverage;
+            this.cardinalityRatio = cardinalityRatio;
+            this.topValues = topValues;
+        }
+    }
+    
+    private static class CardinalityInfo {
+        final String fieldName;
+        final long uniqueTerms;
+        final int docCount;
+        final double coverage;
+        final double cardinality;
+        final String warning;
+        
+        CardinalityInfo(String fieldName, long uniqueTerms, int docCount, 
+                        double coverage, double cardinality, String warning) {
+            this.fieldName = fieldName;
+            this.uniqueTerms = uniqueTerms;
+            this.docCount = docCount;
+            this.coverage = coverage;
+            this.cardinality = cardinality;
+            this.warning = warning;
+        }
+    }
+    
+    private static class TermWithCount {
+        final String term;
+        final int docFreq;
+        
+        TermWithCount(String term, int docFreq) {
+            this.term = term;
+            this.docFreq = docFreq;
+        }
+    }
+    
+    private static class DuplicateGroup {
+        final String normalized;
+        final List<TermWithCount> variants;
+        final int totalDocs;
+        
+        DuplicateGroup(String normalized, List<TermWithCount> variants, int totalDocs) {
+            this.normalized = normalized;
+            this.variants = variants;
+            this.totalDocs = totalDocs;
         }
     }
 }

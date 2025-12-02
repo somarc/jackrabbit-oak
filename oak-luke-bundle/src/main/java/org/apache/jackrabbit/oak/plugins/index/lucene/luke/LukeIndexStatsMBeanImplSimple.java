@@ -23,10 +23,12 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Random;
 import java.util.Set;
 
@@ -1198,6 +1200,668 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                "For interactive GUI analysis, use:\n" +
                "  java -jar luke-4.0.0-ALPHA.jar\n\n" +
                "Or use oak-luke-standalone JAR for CLI access.";
+    }
+
+    // ============================================================
+    // ACTIONABLE INSIGHTS (The "Aha!" Moments)
+    // ============================================================
+
+    @Override
+    public String getIndexInsights(String indexPath, int maxFields) throws IOException {
+        log.info("Generating actionable insights for: {} (max {} fields)", indexPath, maxFields);
+        
+        File indexDir = findIndexDirectory(indexPath);
+        if (indexDir == null) {
+            return "ERROR: Could not find local index for: " + indexPath;
+        }
+        
+        File actualDir = getActualIndexDirectory(indexDir);
+        Directory dir = null;
+        IndexReader reader = null;
+        
+        try {
+            dir = FSDirectory.open(actualDir);
+            reader = DirectoryReader.open(dir);
+            
+            int numDocs = reader.numDocs();
+            int maxDoc = reader.maxDoc();
+            int deletions = maxDoc - numDocs;
+            double deleteRatio = maxDoc > 0 ? (deletions * 100.0 / maxDoc) : 0;
+            long indexSize = getFolderSize(indexDir);
+            
+            // Collect field stats with cardinality
+            List<FieldInsight> insights = new ArrayList<FieldInsight>();
+            Fields fields = MultiFields.getFields(reader);
+            
+            if (fields != null) {
+                for (String fieldName : fields) {
+                    Terms terms = fields.terms(fieldName);
+                    if (terms == null) continue;
+                    
+                    long termCount = terms.size();
+                    if (termCount < 0) {
+                        termCount = countTermsManually(terms);
+                    }
+                    
+                    int docCount = terms.getDocCount();
+                    if (docCount < 0) docCount = numDocs;
+                    
+                    double coverage = numDocs > 0 ? (docCount * 100.0 / numDocs) : 0;
+                    
+                    // Get top 3 values for this field
+                    List<String> topValues = new ArrayList<String>();
+                    TermsEnum te = terms.iterator(null);
+                    PriorityQueue<TermInfo> topTerms = new PriorityQueue<TermInfo>(4, new Comparator<TermInfo>() {
+                        @Override
+                        public int compare(TermInfo a, TermInfo b) {
+                            return Integer.compare(a.docFreq, b.docFreq); // Min heap
+                        }
+                    });
+                    
+                    while (te.next() != null) {
+                        String termText = te.term().utf8ToString();
+                        int docFreq = te.docFreq();
+                        topTerms.offer(new TermInfo(fieldName, termText, docFreq, 0));
+                        if (topTerms.size() > 3) topTerms.poll();
+                    }
+                    
+                    while (!topTerms.isEmpty()) {
+                        TermInfo ti = topTerms.poll();
+                        String truncated = ti.term.length() > 15 ? ti.term.substring(0, 12) + "..." : ti.term;
+                        topValues.add(0, String.format("%s(%,d)", truncated, ti.docFreq));
+                    }
+                    
+                    // Calculate cardinality ratio (unique values per doc)
+                    double cardinalityRatio = docCount > 0 ? (double) termCount / docCount : 0;
+                    
+                    insights.add(new FieldInsight(fieldName, termCount, docCount, coverage, cardinalityRatio, topValues));
+                }
+            }
+            
+            // Sort by term count (size proxy)
+            Collections.sort(insights);
+            
+            // Calculate totals
+            long totalTerms = 0;
+            for (FieldInsight fi : insights) {
+                totalTerms += fi.termCount;
+            }
+            
+            // Generate suggestions for each field
+            for (FieldInsight fi : insights) {
+                fi.percentage = totalTerms > 0 ? (fi.termCount * 100.0 / totalTerms) : 0;
+                fi.suggestion = generateSuggestion(fi);
+            }
+            
+            // Build output table
+            StringBuilder sb = new StringBuilder();
+            sb.append("╔═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗\n");
+            sb.append("║                              INDEX INSIGHTS - ACTIONABLE OPTIMIZATION GUIDE                                            ║\n");
+            sb.append("╠═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣\n");
+            sb.append(String.format("║ Index: %-108s ║\n", indexPath));
+            sb.append(String.format("║ Documents: %,d active | %,d deleted (%.1f%% waste) | Size: %s %52s ║\n", 
+                    numDocs, deletions, deleteRatio, humanReadableByteCount(indexSize), ""));
+            sb.append("╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣\n");
+            sb.append("║                                              TOP FIELDS BY SIZE                                                        ║\n");
+            sb.append("╠══════════════════════════╤═══════════════╤══════════╤══════════╤══════════════════════════════╤═══════════════════════╣\n");
+            sb.append("║ Field                    │ Terms (Size)  │ Coverage │ Card.    │ Top Values                   │ Suggestion            ║\n");
+            sb.append("╠══════════════════════════╪═══════════════╪══════════╪══════════╪══════════════════════════════╪═══════════════════════╣\n");
+            
+            int displayed = 0;
+            long displayedTerms = 0;
+            for (FieldInsight fi : insights) {
+                if (displayed >= maxFields) break;
+                
+                String truncField = fi.fieldName.length() > 24 ? fi.fieldName.substring(0, 21) + "..." : fi.fieldName;
+                String topVals = fi.topValues.isEmpty() ? "-" : String.join(", ", fi.topValues);
+                if (topVals.length() > 28) topVals = topVals.substring(0, 25) + "...";
+                String truncSug = fi.suggestion.length() > 21 ? fi.suggestion.substring(0, 18) + "..." : fi.suggestion;
+                String cardStr = fi.cardinalityRatio > 1000 ? ">1000" : String.format("%.1f", fi.cardinalityRatio);
+                
+                sb.append(String.format("║ %-24s │ %,13d │ %6.1f%% │ %8s │ %-28s │ %-21s ║\n",
+                        truncField, fi.termCount, fi.coverage, cardStr, topVals, truncSug));
+                
+                displayed++;
+                displayedTerms += fi.termCount;
+            }
+            
+            sb.append("╠══════════════════════════╧═══════════════╧══════════╧══════════╧══════════════════════════════╧═══════════════════════╣\n");
+            
+            // Summary and recommendations
+            double displayedPct = totalTerms > 0 ? (displayedTerms * 100.0 / totalTerms) : 0;
+            sb.append(String.format("║ Shown: Top %d fields = %,d terms (%.1f%% of total %,d terms) %50s ║\n", 
+                    displayed, displayedTerms, displayedPct, totalTerms, ""));
+            sb.append("╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣\n");
+            sb.append("║                                           KEY RECOMMENDATIONS                                                          ║\n");
+            sb.append("╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣\n");
+            
+            // Generate overall recommendations
+            List<String> recommendations = generateOverallRecommendations(insights, deleteRatio, numDocs);
+            for (String rec : recommendations) {
+                // Word wrap at 116 chars
+                while (rec.length() > 116) {
+                    sb.append(String.format("║ %-116s ║\n", rec.substring(0, 116)));
+                    rec = "    " + rec.substring(116);
+                }
+                sb.append(String.format("║ %-116s ║\n", rec));
+            }
+            
+            sb.append("╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
+            
+            return sb.toString();
+            
+        } finally {
+            if (reader != null) reader.close();
+            if (dir != null) dir.close();
+        }
+    }
+
+    @Override
+    public String getContentDistribution(String indexPath, int depth) throws IOException {
+        log.info("Analyzing content distribution for: {} at depth {}", indexPath, depth);
+        
+        File indexDir = findIndexDirectory(indexPath);
+        if (indexDir == null) {
+            return "ERROR: Could not find local index for: " + indexPath;
+        }
+        
+        File actualDir = getActualIndexDirectory(indexDir);
+        Directory dir = null;
+        IndexReader reader = null;
+        
+        try {
+            dir = FSDirectory.open(actualDir);
+            reader = DirectoryReader.open(dir);
+            
+            // Look for :path field
+            Fields fields = MultiFields.getFields(reader);
+            Terms pathTerms = fields != null ? fields.terms(":path") : null;
+            
+            if (pathTerms == null) {
+                return "ERROR: No :path field found in index. Cannot analyze content distribution.\n" +
+                       "This index may not have path-based content mapping enabled.";
+            }
+            
+            // Count documents per path prefix
+            Map<String, Integer> pathCounts = new HashMap<String, Integer>();
+            TermsEnum te = pathTerms.iterator(null);
+            
+            while (te.next() != null) {
+                String path = te.term().utf8ToString();
+                String prefix = getPathPrefix(path, depth);
+                int docFreq = te.docFreq();
+                
+                Integer current = pathCounts.get(prefix);
+                pathCounts.put(prefix, (current != null ? current : 0) + docFreq);
+            }
+            
+            // Sort by count
+            List<Map.Entry<String, Integer>> sorted = new ArrayList<Map.Entry<String, Integer>>(pathCounts.entrySet());
+            Collections.sort(sorted, new Comparator<Map.Entry<String, Integer>>() {
+                @Override
+                public int compare(Map.Entry<String, Integer> a, Map.Entry<String, Integer> b) {
+                    return b.getValue().compareTo(a.getValue());
+                }
+            });
+            
+            int totalDocs = reader.numDocs();
+            
+            StringBuilder sb = new StringBuilder();
+            sb.append("═══════════════════════════════════════════════════════════════════════════════════════\n");
+            sb.append("CONTENT DISTRIBUTION ANALYSIS\n");
+            sb.append("═══════════════════════════════════════════════════════════════════════════════════════\n");
+            sb.append(String.format("Index: %s\n", indexPath));
+            sb.append(String.format("Analysis Depth: %d path segments\n", depth));
+            sb.append(String.format("Total Documents: %,d\n\n", totalDocs));
+            
+            sb.append(String.format("%-60s | %10s | %7s | %s\n", "Content Path", "Documents", "% Total", "Bar"));
+            sb.append(repeatStr("-", 60) + "-+-" + repeatStr("-", 10) + "-+-" + repeatStr("-", 7) + "-+-" + repeatStr("-", 20) + "\n");
+            
+            int shown = 0;
+            for (Map.Entry<String, Integer> entry : sorted) {
+                if (shown >= 25) break; // Limit output
+                
+                String path = entry.getKey();
+                int count = entry.getValue();
+                double pct = totalDocs > 0 ? (count * 100.0 / totalDocs) : 0;
+                
+                // Simple ASCII bar
+                int barLen = (int) (pct / 5); // Max 20 chars for 100%
+                String bar = repeatStr("█", barLen);
+                
+                String truncPath = path.length() > 58 ? "..." + path.substring(path.length() - 55) : path;
+                sb.append(String.format("%-60s | %,10d | %6.1f%% | %s\n", truncPath, count, pct, bar));
+                shown++;
+            }
+            
+            if (sorted.size() > 25) {
+                sb.append(String.format("... and %d more paths\n", sorted.size() - 25));
+            }
+            
+            sb.append("\n");
+            sb.append("INSIGHTS:\n");
+            
+            // Generate content insights
+            if (!sorted.isEmpty()) {
+                Map.Entry<String, Integer> top = sorted.get(0);
+                double topPct = totalDocs > 0 ? (top.getValue() * 100.0 / totalDocs) : 0;
+                sb.append(String.format("• Top content area: %s (%.1f%% of index)\n", top.getKey(), topPct));
+                
+                if (topPct > 80) {
+                    sb.append("  ⚠️ Index is heavily concentrated in one area. Consider splitting indexes.\n");
+                }
+                
+                // Check for DAM content
+                for (Map.Entry<String, Integer> entry : sorted) {
+                    if (entry.getKey().contains("/dam")) {
+                        double damPct = totalDocs > 0 ? (entry.getValue() * 100.0 / totalDocs) : 0;
+                        sb.append(String.format("• DAM content: %.1f%% - ", damPct));
+                        if (damPct > 30) {
+                            sb.append("Heavy DAM usage. Ensure pre-extracted cache is configured for re-indexing.\n");
+                        } else {
+                            sb.append("Moderate DAM content.\n");
+                        }
+                        break;
+                    }
+                }
+            }
+            
+            sb.append("═══════════════════════════════════════════════════════════════════════════════════════\n");
+            
+            return sb.toString();
+            
+        } finally {
+            if (reader != null) reader.close();
+            if (dir != null) dir.close();
+        }
+    }
+
+    @Override
+    public String[] getFieldCardinality(String indexPath, int maxFields) throws IOException {
+        log.info("Analyzing field cardinality for: {}", indexPath);
+        
+        File indexDir = findIndexDirectory(indexPath);
+        if (indexDir == null) {
+            return new String[]{"ERROR: Could not find local index for: " + indexPath};
+        }
+        
+        File actualDir = getActualIndexDirectory(indexDir);
+        Directory dir = null;
+        IndexReader reader = null;
+        
+        try {
+            dir = FSDirectory.open(actualDir);
+            reader = DirectoryReader.open(dir);
+            
+            int numDocs = reader.numDocs();
+            List<CardinalityInfo> results = new ArrayList<CardinalityInfo>();
+            
+            Fields fields = MultiFields.getFields(reader);
+            if (fields != null) {
+                for (String fieldName : fields) {
+                    Terms terms = fields.terms(fieldName);
+                    if (terms == null) continue;
+                    
+                    long uniqueTerms = terms.size();
+                    if (uniqueTerms < 0) {
+                        uniqueTerms = countTermsManually(terms);
+                    }
+                    
+                    int docCount = terms.getDocCount();
+                    if (docCount < 0) docCount = numDocs;
+                    
+                    double coverage = numDocs > 0 ? (docCount * 100.0 / numDocs) : 0;
+                    double cardinality = docCount > 0 ? (double) uniqueTerms / docCount : 0;
+                    
+                    String warning = "";
+                    if (cardinality > 100) {
+                        warning = "⚠️ HIGH CARDINALITY";
+                    } else if (cardinality > 10) {
+                        warning = "⚡ MODERATE";
+                    } else if (coverage < 5 && docCount < 1000) {
+                        warning = "📉 SPARSE";
+                    }
+                    
+                    results.add(new CardinalityInfo(fieldName, uniqueTerms, docCount, coverage, cardinality, warning));
+                }
+            }
+            
+            // Sort by cardinality (high cardinality = potential problem)
+            Collections.sort(results, new Comparator<CardinalityInfo>() {
+                @Override
+                public int compare(CardinalityInfo a, CardinalityInfo b) {
+                    return Double.compare(b.cardinality, a.cardinality);
+                }
+            });
+            
+            List<String> output = new ArrayList<String>();
+            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
+            output.add("FIELD CARDINALITY ANALYSIS");
+            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
+            output.add(String.format("Index: %s | Total Docs: %,d", indexPath, numDocs));
+            output.add("");
+            output.add("Cardinality = Unique Values / Documents. High cardinality = memory intensive.");
+            output.add("");
+            output.add(String.format("%-40s | %12s | %10s | %8s | %10s | %s", 
+                    "Field", "Unique Terms", "Doc Count", "Coverage", "Cardinality", "Status"));
+            output.add(repeatStr("-", 40) + "-+-" + repeatStr("-", 12) + "-+-" + repeatStr("-", 10) + 
+                       "-+-" + repeatStr("-", 8) + "-+-" + repeatStr("-", 10) + "-+-" + repeatStr("-", 18));
+            
+            int shown = 0;
+            for (CardinalityInfo ci : results) {
+                if (shown >= maxFields) break;
+                
+                String truncField = ci.fieldName.length() > 38 ? ci.fieldName.substring(0, 35) + "..." : ci.fieldName;
+                String cardStr = ci.cardinality > 1000 ? String.format("%,.0f", ci.cardinality) : String.format("%.2f", ci.cardinality);
+                
+                output.add(String.format("%-40s | %,12d | %,10d | %6.1f%% | %10s | %s",
+                        truncField, ci.uniqueTerms, ci.docCount, ci.coverage, cardStr, ci.warning));
+                shown++;
+            }
+            
+            output.add("");
+            output.add("LEGEND: ⚠️ HIGH CARDINALITY (>100) = Consider faceted search or filtering");
+            output.add("        ⚡ MODERATE (>10) = Monitor for growth");
+            output.add("        📉 SPARSE (<5% coverage, <1k docs) = Consider if field is needed");
+            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
+            
+            return output.toArray(new String[0]);
+            
+        } finally {
+            if (reader != null) reader.close();
+            if (dir != null) dir.close();
+        }
+    }
+
+    @Override
+    public String[] detectDuplicateValues(String indexPath, String fieldName, int maxResults) throws IOException {
+        log.info("Detecting duplicate values in field {} for: {}", fieldName, indexPath);
+        
+        File indexDir = findIndexDirectory(indexPath);
+        if (indexDir == null) {
+            return new String[]{"ERROR: Could not find local index for: " + indexPath};
+        }
+        
+        File actualDir = getActualIndexDirectory(indexDir);
+        Directory dir = null;
+        IndexReader reader = null;
+        
+        try {
+            dir = FSDirectory.open(actualDir);
+            reader = DirectoryReader.open(dir);
+            
+            Fields fields = MultiFields.getFields(reader);
+            Terms terms = fields != null ? fields.terms(fieldName) : null;
+            
+            if (terms == null) {
+                return new String[]{"ERROR: Field '" + fieldName + "' not found in index"};
+            }
+            
+            // Collect all terms and look for case-insensitive duplicates
+            Map<String, List<TermWithCount>> normalizedGroups = new HashMap<String, List<TermWithCount>>();
+            TermsEnum te = terms.iterator(null);
+            
+            while (te.next() != null) {
+                String termText = te.term().utf8ToString();
+                int docFreq = te.docFreq();
+                
+                // Normalize: lowercase, trim, collapse whitespace
+                String normalized = termText.toLowerCase().trim().replaceAll("\\s+", " ");
+                
+                List<TermWithCount> group = normalizedGroups.get(normalized);
+                if (group == null) {
+                    group = new ArrayList<TermWithCount>();
+                    normalizedGroups.put(normalized, group);
+                }
+                group.add(new TermWithCount(termText, docFreq));
+            }
+            
+            // Find groups with multiple variants
+            List<DuplicateGroup> duplicates = new ArrayList<DuplicateGroup>();
+            for (Map.Entry<String, List<TermWithCount>> entry : normalizedGroups.entrySet()) {
+                if (entry.getValue().size() > 1) {
+                    int totalDocs = 0;
+                    for (TermWithCount twc : entry.getValue()) {
+                        totalDocs += twc.docFreq;
+                    }
+                    duplicates.add(new DuplicateGroup(entry.getKey(), entry.getValue(), totalDocs));
+                }
+            }
+            
+            // Sort by total document impact
+            Collections.sort(duplicates, new Comparator<DuplicateGroup>() {
+                @Override
+                public int compare(DuplicateGroup a, DuplicateGroup b) {
+                    return Integer.compare(b.totalDocs, a.totalDocs);
+                }
+            });
+            
+            List<String> output = new ArrayList<String>();
+            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
+            output.add("DUPLICATE VALUE DETECTION");
+            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
+            output.add(String.format("Index: %s", indexPath));
+            output.add(String.format("Field: %s", fieldName));
+            output.add("");
+            
+            if (duplicates.isEmpty()) {
+                output.add("✅ No duplicate variations found in this field.");
+                output.add("   All values appear to be unique (case-sensitive, whitespace-normalized).");
+            } else {
+                output.add(String.format("⚠️ Found %d groups of potential duplicates:", duplicates.size()));
+                output.add("");
+                
+                int shown = 0;
+                for (DuplicateGroup dg : duplicates) {
+                    if (shown >= maxResults) break;
+                    
+                    output.add(String.format("Group '%s' (%,d total docs):", 
+                            dg.normalized.length() > 40 ? dg.normalized.substring(0, 37) + "..." : dg.normalized,
+                            dg.totalDocs));
+                    
+                    for (TermWithCount twc : dg.variants) {
+                        String display = twc.term.length() > 50 ? twc.term.substring(0, 47) + "..." : twc.term;
+                        output.add(String.format("    • \"%s\" (%,d docs)", display, twc.docFreq));
+                    }
+                    output.add("");
+                    shown++;
+                }
+                
+                if (duplicates.size() > maxResults) {
+                    output.add(String.format("... and %d more duplicate groups", duplicates.size() - maxResults));
+                }
+                
+                output.add("");
+                output.add("RECOMMENDATION: Consider normalizing these values during indexing");
+                output.add("                or implementing a custom analyzer with case-folding.");
+            }
+            
+            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
+            
+            return output.toArray(new String[0]);
+            
+        } finally {
+            if (reader != null) reader.close();
+            if (dir != null) dir.close();
+        }
+    }
+
+    // ============================================================
+    // INSIGHT HELPER METHODS
+    // ============================================================
+
+    private String getPathPrefix(String path, int depth) {
+        if (path == null || path.isEmpty()) return "/";
+        
+        String[] parts = path.split("/");
+        StringBuilder prefix = new StringBuilder();
+        
+        for (int i = 0; i < parts.length && i <= depth; i++) {
+            if (!parts[i].isEmpty()) {
+                prefix.append("/").append(parts[i]);
+            }
+        }
+        
+        return prefix.length() > 0 ? prefix.toString() : "/";
+    }
+
+    private String generateSuggestion(FieldInsight fi) {
+        // High cardinality fields
+        if (fi.cardinalityRatio > 100) {
+            if (fi.fieldName.contains("fulltext") || fi.fieldName.equals(":fulltext")) {
+                return "Use pre-extracted cache";
+            }
+            return "Consider faceting";
+        }
+        
+        // Very high term count
+        if (fi.termCount > 10_000_000) {
+            return "Major bloat - review";
+        }
+        
+        // Low coverage
+        if (fi.coverage < 5) {
+            return "Sparse - needed?";
+        }
+        
+        // Fulltext specific
+        if (fi.fieldName.contains("fulltext")) {
+            if (fi.termCount > 1_000_000) {
+                return "Add stemming/synonyms";
+            }
+            return "OK - fulltext";
+        }
+        
+        // High percentage of index
+        if (fi.percentage > 30) {
+            return "Dominates index";
+        }
+        
+        return "OK";
+    }
+
+    private List<String> generateOverallRecommendations(List<FieldInsight> insights, double deleteRatio, int numDocs) {
+        List<String> recs = new ArrayList<String>();
+        
+        // Check deletion ratio
+        if (deleteRatio > 20) {
+            recs.add("⚠️ HIGH DELETION RATIO (%.1f%%): Consider running compaction/optimization to reclaim space." + deleteRatio);
+        }
+        
+        // Check for fulltext field
+        boolean hasFulltext = false;
+        long fulltextTerms = 0;
+        for (FieldInsight fi : insights) {
+            if (fi.fieldName.contains("fulltext") || fi.fieldName.equals(":fulltext")) {
+                hasFulltext = true;
+                fulltextTerms = fi.termCount;
+                break;
+            }
+        }
+        
+        if (hasFulltext && fulltextTerms > 10_000_000) {
+            recs.add(String.format("📚 LARGE FULLTEXT (%,d terms): Use oak-run tika --generate/--populate for pre-extracted cache before re-indexing.", fulltextTerms));
+        }
+        
+        // Check for high-cardinality fields
+        int highCardCount = 0;
+        for (FieldInsight fi : insights) {
+            if (fi.cardinalityRatio > 100 && !fi.fieldName.contains("fulltext")) {
+                highCardCount++;
+            }
+        }
+        
+        if (highCardCount > 0) {
+            recs.add(String.format("🔢 %d HIGH-CARDINALITY FIELDS: These consume extra memory. Consider if all need to be indexed.", highCardCount));
+        }
+        
+        // Check concentration
+        if (!insights.isEmpty() && insights.get(0).percentage > 50) {
+            recs.add(String.format("📊 INDEX DOMINATED BY '%s' (%.1f%%): This field drives most of your index size.", 
+                    insights.get(0).fieldName, insights.get(0).percentage));
+        }
+        
+        // General recommendation
+        if (numDocs > 1_000_000) {
+            recs.add("🏗️ LARGE INDEX (>1M docs): Consider async indexing, dedicated index lanes, or split indexes.");
+        }
+        
+        if (recs.isEmpty()) {
+            recs.add("✅ INDEX LOOKS HEALTHY: No major issues detected.");
+        }
+        
+        return recs;
+    }
+
+    // ============================================================
+    // INSIGHT INNER CLASSES
+    // ============================================================
+
+    private static class FieldInsight implements Comparable<FieldInsight> {
+        final String fieldName;
+        final long termCount;
+        final int docCount;
+        final double coverage;
+        final double cardinalityRatio;
+        final List<String> topValues;
+        double percentage;
+        String suggestion;
+
+        FieldInsight(String fieldName, long termCount, int docCount, double coverage, 
+                     double cardinalityRatio, List<String> topValues) {
+            this.fieldName = fieldName;
+            this.termCount = termCount;
+            this.docCount = docCount;
+            this.coverage = coverage;
+            this.cardinalityRatio = cardinalityRatio;
+            this.topValues = topValues;
+        }
+
+        @Override
+        public int compareTo(FieldInsight other) {
+            return Long.compare(other.termCount, this.termCount);
+        }
+    }
+
+    private static class CardinalityInfo {
+        final String fieldName;
+        final long uniqueTerms;
+        final int docCount;
+        final double coverage;
+        final double cardinality;
+        final String warning;
+
+        CardinalityInfo(String fieldName, long uniqueTerms, int docCount, 
+                        double coverage, double cardinality, String warning) {
+            this.fieldName = fieldName;
+            this.uniqueTerms = uniqueTerms;
+            this.docCount = docCount;
+            this.coverage = coverage;
+            this.cardinality = cardinality;
+            this.warning = warning;
+        }
+    }
+
+    private static class TermWithCount {
+        final String term;
+        final int docFreq;
+
+        TermWithCount(String term, int docFreq) {
+            this.term = term;
+            this.docFreq = docFreq;
+        }
+    }
+
+    private static class DuplicateGroup {
+        final String normalized;
+        final List<TermWithCount> variants;
+        final int totalDocs;
+
+        DuplicateGroup(String normalized, List<TermWithCount> variants, int totalDocs) {
+            this.normalized = normalized;
+            this.variants = variants;
+            this.totalDocs = totalDocs;
+        }
     }
 
     // ============================================================

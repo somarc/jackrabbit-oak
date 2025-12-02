@@ -261,6 +261,65 @@ public interface LukeIndexStatsMBean {
     ) throws IOException;
 
     // ============================================================
+    // ACTIONABLE INSIGHTS (The "Aha!" Moments)
+    // ============================================================
+
+    @Description("⭐ MAIN FEATURE: Actionable index insights with optimization suggestions. " +
+            "Answers: 'What's eating my index? What should I do about it?' " +
+            "Produces a table with fields, sizes, top values, and specific recommendations. " +
+            "⚠️ EXPENSIVE for large indexes: Runtime 1-30min for 100GB+.")
+    String getIndexInsights(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath,
+            @Name("maxFields")
+            @Description("Number of fields to analyze (recommended: 10-20)")
+            int maxFields
+    ) throws IOException;
+
+    @Description("Analyzes content distribution using the :path field. " +
+            "Shows breakdown by content area (e.g., /content/dam, /content/pages). " +
+            "Answers: 'What content is my index serving? Where should I focus?' " +
+            "Runtime: O(unique paths) - typically 1-5min.")
+    String getContentDistribution(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath,
+            @Name("depth")
+            @Description("Path depth to analyze (2=/content/dam, 3=/content/dam/projects)")
+            int depth
+    ) throws IOException;
+
+    @Description("Analyzes field cardinality and document coverage. " +
+            "Answers: 'Which fields have too many unique values? Which fields are sparse?' " +
+            "High cardinality = memory hog. Low coverage = maybe unnecessary. " +
+            "⚠️ EXPENSIVE: Runtime 5-30min for large indexes.")
+    String[] getFieldCardinality(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath,
+            @Name("maxFields")
+            @Description("Number of fields to analyze (recommended: 20)")
+            int maxFields
+    ) throws IOException;
+
+    @Description("Detects potential duplicate or near-duplicate values in a field. " +
+            "Answers: 'Are there junk variations like urgent/URGENT/Urgent?' " +
+            "Useful for tag fields, categories, authors. " +
+            "Runtime: O(unique terms in field).")
+    String[] detectDuplicateValues(
+            @Name("indexPath")
+            @Description("Index path to analyze")
+            String indexPath,
+            @Name("fieldName")
+            @Description("Field to check for duplicates (e.g., 'tags', 'author')")
+            String fieldName,
+            @Name("maxResults")
+            @Description("Maximum duplicate groups to return")
+            int maxResults
+    ) throws IOException;
+
+    // ============================================================
     // GUI (PLACEHOLDER)
     // ============================================================
 
