@@ -94,9 +94,6 @@ public interface LukeIndexStatsMBean {
             String indexPath
     ) throws IOException;
 
-    @Description("Gets information about all indexed paths and their local cache status")
-    TabularData getIndexCacheStatus();
-
     @Description("⚠️ EXPENSIVE: Analyzes which fields consume the most space (by term count). " +
             "Runtime: 10s-60min depending on index size. For 100GB+ indexes, use standalone JAR during maintenance windows.")
     String[] getFieldSizeAnalysis(
