@@ -126,5 +126,14 @@ public interface LukeIndexStatsMBean {
             @Description("Index path to analyze")
             String indexPath
     ) throws IOException;
+
+    @Description("Get fulltext-specific statistics for an index. " +
+            "Shows stored fulltext size, estimated backup time, and recommendations. " +
+            "Fast operation: < 5 seconds.")
+    String getFulltextStats(
+            @Name("indexPath")
+            @Description("Index path to analyze (e.g., /oak:index/damAssetLucene)")
+            String indexPath
+    ) throws IOException;
 }
 

@@ -673,6 +673,131 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
         }
         return size;
     }
+    
+    @Override
+    public String getFulltextStats(String indexPath) throws IOException {
+        File indexDir = findIndexDirectory(indexPath);
+        if (indexDir == null) {
+            return "ERROR: Index not found: " + indexPath;
+        }
+
+        File actualIndexDir = getActualIndexDirectory(indexDir);
+        if (!isValidLuceneIndex(actualIndexDir)) {
+            return "ERROR: Not a valid Lucene index: " + actualIndexDir.getAbsolutePath();
+        }
+
+        Directory dir = null;
+        IndexReader reader = null;
+        
+        try {
+            dir = FSDirectory.open(actualIndexDir);
+            reader = DirectoryReader.open(dir);
+            
+            // Analyze :fulltext field
+            Fields fields = MultiFields.getFields(reader);
+            if (fields == null) {
+                return "ERROR: No fields found in index";
+            }
+            
+            Terms fulltextTerms = fields.terms(":fulltext");
+            if (fulltextTerms == null) {
+                return formatNoFulltextReport(indexPath, indexDir, reader);
+            }
+            
+            // Get term count for :fulltext field
+            long termCount = fulltextTerms.size();
+            if (termCount == -1) {
+                log.debug("Counting :fulltext terms manually (size() returned -1)");
+                termCount = countTermsManually(fulltextTerms);
+            }
+            
+            // Estimate stored text size (rough approximation)
+            // Average term length ~20 bytes, stored fulltext has overhead
+            long estimatedStoredSize = termCount * 100; // Conservative estimate
+            
+            // Get index size on disk
+            long indexSizeBytes = getFolderSize(indexDir);
+            
+            // Estimate backup time (reading from index)
+            // Rough estimate: 1GB takes ~30 seconds to read and write
+            long backupTimeSeconds = estimatedStoredSize / (1024 * 1024 * 1024 / 30);
+            if (backupTimeSeconds < 60) backupTimeSeconds = 60; // Minimum 1 minute
+            
+            // Format report
+            StringBuilder sb = new StringBuilder();
+            sb.append("═══════════════════════════════════════════════════════════════\n");
+            sb.append("FULLTEXT INDEX STATISTICS\n");
+            sb.append("═══════════════════════════════════════════════════════════════\n");
+            sb.append(String.format("Index: %s\n", indexPath));
+            sb.append(String.format("Location: %s\n", indexDir.getAbsolutePath()));
+            sb.append("\n");
+            
+            sb.append("FULLTEXT FIELD ANALYSIS:\n");
+            sb.append(String.format("  Field: :fulltext\n"));
+            sb.append(String.format("  Total Terms: %,d\n", termCount));
+            sb.append(String.format("  Estimated Stored Text Size: %.1f MB\n", estimatedStoredSize / (1024.0 * 1024.0)));
+            sb.append("\n");
+            
+            sb.append("INDEX SIZE:\n");
+            sb.append(String.format("  Total Index Size on Disk: %.1f MB\n", indexSizeBytes / (1024.0 * 1024.0)));
+            sb.append("\n");
+            
+            sb.append("BACKUP ESTIMATE:\n");
+            sb.append(String.format("  Time to backup: ~%d minutes (read from Lucene index)\n", backupTimeSeconds / 60));
+            sb.append(String.format("  Disk space needed: ~%.1f MB (stored text + overhead)\n", estimatedStoredSize / (1024.0 * 1024.0) * 1.2));
+            sb.append("\n");
+            
+            // Recommendation
+            if (termCount > 100000) {
+                sb.append("RECOMMENDATION:\n");
+                sb.append("  ✅ Backup RECOMMENDED - will save 100x time during re-indexing\n");
+                sb.append("  ⚠️  Large fulltext index detected. Pre-extracted cache will significantly\n");
+                sb.append("     accelerate re-indexing by eliminating binary extraction time.\n");
+            } else {
+                sb.append("RECOMMENDATION:\n");
+                sb.append("  ℹ️  Fulltext index is relatively small. Backup may not be necessary\n");
+                sb.append("     unless re-indexing frequently.\n");
+            }
+            
+            sb.append("═══════════════════════════════════════════════════════════════\n");
+            
+            return sb.toString();
+            
+        } finally {
+            if (reader != null) reader.close();
+            if (dir != null) dir.close();
+        }
+    }
+    
+    private String formatNoFulltextReport(String indexPath, File indexDir, IndexReader reader) throws IOException {
+        // Count fields manually for Lucene 4.7.2
+        int fieldCount = 0;
+        Fields fields = MultiFields.getFields(reader);
+        if (fields != null) {
+            for (String fieldName : fields) {
+                fieldCount++;
+            }
+        }
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append("═══════════════════════════════════════════════════════════════\n");
+        sb.append("FULLTEXT INDEX STATISTICS\n");
+        sb.append("═══════════════════════════════════════════════════════════════\n");
+        sb.append(String.format("Index: %s\n", indexPath));
+        sb.append(String.format("Location: %s\n", indexDir.getAbsolutePath()));
+        sb.append("\n");
+        sb.append("FULLTEXT FIELD ANALYSIS:\n");
+        sb.append("  ⚠️  No :fulltext field found in this index\n");
+        sb.append("\n");
+        sb.append(String.format("  Total Documents: %,d\n", reader.numDocs()));
+        sb.append(String.format("  Total Fields: %,d\n", fieldCount));
+        sb.append("\n");
+        sb.append("RECOMMENDATION:\n");
+        sb.append("  ℹ️  This index does not contain fulltext data.\n");
+        sb.append("     Fulltext backup not applicable.\n");
+        sb.append("═══════════════════════════════════════════════════════════════\n");
+        return sb.toString();
+    }
 
     private TabularData createDummyTabularData(String key, String value) throws OpenDataException {
         CompositeType rowType = new CompositeType(
