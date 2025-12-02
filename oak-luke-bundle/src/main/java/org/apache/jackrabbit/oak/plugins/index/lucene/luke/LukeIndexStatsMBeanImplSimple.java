@@ -500,6 +500,14 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                     Terms terms = fields.terms(fieldName);
                     if (terms != null) {
                         long termCount = terms.size();
+                        
+                        // Lucene 4.7.2: size() returns -1 if unknown
+                        // Must iterate to count (expensive but accurate)
+                        if (termCount == -1) {
+                            log.debug("Counting terms manually for field: {}", fieldName);
+                            termCount = countTermsManually(terms);
+                        }
+                        
                         fieldCounts.put(fieldName, new FieldTermCount(fieldName, termCount));
                         totalTerms += termCount;
                     }
