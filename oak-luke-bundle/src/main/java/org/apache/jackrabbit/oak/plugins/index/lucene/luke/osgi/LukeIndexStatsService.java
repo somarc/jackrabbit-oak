@@ -25,7 +25,8 @@ import java.util.List;
 
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
-import javax.management.StandardMBean;
+
+import org.apache.jackrabbit.oak.commons.jmx.AnnotatedStandardMBean;
 
 import org.apache.felix.scr.annotations.Activate;
 import org.apache.felix.scr.annotations.Component;
@@ -164,8 +165,8 @@ public class LukeIndexStatsService {
                 mbeanServer.unregisterMBean(objectName);
             }
             
-            // Create StandardMBean wrapper to properly expose the interface
-            StandardMBean mbean = new StandardMBean(impl, mbeanInterface);
+            // Create AnnotatedStandardMBean to properly expose @Name/@Description annotations
+            AnnotatedStandardMBean mbean = new AnnotatedStandardMBean(impl, mbeanInterface);
             
             mbeanServer.registerMBean(mbean, objectName);
             registeredMBeans.add(objectName);
