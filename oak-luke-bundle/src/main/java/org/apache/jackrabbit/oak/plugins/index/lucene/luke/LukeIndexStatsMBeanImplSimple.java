@@ -298,10 +298,6 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
         return "GUI not supported in this version - use JMX operations instead";
     }
 
-    @Override
-    public TabularData getIndexCacheStatus() {
-        return getLocalIndexDirectories();
-    }
 
     @Override
     public String[] getFieldSizeAnalysis(String indexPath, int maxFields) throws IOException {
