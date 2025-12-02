@@ -157,12 +157,13 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             return new String[]{"ERROR: Index not found: " + indexPath};
         }
 
+        File actualIndexDir = getActualIndexDirectory(indexDir);
         List<String> results = new ArrayList<>();
         Directory dir = null;
         IndexReader reader = null;
         
         try {
-            dir = FSDirectory.open(indexDir);
+            dir = FSDirectory.open(actualIndexDir);
             reader = DirectoryReader.open(dir);
             
             Fields fields = MultiFields.getFields(reader);
@@ -191,12 +192,13 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             return new String[]{"ERROR: Index not found: " + indexPath};
         }
 
+        File actualIndexDir = getActualIndexDirectory(indexDir);
         List<String> results = new ArrayList<>();
         Directory dir = null;
         IndexReader reader = null;
         
         try {
-            dir = FSDirectory.open(indexDir);
+            dir = FSDirectory.open(actualIndexDir);
             reader = DirectoryReader.open(dir);
             
             Terms terms = MultiFields.getTerms(reader, fieldName);
@@ -225,11 +227,14 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             return "ERROR: Index not found: " + indexPath;
         }
 
+        // Oak IndexCopier often stores index in "data" subdirectory
+        File actualIndexDir = getActualIndexDirectory(indexDir);
+        
         Directory dir = null;
         IndexReader reader = null;
         
         try {
-            dir = FSDirectory.open(indexDir);
+            dir = FSDirectory.open(actualIndexDir);
             reader = DirectoryReader.open(dir);
             
             StringBuilder sb = new StringBuilder();
@@ -272,13 +277,14 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                    "\nThis may be a metadata-only directory or an index being rebuilt.";
         }
 
+        File actualIndexDir = getActualIndexDirectory(indexDir);
         Directory dir = null;
         try {
-            dir = FSDirectory.open(indexDir);
+            dir = FSDirectory.open(actualIndexDir);
             DirectoryReader reader = DirectoryReader.open(dir);
             int numDocs = reader.numDocs();
             reader.close();
-            return String.format("OK: Valid Lucene index with %,d documents at %s", numDocs, indexDir.getAbsolutePath());
+            return String.format("OK: Valid Lucene index with %,d documents at %s", numDocs, actualIndexDir.getAbsolutePath());
         } catch (Exception e) {
             return String.format("ERROR: Failed to open index at %s\nReason: %s", 
                     indexDir.getAbsolutePath(), e.getMessage());
@@ -306,12 +312,13 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             return new String[]{"ERROR: Index not found: " + indexPath};
         }
 
+        File actualIndexDir = getActualIndexDirectory(indexDir);
         List<String> results = new ArrayList<>();
         Directory dir = null;
         IndexReader reader = null;
         
         try {
-            dir = FSDirectory.open(indexDir);
+            dir = FSDirectory.open(actualIndexDir);
             reader = DirectoryReader.open(dir);
             
             // Count terms per field (adapted from LUKE's IndexInfo)
@@ -373,12 +380,13 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             return new String[]{"ERROR: Index not found: " + indexPath};
         }
 
+        File actualIndexDir = getActualIndexDirectory(indexDir);
         List<String> results = new ArrayList<>();
         Directory dir = null;
         IndexReader reader = null;
         
         try {
-            dir = FSDirectory.open(indexDir);
+            dir = FSDirectory.open(actualIndexDir);
             reader = DirectoryReader.open(dir);
             
             // Collect top terms (adapted from LUKE's HighFreqTerms)
@@ -451,11 +459,12 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             return "ERROR: Index not found: " + indexPath;
         }
 
+        File actualIndexDir = getActualIndexDirectory(indexDir);
         Directory dir = null;
         IndexReader reader = null;
         
         try {
-            dir = FSDirectory.open(indexDir);
+            dir = FSDirectory.open(actualIndexDir);
             reader = DirectoryReader.open(dir);
             
             // Gather comprehensive statistics
@@ -545,31 +554,65 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
         }
         return null;
     }
+    
+    /**
+     * Gets the actual directory containing the Lucene index files.
+     * Oak's IndexCopier stores the index in a "data" subdirectory.
+     */
+    private File getActualIndexDirectory(File indexDir) {
+        // Check if there's a "data" subdirectory (Oak IndexCopier structure)
+        File dataDir = new File(indexDir, "data");
+        if (dataDir.exists() && dataDir.isDirectory() && hasSegmentsFile(dataDir)) {
+            return dataDir;
+        }
+        
+        // Otherwise use the directory as-is
+        return indexDir;
+    }
 
     /**
      * Checks if a directory contains a valid Lucene index.
      * A valid index must have a segments file (segments_N).
+     * Oak's IndexCopier often stores the actual index in a "data" subdirectory.
      */
     private boolean isValidLuceneIndex(File dir) {
         if (!dir.isDirectory()) {
             return false;
         }
         
-        File[] files = dir.listFiles();
-        if (files == null || files.length == 0) {
-            return false;
+        // Check root directory first
+        if (hasSegmentsFile(dir)) {
+            return true;
         }
         
-        // Look for segments file (segments_N or segments.gen)
-        for (File file : files) {
-            String name = file.getName();
-            if (name.startsWith("segments") && !name.equals("segments.gen")) {
+        // Check "data" subdirectory (common Oak IndexCopier structure)
+        File dataDir = new File(dir, "data");
+        if (dataDir.exists() && dataDir.isDirectory()) {
+            if (hasSegmentsFile(dataDir)) {
                 return true;
             }
         }
         
         // No segments file found - this is likely just metadata
         log.debug("Directory {} does not contain a valid Lucene index (no segments file)", dir);
+        return false;
+    }
+    
+    /**
+     * Checks if a directory contains a segments file.
+     */
+    private boolean hasSegmentsFile(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null || files.length == 0) {
+            return false;
+        }
+        
+        for (File file : files) {
+            String name = file.getName();
+            if (name.startsWith("segments") && !name.equals("segments.gen")) {
+                return true;
+            }
+        }
         return false;
     }
 
