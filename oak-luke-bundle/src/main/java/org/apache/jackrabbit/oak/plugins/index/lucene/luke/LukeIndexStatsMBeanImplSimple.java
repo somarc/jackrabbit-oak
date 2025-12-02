@@ -109,12 +109,21 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                     for (File indexDir : indexDirs) {
                         if (indexDir.isDirectory()) {
                             try {
+                                // Only include valid Lucene indexes
+                                boolean isValid = isValidLuceneIndex(indexDir);
                                 long size = getFolderSize(indexDir);
+                                
+                                // Add status indicator for metadata-only directories
+                                String displayName = indexDir.getName();
+                                if (!isValid) {
+                                    displayName += " (metadata only)";
+                                }
+                                
                                 tds.put(new CompositeDataSupport(ct, headers, new Object[]{
-                                        indexDir.getName(),
+                                        displayName,
                                         indexDir.getAbsolutePath(),
                                         humanReadableByteCount(size),
-                                        true
+                                        isValid
                                 }));
                             } catch (Exception e) {
                                 log.warn("Error processing directory: {}", indexDir, e);
@@ -252,7 +261,15 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
     public String validateLocalIndex(String indexPath) throws IOException {
         File indexDir = findIndexDirectory(indexPath);
         if (indexDir == null) {
-            return "ERROR: Index not found: " + indexPath;
+            return "ERROR: Index not found or not a valid Lucene index: " + indexPath + 
+                   "\nTip: Use getLocalIndexDirectories() to see which indexes are valid";
+        }
+
+        // Double-check it's valid (findIndexDirectory already checks, but be explicit)
+        if (!isValidLuceneIndex(indexDir)) {
+            return "ERROR: Directory exists but does not contain a valid Lucene index (no segments file): " + 
+                   indexDir.getAbsolutePath() + 
+                   "\nThis may be a metadata-only directory or an index being rebuilt.";
         }
 
         Directory dir = null;
@@ -261,9 +278,10 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             DirectoryReader reader = DirectoryReader.open(dir);
             int numDocs = reader.numDocs();
             reader.close();
-            return String.format("OK: Valid Lucene index with %d documents at %s", numDocs, indexDir);
+            return String.format("OK: Valid Lucene index with %,d documents at %s", numDocs, indexDir.getAbsolutePath());
         } catch (Exception e) {
-            return "ERROR: " + e.getMessage();
+            return String.format("ERROR: Failed to open index at %s\nReason: %s", 
+                    indexDir.getAbsolutePath(), e.getMessage());
         } finally {
             if (dir != null) dir.close();
         }
@@ -522,11 +540,41 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             String searchName = indexPath.replace("/oak:index/", "").replace("/", "_");
             for (File dir : dirs) {
                 if (dir.getName().contains(searchName)) {
-                    return dir;
+                    // Verify it's actually a Lucene index, not just metadata
+                    if (isValidLuceneIndex(dir)) {
+                        return dir;
+                    }
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * Checks if a directory contains a valid Lucene index.
+     * A valid index must have a segments file (segments_N).
+     */
+    private boolean isValidLuceneIndex(File dir) {
+        if (!dir.isDirectory()) {
+            return false;
+        }
+        
+        File[] files = dir.listFiles();
+        if (files == null || files.length == 0) {
+            return false;
+        }
+        
+        // Look for segments file (segments_N or segments.gen)
+        for (File file : files) {
+            String name = file.getName();
+            if (name.startsWith("segments") && !name.equals("segments.gen")) {
+                return true;
+            }
+        }
+        
+        // No segments file found - this is likely just metadata
+        log.debug("Directory {} does not contain a valid Lucene index (no segments file)", dir);
+        return false;
     }
 
     private long getFolderSize(File folder) {
