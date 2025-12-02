@@ -135,5 +135,39 @@ public interface LukeIndexStatsMBean {
             @Description("Index path to analyze (e.g., /oak:index/damAssetLucene)")
             String indexPath
     ) throws IOException;
+
+    // ============================================================
+    // FULLTEXT BACKUP OPERATIONS (Phase 2)
+    // ============================================================
+
+    @Description("⚠️ LONG RUNNING: Start background fulltext backup job. " +
+            "Extracts stored :fulltext from Lucene index and saves to filesystem. " +
+            "Compatible with oak-run tika --populate format. " +
+            "Runtime: 10-60 minutes for 100GB+ indexes. Monitor with getFulltextBackupProgress().")
+    String startFulltextBackup(
+            @Name("storePath")
+            @Description("Local filesystem path to store extracted text (e.g., /opt/aem/fulltext-store)")
+            String storePath,
+            @Name("indexPath")
+            @Description("Index path to backup (e.g., /oak:index/damAssetLucene)")
+            String indexPath
+    ) throws IOException;
+
+    @Description("Get progress of running fulltext backup job.")
+    String getFulltextBackupProgress(
+            @Name("jobId")
+            @Description("Job ID returned from startFulltextBackup")
+            String jobId
+    ) throws IOException;
+
+    @Description("Cancel a running fulltext backup job.")
+    String cancelFulltextBackup(
+            @Name("jobId")
+            @Description("Job ID to cancel")
+            String jobId
+    ) throws IOException;
+
+    @Description("List all fulltext backup jobs (running and completed).")
+    String[] listFulltextBackupJobs() throws IOException;
 }
 

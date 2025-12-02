@@ -52,6 +52,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.jackrabbit.oak.commons.IOUtils.humanReadableByteCount;
 
@@ -63,6 +64,9 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
 
     private static final Logger log = LoggerFactory.getLogger(LukeIndexStatsMBeanImplSimple.class);
 
+    // Job tracking for fulltext backup
+    private static final Map<String, FulltextBackupJob> backupJobs = new ConcurrentHashMap<>();
+    
     private final IndexCopier indexCopier;
     private final File repositoryHome;
 
@@ -825,6 +829,182 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             tds.put(new CompositeDataSupport(rowType, new String[]{"Value"}, new Object[]{s}));
         }
         return tds;
+    }
+    
+    // ============================================================
+    // FULLTEXT BACKUP OPERATIONS (Phase 2)
+    // ============================================================
+    
+    @Override
+    public String startFulltextBackup(String storePath, String indexPath) throws IOException {
+        // Validate store path
+        if (storePath == null || storePath.trim().isEmpty()) {
+            return "ERROR: storePath is required (e.g., /opt/aem/fulltext-store)";
+        }
+        
+        // Check if store path is writable
+        File storeDir = new File(storePath);
+        if (storeDir.exists()) {
+            if (!storeDir.isDirectory()) {
+                return "ERROR: storePath exists but is not a directory: " + storePath;
+            }
+            if (!storeDir.canWrite()) {
+                return "ERROR: storePath is not writable: " + storePath;
+            }
+        } else {
+            // Try to create
+            File parentDir = storeDir.getParentFile();
+            if (parentDir != null && !parentDir.canWrite()) {
+                return "ERROR: Cannot create storePath (parent not writable): " + storePath;
+            }
+        }
+        
+        // Find index
+        File indexDir = findIndexDirectory(indexPath);
+        if (indexDir == null) {
+            return "ERROR: Index not found: " + indexPath;
+        }
+        
+        File actualIndexDir = getActualIndexDirectory(indexDir);
+        if (!isValidLuceneIndex(actualIndexDir)) {
+            return "ERROR: Not a valid Lucene index: " + actualIndexDir.getAbsolutePath();
+        }
+        
+        // Generate job ID
+        String jobId = "backup-" + System.currentTimeMillis();
+        
+        // Check for existing running job for same index
+        for (FulltextBackupJob existingJob : backupJobs.values()) {
+            if (existingJob.getIndexPath().equals(indexPath) && 
+                existingJob.getStatus() == FulltextBackupJob.Status.RUNNING) {
+                return "ERROR: A backup job is already running for this index. Job ID: " + existingJob.getJobId() + 
+                       "\nUse cancelFulltextBackup(\"" + existingJob.getJobId() + "\") to cancel it first.";
+            }
+        }
+        
+        // Create and start job
+        FulltextBackupJob job = new FulltextBackupJob(jobId, storePath, indexPath, actualIndexDir);
+        backupJobs.put(jobId, job);
+        job.start();
+        
+        log.info("Started fulltext backup job: {} for index: {} to store: {}", jobId, indexPath, storePath);
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append("═══════════════════════════════════════════════════════════════\n");
+        sb.append("FULLTEXT BACKUP STARTED\n");
+        sb.append("═══════════════════════════════════════════════════════════════\n");
+        sb.append(String.format("Job ID: %s\n", jobId));
+        sb.append(String.format("Index: %s\n", indexPath));
+        sb.append(String.format("Store Path: %s\n", storePath));
+        sb.append("\n");
+        sb.append("Monitor progress with:\n");
+        sb.append(String.format("  getFulltextBackupProgress(\"%s\")\n", jobId));
+        sb.append("\n");
+        sb.append("Cancel with:\n");
+        sb.append(String.format("  cancelFulltextBackup(\"%s\")\n", jobId));
+        sb.append("═══════════════════════════════════════════════════════════════\n");
+        
+        return sb.toString();
+    }
+    
+    @Override
+    public String getFulltextBackupProgress(String jobId) throws IOException {
+        if (jobId == null || jobId.trim().isEmpty()) {
+            return "ERROR: jobId is required. Use listFulltextBackupJobs() to see available jobs.";
+        }
+        
+        FulltextBackupJob job = backupJobs.get(jobId);
+        if (job == null) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("ERROR: Job not found: " + jobId + "\n\n");
+            sb.append("Available jobs:\n");
+            if (backupJobs.isEmpty()) {
+                sb.append("  (none)\n");
+            } else {
+                for (FulltextBackupJob j : backupJobs.values()) {
+                    sb.append(String.format("  %s (%s) - %s\n", j.getJobId(), j.getStatus(), j.getIndexPath()));
+                }
+            }
+            return sb.toString();
+        }
+        
+        return job.formatProgress();
+    }
+    
+    @Override
+    public String cancelFulltextBackup(String jobId) throws IOException {
+        if (jobId == null || jobId.trim().isEmpty()) {
+            return "ERROR: jobId is required.";
+        }
+        
+        FulltextBackupJob job = backupJobs.get(jobId);
+        if (job == null) {
+            return "ERROR: Job not found: " + jobId;
+        }
+        
+        if (job.getStatus() != FulltextBackupJob.Status.RUNNING && 
+            job.getStatus() != FulltextBackupJob.Status.PENDING) {
+            return "Cannot cancel job - current status: " + job.getStatus();
+        }
+        
+        job.cancel();
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append("═══════════════════════════════════════════════════════════════\n");
+        sb.append("CANCELLATION REQUESTED\n");
+        sb.append("═══════════════════════════════════════════════════════════════\n");
+        sb.append(String.format("Job ID: %s\n", jobId));
+        sb.append("Status: Cancellation requested\n");
+        sb.append("\n");
+        sb.append("The job will stop at the next safe point.\n");
+        sb.append("Check progress for final status:\n");
+        sb.append(String.format("  getFulltextBackupProgress(\"%s\")\n", jobId));
+        sb.append("═══════════════════════════════════════════════════════════════\n");
+        
+        return sb.toString();
+    }
+    
+    @Override
+    public String[] listFulltextBackupJobs() throws IOException {
+        List<String> result = new ArrayList<>();
+        
+        if (backupJobs.isEmpty()) {
+            result.add("No fulltext backup jobs found.");
+            result.add("");
+            result.add("To start a backup:");
+            result.add("  startFulltextBackup(\"/opt/aem/fulltext-store\", \"/oak:index/damAssetLucene\")");
+            return result.toArray(new String[0]);
+        }
+        
+        result.add("═══════════════════════════════════════════════════════════════");
+        result.add("FULLTEXT BACKUP JOBS");
+        result.add("═══════════════════════════════════════════════════════════════");
+        result.add("");
+        
+        for (FulltextBackupJob job : backupJobs.values()) {
+            String statusEmoji = "";
+            switch (job.getStatus()) {
+                case RUNNING: statusEmoji = "🔄"; break;
+                case COMPLETED: statusEmoji = "✅"; break;
+                case CANCELLED: statusEmoji = "⏹️"; break;
+                case FAILED: statusEmoji = "❌"; break;
+                case PENDING: statusEmoji = "⏳"; break;
+            }
+            
+            result.add(String.format("%s Job: %s", statusEmoji, job.getJobId()));
+            result.add(String.format("   Status: %s", job.getStatus()));
+            result.add(String.format("   Index: %s", job.getIndexPath()));
+            result.add(String.format("   Store: %s", job.getStorePath()));
+            result.add(String.format("   Progress: %.1f%% (%,d/%,d docs)", 
+                    job.getProgressPercent(), job.getDocumentsProcessed(), job.getDocumentsTotal()));
+            result.add(String.format("   Files Written: %,d", job.getFilesWritten()));
+            result.add(String.format("   Size: %.1f MB", job.getBytesWritten() / (1024.0 * 1024.0)));
+            result.add("");
+        }
+        
+        result.add("═══════════════════════════════════════════════════════════════");
+        
+        return result.toArray(new String[0]);
     }
 }
 
