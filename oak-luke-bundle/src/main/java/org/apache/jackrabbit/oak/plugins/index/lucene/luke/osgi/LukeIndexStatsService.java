@@ -20,9 +20,12 @@ package org.apache.jackrabbit.oak.plugins.index.lucene.luke.osgi;
 
 import java.io.File;
 import java.lang.management.ManagementFactory;
+import java.util.ArrayList;
+import java.util.List;
 
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
+import javax.management.StandardMBean;
 
 import org.apache.felix.scr.annotations.Activate;
 import org.apache.felix.scr.annotations.Component;
@@ -32,100 +35,145 @@ import org.apache.felix.scr.annotations.ReferenceCardinality;
 import org.apache.felix.scr.annotations.ReferencePolicy;
 import org.apache.jackrabbit.oak.plugins.index.lucene.IndexCopier;
 import org.apache.jackrabbit.oak.plugins.index.lucene.IndexTracker;
+import org.apache.jackrabbit.oak.plugins.index.lucene.luke.LukeIndexStatsMBean;
 import org.apache.jackrabbit.oak.plugins.index.lucene.luke.LukeIndexStatsMBeanImplSimple;
+import org.apache.jackrabbit.oak.plugins.index.lucene.luke.mbean.LukeBasicStatsMBean;
+import org.apache.jackrabbit.oak.plugins.index.lucene.luke.mbean.LukeDiscoveryMBean;
+import org.apache.jackrabbit.oak.plugins.index.lucene.luke.mbean.LukeDocumentsMBean;
+import org.apache.jackrabbit.oak.plugins.index.lucene.luke.mbean.LukeFieldAnalysisMBean;
+import org.apache.jackrabbit.oak.plugins.index.lucene.luke.mbean.LukeInsightsMBean;
+import org.apache.jackrabbit.oak.plugins.index.lucene.luke.mbean.LukeMBeanImpl;
+import org.apache.jackrabbit.oak.plugins.index.lucene.luke.mbean.LukeTermAnalysisMBean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * OSGi Component that registers the LUKE Index Statistics MBean.
+ * OSGi Component that registers multiple LUKE Index MBeans for organized JMX access.
  * 
- * <p>Provides LUKE-style index inspection capabilities via JMX, answering:</p>
+ * <h2>Registered MBeans</h2>
  * <ul>
- *   <li>What fields are in my index?</li>
- *   <li>What's consuming the most space?</li>
- *   <li>Is my index healthy?</li>
+ *   <li><b>LukeDiscovery</b> - Find and validate indexes</li>
+ *   <li><b>LukeBasicStats</b> - Quick health check and basic stats</li>
+ *   <li><b>LukeFieldAnalysis</b> - Field-level analysis</li>
+ *   <li><b>LukeTermAnalysis</b> - Term-level analysis</li>
+ *   <li><b>LukeDocuments</b> - Document inspection</li>
+ *   <li><b>LukeInsights</b> - ⭐ Actionable optimization insights</li>
+ *   <li><b>LukeIndexStats</b> - Legacy single MBean with all operations</li>
  * </ul>
  * 
  * <p>Compatible with AEM 6.5.x (Oak 1.22.x) using Felix SCR annotations.</p>
- * 
- * <h2>For Fulltext Backup</h2>
- * <p>Use oak-run tika commands (can run while AEM is online):</p>
- * <pre>
- * oak-run tika --generate ...
- * oak-run tika --populate ...
- * </pre>
  */
 @Component(
     immediate = true,
     metatype = false,
     label = "Apache Jackrabbit Oak LUKE Index Statistics",
-    description = "Provides LUKE-based index inspection and statistics via JMX"
+    description = "Provides LUKE-based index inspection and statistics via JMX (multiple organized MBeans)"
 )
 public class LukeIndexStatsService {
     
     private static final Logger log = LoggerFactory.getLogger(LukeIndexStatsService.class);
-    private static final String MBEAN_NAME = "org.apache.jackrabbit.oak:name=LukeIndexStats,type=LukeIndexStats";
     
-    /**
-     * IndexTracker is optional - not available in Oak 1.22.x via OSGi.
-     * We use direct filesystem access instead.
-     */
+    // MBean naming pattern
+    private static final String MBEAN_DOMAIN = "org.apache.jackrabbit.oak";
+    private static final String MBEAN_TYPE = "LukeIndexStats";
+    
     @Reference(
         cardinality = ReferenceCardinality.OPTIONAL_UNARY,
         policy = ReferencePolicy.DYNAMIC
     )
     private volatile IndexTracker indexTracker;
     
-    /**
-     * IndexCopier provides the local index cache path.
-     * Optional - falls back to repository.home if not available.
-     */
     @Reference(
         cardinality = ReferenceCardinality.OPTIONAL_UNARY,
         policy = ReferencePolicy.DYNAMIC
     )
     private volatile IndexCopier indexCopier;
     
-    private LukeIndexStatsMBeanImplSimple lukeMBean;
-    private ObjectName mbeanObjectName;
+    private LukeIndexStatsMBeanImplSimple coreImpl;
+    private LukeMBeanImpl lukeMBeanImpl;
     private MBeanServer mbeanServer;
+    private List<ObjectName> registeredMBeans = new ArrayList<ObjectName>();
     
     @Activate
     protected void activate() {
         try {
-            log.info("Activating Oak LUKE Index Statistics Service");
-            
-            if (indexTracker == null) {
-                log.info("IndexTracker not available - using filesystem-only mode (normal for Oak 1.22.x)");
-            }
-            
-            if (indexCopier == null) {
-                log.info("IndexCopier not available - will scan repository/index directory");
-            }
+            log.info("Activating Oak LUKE Index Statistics Service (Multi-MBean)");
             
             // Determine repository home
             File repositoryHome = new File(System.getProperty("repository.home", "crx-quickstart"));
             log.info("Using repository home: {}", repositoryHome.getAbsolutePath());
             
-            // Create the MBean implementation
-            lukeMBean = new LukeIndexStatsMBeanImplSimple(indexTracker, indexCopier, repositoryHome);
+            // Create the core implementation
+            coreImpl = new LukeIndexStatsMBeanImplSimple(indexTracker, indexCopier, repositoryHome);
+            lukeMBeanImpl = new LukeMBeanImpl(coreImpl);
             
-            // Register with JMX
+            // Get MBean server
             mbeanServer = ManagementFactory.getPlatformMBeanServer();
-            mbeanObjectName = new ObjectName(MBEAN_NAME);
             
-            if (mbeanServer.isRegistered(mbeanObjectName)) {
-                log.warn("MBean {} already registered, unregistering old instance", MBEAN_NAME);
-                mbeanServer.unregisterMBean(mbeanObjectName);
-            }
+            // Register grouped MBeans
+            registerMBean(LukeDiscoveryMBean.class, lukeMBeanImpl, "Discovery", 
+                    "Find and validate local index directories");
             
-            mbeanServer.registerMBean(lukeMBean, mbeanObjectName);
-            log.info("✅ LUKE Index Statistics MBean registered: {}", MBEAN_NAME);
+            registerMBean(LukeBasicStatsMBean.class, lukeMBeanImpl, "BasicStats", 
+                    "Quick health check, basic stats, segment info");
+            
+            registerMBean(LukeFieldAnalysisMBean.class, lukeMBeanImpl, "FieldAnalysis", 
+                    "Field-level analysis: sizes, flags, cardinality");
+            
+            registerMBean(LukeTermAnalysisMBean.class, lukeMBeanImpl, "TermAnalysis", 
+                    "Term-level analysis: frequencies, distributions");
+            
+            registerMBean(LukeDocumentsMBean.class, lukeMBeanImpl, "Documents", 
+                    "Document inspection and sampling");
+            
+            registerMBean(LukeInsightsMBean.class, lukeMBeanImpl, "Insights", 
+                    "⭐ Actionable optimization insights - START HERE!");
+            
+            // Also register the legacy all-in-one MBean for backwards compatibility
+            registerMBean(LukeIndexStatsMBean.class, coreImpl, "All", 
+                    "All operations in one MBean (legacy)");
+            
+            log.info("═══════════════════════════════════════════════════════════════════════════");
+            log.info("✅ LUKE Index Statistics MBeans registered successfully!");
             log.info("   Access via: http://localhost:4502/system/console/jmx");
             log.info("   Search for: LukeIndexStats");
+            log.info("");
+            log.info("   Available MBeans:");
+            log.info("   • LukeIndexStats,name=Discovery     - Find indexes");
+            log.info("   • LukeIndexStats,name=BasicStats    - Health & overview");
+            log.info("   • LukeIndexStats,name=FieldAnalysis - Field analysis");
+            log.info("   • LukeIndexStats,name=TermAnalysis  - Term analysis");
+            log.info("   • LukeIndexStats,name=Documents     - Doc inspection");
+            log.info("   • LukeIndexStats,name=Insights      - ⭐ START HERE!");
+            log.info("   • LukeIndexStats,name=All           - Legacy (all ops)");
+            log.info("═══════════════════════════════════════════════════════════════════════════");
             
         } catch (Exception e) {
-            log.error("Failed to register LUKE Index Statistics MBean", e);
+            log.error("Failed to register LUKE Index Statistics MBeans", e);
+        }
+    }
+    
+    private <T> void registerMBean(Class<T> mbeanInterface, T impl, String name, String description) {
+        try {
+            ObjectName objectName = new ObjectName(
+                    MBEAN_DOMAIN + ":type=" + MBEAN_TYPE + ",name=" + name);
+            
+            // Unregister if already exists
+            if (mbeanServer.isRegistered(objectName)) {
+                log.debug("MBean {} already registered, replacing", objectName);
+                mbeanServer.unregisterMBean(objectName);
+            }
+            
+            // Create StandardMBean wrapper to properly expose the interface
+            StandardMBean mbean = new StandardMBean(impl, mbeanInterface);
+            
+            mbeanServer.registerMBean(mbean, objectName);
+            registeredMBeans.add(objectName);
+            
+            log.debug("Registered MBean: {} - {}", objectName, description);
+            
+        } catch (Exception e) {
+            log.error("Failed to register MBean: " + name, e);
         }
     }
     
@@ -134,19 +182,27 @@ public class LukeIndexStatsService {
         try {
             log.info("Deactivating Oak LUKE Index Statistics Service");
             
-            if (mbeanServer != null && mbeanObjectName != null) {
-                if (mbeanServer.isRegistered(mbeanObjectName)) {
-                    mbeanServer.unregisterMBean(mbeanObjectName);
-                    log.info("Successfully unregistered LUKE Index Statistics MBean");
+            // Unregister all MBeans
+            for (ObjectName objectName : registeredMBeans) {
+                try {
+                    if (mbeanServer != null && mbeanServer.isRegistered(objectName)) {
+                        mbeanServer.unregisterMBean(objectName);
+                        log.debug("Unregistered MBean: {}", objectName);
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to unregister MBean: " + objectName, e);
                 }
             }
             
-            lukeMBean = null;
-            mbeanObjectName = null;
+            registeredMBeans.clear();
+            lukeMBeanImpl = null;
+            coreImpl = null;
             mbeanServer = null;
             
+            log.info("LUKE Index Statistics MBeans unregistered");
+            
         } catch (Exception e) {
-            log.error("Failed to unregister LUKE Index Statistics MBean", e);
+            log.error("Failed to deactivate LUKE Index Statistics Service", e);
         }
     }
     
