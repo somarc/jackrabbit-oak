@@ -1230,6 +1230,10 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             long indexSize = getFolderSize(indexDir);
             
             // Collect field stats with cardinality
+            // MEMORY/CPU SAFETY: Limit iterations for huge fields
+            final int MAX_TERMS_FOR_TOP_VALUES = 500_000; // Skip top-values for fields >500k terms
+            final int MAX_TERMS_FOR_COUNTING = 10_000_000; // Estimate for fields >10M terms
+            
             List<FieldInsight> insights = new ArrayList<FieldInsight>();
             Fields fields = MultiFields.getFields(reader);
             
@@ -1239,8 +1243,14 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                     if (terms == null) continue;
                     
                     long termCount = terms.size();
+                    boolean estimatedCount = false;
+                    
                     if (termCount < 0) {
-                        termCount = countTermsManually(terms);
+                        // Count manually but with a limit
+                        termCount = countTermsWithLimit(terms, MAX_TERMS_FOR_COUNTING);
+                        if (termCount >= MAX_TERMS_FOR_COUNTING) {
+                            estimatedCount = true; // Mark as estimate
+                        }
                     }
                     
                     int docCount = terms.getDocCount();
@@ -1248,27 +1258,34 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                     
                     double coverage = numDocs > 0 ? (docCount * 100.0 / numDocs) : 0;
                     
-                    // Get top 3 values for this field
+                    // Get top 3 values for this field - BUT skip for very large fields
                     List<String> topValues = new ArrayList<String>();
-                    TermsEnum te = terms.iterator(null);
-                    PriorityQueue<TermInfo> topTerms = new PriorityQueue<TermInfo>(4, new Comparator<TermInfo>() {
-                        @Override
-                        public int compare(TermInfo a, TermInfo b) {
-                            return Integer.compare(a.docFreq, b.docFreq); // Min heap
+                    
+                    if (termCount <= MAX_TERMS_FOR_TOP_VALUES) {
+                        // Safe to iterate for top values
+                        TermsEnum te = terms.iterator(null);
+                        PriorityQueue<TermInfo> topTerms = new PriorityQueue<TermInfo>(4, new Comparator<TermInfo>() {
+                            @Override
+                            public int compare(TermInfo a, TermInfo b) {
+                                return Integer.compare(a.docFreq, b.docFreq); // Min heap
+                            }
+                        });
+                        
+                        while (te.next() != null) {
+                            String termText = te.term().utf8ToString();
+                            int docFreq = te.docFreq();
+                            topTerms.offer(new TermInfo(fieldName, termText, docFreq, 0));
+                            if (topTerms.size() > 3) topTerms.poll();
                         }
-                    });
-                    
-                    while (te.next() != null) {
-                        String termText = te.term().utf8ToString();
-                        int docFreq = te.docFreq();
-                        topTerms.offer(new TermInfo(fieldName, termText, docFreq, 0));
-                        if (topTerms.size() > 3) topTerms.poll();
-                    }
-                    
-                    while (!topTerms.isEmpty()) {
-                        TermInfo ti = topTerms.poll();
-                        String truncated = ti.term.length() > 15 ? ti.term.substring(0, 12) + "..." : ti.term;
-                        topValues.add(0, String.format("%s(%,d)", truncated, ti.docFreq));
+                        
+                        while (!topTerms.isEmpty()) {
+                            TermInfo ti = topTerms.poll();
+                            String truncated = ti.term.length() > 15 ? ti.term.substring(0, 12) + "..." : ti.term;
+                            topValues.add(0, String.format("%s(%,d)", truncated, ti.docFreq));
+                        }
+                    } else {
+                        // Field too large - skip top values to save CPU
+                        topValues.add(String.format("[%s terms - skipped]", estimatedCount ? ">" + MAX_TERMS_FOR_COUNTING : termCount));
                     }
                     
                     // Calculate cardinality ratio (unique values per doc)
@@ -1382,14 +1399,22 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                        "This index may not have path-based content mapping enabled.";
             }
             
-            // Count documents per path prefix
+            // Count documents per path prefix (with memory limit)
+            final int MAX_PATH_PREFIXES = 50_000;
             Map<String, Integer> pathCounts = new HashMap<String, Integer>();
             TermsEnum te = pathTerms.iterator(null);
+            boolean truncated = false;
             
             while (te.next() != null) {
                 String path = te.term().utf8ToString();
                 String prefix = getPathPrefix(path, depth);
                 int docFreq = te.docFreq();
+                
+                // Memory guard: limit unique prefixes
+                if (!pathCounts.containsKey(prefix) && pathCounts.size() >= MAX_PATH_PREFIXES) {
+                    truncated = true;
+                    continue; // Skip new prefixes, still count existing ones
+                }
                 
                 Integer current = pathCounts.get(prefix);
                 pathCounts.put(prefix, (current != null ? current : 0) + docFreq);
@@ -1412,7 +1437,12 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             sb.append("═══════════════════════════════════════════════════════════════════════════════════════\n");
             sb.append(String.format("Index: %s\n", indexPath));
             sb.append(String.format("Analysis Depth: %d path segments\n", depth));
-            sb.append(String.format("Total Documents: %,d\n\n", totalDocs));
+            sb.append(String.format("Total Documents: %,d\n", totalDocs));
+            sb.append(String.format("Unique Path Prefixes: %,d\n", pathCounts.size()));
+            if (truncated) {
+                sb.append("⚠️ Results truncated to limit memory usage (50,000 prefix limit)\n");
+            }
+            sb.append("\n");
             
             sb.append(String.format("%-60s | %10s | %7s | %s\n", "Content Path", "Documents", "% Total", "Bar"));
             sb.append(repeatStr("-", 60) + "-+-" + repeatStr("-", 10) + "-+-" + repeatStr("-", 7) + "-+-" + repeatStr("-", 20) + "\n");
@@ -1573,6 +1603,9 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
         }
     }
 
+    // Memory safety limit for duplicate detection
+    private static final int MAX_TERMS_FOR_DUPLICATE_DETECTION = 100_000;
+    
     @Override
     public String[] detectDuplicateValues(String indexPath, String fieldName, int maxResults) throws IOException {
         log.info("Detecting duplicate values in field {} for: {}", fieldName, indexPath);
@@ -1597,11 +1630,59 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                 return new String[]{"ERROR: Field '" + fieldName + "' not found in index"};
             }
             
-            // Collect all terms and look for case-insensitive duplicates
+            // MEMORY SAFETY: Check term count before loading
+            long termCount = terms.size();
+            if (termCount < 0) {
+                // Unknown size - sample first 1000 to estimate
+                TermsEnum sampleEnum = terms.iterator(null);
+                int sampleCount = 0;
+                while (sampleEnum.next() != null && sampleCount < 1000) {
+                    sampleCount++;
+                }
+                if (sampleCount >= 1000) {
+                    // Field is large, estimate conservatively
+                    termCount = MAX_TERMS_FOR_DUPLICATE_DETECTION + 1;
+                }
+            }
+            
+            List<String> output = new ArrayList<String>();
+            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
+            output.add("DUPLICATE VALUE DETECTION");
+            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
+            output.add(String.format("Index: %s", indexPath));
+            output.add(String.format("Field: %s", fieldName));
+            output.add("");
+            
+            // MEMORY GUARD: Refuse to process high-cardinality fields
+            if (termCount > MAX_TERMS_FOR_DUPLICATE_DETECTION) {
+                output.add(String.format("⛔ ABORTED: Field has too many unique terms (%,d+)", 
+                        termCount > 0 ? termCount : MAX_TERMS_FOR_DUPLICATE_DETECTION));
+                output.add(String.format("   Memory limit: %,d terms max", MAX_TERMS_FOR_DUPLICATE_DETECTION));
+                output.add("");
+                output.add("This field is HIGH-CARDINALITY and not suitable for duplicate detection.");
+                output.add("Duplicate detection works best on low-cardinality fields like:");
+                output.add("  • cq:tags (hundreds to thousands of values)");
+                output.add("  • jcr:primaryType (tens of values)");
+                output.add("  • author/creator fields (hundreds of values)");
+                output.add("");
+                output.add("For high-cardinality fields, use getFieldCardinality() instead.");
+                output.add("═══════════════════════════════════════════════════════════════════════════════════════");
+                return output.toArray(new String[0]);
+            }
+            
+            // Safe to proceed - collect terms with memory limit
             Map<String, List<TermWithCount>> normalizedGroups = new HashMap<String, List<TermWithCount>>();
             TermsEnum te = terms.iterator(null);
+            int processedTerms = 0;
             
             while (te.next() != null) {
+                // Double-check memory safety during iteration
+                if (processedTerms >= MAX_TERMS_FOR_DUPLICATE_DETECTION) {
+                    log.warn("Duplicate detection hit memory limit at {} terms for field {}", 
+                            processedTerms, fieldName);
+                    break;
+                }
+                
                 String termText = te.term().utf8ToString();
                 int docFreq = te.docFreq();
                 
@@ -1614,6 +1695,7 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                     normalizedGroups.put(normalized, group);
                 }
                 group.add(new TermWithCount(termText, docFreq));
+                processedTerms++;
             }
             
             // Find groups with multiple variants
@@ -1628,6 +1710,10 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                 }
             }
             
+            // Clear the large map immediately after extracting duplicates
+            normalizedGroups.clear();
+            normalizedGroups = null;
+            
             // Sort by total document impact
             Collections.sort(duplicates, new Comparator<DuplicateGroup>() {
                 @Override
@@ -1636,12 +1722,7 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                 }
             });
             
-            List<String> output = new ArrayList<String>();
-            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
-            output.add("DUPLICATE VALUE DETECTION");
-            output.add("═══════════════════════════════════════════════════════════════════════════════════════");
-            output.add(String.format("Index: %s", indexPath));
-            output.add(String.format("Field: %s", fieldName));
+            output.add(String.format("Analyzed: %,d terms", processedTerms));
             output.add("");
             
             if (duplicates.isEmpty()) {
@@ -1935,6 +2016,22 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
         TermsEnum te = terms.iterator(null);
         while (te.next() != null) {
             count++;
+        }
+        return count;
+    }
+    
+    /**
+     * Count terms with a limit to prevent excessive CPU usage on huge fields.
+     * Returns the limit value if limit is reached, indicating "at least this many".
+     */
+    private long countTermsWithLimit(Terms terms, int limit) throws IOException {
+        long count = 0;
+        TermsEnum te = terms.iterator(null);
+        while (te.next() != null) {
+            count++;
+            if (count >= limit) {
+                return count; // Hit limit, return early
+            }
         }
         return count;
     }

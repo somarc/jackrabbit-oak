@@ -667,13 +667,22 @@ public class LukeInspectCommand implements Command {
             return;
         }
         
+        // Memory limit for path prefixes
+        final int MAX_PATH_PREFIXES = 50_000;
         Map<String, Integer> pathCounts = new HashMap<>();
         TermsEnum te = pathTerms.iterator(null);
+        boolean truncated = false;
         
         while (te.next() != null) {
             String path = te.term().utf8ToString();
             String prefix = getPathPrefix(path, depth);
             int docFreq = te.docFreq();
+            
+            // Memory guard: limit unique prefixes
+            if (!pathCounts.containsKey(prefix) && pathCounts.size() >= MAX_PATH_PREFIXES) {
+                truncated = true;
+                continue;
+            }
             pathCounts.merge(prefix, docFreq, Integer::sum);
         }
         
@@ -686,7 +695,12 @@ public class LukeInspectCommand implements Command {
         System.out.println("CONTENT DISTRIBUTION ANALYSIS");
         System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
         System.out.printf("Analysis Depth: %d path segments%n", depth);
-        System.out.printf("Total Documents: %,d%n%n", totalDocs);
+        System.out.printf("Total Documents: %,d%n", totalDocs);
+        System.out.printf("Unique Path Prefixes: %,d%n", pathCounts.size());
+        if (truncated) {
+            System.out.println("⚠️ Results truncated to limit memory usage (50,000 prefix limit)");
+        }
+        System.out.println();
         
         System.out.printf("%-60s | %10s | %7s | %s%n", "Content Path", "Documents", "% Total", "Bar");
         System.out.println(repeatChar('-', 60) + "-+-" + repeatChar('-', 10) + "-+-" + repeatChar('-', 7) + "-+-" + repeatChar('-', 20));
@@ -799,6 +813,9 @@ public class LukeInspectCommand implements Command {
         System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
     }
     
+    // Memory safety limit for duplicate detection
+    private static final int MAX_TERMS_FOR_DUPLICATE_DETECTION = 100_000;
+    
     private void showDuplicates(IndexReader reader, String fieldName, int maxResults) throws IOException {
         Fields fields = MultiFields.getFields(reader);
         Terms terms = fields != null ? fields.terms(fieldName) : null;
@@ -808,14 +825,49 @@ public class LukeInspectCommand implements Command {
             return;
         }
         
+        // MEMORY SAFETY: Check term count first
+        long termCount = terms.size();
+        if (termCount < 0) {
+            // Sample to estimate
+            TermsEnum sampleEnum = terms.iterator(null);
+            int sampleCount = 0;
+            while (sampleEnum.next() != null && sampleCount < 1000) {
+                sampleCount++;
+            }
+            if (sampleCount >= 1000) {
+                termCount = MAX_TERMS_FOR_DUPLICATE_DETECTION + 1;
+            }
+        }
+        
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+        System.out.println("DUPLICATE VALUE DETECTION");
+        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+        System.out.printf("Field: %s%n%n", fieldName);
+        
+        // MEMORY GUARD: Refuse high-cardinality fields
+        if (termCount > MAX_TERMS_FOR_DUPLICATE_DETECTION) {
+            System.out.printf("⛔ ABORTED: Field has too many unique terms (%,d+)%n", 
+                    termCount > 0 ? termCount : MAX_TERMS_FOR_DUPLICATE_DETECTION);
+            System.out.printf("   Memory limit: %,d terms max%n%n", MAX_TERMS_FOR_DUPLICATE_DETECTION);
+            System.out.println("This field is HIGH-CARDINALITY and not suitable for duplicate detection.");
+            System.out.println("Use --cardinality instead to analyze high-cardinality fields.");
+            System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
+            return;
+        }
+        
         Map<String, List<TermWithCount>> normalizedGroups = new HashMap<>();
         TermsEnum te = terms.iterator(null);
+        int processedTerms = 0;
         
         while (te.next() != null) {
+            if (processedTerms >= MAX_TERMS_FOR_DUPLICATE_DETECTION) {
+                break; // Safety limit
+            }
             String termText = te.term().utf8ToString();
             int docFreq = te.docFreq();
             String normalized = termText.toLowerCase().trim().replaceAll("\\s+", " ");
             normalizedGroups.computeIfAbsent(normalized, k -> new ArrayList<>()).add(new TermWithCount(termText, docFreq));
+            processedTerms++;
         }
         
         List<DuplicateGroup> duplicates = new ArrayList<>();
@@ -829,12 +881,12 @@ public class LukeInspectCommand implements Command {
             }
         }
         
+        // Clear large map
+        normalizedGroups.clear();
+        
         duplicates.sort((a, b) -> Integer.compare(b.totalDocs, a.totalDocs));
         
-        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
-        System.out.println("DUPLICATE VALUE DETECTION");
-        System.out.println("═══════════════════════════════════════════════════════════════════════════════════════");
-        System.out.printf("Field: %s%n%n", fieldName);
+        System.out.printf("Analyzed: %,d terms%n%n", processedTerms);
         
         if (duplicates.isEmpty()) {
             System.out.println("✅ No duplicate variations found in this field.");
