@@ -76,6 +76,7 @@
     <module>oak-benchmarks</module>
     <module>oak-search-elastic</module>
     <module>oak-run-luke</module>
+    <module>oak-luke-bundle</module>
   </modules>
 
   <build>
