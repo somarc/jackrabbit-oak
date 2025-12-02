@@ -172,9 +172,16 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
                 for (String fieldName : fields) {
                     if (count++ >= maxFields) break;
                     Terms terms = fields.terms(fieldName);
-                    results.add(String.format("Field: %s, Terms: %d",
-                            fieldName,
-                            terms != null ? terms.size() : 0));
+                    if (terms != null) {
+                        long termCount = terms.size();
+                        
+                        // If size() returns -1, count manually (expensive)
+                        if (termCount == -1) {
+                            termCount = countTermsManually(terms);
+                        }
+                        
+                        results.add(String.format("Field: %s, Terms: %,d", fieldName, termCount));
+                    }
                 }
             }
         } finally {
@@ -327,12 +334,26 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
             
             Fields fields = MultiFields.getFields(reader);
             if (fields != null) {
+                int analyzed = 0;
+                
                 for (String fieldName : fields) {
                     Terms terms = fields.terms(fieldName);
                     if (terms != null) {
                         long termCount = terms.size();
+                        
+                        // Lucene 4.7.2: size() returns -1 if unknown
+                        // Must iterate to count (expensive but accurate)
+                        if (termCount == -1) {
+                            log.debug("Counting terms manually for field: {}", fieldName);
+                            termCount = countTermsManually(terms);
+                        }
+                        
                         fieldCounts.put(fieldName, new FieldTermCount(fieldName, termCount));
                         totalTerms += termCount;
+                        
+                        if (++analyzed % 10 == 0) {
+                            log.info("Analyzed {} fields so far...", analyzed);
+                        }
                     }
                 }
             }
@@ -616,6 +637,20 @@ public class LukeIndexStatsMBeanImplSimple extends AnnotatedStandardMBean implem
         return false;
     }
 
+    /**
+     * Manually counts terms in a Terms object.
+     * Required when Terms.size() returns -1 (unknown).
+     * This is EXPENSIVE - O(t) where t = number of terms.
+     */
+    private long countTermsManually(Terms terms) throws IOException {
+        long count = 0;
+        TermsEnum te = terms.iterator(null);
+        while (te.next() != null) {
+            count++;
+        }
+        return count;
+    }
+    
     private long getFolderSize(File folder) {
         long size = 0;
         File[] files = folder.listFiles();
