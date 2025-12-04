@@ -8,6 +8,11 @@
 
 - **[CONFIGURATION.md](CONFIGURATION.md)** - Complete environment variables & system properties reference
 - **[IPFS-DATASTORE.md](IPFS-DATASTORE.md)** - IPFS binary storage guide (ADR 015)
+- **[DELETE-PROPOSAL-AND-GC-DEEP-DIVE.md](DELETE-PROPOSAL-AND-GC-DEEP-DIVE.md)** - Delete proposal flow & GC mechanisms (technical deep dive)
+- **[DELETE-QUICK-REFERENCE.md](DELETE-QUICK-REFERENCE.md)** - Quick reference for delete/GC development
+- **[docs/delete-flow-diagram.md](docs/delete-flow-diagram.md)** - Visual flow diagrams for delete proposals
+- **[docs/GAP-ANALYSIS-VS-OAK-REPOSITORY-SERVICE.md](docs/GAP-ANALYSIS-VS-OAK-REPOSITORY-SERVICE.md)** - Feature gaps vs Adobe's production OakRS
+- **[docs/IPFS-DATASTORE-ROBUSTNESS-ANALYSIS.md](docs/IPFS-DATASTORE-ROBUSTNESS-ANALYSIS.md)** - IPFS implementation vs Azure Blob Storage comparison
 
 ## Overview
 

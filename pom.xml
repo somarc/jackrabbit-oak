@@ -64,6 +64,7 @@
     <module>oak-lucene</module>
     <module>oak-auth-external</module>
     <module>oak-auth-ldap</module>
+    <module>oak-auth-web3</module>
     <module>oak-run-commons</module>
     <module>oak-run</module>
     <module>oak-it-osgi</module>
