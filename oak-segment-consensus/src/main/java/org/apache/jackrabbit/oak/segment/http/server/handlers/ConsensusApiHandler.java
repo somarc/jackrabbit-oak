@@ -918,9 +918,11 @@ public class ConsensusApiHandler {
      * This is called from AeronConsensusEngine.onSessionMessage() after Aeron replicates the write.
      */
     public void applyReplicatedWrite(String walletAddress, String path, String contentType, 
-                                     String message, String signature, String intentToken) {
+                                     String message, String signature, String intentToken, 
+                                     String blobId, String mimeType) {
         try {
-            log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}", walletAddress, path);
+            log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}", 
+                     walletAddress, path, intentToken, blobId);
             
             // Get current HEAD
             String previousHead = context.fileStore.getHead().getRecordId().toString();
@@ -978,31 +980,8 @@ public class ConsensusApiHandler {
             contentNode.setProperty("jcr:primaryType", "nt:unstructured");
             contentNode.setProperty("contentType", contentType != null ? contentType : "page");
             
-            // 📦 Extract blob info from message if present (format: message\n---BLOB---\nblobId\nmimeType)
-            // Note: Newlines may be literal \n or escaped \\n depending on JSON encoding
+            // blobId and mimeType now passed as parameters (ADR 020)
             String actualMessage = message != null ? message : "";
-            String blobId = null;
-            String mimeType = null;
-            
-            // Check for blob marker (handle both literal newlines and escaped newlines)
-            String blobMarker = "\n---BLOB---\n";
-            String escapedBlobMarker = "\\n---BLOB---\\n";
-            
-            if (actualMessage.contains(blobMarker) || actualMessage.contains(escapedBlobMarker)) {
-                // Normalize to use literal newlines for splitting
-                String normalizedMessage = actualMessage.replace("\\n", "\n");
-                
-                String[] parts = normalizedMessage.split("\n---BLOB---\n", 2);
-                actualMessage = parts[0]; // Original message without blob marker
-                if (parts.length > 1) {
-                    String[] blobParts = parts[1].split("\n", 2);
-                    blobId = blobParts[0].trim();
-                    if (blobParts.length > 1) {
-                        mimeType = blobParts[1].trim();
-                    }
-                    log.info("📦 Extracted blob from message: blobId={}, mimeType={}", blobId, mimeType);
-                }
-            }
             
             contentNode.setProperty("message", actualMessage);
             contentNode.setProperty("timestamp", System.currentTimeMillis());

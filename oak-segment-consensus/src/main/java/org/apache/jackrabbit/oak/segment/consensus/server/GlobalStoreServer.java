@@ -979,14 +979,15 @@ public class GlobalStoreServer {
                 // IMPORTANT: Callback must be set before ClusteredServiceContainer.launch()
                 aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
                     @Override
-                    public void applyWrite(String walletAddress, String path, String contentType, String message, String signature, String intentToken) {
+                    public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message, 
+                                                     String signature, String intentToken, String blobId, String mimeType) {
                         httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                            walletAddress, path, contentType, message, signature, intentToken
+                            walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType
                         );
                     }
                     
                     @Override
-                    public void applyDelete(String walletAddress, String path, String signature) {
+                    public void applyReplicatedDelete(String walletAddress, String path, String signature) {
                         httpServer.getConsensusApiHandler().applyReplicatedDelete(
                             walletAddress, path, signature
                         );
@@ -1784,14 +1785,15 @@ public class GlobalStoreServer {
         // Set write/delete application callback BEFORE launching cluster
         aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
             @Override
-            public void applyWrite(String walletAddress, String path, String contentType, String message, String signature, String intentToken) {
+            public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message, 
+                                             String signature, String intentToken, String blobId, String mimeType) {
                 httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                    walletAddress, path, contentType, message, signature, intentToken
+                    walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType
                 );
             }
             
             @Override
-            public void applyDelete(String walletAddress, String path, String signature) {
+            public void applyReplicatedDelete(String walletAddress, String path, String signature) {
                 httpServer.getConsensusApiHandler().applyReplicatedDelete(
                     walletAddress, path, signature
                 );
