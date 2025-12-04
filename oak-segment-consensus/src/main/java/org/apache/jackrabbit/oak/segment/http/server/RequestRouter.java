@@ -546,6 +546,13 @@ public class RequestRouter {
                 return;
             }
             
+            // ✅ ADR 025: Replication lag monitoring endpoint
+            if ("/v1/aeron/replication-lag".equals(path) && "GET".equals(method)) {
+                aeronApiHandler.handleReplicationLag(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
             // Fragmentation & GC Metrics API
             if ("/v1/fragmentation/metrics".equals(path) && "GET".equals(method)) {
                 fragmentationApiHandler.handleGetAllMetrics(request, response);

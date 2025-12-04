@@ -570,6 +570,40 @@ public class AeronApiHandler {
     }
 
     /**
+     * ✅ ADR 025: Handle GET /v1/aeron/replication-lag - Returns replication lag status
+     * 
+     * <p>Shows how far behind this follower is from the leader's log position.
+     * Useful for monitoring cluster health and detecting slow followers.
+     * 
+     * <p>Response includes:
+     * - role: Current role (LEADER/FOLLOWER)
+     * - myLogPosition: This node's log position
+     * - leaderLogPosition: Leader's log position
+     * - replicationLag: Number of messages behind leader
+     * - lagThreshold: Alert threshold (1000 messages)
+     * - healthy: Whether lag is within acceptable range
+     */
+    public void handleReplicationLag(HttpServletResponse response) throws IOException {
+        if (context.aeronConsensusEngine == null) {
+            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+                "Aeron Cluster consensus not configured");
+            return;
+        }
+        
+        Map<String, Object> lagStatus = context.aeronConsensusEngine.getReplicationLagStatus();
+        
+        if (lagStatus == null) {
+            sendError(response, HttpServletResponse.SC_NOT_FOUND, 
+                "Replication lag not applicable (cluster not initialized)");
+            return;
+        }
+        
+        response.setContentType("application/json");
+        response.setStatus(HttpServletResponse.SC_OK);
+        writeJsonResponse(response, lagStatus);
+    }
+    
+    /**
      * Send standardized error response.
      */
     private void sendError(HttpServletResponse response, int statusCode, String message) throws IOException {
