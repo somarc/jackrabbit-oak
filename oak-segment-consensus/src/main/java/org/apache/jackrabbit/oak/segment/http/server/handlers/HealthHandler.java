@@ -78,6 +78,12 @@ public class HealthHandler {
         json.append("  \"status\": \"UP\",\n");
         json.append("  \"store\": \"").append(storeDirectory).append("\"");
         
+        // Add BlobStore type for dashboard status checks
+        if (context != null && context.blobStoreType != null) {
+            json.append(",\n  \"blobStoreType\": \"").append(context.blobStoreType).append("\"");
+            json.append(",\n  \"blobStoreActive\": ").append(context.blobStore != null);
+        }
+        
         // Add committedHead vs latestHead if Aeron engine is available
         if (context != null && context.aeronConsensusEngine != null) {
             String committedHead = context.aeronConsensusEngine.getCommittedHead();
@@ -329,7 +335,34 @@ public class HealthHandler {
         json.append("    \"registeredValidators\": ").append(registeredValidators.size()).append("\n");
         json.append("  },\n");
         
-        // 7. Overall health
+        // 7. BlobStore health
+        json.append("  \"blobStore\": {\n");
+        if (context != null && context.blobStoreType != null) {
+            String blobStoreType = context.blobStoreType;
+            json.append("    \"type\": \"").append(blobStoreType).append("\",\n");
+            
+            if (context.blobStore != null) {
+                json.append("    \"status\": \"UP\",\n");
+                
+                // Check if IPFS and add gateway info
+                if ("ipfs".equalsIgnoreCase(blobStoreType)) {
+                    json.append("    \"cidMappingAvailable\": ").append(context.cidMappingService != null).append(",\n");
+                    json.append("    \"ipfsGateway\": \"http://127.0.0.1:8080/ipfs/\"\n");
+                } else {
+                    json.append("    \"note\": \"").append(blobStoreType).append(" storage configured\"\n");
+                }
+            } else {
+                json.append("    \"status\": \"DEGRADED\",\n");
+                json.append("    \"error\": \"BlobStore not initialized\"\n");
+            }
+        } else {
+            json.append("    \"type\": \"default\",\n");
+            json.append("    \"status\": \"UP\",\n");
+            json.append("    \"note\": \"FileDataStore (embedded)\"\n");
+        }
+        json.append("  },\n");
+        
+        // 8. Overall health
         json.append("  \"overall\": {\n");
         json.append("    \"status\": \"").append(allHealthy ? "UP" : "DEGRADED").append("\",\n");
         json.append("    \"timestamp\": \"").append(new java.util.Date()).append("\"\n");
