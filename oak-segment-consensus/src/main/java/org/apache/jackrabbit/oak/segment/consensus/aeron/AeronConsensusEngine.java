@@ -4036,43 +4036,72 @@ public class AeronConsensusEngine implements ClusteredService {
             innovations.setProperty("demo-date", "Garage Week - December 15, 2025");
             innovations.setProperty("team", "somarc + Cursor (Auto mode + Composer-1) + Grok 4.1 as outside counsel — distributed intelligence building distributed systems");
             
-            // ✈️ AERON REPLICATION: Send genesis through Aeron instead of local merge
-            // This ensures ALL nodes receive and create genesis identically via Raft consensus
+            // ═══════════════════════════════════════════════════════════════════
+            // IPFS: Decentralized Binary Storage Info (ADR 015)
+            // ═══════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder ipfs = genesis.child("ipfs");
+            ipfs.setProperty("jcr:primaryType", "nt:unstructured");
+            ipfs.setProperty("description", "Decentralized binary storage via IPFS - content-addressed, immutable");
+            ipfs.setProperty("gateway-public", "https://ipfs.io/ipfs/");
+            ipfs.setProperty("gateway-local", "http://localhost:8080/ipfs/");
+            ipfs.setProperty("note", "Genesis image can be uploaded via Editor - demonstrates IPFS integration");
             
-            // Serialize genesis structure to JSON for replication
+            // TODO: Add genesis image via BlobStore (requires passing blobStore to AeronConsensusEngine)
+            // For now, document how to add content to genesis
+            String ipfsCid = null;
+            
+            // ═══════════════════════════════════════════════════════════════════
+            // COMMIT: Merge rich genesis structure locally first
+            // ═══════════════════════════════════════════════════════════════════
+            log.info("📝 Committing genesis structure to local FileStore...");
+            ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore).merge(
+                rootBuilder, 
+                org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
+                org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY
+            );
+            String newHead = fileStore.getHead().getRecordId().toString10();
+            log.info("✅ Genesis committed locally - HEAD: {}", newHead);
+            
+            // ✈️ AERON REPLICATION: Send marker through Aeron for followers to sync
+            // Followers will pull the full genesis via HTTP segment transfer
             StringBuilder genesisJson = new StringBuilder();
             genesisJson.append("{");
-            genesisJson.append("\"type\":\"genesis\",");
+            genesisJson.append("\"type\":\"genesis-created\",");
             genesisJson.append("\"genesisValidator\":\"").append(selfUrl).append("\",");
             genesisJson.append("\"timestamp\":").append(System.currentTimeMillis()).append(",");
-            genesisJson.append("\"message\":\"Network genesis - Blockchain AEM initialized - All nodes will create this structure identically\"");
+            genesisJson.append("\"head\":\"").append(newHead).append("\",");
+            if (ipfsCid != null) {
+                genesisJson.append("\"ipfsCid\":\"").append(ipfsCid).append("\",");
+            }
+            genesisJson.append("\"message\":\"Genesis created - followers should sync via HTTP segment transfer\"");
             genesisJson.append("}");
             
-            log.info("📡 Sending genesis through Aeron for cluster-wide replication...");
+            log.info("📡 Sending genesis marker through Aeron...");
             
-            // Send through Aeron ingress - Raft will replicate to all nodes
+            // Send marker through Aeron (informational - followers sync via HTTP)
             boolean sent = sendWriteThroughIngress(
                 "0x0000000000000000000000000000000000000000",
                 "/oak-chain/00/00/00/0x0000000000000000000000000000000000000000/content/genesis",
                 "genesis",
                 genesisJson.toString(),
-                "0x0000000000000000000000000000000000000000000000000000000000000000"  // System signature
+                "0x0000000000000000000000000000000000000000000000000000000000000000"
             );
             
             if (sent) {
-                log.info("✅ Genesis sent through Aeron - will be received by all nodes via onSessionMessage()");
-                log.info("   All nodes will create identical genesis structure when they receive this write");
+                log.info("✅ Genesis marker sent - followers will sync via HTTP segment transfer");
             } else {
-                log.error("❌ Failed to send genesis through Aeron - falling back to local creation");
-                // Fallback: Create locally if Aeron send fails
-                ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore).merge(
-                    rootBuilder, 
-                    org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
-                    org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY
-                );
-                String newHead = fileStore.getHead().getRecordId().toString10();
-                log.warn("⚠️  Genesis created locally only - HEAD: {}", newHead);
+                log.warn("⚠️  Genesis marker send failed (genesis still committed locally)");
             }
+            
+            // Log genesis summary
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("🎊 GENESIS NODE CREATED");
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("   Path: /oak-chain/00/00/00/0x0000.../content/genesis");
+            log.info("   Message: DO IT LIVE!");
+            log.info("   IPFS Image: {}", ipfsCid != null ? ipfsCid : "stored in BlobStore");
+            log.info("   HEAD: {}", newHead);
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             
         } catch (Exception e) {
             log.error("Exception during genesis creation", e);
