@@ -23,7 +23,7 @@ import java.util.List;
  */
 public interface RaftAppendCallback {
     /**
-     * Append a verified write proposal to Raft log.
+     * Append a verified write proposal to Raft log (without binary).
      * 
      * @param walletAddress Ethereum wallet address
      * @param path Shard path
@@ -32,6 +32,23 @@ public interface RaftAppendCallback {
      * @param signature Transaction signature
      */
     void appendProposal(String walletAddress, String path, String contentType, String message, String signature);
+    
+    /**
+     * Append a verified write proposal with binary to Raft log.
+     * 
+     * @param walletAddress Ethereum wallet address
+     * @param path Shard path
+     * @param contentType Content type
+     * @param message Content message
+     * @param signature Transaction signature
+     * @param blobId Oak blob ID for attached binary
+     * @param mimeType MIME type of binary
+     */
+    default void appendProposal(String walletAddress, String path, String contentType, String message, 
+                               String signature, String blobId, String mimeType) {
+        // Default: ignore binary metadata and call base method
+        appendProposal(walletAddress, path, contentType, message, signature);
+    }
     
     /**
      * Append a verified delete proposal to Raft log.

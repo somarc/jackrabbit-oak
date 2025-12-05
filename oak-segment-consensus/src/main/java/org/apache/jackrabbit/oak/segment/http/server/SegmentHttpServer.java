@@ -586,8 +586,19 @@ public class SegmentHttpServer {
     /**
      * Jetty handler for serving segment store files.
      * Delegates to RequestRouter for routing to appropriate handlers.
+     * 
+     * Supports multipart/form-data for binary uploads (up to 100MB per file, 200MB total).
      */
     private class SegmentStoreHandler extends AbstractHandler {
+        
+        // Multipart config for file uploads: 100MB max file, 200MB max request, 1MB threshold
+        private final javax.servlet.MultipartConfigElement multipartConfig = 
+            new javax.servlet.MultipartConfigElement(
+                System.getProperty("java.io.tmpdir"),  // temp dir
+                100 * 1024 * 1024,  // maxFileSize: 100MB
+                200 * 1024 * 1024,  // maxRequestSize: 200MB
+                1024 * 1024         // fileSizeThreshold: 1MB (files larger go to disk)
+            );
         
         @Override
         public void handle(String target, Request baseRequest, HttpServletRequest request,
@@ -595,6 +606,14 @@ public class SegmentHttpServer {
             
             String path = request.getPathInfo();
             String method = request.getMethod();
+            
+            // Enable multipart parsing for POST requests with multipart content
+            String contentType = request.getContentType();
+            if ("POST".equals(method) && contentType != null && 
+                contentType.toLowerCase().startsWith("multipart/")) {
+                // Set multipart config on the request for Jetty to parse multipart data
+                request.setAttribute("org.eclipse.jetty.multipartConfig", multipartConfig);
+            }
             
             log.debug("HTTP {} {}", method, path);
             

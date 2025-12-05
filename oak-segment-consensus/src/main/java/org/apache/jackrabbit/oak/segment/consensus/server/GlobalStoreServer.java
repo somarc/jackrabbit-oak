@@ -97,6 +97,7 @@ public class GlobalStoreServer {
     private volatile boolean running = false;
     private FileStore fileStore;
     private NodeStore nodeStore;
+    private org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     private SegmentHttpServer httpServer;
     private EpochListener epochListener;
     private ValidatorBootstrap bootstrap;
@@ -317,6 +318,7 @@ public class GlobalStoreServer {
                     
                     // Wrap DataStore in DataStoreBlobStore (Oak pattern for DataStore -> BlobStore conversion)
                     blobStore = new org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore(ipfsDataStore);
+                    this.blobStore = blobStore; // Store reference for genesis image upload
                     
                     System.out.println("✅ IPFS BlobStore initialized");
                     System.out.println("   - IPFS API: " + ipfsEndpoint);
@@ -1182,7 +1184,7 @@ public class GlobalStoreServer {
                     new org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback() {
                         @Override
                         public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
-                            // Append single write proposal to Raft via AeronConsensusEngine
+                            // Append single write proposal to Raft via AeronConsensusEngine (no binary)
                             if (aeronEngine == null) {
                                 System.err.println("❌ aeronEngine is NULL in appendProposal!");
                                 return;
@@ -1191,6 +1193,21 @@ public class GlobalStoreServer {
                             boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
                             if (!success) {
                                 System.err.println("❌ sendWriteThroughIngress() returned false!");
+                            }
+                        }
+                        
+                        @Override
+                        public void appendProposal(String walletAddress, String path, String contentType, String message, 
+                                                  String signature, String blobId, String mimeType) {
+                            // Append single write proposal WITH BINARY to Raft via AeronConsensusEngine
+                            if (aeronEngine == null) {
+                                System.err.println("❌ aeronEngine is NULL in appendProposal!");
+                                return;
+                            }
+                            System.out.println("📤 appendProposal() with binary - blobId=" + blobId + " (role: " + aeronEngine.getCurrentRole() + ")");
+                            boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature, blobId, mimeType);
+                            if (!success) {
+                                System.err.println("❌ sendWriteThroughIngress() with binary returned false!");
                             }
                         }
                         
@@ -1565,13 +1582,107 @@ public class GlobalStoreServer {
             meta.setProperty("license", "Apache License 2.0");
             
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // BYOD Model (binaries external)
+            // GENESIS IMAGE: "DO IT LIVE!" via IPFS (ADR 015)
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder byod = genesis.child("byod");
-            byod.setProperty("jcr:primaryType", "nt:unstructured");
-            byod.setProperty("imageUri", "https://participant-cdn.example.com/assets/do-it-live.jpeg");
-            byod.setProperty("imageMimeType", "image/jpeg");
-            byod.setProperty("note", "Binaries stored in participant-owned datastore, not in global chain");
+            // The genesis image is stored in IPFS and serves as:
+            // 1. Proof that IPFS integration works from day 0
+            // 2. A memorable visual for the network's birth
+            // 3. Content-addressed storage demo (CID never changes)
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesisImage = genesis.child("do-it-live.jpeg");
+            genesisImage.setProperty("jcr:primaryType", "nt:file");
+            genesisImage.setProperty("jcr:created", timestamp);
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder imageContent = genesisImage.child("jcr:content");
+            imageContent.setProperty("jcr:primaryType", "nt:resource");
+            imageContent.setProperty("jcr:mimeType", "image/jpeg");
+            imageContent.setProperty("jcr:lastModified", timestamp);
+            
+            // Load genesis image from resources and store in BlobStore (IPFS if configured)
+            String ipfsCid = null;
+            try {
+                java.io.InputStream imageStream = getClass().getClassLoader()
+                    .getResourceAsStream("genesis-assets/do-it-live.jpeg");
+                
+                if (imageStream != null && blobStore != null) {
+                    // Read image bytes
+                    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = imageStream.read(buffer)) != -1) {
+                        baos.write(buffer, 0, bytesRead);
+                    }
+                    imageStream.close();
+                    byte[] imageBytes = baos.toByteArray();
+                    
+                    System.out.println("   📸 Storing genesis image in IPFS...");
+                    System.out.println("      Size: " + imageBytes.length + " bytes");
+                    
+                    // Store via BlobStore (IPFS backend will pin it)
+                    org.apache.jackrabbit.oak.spi.blob.BlobStore bStore = this.blobStore;
+                    if (bStore != null) {
+                        String blobId = bStore.writeBlob(new java.io.ByteArrayInputStream(imageBytes));
+                        
+                        // Create proper Binary from blobId
+                        org.apache.jackrabbit.oak.api.Blob blob = 
+                            new org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob(bStore, blobId);
+                        imageContent.setProperty("jcr:data", blob);
+                        imageContent.setProperty("jcr:blobId", blobId);
+                        
+                        // If IPFS, try to extract CID
+                        if (blobId.startsWith("Qm") || blobId.startsWith("bafy")) {
+                            ipfsCid = blobId.split("#")[0]; // Remove size suffix if present
+                            imageContent.setProperty("ipfs:cid", ipfsCid);
+                            System.out.println("      ✅ IPFS CID: " + ipfsCid);
+                        } else {
+                            // Try to look up CID from blob metadata
+                            try {
+                                if (bStore instanceof org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) {
+                                    org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore dsBlobStore = 
+                                        (org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) bStore;
+                                    // CID might be stored in the underlying DataStore
+                                    ipfsCid = blobId; // Use blobId as fallback
+                                }
+                            } catch (Exception e) {
+                                // Ignore - CID lookup is optional
+                            }
+                            System.out.println("      ✅ Blob ID: " + blobId);
+                        }
+                    }
+                } else if (imageStream != null) {
+                    // No BlobStore, store as inline binary (not recommended for production)
+                    System.out.println("   ⚠️  No BlobStore configured - storing image inline (demo mode)");
+                    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = imageStream.read(buffer)) != -1) {
+                        baos.write(buffer, 0, bytesRead);
+                    }
+                    imageStream.close();
+                    byte[] imageBytes = baos.toByteArray();
+                    
+                    // Store as inline binary (Oak will store in segment)
+                    org.apache.jackrabbit.oak.api.Blob blob = 
+                        nodeStore.createBlob(new java.io.ByteArrayInputStream(imageBytes));
+                    imageContent.setProperty("jcr:data", blob);
+                    System.out.println("      Size: " + imageBytes.length + " bytes (inline)");
+                } else {
+                    System.out.println("   ⚠️  Genesis image not found in resources");
+                    imageContent.setProperty("jcr:data", "DO IT LIVE! (image placeholder)");
+                }
+            } catch (Exception e) {
+                System.out.println("   ⚠️  Failed to store genesis image: " + e.getMessage());
+                imageContent.setProperty("jcr:data", "DO IT LIVE! (image error: " + e.getMessage() + ")");
+            }
+            
+            // Store IPFS info for display
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder ipfsInfo = genesis.child("ipfs");
+            ipfsInfo.setProperty("jcr:primaryType", "nt:unstructured");
+            ipfsInfo.setProperty("enabled", blobStore != null);
+            ipfsInfo.setProperty("genesisImageCid", ipfsCid != null ? ipfsCid : "N/A (BlobStore fallback)");
+            ipfsInfo.setProperty("gateway", "https://ipfs.io/ipfs/");
+            ipfsInfo.setProperty("localGateway", "http://localhost:8080/ipfs/");
+            ipfsInfo.setProperty("description", "Binaries stored via IPFS - content-addressed, decentralized, immutable");
             
             // Commit the IMMORTAL GENESIS
             nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
@@ -1591,6 +1702,18 @@ public class GlobalStoreServer {
             System.out.println("      Message: \"DO IT LIVE!\"");
             System.out.println("      Version: 1.0.0-POC");
             System.out.println("      Birth: " + genesisDate);
+            System.out.println("");
+            System.out.println("   📦 IPFS (Decentralized Binary Storage):");
+            if (ipfsCid != null) {
+                System.out.println("      ✅ Genesis Image: do-it-live.jpeg");
+                System.out.println("      ✅ IPFS CID: " + ipfsCid);
+                System.out.println("      ✅ Public Gateway: https://ipfs.io/ipfs/" + ipfsCid);
+                System.out.println("      ✅ Local Gateway: http://localhost:8080/ipfs/" + ipfsCid);
+            } else if (blobStore != null) {
+                System.out.println("      ✅ Genesis Image: do-it-live.jpeg (via BlobStore)");
+            } else {
+                System.out.println("      ⚠️ IPFS not configured (demo mode - inline binaries)");
+            }
             System.out.println("");
             System.out.println("   🎖️  CONSENSUS:");
             System.out.println("      Model: aeron-raft");

@@ -1818,6 +1818,123 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
+     * Send a write proposal with binary metadata through Aeron ingress.
+     * This overload includes blobId and mimeType for eager binary uploads.
+     */
+    public boolean sendWriteThroughIngress(String walletAddress, String path, 
+                                           String contentType, String message, String signature,
+                                           String blobId, String mimeType) {
+        if (cluster == null) {
+            log.error("❌ Cluster not initialized - cannot send write through ingress");
+            return false;
+        }
+        
+        // Ensure internal cluster client is created (lazy initialization)
+        ensureInternalClusterClient();
+        
+        if (internalClusterClient == null) {
+            log.error("❌ Internal AeronCluster client not available - cannot send write through ingress");
+            return false;
+        }
+        
+        log.info("🔍 PRIORITY PATH (with binary): client={}, sessionId={}, blobId={}", 
+            System.identityHashCode(internalClusterClient),
+            internalClusterClient.clusterSessionId(),
+            blobId);
+        
+        try {
+            // Build JSON write proposal WITH blobId and mimeType
+            StringBuilder json = new StringBuilder();
+            json.append("{");
+            json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
+            json.append("\"path\":\"").append(escapeJson(path)).append("\",");
+            json.append("\"contentType\":\"").append(escapeJson(contentType != null ? contentType : "page")).append("\",");
+            json.append("\"message\":\"").append(escapeJson(message != null ? message : "")).append("\",");
+            json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
+            
+            // Add blobId and mimeType if present
+            if (blobId != null && !blobId.isEmpty()) {
+                json.append(",\"blobId\":\"").append(escapeJson(blobId)).append("\"");
+                json.append(",\"mimeType\":\"").append(escapeJson(mimeType != null ? mimeType : "application/octet-stream")).append("\"");
+                log.info("📎 Including blobId in Aeron JSON: {}", blobId);
+            }
+            
+            json.append("}");
+            
+            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            log.debug("📤 Sending write with binary - JSON size: {} bytes", jsonBytes.length);
+            
+            // ✈️ AERON SBE MESSAGE FORMAT
+            int blockLength = jsonBytes.length;
+            int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL;
+            
+            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
+            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
+                new byte[totalLength]
+            );
+            
+            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
+                messageBuffer, 0, blockLength, templateId);
+            
+            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+            
+            try {
+                if (internalClusterClient.isClosed()) {
+                    log.error("❌ Cannot send write - internal cluster client session is CLOSED");
+                    synchronized (this) {
+                        internalClusterClient = null;
+                        ensureInternalClusterClient();
+                    }
+                    if (internalClusterClient == null || internalClusterClient.isClosed()) {
+                        log.error("❌ Reconnection failed - cannot send write");
+                        return false;
+                    }
+                    log.info("✅ Reconnection successful - retrying write send");
+                }
+                
+                idleStrategy.reset();
+                long result;
+                int retries = 0;
+                while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
+                    if (result == io.aeron.Publication.BACK_PRESSURED) {
+                        idleStrategy.idle();
+                        retries++;
+                        if (retries > 100) {
+                            log.error("❌ Ingress back-pressured after {} retries", retries);
+                            return false;
+                        }
+                    } else if (result == io.aeron.Publication.NOT_CONNECTED) {
+                        log.warn("⚠️  Ingress not connected - waiting...");
+                        idleStrategy.idle();
+                        retries++;
+                        if (retries > 100) {
+                            log.error("❌ Ingress not connected after {} retries", retries);
+                            return false;
+                        }
+                    } else {
+                        log.error("❌ Failed to send write through ingress: {}", result);
+                        return false;
+                    }
+                }
+                
+                ingressTimestamps.offer(System.nanoTime());
+                performanceMetrics.recordMessageIngressed();
+                backpressureManager.incrementSent();
+                
+                log.info("✅ Write with binary sent through AeronCluster.offer() - blobId={}", blobId);
+                return true;
+            } catch (Exception e) {
+                log.error("❌ Exception sending write through AeronCluster client", e);
+                return false;
+            }
+            
+        } catch (Exception e) {
+            log.error("❌ Exception sending write through ingress", e);
+            return false;
+        }
+    }
+    
+    /**
      * Send a DELETE proposal through Aeron ingress for consensus replication.
      * Same flow as writes, just different template ID and simpler JSON.
      * 
@@ -1986,6 +2103,15 @@ public class AeronConsensusEngine implements ClusteredService {
                 // Add intentToken if present (ADR 020 - lazy binary upload)
                 if (proposal.getIntentToken() != null && !proposal.getIntentToken().isEmpty()) {
                     json.append(",\"intentToken\":\"").append(escapeJson(proposal.getIntentToken())).append("\"");
+                }
+                
+                // Add blobId and mimeType if present (eager binary upload)
+                String pBlobId = proposal.getBlobId();
+                log.info("🔍 Serializing proposal: path={}, blobId={}", proposal.getPath(), pBlobId);
+                if (pBlobId != null && !pBlobId.isEmpty()) {
+                    json.append(",\"blobId\":\"").append(escapeJson(pBlobId)).append("\"");
+                    json.append(",\"mimeType\":\"").append(escapeJson(proposal.getMimeType() != null ? proposal.getMimeType() : "application/octet-stream")).append("\"");
+                    log.info("📎 Including blobId in Aeron JSON: {}", pBlobId);
                 }
                 
                 json.append("}");

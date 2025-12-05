@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
+import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
@@ -71,15 +72,87 @@ public class ConsensusApiHandler {
         // No proxy needed - Aeron handles it natively
         
         try {
-            // Read wallet-based write parameters
-            // CRITICAL: walletAddress is REQUIRED and must be a valid 0x Ethereum address
-            String wallet = request.getParameter("walletAddress");
-            if (wallet == null || wallet.isEmpty()) {
-                wallet = request.getParameter("wallet"); // Fallback for backward compatibility
+            // ============================================================
+            // MULTIPART FORM DATA SUPPORT
+            // Handles binary uploads elegantly without base64 encoding
+            // Future: ADR 016 (client IPFS) and ADR 020 (lazy upload)
+            // ============================================================
+            String wallet = null;
+            String signature = null;
+            String message = null;
+            String contentType = null;
+            String ethereumTxHash = null;
+            String intentToken = null;
+            String paymentTier = null;
+            byte[] binaryBytes = null;
+            String mimeType = null;
+            String fileName = null;
+            
+            String requestContentType = request.getContentType();
+            boolean isMultipart = requestContentType != null && requestContentType.toLowerCase().startsWith("multipart/");
+            
+            if (isMultipart) {
+                log.info("📦 Processing MULTIPART form data upload");
+                
+                // Parse multipart request
+                java.util.Collection<javax.servlet.http.Part> parts = request.getParts();
+                for (javax.servlet.http.Part part : parts) {
+                    String partName = part.getName();
+                    
+                    if (part.getSubmittedFileName() != null) {
+                        // This is a file upload
+                        fileName = part.getSubmittedFileName();
+                        mimeType = part.getContentType();
+                        
+                        // Read file bytes directly (no base64!)
+                        try (java.io.InputStream is = part.getInputStream()) {
+                            binaryBytes = is.readAllBytes();
+                        }
+                        log.info("📎 Received file: {} ({} bytes, {})", fileName, binaryBytes.length, mimeType);
+                        
+                    } else {
+                        // This is a form field
+                        String value = new String(part.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                        
+                        switch (partName) {
+                            case "walletAddress": case "wallet": wallet = value; break;
+                            case "signature": signature = value; break;
+                            case "message": message = value; break;
+                            case "contentType": contentType = value; break;
+                            case "ethereumTxHash": ethereumTxHash = value; break;
+                            case "intentToken": intentToken = value; break;
+                            case "paymentTier": paymentTier = value; break;
+                            // TODO ADR 016: case "ipfsCid": ipfsCid = value; break;
+                            // TODO ADR 020: case "intentToken": intentToken = value; break;
+                        }
+                    }
+                }
+            } else {
+                // Standard URL-encoded form (existing path)
+                wallet = request.getParameter("walletAddress");
+                if (wallet == null || wallet.isEmpty()) {
+                    wallet = request.getParameter("wallet"); // Fallback for backward compatibility
+                }
+                signature = request.getParameter("signature");
+                message = request.getParameter("message");
+                contentType = request.getParameter("contentType");
+                ethereumTxHash = request.getParameter("ethereumTxHash");
+                intentToken = request.getParameter("intentToken");
+                paymentTier = request.getParameter("paymentTier");
+                
+                // Legacy base64 binary (for backward compatibility, but discouraged)
+                String binaryData = request.getParameter("binaryData");
+                if (binaryData != null && !binaryData.isEmpty()) {
+                    log.debug("⚠️  Using legacy base64 binary upload (consider multipart for large files)");
+                    mimeType = request.getParameter("mimeType");
+                    try {
+                        String cleanedBase64 = binaryData.replace(' ', '+').replaceAll("\\s", "");
+                        binaryBytes = java.util.Base64.getDecoder().decode(cleanedBase64);
+                    } catch (IllegalArgumentException e) {
+                        log.warn("⚠️  Invalid base64 binary data: {}", e.getMessage());
+                    }
+                }
             }
-            String signature = request.getParameter("signature");
-            String message = request.getParameter("message");
-            String contentType = request.getParameter("contentType");
             
             // Validate Ethereum address format FIRST (REQUIRED)
             if (wallet == null || wallet.isEmpty()) {
@@ -293,8 +366,7 @@ public class ConsensusApiHandler {
                 log.debug("✅ Signature verification: Format valid (real mode - full verification TODO)");
             }
             
-            // Extract Ethereum transaction hash (REQUIRED for queue)
-            String ethereumTxHash = request.getParameter("ethereumTxHash");
+            // Validate Ethereum transaction hash (REQUIRED for queue)
             if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
                 log.warn("🚫 Write rejected: Missing ethereumTxHash parameter");
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
@@ -302,27 +374,16 @@ public class ConsensusApiHandler {
                 return;
             }
             
-            // Extract intentToken (optional - for lazy binary upload, ADR 020)
-            String intentToken = request.getParameter("intentToken");
-            
-            // Extract binary data (optional - for eager binary upload)
-            String binaryData = request.getParameter("binaryData");
-            String mimeType = request.getParameter("mimeType");
+            // ============================================================
+            // BINARY UPLOAD TO BLOBSTORE
+            // Supports: Multipart (preferred), base64 (legacy), ADR 020 (future)
+            // ============================================================
             String blobId = null;
             
-            // 📦 EAGER BINARY UPLOAD: If binaryData is provided, upload to BlobStore immediately
-            // This is the alternative to ADR 020 lazy upload - client sends binary with proposal
-            if (binaryData != null && !binaryData.isEmpty() && context.blobStore != null) {
+            // 📦 EAGER BINARY UPLOAD: If binary bytes are available, upload to BlobStore
+            if (binaryBytes != null && binaryBytes.length > 0 && context.blobStore != null) {
                 try {
-                    log.debug("📦 Processing eager binary upload ({} bytes base64)", binaryData.length());
-                    
-                    // Fix URL encoding issues: + becomes space in form encoding, need to convert back
-                    // Also handle any whitespace that might have been introduced
-                    String cleanedBase64 = binaryData.replace(' ', '+').replaceAll("\\s", "");
-                    
-                    // Decode base64
-                    byte[] binaryBytes = java.util.Base64.getDecoder().decode(cleanedBase64);
-                    log.debug("   Decoded to {} bytes", binaryBytes.length);
+                    log.info("📦 Uploading binary to BlobStore ({} bytes, {})", binaryBytes.length, mimeType);
                     
                     // Upload to BlobStore (IPFS or other configured store)
                     java.io.InputStream binaryStream = new java.io.ByteArrayInputStream(binaryBytes);
@@ -421,7 +482,6 @@ public class ConsensusApiHandler {
             }
             
             // Parse payment tier from request (defaults to STANDARD)
-            String paymentTierParam = request.getParameter("paymentTier");
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier = 
                 org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
             
@@ -431,10 +491,10 @@ public class ConsensusApiHandler {
                     (org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) context.evmBridge;
                 
                 java.math.BigInteger paymentAmount;
-                if ("express".equalsIgnoreCase(paymentTierParam)) {
+                if ("express".equalsIgnoreCase(paymentTier)) {
                     tier = org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS;
                     paymentAmount = tier.baseRate; // 0.000002 ETH
-                } else if ("priority".equalsIgnoreCase(paymentTierParam)) {
+                } else if ("priority".equalsIgnoreCase(paymentTier)) {
                     tier = org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY;
                     paymentAmount = tier.baseRate; // 0.00001 ETH
                 } else {
@@ -471,27 +531,30 @@ public class ConsensusApiHandler {
             }
             
             // Queue proposal (waiting for Ethereum confirmation)
-            // If we have a blobId, append it to the message for transport through Aeron
-            // Format: message + "\n---BLOB---\nblobId\nmimeType"
-            String messageWithBlob = message != null ? message : "";
-            if (blobId != null) {
-                messageWithBlob = messageWithBlob + "\n---BLOB---\n" + blobId + "\n" + (mimeType != null ? mimeType : "application/octet-stream");
-                log.debug("📎 Binary blob ID embedded in message for Aeron transport: {}", blobId);
-            }
-            
             log.debug("📥 Queuing proposal {} (tx: {}, tier: {}, intentToken: {}, blobId: {}), waiting for Ethereum confirmation", 
                 proposalId, ethereumTxHash, tier, intentToken != null ? intentToken : "none", blobId != null ? blobId : "none");
-            context.proposalQueueManager.queueProposal(
+            
+            QueuedProposal queuedProposal = context.proposalQueueManager.queueProposal(
                 proposalId,
                 ethereumTxHash,
                 normalizedWallet,
                 fullPath,
                 contentType != null ? contentType : "page",
-                messageWithBlob,  // Message now includes blob info if present
+                message != null ? message : "",  // Keep message clean, no blob embedding
                 signature, // Already validated - no fallback needed
                 tier,  // Pass payment tier for priority handling
                 intentToken  // Pass intentToken for lazy binary upload (ADR 020)
             );
+            
+            // Set binary info directly on proposal (for Aeron serialization)
+            if (blobId != null && !blobId.isEmpty()) {
+                queuedProposal.setBlobId(blobId);
+                queuedProposal.setMimeType(mimeType != null ? mimeType : "application/octet-stream");
+                log.info("📎 Binary blob attached to proposal {}: blobId={}, mimeType={}", 
+                    proposalId, blobId, mimeType);
+            } else {
+                log.info("📝 Text-only proposal {} (no binary)", proposalId);
+            }
             
             // Return queued status (202 Accepted)
             response.setContentType("application/json");

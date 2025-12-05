@@ -626,13 +626,15 @@ public class ProposalQueueManagerOptimized {
                                 proposal.getSignature()
                             );
                         } else {
-                            log.info("📝 Sending WRITE proposal (templateId 100)");
+                            log.info("📝 Sending WRITE proposal (templateId 100) blobId={}", proposal.getBlobId());
                             raftAppendCallback.appendProposal(
                                 proposal.getWalletAddress(),
                                 proposal.getPath(),
                                 proposal.getContentType(),
                                 proposal.getMessage(),
-                                proposal.getSignature()
+                                proposal.getSignature(),
+                                proposal.getBlobId(),
+                                proposal.getMimeType()
                             );
                         }
                         sent = 1; // appendProposal/appendDeleteProposal returns void, assume success
