@@ -124,6 +124,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final SegmentReplicator replicator;
     private final String storeDirectory;
     private final org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager backpressureManager;
+    private final org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     
     // ✅ PRODUCTION REFACTOR: Service layer components (extracted from monolithic class)
     private final MessageDispatcher messageDispatcher;
@@ -225,6 +226,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * @param selfUrl This validator's URL
      * @param peerUrls List of peer validator URLs
      * @param wallet Ethereum wallet for validator identity
+     * @param blobStore BlobStore for genesis image (can be null)
      */
     public AeronConsensusEngine(
             FileStore fileStore,
@@ -232,13 +234,15 @@ public class AeronConsensusEngine implements ClusteredService {
             String selfUrl,
             List<String> peerUrls,
             org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet,
-            String storeDirectory) {
+            String storeDirectory,
+            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.selfUrl = selfUrl;
         this.peerUrls = peerUrls;
         this.wallet = wallet;
         this.storeDirectory = storeDirectory;
+        this.blobStore = blobStore;
         this.replicator = new SegmentReplicator(fileStore);
         this.backpressureManager = new org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager();
         
@@ -4037,18 +4041,74 @@ public class AeronConsensusEngine implements ClusteredService {
             innovations.setProperty("team", "somarc + Cursor (Auto mode + Composer-1) + Grok 4.1 as outside counsel — distributed intelligence building distributed systems");
             
             // ═══════════════════════════════════════════════════════════════════
-            // IPFS: Decentralized Binary Storage Info (ADR 015)
+            // IPFS: Decentralized Binary Storage (ADR 015) - "DO IT LIVE!" Image
             // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder ipfs = genesis.child("ipfs");
-            ipfs.setProperty("jcr:primaryType", "nt:unstructured");
-            ipfs.setProperty("description", "Decentralized binary storage via IPFS - content-addressed, immutable");
-            ipfs.setProperty("gateway-public", "https://ipfs.io/ipfs/");
-            ipfs.setProperty("gateway-local", "http://localhost:8080/ipfs/");
-            ipfs.setProperty("note", "Genesis image can be uploaded via Editor - demonstrates IPFS integration");
-            
-            // TODO: Add genesis image via BlobStore (requires passing blobStore to AeronConsensusEngine)
-            // For now, document how to add content to genesis
             String ipfsCid = null;
+            
+            // Create nt:file node for the "do-it-live.jpeg" image
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesisImage = genesis.child("do-it-live.jpeg");
+            genesisImage.setProperty("jcr:primaryType", "nt:file");
+            genesisImage.setProperty("jcr:created", System.currentTimeMillis());
+            
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder imageContent = genesisImage.child("jcr:content");
+            imageContent.setProperty("jcr:primaryType", "nt:resource");
+            imageContent.setProperty("jcr:mimeType", "image/jpeg");
+            imageContent.setProperty("jcr:lastModified", System.currentTimeMillis());
+            
+            // Try to load and upload the genesis image
+            try {
+                java.io.InputStream imageStream = getClass().getClassLoader()
+                    .getResourceAsStream("genesis-assets/do-it-live.jpeg");
+                
+                if (imageStream != null && blobStore != null) {
+                    // Read image bytes
+                    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                    byte[] buffer = new byte[8192];
+                    int read;
+                    while ((read = imageStream.read(buffer)) != -1) {
+                        baos.write(buffer, 0, read);
+                    }
+                    byte[] imageBytes = baos.toByteArray();
+                    long imageSize = imageBytes.length;
+                    imageStream.close();
+                    
+                    // Store via BlobStore (IPFS backend will pin it)
+                    String blobId = blobStore.writeBlob(new java.io.ByteArrayInputStream(imageBytes));
+                    
+                    // Create proper Binary from blobId
+                    org.apache.jackrabbit.oak.api.Blob blob = 
+                        ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore)
+                            .createBlob(new java.io.ByteArrayInputStream(imageBytes));
+                    
+                    // Attach to jcr:content
+                    imageContent.setProperty("jcr:data", blob);
+                    imageContent.setProperty("jcr:blobId", blobId);
+                    imageContent.setProperty("size", imageSize);
+                    
+                    // Extract IPFS CID from blobId if it's an IPFS hash
+                    if (blobId != null && blobId.startsWith("Qm") || (blobId != null && blobId.startsWith("baf"))) {
+                        // It's a CID! (IPFS uses Qm... for CIDv0 or baf... for CIDv1)
+                        ipfsCid = blobId.split("#")[0]; // Strip size suffix if present
+                    }
+                    
+                    log.info("✅ Genesis image uploaded: {} bytes, blobId={}, ipfsCid={}", imageSize, blobId, ipfsCid);
+                } else if (blobStore == null) {
+                    log.warn("⚠️  BlobStore not configured - genesis image will not be uploaded");
+                } else {
+                    log.warn("⚠️  Genesis image resource not found: genesis-assets/do-it-live.jpeg");
+                }
+            } catch (Exception e) {
+                log.error("Failed to upload genesis image", e);
+            }
+            
+            // IPFS metadata node
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder ipfsInfo = genesis.child("ipfs");
+            ipfsInfo.setProperty("jcr:primaryType", "nt:unstructured");
+            ipfsInfo.setProperty("enabled", blobStore != null);
+            ipfsInfo.setProperty("genesisImageCid", ipfsCid != null ? ipfsCid : "N/A (BlobStore fallback)");
+            ipfsInfo.setProperty("gateway", "https://ipfs.io/ipfs/");
+            ipfsInfo.setProperty("localGateway", "http://localhost:8080/ipfs/");
+            ipfsInfo.setProperty("description", "Binaries stored via IPFS - content-addressed, decentralized, immutable");
             
             // ═══════════════════════════════════════════════════════════════════
             // COMMIT: Merge rich genesis structure locally first

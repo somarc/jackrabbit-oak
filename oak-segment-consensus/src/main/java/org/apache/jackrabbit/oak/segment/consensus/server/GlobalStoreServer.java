@@ -952,7 +952,7 @@ public class GlobalStoreServer {
                 // Create Aeron Consensus Engine
                 org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = 
                     new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine(
-                        fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory
+                        fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore
                     );
                 
                 // Initialize Ethereum integration if configured
@@ -1883,7 +1883,7 @@ public class GlobalStoreServer {
         // Create Aeron Consensus Engine
         org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = 
             new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine(
-                fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory
+                fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore
             );
         
         // Initialize Ethereum integration if configured
