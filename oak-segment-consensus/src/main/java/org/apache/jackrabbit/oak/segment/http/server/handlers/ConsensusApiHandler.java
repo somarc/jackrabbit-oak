@@ -987,6 +987,17 @@ public class ConsensusApiHandler {
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}", 
                      walletAddress, path, intentToken, blobId);
             
+            // 🌟 GENESIS MARKER DETECTION: Skip if this is a genesis creation marker
+            // The leader creates the full rich genesis locally and sends a marker through Aeron.
+            // Followers should NOT try to rebuild genesis from this marker.
+            // They will get the full genesis via HTTP segment transfer.
+            if ("genesis".equals(contentType) && message != null && message.contains("\"type\":\"genesis-created\"")) {
+                log.info("🌟 Genesis creation marker received - skipping write application");
+                log.info("   Followers will sync full genesis via HTTP segment transfer");
+                log.info("   Leader has already created canonical genesis locally");
+                return; // Skip entire write application
+            }
+            
             // Get current HEAD
             String previousHead = context.fileStore.getHead().getRecordId().toString();
             log.debug("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
@@ -1094,11 +1105,6 @@ public class ConsensusApiHandler {
                 log.debug("📎 Intent token stored for lazy binary upload: {}", intentToken);
             }
             
-            // 🌟 GENESIS: If this is the genesis write, build the elaborate structure on ALL nodes
-            if ("genesis".equals(contentType)) {
-                log.info("🌟 Genesis write detected - building elaborate genesis structure on this node");
-                buildGenesisStructure(contentNode, message);
-            }
             
             // 🎯 DETERMINISTIC STATE MACHINE: ALL nodes commit identically
             // Aeron guarantees: same messages, same order, on ALL nodes
