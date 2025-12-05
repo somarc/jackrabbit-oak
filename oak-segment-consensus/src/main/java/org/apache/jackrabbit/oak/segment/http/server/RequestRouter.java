@@ -83,7 +83,8 @@ public class RequestRouter {
         );
         this.explorerApiHandler = new ExplorerApiHandler(
             context.nodeStore,
-            context.storeDirectory
+            context.storeDirectory,
+            context.blobStore
         );
         this.dashboardHandler = new DashboardHandler(context);
         this.consensusApiHandler = new ConsensusApiHandler(context);
@@ -286,6 +287,14 @@ public class RequestRouter {
             
             if ("/api/segments/tars".equals(path) && "GET".equals(method)) {
                 explorerApiHandler.handleTarFiles(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // Blob streaming API - serve binaries directly from Oak BlobStore
+            if (path.startsWith("/api/blob/") && "GET".equals(method)) {
+                String blobId = path.substring("/api/blob/".length());
+                explorerApiHandler.handleBlobStream(request, response, blobId);
                 baseRequest.setHandled(true);
                 return;
             }

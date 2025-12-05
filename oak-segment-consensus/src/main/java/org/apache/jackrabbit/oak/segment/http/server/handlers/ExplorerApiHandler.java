@@ -42,10 +42,12 @@ public class ExplorerApiHandler {
     
     private final NodeStore nodeStore;
     private final Path storeDirectory;
+    private final org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     
-    public ExplorerApiHandler(NodeStore nodeStore, Path storeDirectory) {
+    public ExplorerApiHandler(NodeStore nodeStore, Path storeDirectory, org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
         this.nodeStore = nodeStore;
         this.storeDirectory = storeDirectory;
+        this.blobStore = blobStore;
     }
     
     /**
@@ -253,6 +255,80 @@ public class ExplorerApiHandler {
             log.error("Error reading TAR files", e);
             response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
             response.getWriter().write("[]");
+        }
+    }
+    
+    /**
+     * Handle GET /api/blob/{blobId} - Stream binary from Oak BlobStore.
+     * 
+     * <p>This endpoint allows streaming binaries that are stored in Oak BlobStore
+     * but don't have IPFS CID mappings yet. Useful for genesis content and testing.</p>
+     * 
+     * @param request HTTP request
+     * @param response HTTP response
+     * @param blobId Oak blob ID (e.g., ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442)
+     */
+    public void handleBlobStream(javax.servlet.http.HttpServletRequest request, 
+                                  HttpServletResponse response, 
+                                  String blobId) throws IOException {
+        if (blobStore == null) {
+            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+                "BlobStore not configured");
+            return;
+        }
+        
+        if (blobId == null || blobId.isEmpty()) {
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Blob ID required");
+            return;
+        }
+        
+        try {
+            log.info("📦 Streaming blob from BlobStore: {}", blobId);
+            
+            // Read blob from BlobStore
+            java.io.InputStream blobStream = blobStore.getInputStream(blobId);
+            
+            if (blobStream == null) {
+                log.warn("Blob not found in BlobStore: {}", blobId);
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, 
+                    "Blob not found: " + blobId);
+                return;
+            }
+            
+            // Try to determine content type from blob ID or default to octet-stream
+            // For genesis image, we know it's JPEG
+            String contentType = "application/octet-stream";
+            if (blobId.contains("do-it-live") || blobId.startsWith("ed06f9cb")) {
+                contentType = "image/jpeg";
+            }
+            
+            // Set response headers
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.setContentType(contentType);
+            response.setHeader("Cache-Control", "public, max-age=31536000"); // 1 year cache
+            response.setHeader("X-Blob-Id", blobId);
+            
+            // Stream the blob
+            try (java.io.OutputStream out = response.getOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                long totalBytes = 0;
+                
+                while ((bytesRead = blobStream.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                    totalBytes += bytesRead;
+                }
+                
+                out.flush();
+                log.info("✅ Streamed blob {} ({} bytes)", blobId, totalBytes);
+            } finally {
+                blobStream.close();
+            }
+            
+        } catch (Exception e) {
+            log.error("Error streaming blob {}: {}", blobId, e.getMessage());
+            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                "Failed to stream blob: " + e.getMessage());
         }
     }
 }
