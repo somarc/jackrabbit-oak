@@ -42,6 +42,7 @@ public class SimpleMessageHeader {
     public static final int TEMPLATE_ID_GC_PROPOSAL = 103;
     public static final int TEMPLATE_ID_GC_VOTE = 104;
     public static final int TEMPLATE_ID_GC_EXECUTE = 105;
+    public static final int TEMPLATE_ID_GENESIS_PROPOSAL = 107; // Genesis creation command
     
     // Schema ID and version (arbitrary values for our custom messages)
     private static final int SCHEMA_ID = 1;

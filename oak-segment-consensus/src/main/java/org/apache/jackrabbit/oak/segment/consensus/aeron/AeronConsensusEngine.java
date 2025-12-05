@@ -554,6 +554,47 @@ public class AeronConsensusEngine implements ClusteredService {
         // Map Aeron Cluster role to our ValidatorRole
         updateRoleFromCluster(cluster.role());
         
+        // 🎬 GENESIS CREATION: Check if this is initial leader on fresh cluster
+        // onRoleChange() is NOT called for initial role assignment, only for role CHANGES
+        // So we must create genesis here if we're the initial leader
+        if (cluster.role() == Cluster.Role.LEADER && snapshotImage == null) {
+            log.info("🎬 Initial leader detected on fresh cluster - checking for genesis");
+            
+            if (nodeStore != null) {
+                try {
+                    // Check if genesis node exists
+                    org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
+                    boolean genesisExists = root.getChildNode("oak-chain")
+                        .getChildNode("00")
+                        .getChildNode("00")
+                        .getChildNode("00")
+                        .getChildNode("0x0000000000000000000000000000000000000000")
+                        .getChildNode("content")
+                        .getChildNode("genesis")
+                        .exists();
+                    
+                    if (!genesisExists) {
+                        log.info("🎬 Network genesis: No genesis detected on initial leader - creating genesis");
+                        
+                        // Trigger genesis creation in background thread
+                        // (don't block onStart callback)
+                        new Thread(() -> {
+                            try {
+                                Thread.sleep(2000); // Wait 2s for cluster to stabilize
+                                createGenesisViaConsensus();
+                            } catch (Exception e) {
+                                log.error("❌ Failed to create genesis", e);
+                            }
+                        }, "genesis-creator").start();
+                    } else {
+                        log.info("Genesis already exists, skipping creation");
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to check for genesis existence: {}", e.getMessage());
+                }
+            }
+        }
+        
         // ✈️ AERON NATIVE: Create internal AeronCluster client for sending writes through ingress
         // This allows us to send messages from within the ClusteredService
         // Uses UDP to connect to the cluster for reliable message delivery
@@ -1110,6 +1151,15 @@ public class AeronConsensusEngine implements ClusteredService {
                 buffer.getBytes(offset, jsonBytes);
                 String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
                 handleGCExecution(json);
+            } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
+                log.info("🎬 GENESIS proposal received via Aeron - creating genesis on this node");
+                
+                // All nodes (including leader) receive this message and create genesis identically
+                // This ensures all validators have identical genesis from the start
+                applyGenesisCreation();
+                
+                log.info("✅ Genesis creation complete on this node");
+                
             } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
                 log.debug("📸 Snapshot message received in onSessionMessage (unexpected but handled)");
                 // Snapshots are typically loaded in onStart(), but handle gracefully if received here
@@ -2748,6 +2798,65 @@ public class AeronConsensusEngine implements ClusteredService {
         log.trace("broadcastHeadToFollowers() called but disabled (Aeron Raft handles consistency)");
     }
     
+    /**
+     * Notify followers to sync segments via HTTP segment transfer.
+     * 
+     * This is needed when the leader creates content locally (like genesis)
+     * that doesn't go through the Aeron write proposal mechanism.
+     * 
+     * Aeron Raft replicates the state machine, but Oak FileStore segments
+     * are stored outside the state machine in TAR files. Followers must
+     * pull segments via HTTP.
+     */
+    private void notifyFollowersToSyncSegments(String newHeadStr) {
+        log.info("📡 Notifying followers to sync segments for HEAD: {}...", 
+            newHeadStr.substring(0, Math.min(20, newHeadStr.length())));
+        
+        // Get follower URLs from peer configuration
+        if (peerUrls == null || peerUrls.isEmpty()) {
+            log.warn("No peer URLs configured - cannot notify followers");
+            return;
+        }
+        
+        // Notify each follower in background threads
+        for (String peerUrl : peerUrls) {
+            if (peerUrl.equals(selfUrl)) {
+                continue; // Skip self
+            }
+            
+            // Spawn thread for each follower (non-blocking)
+            new Thread(() -> {
+                try {
+                    String url = peerUrl + "/v1/follower/head-update";
+                    log.info("   → Notifying follower: {}", peerUrl);
+                    
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) 
+                        new java.net.URL(url).openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setDoOutput(true);
+                    conn.setConnectTimeout(5000);
+                    conn.setReadTimeout(10000);
+                    
+                    // Send HEAD as form parameter
+                    String params = "head=" + java.net.URLEncoder.encode(newHeadStr, "UTF-8") +
+                                  "&leaderUrl=" + java.net.URLEncoder.encode(selfUrl, "UTF-8");
+                    conn.getOutputStream().write(params.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    
+                    int responseCode = conn.getResponseCode();
+                    if (responseCode == 200) {
+                        log.info("   ✅ Follower {} acknowledged HEAD update", peerUrl);
+                    } else {
+                        log.warn("   ⚠️  Follower {} returned HTTP {}", peerUrl, responseCode);
+                    }
+                    
+                    conn.disconnect();
+                } catch (Exception e) {
+                    log.warn("   ⚠️  Failed to notify follower {}: {}", peerUrl, e.getMessage());
+                }
+            }, "notify-follower-" + peerUrl.hashCode()).start();
+        }
+    }
+    
     /* ✅ ADR 025: Removed broadcastHeadToFollowers implementation
        Old implementation commented out below for reference (can be deleted)
        
@@ -3818,23 +3927,84 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * NEW GENESIS ARCHITECTURE: Create genesis on leader after cluster formation.
+     * NEW GENESIS ARCHITECTURE: Create genesis via Aeron consensus.
      * 
      * This is called when the leader detects an empty store after cluster formation.
-     * Genesis is created locally on the leader, then followers pull it via HTTP segment
-     * transfer, ensuring all validators have identical segment history from the start.
-     * 
-     * NOTE: This requires a callback to GlobalStoreServer.initializeGenesisContent()
-     * since we need access to NodeStore write operations.
+     * Instead of creating genesis locally, we send a GENESIS_PROPOSAL through Aeron.
+     * All nodes (including leader) receive the message and create genesis deterministically.
+     * This ensures all validators have identical segment history from the start.
      */
     private void createGenesisViaConsensus() {
-        log.info("Creating network genesis on leader");
+        log.info("📡 Sending GENESIS proposal through Aeron consensus...");
+        
+        // Ensure internal cluster client exists
+        ensureInternalClusterClient();
+        
+        if (internalClusterClient == null) {
+            log.error("❌ Cannot send genesis proposal - internal cluster client not available");
+            return;
+        }
         
         try {
-            // Create genesis directly in NodeStore
-            // This is simpler than trying to route through consensus write path
-            // Followers will pull segments via HTTP segment transfer
+            // Build minimal genesis command (empty JSON, just the command itself)
+            String json = "{\"command\":\"CREATE_GENESIS\"}";
+            byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             
+            // Encode message with GENESIS template ID
+            int blockLength = jsonBytes.length;
+            int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL;
+            
+            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
+            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(new byte[totalLength]);
+            
+            // Encode SBE header
+            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
+                messageBuffer, 0, blockLength, templateId);
+            
+            // Write JSON payload
+            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+            
+            // Send through Aeron ingress (will be replicated to ALL nodes including this one)
+            idleStrategy.reset();
+            long result;
+            int retries = 0;
+            while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
+                if (result == io.aeron.Publication.BACK_PRESSURED) {
+                    idleStrategy.idle();
+                    retries++;
+                    if (retries > 100) {
+                        log.error("❌ Genesis ingress back-pressured after {} retries", retries);
+                        return;
+                    }
+                } else if (result == io.aeron.Publication.NOT_CONNECTED) {
+                    log.warn("⚠️  Genesis ingress not connected - waiting...");
+                    idleStrategy.idle();
+                    retries++;
+                    if (retries > 100) {
+                        log.error("❌ Genesis ingress not connected after {} retries", retries);
+                        return;
+                    }
+                } else {
+                    log.error("❌ Genesis ingress offer failed: {}", result);
+                    return;
+                }
+            }
+            
+            log.info("✅ GENESIS proposal sent through Aeron - all nodes will create genesis identically");
+            
+        } catch (Exception e) {
+            log.error("❌ Failed to send genesis proposal", e);
+        }
+    }
+    
+    /**
+     * Apply genesis creation on all nodes (called when GENESIS message is received via Aeron).
+     * This method is deterministic - all nodes create identical genesis structure.
+     */
+    private void applyGenesisCreation() {
+        log.info("🎬 Creating genesis (triggered via Aeron consensus)");
+        
+        try {
             // Use zero address for genesis (Ethereum convention)
             String GENESIS_ADDRESS = "0x0000000000000000000000000000000000000000";
             String genesisPath = "/oak-chain/00/00/00/" + GENESIS_ADDRESS + "/content/genesis";
@@ -4122,11 +4292,10 @@ public class AeronConsensusEngine implements ClusteredService {
             String newHead = fileStore.getHead().getRecordId().toString10();
             log.info("✅ Genesis committed locally - HEAD: {}", newHead);
             
-            // ✈️ AERON REPLICATION: Followers sync via Aeron snapshot mechanism
-            // Aeron Cluster automatically replicates state via snapshots when followers join.
-            // No need to send a marker - Aeron handles this natively.
-            // Followers will request snapshots from the leader and get the full genesis.
-            log.info("✅ Genesis created on leader - Aeron will replicate via snapshot mechanism");
+            // ✅ DETERMINISTIC GENESIS: All nodes executed identical code via Aeron
+            // Aeron Raft guarantees same message order on all nodes
+            // Therefore: same processing = same segments = same HEAD (guaranteed!)
+            log.info("✅ Genesis created deterministically via Aeron consensus");
             
             // Log genesis summary
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
