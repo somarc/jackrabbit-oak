@@ -4122,36 +4122,11 @@ public class AeronConsensusEngine implements ClusteredService {
             String newHead = fileStore.getHead().getRecordId().toString10();
             log.info("✅ Genesis committed locally - HEAD: {}", newHead);
             
-            // ✈️ AERON REPLICATION: Send marker through Aeron for followers to sync
-            // Followers will pull the full genesis via HTTP segment transfer
-            StringBuilder genesisJson = new StringBuilder();
-            genesisJson.append("{");
-            genesisJson.append("\"type\":\"genesis-created\",");
-            genesisJson.append("\"genesisValidator\":\"").append(selfUrl).append("\",");
-            genesisJson.append("\"timestamp\":").append(System.currentTimeMillis()).append(",");
-            genesisJson.append("\"head\":\"").append(newHead).append("\",");
-            if (ipfsCid != null) {
-                genesisJson.append("\"ipfsCid\":\"").append(ipfsCid).append("\",");
-            }
-            genesisJson.append("\"message\":\"Genesis created - followers should sync via HTTP segment transfer\"");
-            genesisJson.append("}");
-            
-            log.info("📡 Sending genesis marker through Aeron...");
-            
-            // Send marker through Aeron (informational - followers sync via HTTP)
-            boolean sent = sendWriteThroughIngress(
-                "0x0000000000000000000000000000000000000000",
-                "/oak-chain/00/00/00/0x0000000000000000000000000000000000000000/content/genesis",
-                "genesis",
-                genesisJson.toString(),
-                "0x0000000000000000000000000000000000000000000000000000000000000000"
-            );
-            
-            if (sent) {
-                log.info("✅ Genesis marker sent - followers will sync via HTTP segment transfer");
-            } else {
-                log.warn("⚠️  Genesis marker send failed (genesis still committed locally)");
-            }
+            // ✈️ AERON REPLICATION: Followers sync via Aeron snapshot mechanism
+            // Aeron Cluster automatically replicates state via snapshots when followers join.
+            // No need to send a marker - Aeron handles this natively.
+            // Followers will request snapshots from the leader and get the full genesis.
+            log.info("✅ Genesis created on leader - Aeron will replicate via snapshot mechanism");
             
             // Log genesis summary
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
