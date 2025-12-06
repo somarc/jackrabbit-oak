@@ -278,6 +278,27 @@
         .stat-value.role-leader { color: var(--success); }
         .stat-value.role-follower { color: var(--accent-primary); }
         
+        /* Mode indicator in stats bar */
+        .stat-item.mode-item {
+            margin-left: auto;
+            padding-left: 20px;
+            border-left: 1px solid var(--border-subtle);
+            border-right: none;
+            padding-right: 0;
+        }
+        
+        .stat-item.mode-item .stat-value.mode-mock {
+            color: #f59e0b;
+        }
+        
+        .stat-item.mode-item .stat-value.mode-sepolia {
+            color: #8b5cf6;
+        }
+        
+        .stat-item.mode-item .stat-value.mode-mainnet {
+            color: #10b981;
+        }
+        
         /* Legacy grid for TarMK section */
         .stats-grid {
             display: grid;
@@ -885,13 +906,7 @@
             </div>
         </div>
         
-        <!-- Mode Banner -->
-        <div class="mode-banner {{MODE_CLASS}}">
-            <div class="mode-label">{{MODE_ICON}} {{MODE_LABEL}}</div>
-            <div class="mode-detail">{{MODE_DETAIL}}</div>
-        </div>
-        
-        <!-- Compact Stats Bar -->
+        <!-- Compact Stats Bar (includes mode indicator at far right) -->
         <div class="stats-bar">
             {{STATS_ITEMS}}
         </div>
