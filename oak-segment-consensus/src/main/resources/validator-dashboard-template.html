@@ -226,7 +226,59 @@
             opacity: 0.8;
         }
         
-        /* Stats Grid */
+        /* Compact Stats Bar */
+        .stats-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 24px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 16px 20px;
+        }
+        
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding-right: 20px;
+            border-right: 1px solid var(--border-subtle);
+        }
+        
+        .stat-item:last-child {
+            border-right: none;
+            padding-right: 0;
+        }
+        
+        .stat-icon {
+            font-size: 18px;
+            opacity: 0.8;
+        }
+        
+        .stat-content {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .stat-label {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .stat-value {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        
+        .stat-value.role-leader { color: var(--success); }
+        .stat-value.role-follower { color: var(--accent-primary); }
+        
+        /* Legacy grid for TarMK section */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -248,20 +300,9 @@
             box-shadow: var(--shadow-glow);
         }
         
-        .stat-label {
+        .stat-caption {
             font-size: 11px;
-            font-weight: 600;
             color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 8px;
-        }
-        
-        .stat-value {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: 4px;
         }
         
         .stat-caption {
@@ -850,9 +891,9 @@
             <div class="mode-detail">{{MODE_DETAIL}}</div>
         </div>
         
-        <!-- Stats Grid -->
-        <div class="stats-grid">
-            {{STATS_CARDS}}
+        <!-- Compact Stats Bar -->
+        <div class="stats-bar">
+            {{STATS_ITEMS}}
         </div>
         
         <!-- Cluster Visualization -->

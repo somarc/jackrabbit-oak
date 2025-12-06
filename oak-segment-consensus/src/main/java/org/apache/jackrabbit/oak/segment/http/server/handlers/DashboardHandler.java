@@ -97,56 +97,71 @@ public class DashboardHandler {
                 modeDetail = "Configuration error";
         }
         
-        // Build stats cards HTML
-        StringBuilder statsCards = new StringBuilder();
+        // Build compact stats bar HTML
+        StringBuilder statsItems = new StringBuilder();
         
         if (clusterState != null) {
-            // Role card
+            // Role
             String role = clusterState.get("role").toString();
-            statsCards.append("<div class='stat-card'>");
-            statsCards.append("<div class='stat-label'>Role</div>");
-            statsCards.append("<div class='stat-value'>").append(role.toUpperCase()).append("</div>");
-            statsCards.append("<div class='stat-caption'>").append(role.equals("LEADER") ? "This validator currently owns leadership" : "Follower node").append("</div>");
-            statsCards.append("</div>");
+            String roleClass = role.equals("LEADER") ? "role-leader" : "role-follower";
+            statsItems.append("<div class='stat-item'>");
+            statsItems.append("<span class='stat-icon'>").append(role.equals("LEADER") ? "👑" : "🔗").append("</span>");
+            statsItems.append("<div class='stat-content'>");
+            statsItems.append("<span class='stat-label'>Role</span>");
+            statsItems.append("<span class='stat-value ").append(roleClass).append("'>").append(role.toUpperCase()).append("</span>");
+            statsItems.append("</div></div>");
             
-            // Node ID card - use Aeron memberId (0, 1, 2) not URL hash
+            // Node ID - use Aeron memberId (0, 1, 2)
             int cardMemberId = clusterState.containsKey("memberId") ? ((Number) clusterState.get("memberId")).intValue() : 0;
-            statsCards.append("<div class='stat-card'>");
-            statsCards.append("<div class='stat-label'>Node ID</div>");
-            statsCards.append("<div class='stat-value'>").append(cardMemberId).append("</div>");
-            statsCards.append("<div class='stat-caption'>Aeron member ID</div>");
-            statsCards.append("</div>");
+            statsItems.append("<div class='stat-item'>");
+            statsItems.append("<span class='stat-icon'>#</span>");
+            statsItems.append("<div class='stat-content'>");
+            statsItems.append("<span class='stat-label'>Node</span>");
+            statsItems.append("<span class='stat-value'>").append(cardMemberId).append("</span>");
+            statsItems.append("</div></div>");
             
-            // Members card
-            statsCards.append("<div class='stat-card'>");
-            statsCards.append("<div class='stat-label'>Members</div>");
-            statsCards.append("<div class='stat-value'>").append(clusterState.get("memberCount")).append("/3 Active</div>");
-            statsCards.append("<div class='stat-caption'>3 of 3 validators currently reachable (quorum: 2)</div>");
-            statsCards.append("</div>");
+            // Members
+            statsItems.append("<div class='stat-item'>");
+            statsItems.append("<span class='stat-icon'>⚡</span>");
+            statsItems.append("<div class='stat-content'>");
+            statsItems.append("<span class='stat-label'>Cluster</span>");
+            statsItems.append("<span class='stat-value'>").append(clusterState.get("memberCount")).append("/3</span>");
+            statsItems.append("</div></div>");
         }
         
-        // Store size card
+        // Store size
         String sizeFormatted = FormatUtils.formatBytes(fileStoreStats.size);
-        statsCards.append("<div class='stat-card'>");
-        statsCards.append("<div class='stat-label'>Store Size</div>");
-        statsCards.append("<div class='stat-value'>").append(sizeFormatted).append("</div>");
-        statsCards.append("<div class='stat-caption'>").append(fileStoreStats.segmentCount).append(" segments</div>");
-        statsCards.append("</div>");
+        statsItems.append("<div class='stat-item'>");
+        statsItems.append("<span class='stat-icon'>💾</span>");
+        statsItems.append("<div class='stat-content'>");
+        statsItems.append("<span class='stat-label'>Store</span>");
+        statsItems.append("<span class='stat-value'>").append(sizeFormatted).append("</span>");
+        statsItems.append("</div></div>");
         
-        // Connected peers card
-        statsCards.append("<div class='stat-card'>");
-        statsCards.append("<div class='stat-label'>Connected Peers</div>");
-        statsCards.append("<div class='stat-value'>").append(clientCount).append("</div>");
-        statsCards.append("<div class='stat-caption'>AEM/Sling author instances</div>");
-        statsCards.append("</div>");
+        // Segments
+        statsItems.append("<div class='stat-item'>");
+        statsItems.append("<span class='stat-icon'>📦</span>");
+        statsItems.append("<div class='stat-content'>");
+        statsItems.append("<span class='stat-label'>Segments</span>");
+        statsItems.append("<span class='stat-value'>").append(fileStoreStats.segmentCount).append("</span>");
+        statsItems.append("</div></div>");
         
-        // Binary store card
+        // Connected peers
+        statsItems.append("<div class='stat-item'>");
+        statsItems.append("<span class='stat-icon'>🖥️</span>");
+        statsItems.append("<div class='stat-content'>");
+        statsItems.append("<span class='stat-label'>Peers</span>");
+        statsItems.append("<span class='stat-value'>").append(clientCount).append("</span>");
+        statsItems.append("</div></div>");
+        
+        // Binary store
         String blobStoreType = System.getProperty("blobstore.type", "file");
-        statsCards.append("<div class='stat-card'>");
-        statsCards.append("<div class='stat-label'>Binary Store</div>");
-        statsCards.append("<div class='stat-value'>").append(blobStoreType.toUpperCase()).append("</div>");
-        statsCards.append("<div class='stat-caption'>").append(blobStoreType.equals("ipfs") ? "Decentralized P2P storage (ADR 015)" : "Local filesystem").append("</div>");
-        statsCards.append("</div>");
+        statsItems.append("<div class='stat-item'>");
+        statsItems.append("<span class='stat-icon'>").append(blobStoreType.equals("ipfs") ? "🌐" : "📁").append("</span>");
+        statsItems.append("<div class='stat-content'>");
+        statsItems.append("<span class='stat-label'>Binaries</span>");
+        statsItems.append("<span class='stat-value'>").append(blobStoreType.toUpperCase()).append("</span>");
+        statsItems.append("</div></div>");
         
         // Build cluster visualization data
         String node0Class = "", node1Class = "", node2Class = "";
@@ -339,7 +354,7 @@ public class DashboardHandler {
             .replace("{{MODE_ICON}}", modeIcon)
             .replace("{{MODE_LABEL}}", modeLabel)
             .replace("{{MODE_DETAIL}}", modeDetail)
-            .replace("{{STATS_CARDS}}", statsCards.toString())
+            .replace("{{STATS_ITEMS}}", statsItems.toString())
             // Cluster visualization
             .replace("{{NODE_0_CLASS}}", node0Class)
             .replace("{{NODE_1_CLASS}}", node1Class)
