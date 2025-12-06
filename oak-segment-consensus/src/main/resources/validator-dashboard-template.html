@@ -278,9 +278,38 @@
         .stat-value.role-leader { color: var(--success); }
         .stat-value.role-follower { color: var(--accent-primary); }
         
+        /* Wallet address in stats bar */
+        .stat-item.wallet-item {
+            flex: 1;
+            min-width: 200px;
+            max-width: 400px;
+        }
+        
+        .stat-item.wallet-item .wallet-addr {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--accent-primary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .stat-item.wallet-item .wallet-addr:hover {
+            text-decoration: underline;
+        }
+        
+        .stat-item.wallet-item .copy-icon {
+            opacity: 0.6;
+            font-size: 11px;
+        }
+        
+        .stat-item.wallet-item .copy-icon:hover {
+            opacity: 1;
+        }
+        
         /* Mode indicator in stats bar */
         .stat-item.mode-item {
-            margin-left: auto;
             padding-left: 20px;
             border-left: 1px solid var(--border-subtle);
             border-right: none;
@@ -895,18 +924,7 @@
             </div>
         </div>
         
-        <!-- Validator Wallet -->
-        <div class="wallet-section">
-            <div>
-                <div class="wallet-label">Validator Ethereum Address</div>
-                <div class="wallet-address" id="wallet-address">
-                    {{WALLET_ADDRESS}}
-                    <button class="copy-btn" onclick="copyAddress()">📋 Copy</button>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Compact Stats Bar (includes mode indicator at far right) -->
+        <!-- Compact Stats Bar (includes wallet + mode) -->
         <div class="stats-bar">
             {{STATS_ITEMS}}
         </div>
