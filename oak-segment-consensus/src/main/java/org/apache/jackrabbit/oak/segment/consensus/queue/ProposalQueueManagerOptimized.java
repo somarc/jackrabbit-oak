@@ -102,6 +102,11 @@ public class ProposalQueueManagerOptimized {
     private final java.util.concurrent.atomic.AtomicLong priorityProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong batchedProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
     
+    // Metrics: Persistent counters (survive proposal removal from allProposals)
+    private final java.util.concurrent.atomic.AtomicLong totalRejectedCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong totalVerifiedCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong totalFinalizedCount = new java.util.concurrent.atomic.AtomicLong(0);
+    
     /**
      * Create optimized proposal queue manager with Ethereum epoch-based batching.
      * 
@@ -215,6 +220,11 @@ public class ProposalQueueManagerOptimized {
         stats.put("verifiedCount", verified);
         stats.put("rejectedCount", rejected);
         stats.put("processedCount", processed);
+        
+        // Persistent counters (survive proposal removal from allProposals)
+        stats.put("totalRejectedCount", totalRejectedCount.get());
+        stats.put("totalVerifiedCount", totalVerifiedCount.get());
+        stats.put("totalFinalizedCount", totalFinalizedCount.get());
         
         // Count proposals by type (WRITE vs DELETE)
         long writeProposals = allProposals.values().stream()
@@ -651,6 +661,7 @@ public class ProposalQueueManagerOptimized {
                         for (QueuedProposal queued : batch) {
                             queued.setState(ProposalState.PROCESSED);
                             allProposals.remove(queued.getProposalId());
+                            totalFinalizedCount.incrementAndGet();
                             
                             // Track for backpressure management (one per proposal)
                             backpressureManager.incrementSent();
@@ -851,6 +862,9 @@ public class ProposalQueueManagerOptimized {
                     proposal.setState(ProposalState.VERIFIED);
                     proposal.setConfirmedBlock(proof.getBlockNumber());
                     
+                    // Track verification persistently
+                    totalVerifiedCount.incrementAndGet();
+                    
                     // ═══════════════════════════════════════════════════════════
                     // PRIORITY TIER: Fast-path directly to Aeron (bypass epoch batching)
                     // ═══════════════════════════════════════════════════════════
@@ -881,6 +895,7 @@ public class ProposalQueueManagerOptimized {
                             
                             proposal.setState(ProposalState.PROCESSED);
                             allProposals.remove(proposal.getProposalId());
+                            totalFinalizedCount.incrementAndGet();
                             
                             // Track for backpressure
                             backpressureManager.incrementSent();
@@ -936,7 +951,11 @@ public class ProposalQueueManagerOptimized {
             proposal.setRejectionReason(reason);
             allProposals.remove(proposal.getProposalId());
             
-            log.warn("❌ REJECTED proposal {}: {}", proposal.getProposalId(), reason);
+            // Track rejection persistently (survives proposal removal)
+            totalRejectedCount.incrementAndGet();
+            
+            log.warn("❌ REJECTED proposal {}: {} (total rejected: {})", 
+                proposal.getProposalId(), reason, totalRejectedCount.get());
         }
         
         @Override

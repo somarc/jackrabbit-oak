@@ -156,16 +156,30 @@ public class ConsensusApiHandler {
             
             // Validate Ethereum address format FIRST (REQUIRED)
             if (wallet == null || wallet.isEmpty()) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Missing wallet address");
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
                     "Missing walletAddress parameter. Writes require a valid 0x Ethereum address.");
                 return;
             }
             
-            // Validate Ethereum address format (basic check)
+            // Validate Ethereum address format (strict validation)
             wallet = wallet.trim();
             if (!wallet.startsWith("0x") || wallet.length() < 10) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Invalid wallet format: {}", wallet);
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid Ethereum address format. Must start with '0x' and be at least 10 characters.");
+                return;
+            }
+            
+            // Validate wallet is valid hex after 0x prefix
+            String walletHex = wallet.substring(2);
+            if (!walletHex.matches("[a-fA-F0-9]+")) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Wallet contains non-hex characters: {}", wallet);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Invalid Ethereum address: must be valid hexadecimal after '0x'");
                 return;
             }
             
@@ -338,39 +352,89 @@ public class ConsensusApiHandler {
                 org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
             
             // In mock mode, generate mock signature if not provided
+            // ============================================================
+            // SIGNATURE VALIDATION (strict even in MOCK mode for testing)
+            // ============================================================
             if (signature == null || signature.isEmpty()) {
-                if (blockchainConfig.isMockMode()) {
-                    signature = "0xMOCK" + System.currentTimeMillis(); // Mock signature
-                } else {
-                    log.warn("🚫 Write rejected: Signature required in real blockchain mode");
-                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
-                        "Signature required. In real blockchain mode, all writes must be signed.");
-                    return;
-                }
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Missing signature");
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Missing signature. All writes require a signature (even in mock mode for testing).");
+                return;
+            }
+            
+            // Validate signature format: must start with 0x and be hex
+            signature = signature.trim();
+            if (!signature.startsWith("0x")) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Signature must start with '0x': {}", signature);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Invalid signature format: must start with '0x'");
+                return;
+            }
+            
+            // Validate signature is valid hex after 0x prefix
+            String sigHex = signature.substring(2);
+            if (sigHex.isEmpty()) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Signature too short: {}", signature);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Invalid signature: too short (need hex data after 0x)");
+                return;
+            }
+            
+            if (!sigHex.matches("[a-fA-F0-9]+")) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Signature contains non-hex characters: {}", signature);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Invalid signature format: must be valid hexadecimal after '0x'");
+                return;
             }
             
             log.debug("🔐 WALLET-BASED WRITE: client={}, wallet={}, contentType={}", clientId, wallet, contentType);
             
-            // Signature verification
-            if (!signature.startsWith("0x")) {
-                log.warn("🚫 Write rejected: Invalid signature format (must start with '0x')");
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid signature format");
+            if (blockchainConfig.isMockMode()) {
+                log.debug("✅ Signature validation: Format OK (mock mode - cryptographic verification skipped)");
+            } else {
+                // TODO: Real signature verification with Web3j
+                log.debug("✅ Signature validation: Format OK (real mode - full crypto verification TODO)");
+            }
+            
+            // ============================================================
+            // TRANSACTION HASH VALIDATION
+            // ============================================================
+            if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Missing ethereumTxHash");
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Missing ethereumTxHash parameter. Must provide Ethereum transaction hash from authorizeWrite() call.");
                 return;
             }
             
-            if (blockchainConfig.isMockMode()) {
-                log.debug("✅ Signature verification: MOCK (accepted - mock mode enabled)");
-            } else {
-                // TODO: Real signature verification with Web3j
-                // For now, accept signature format (real verification will be added)
-                log.debug("✅ Signature verification: Format valid (real mode - full verification TODO)");
+            // Validate tx hash format: must start with 0x and be valid hex
+            ethereumTxHash = ethereumTxHash.trim();
+            if (!ethereumTxHash.startsWith("0x")) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Transaction hash must start with '0x': {}", ethereumTxHash);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Invalid ethereumTxHash format: must start with '0x'");
+                return;
             }
             
-            // Validate Ethereum transaction hash (REQUIRED for queue)
-            if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
-                log.warn("🚫 Write rejected: Missing ethereumTxHash parameter");
+            String txHex = ethereumTxHash.substring(2);
+            if (txHex.length() < 8) {  // Minimum reasonable tx hash length
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Transaction hash too short: {}", ethereumTxHash);
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
-                    "Missing ethereumTxHash parameter. Must provide Ethereum transaction hash from authorizeWrite() call.");
+                    "Invalid ethereumTxHash: too short (expected at least 8 hex characters)");
+                return;
+            }
+            
+            if (!txHex.matches("[a-fA-F0-9]+")) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Transaction hash contains non-hex characters: {}", ethereumTxHash);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    "Invalid ethereumTxHash format: must be valid hexadecimal");
                 return;
             }
             
@@ -481,6 +545,21 @@ public class ConsensusApiHandler {
                 return;
             }
             
+            // ============================================================
+            // PAYMENT TIER VALIDATION
+            // ============================================================
+            // Validate tier if provided (defaults to STANDARD if missing)
+            if (paymentTier != null && !paymentTier.isEmpty()) {
+                String normalizedTier = paymentTier.trim().toLowerCase();
+                if (!normalizedTier.equals("standard") && !normalizedTier.equals("express") && !normalizedTier.equals("priority")) {
+                    context.apiRejectedRequests.incrementAndGet();
+                    log.warn("❌ API REJECTED: Invalid payment tier: {}", paymentTier);
+                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                        "Invalid paymentTier: '" + paymentTier + "'. Must be 'standard', 'express', or 'priority'.");
+                    return;
+                }
+            }
+            
             // Parse payment tier from request (defaults to STANDARD)
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier = 
                 org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
@@ -555,6 +634,9 @@ public class ConsensusApiHandler {
             } else {
                 log.info("📝 Text-only proposal {} (no binary)", proposalId);
             }
+            
+            // Track API acceptance (proposal successfully queued)
+            context.apiAcceptedRequests.incrementAndGet();
             
             // Return queued status (202 Accepted)
             response.setContentType("application/json");
@@ -1067,14 +1149,41 @@ public class ConsensusApiHandler {
                         contentNode.setProperty("jcr:mimeType", mimeType);
                     }
                     
-                    // Also store the raw blob ID for API access (IPFS gateway links, etc.)
-                    String ipfsUri = blobId.startsWith("Qm") || blobId.startsWith("bafy") 
-                        ? "ipfs://" + blobId.split("#")[0]  // Remove length suffix for URI
-                        : blobId;
-                    contentNode.setProperty("jcr:blobId", ipfsUri);
+                    // Store raw blob ID
+                    contentNode.setProperty("jcr:blobId", blobId);
                     
-                    log.info("✅ Binary stored as BINARY property: jcr:data={}, jcr:mimeType={}, jcr:blobId={}", 
-                        blobId, mimeType, ipfsUri);
+                    // 🔗 Try to get IPFS CID and store it as property (persists across restarts!)
+                    String ipfsCid = null;
+                    if (context.blobStore instanceof org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) {
+                        try {
+                            org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore dsBlobStore = 
+                                (org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) context.blobStore;
+                            Object dataStore = dsBlobStore.getDataStore();
+                            if (dataStore instanceof org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) {
+                                org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfsDataStore = 
+                                    (org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) dataStore;
+                                
+                                // Try a few times (async upload may still be in progress)
+                                for (int retry = 0; retry < 5 && ipfsCid == null; retry++) {
+                                    ipfsCid = ipfsDataStore.getCID(blobId);
+                                    if (ipfsCid == null && retry < 4) {
+                                        Thread.sleep(200); // Wait 200ms between retries
+                                    }
+                                }
+                            }
+                        } catch (Exception e) {
+                            log.debug("Could not get IPFS CID: {}", e.getMessage());
+                        }
+                    }
+                    
+                    if (ipfsCid != null) {
+                        contentNode.setProperty("ipfsCid", ipfsCid);
+                        contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + ipfsCid);
+                        log.info("✅ Binary stored with IPFS CID: jcr:blobId={}, ipfsCid={}", blobId, ipfsCid);
+                    } else {
+                        log.info("✅ Binary stored (IPFS CID pending async): jcr:blobId={}", blobId);
+                    }
+                    
                 } catch (Exception e) {
                     log.error("❌ Failed to create Blob from blobId {}: {}", blobId, e.getMessage());
                     // Fallback: store as string reference

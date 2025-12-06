@@ -1346,6 +1346,9 @@ public class GlobalStoreServer {
                 httpServer.getContext().setValidatorEarningsTracker(earningsTracker);
                 System.out.println("   ✅ Validator Earnings Tracker initialized (" + validatorWallets.size() + " validators)");
                 System.out.println("   - Self wallet: " + wallet.getWalletAddress());
+                
+                // Set validator wallet address in ServerContext for dashboard display
+                httpServer.getContext().validatorWalletAddress = wallet.getWalletAddress();
                 System.out.println("   - Earnings distributed equitably across all validators (regardless of Aeron leader)");
                 
                 // ✈️ AERON MODE: Skip HTTP peer registration

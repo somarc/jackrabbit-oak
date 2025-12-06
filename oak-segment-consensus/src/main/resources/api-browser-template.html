@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements.  See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License.  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Browser | Blockchain AEM Validator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0f1a;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.8);
+            --border-color: rgba(0, 255, 255, 0.15);
+            --border-glow: rgba(0, 255, 255, 0.3);
+            --text-primary: #f0f4f8;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #00ffff;
+            --accent-secondary: #22d3ee;
+            --accent-purple: #a855f7;
+            --accent-green: #10b981;
+            --accent-orange: #f59e0b;
+            --accent-pink: #ec4899;
+            --accent-red: #ef4444;
+            --gradient-cyber: linear-gradient(135deg, #0a0f1a 0%, #1a1a2e 50%, #0a0f1a 100%);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--gradient-cyber);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(180deg, rgba(0, 255, 255, 0.08) 0%, transparent 100%);
+            border-bottom: 1px solid var(--border-color);
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .logo-text {
+            font-size: 20px;
+            font-weight: 700;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 8px;
+        }
+
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            color: var(--text-primary);
+            background: rgba(0, 255, 255, 0.1);
+        }
+
+        .nav-link.active {
+            color: var(--accent-primary);
+            background: rgba(0, 255, 255, 0.15);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .mode-badge {
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .mode-mock {
+            background: rgba(168, 85, 247, 0.2);
+            color: #c084fc;
+            border: 1px solid rgba(168, 85, 247, 0.3);
+        }
+
+        /* Main Content */
+        .main-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px 32px;
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 24px;
+            min-height: calc(100vh - 80px);
+        }
+
+        @media (max-width: 1000px) {
+            .main-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--text-primary);
+        }
+
+        .card-header .icon {
+            font-size: 18px;
+        }
+
+        .card-body {
+            padding: 16px;
+        }
+
+        /* API Endpoints List */
+        .endpoint-group {
+            margin-bottom: 16px;
+        }
+
+        .endpoint-group-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 8px;
+        }
+
+        .endpoint-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            margin: 4px 0;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .endpoint-item:hover {
+            background: rgba(0, 255, 255, 0.08);
+            transform: translateX(4px);
+        }
+
+        .endpoint-item.active {
+            background: rgba(0, 255, 255, 0.15);
+            border-left: 3px solid var(--accent-primary);
+        }
+
+        .method-badge {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .method-get {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--accent-green);
+        }
+
+        .method-post {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+        }
+
+        .endpoint-path {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Request Builder */
+        .request-section {
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .url-bar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .url-input {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+        }
+
+        .url-input:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(0, 255, 255, 0.1);
+        }
+
+        .send-btn {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border: none;
+            border-radius: 8px;
+            padding: 12px 24px;
+            color: var(--bg-primary);
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .send-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0, 255, 255, 0.3);
+        }
+
+        .send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Parameters */
+        .params-container {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .param-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .param-input {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .param-input:focus {
+            outline: none;
+            border-color: var(--accent-secondary);
+        }
+
+        .param-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        /* Response */
+        .response-container {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .response-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: rgba(0, 0, 0, 0.2);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .response-status {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .status-success { color: var(--accent-green); }
+        .status-error { color: var(--accent-red); }
+        .status-pending { color: var(--accent-orange); }
+
+        .response-time {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .response-body {
+            padding: 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            max-height: 500px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .response-body .json-key { color: var(--accent-orange); }
+        .response-body .json-string { color: var(--accent-green); }
+        .response-body .json-number { color: var(--accent-primary); }
+        .response-body .json-boolean { color: var(--accent-purple); }
+        .response-body .json-null { color: var(--text-muted); }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 255, 255, 0.3);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 255, 255, 0.5);
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-muted);
+            font-size: 12px;
+            border-top: 1px solid var(--border-color);
+            margin-top: 40px;
+        }
+
+        .footer a {
+            color: var(--accent-secondary);
+            text-decoration: none;
+        }
+
+        /* Empty state */
+        .empty-response {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-muted);
+        }
+
+        .empty-response .icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <a href="/" class="logo">
+                <div class="logo-icon">⛓️</div>
+                <span class="logo-text">Blockchain AEM</span>
+            </a>
+            <nav class="nav-links">
+                <a href="/" class="nav-link">Dashboard</a>
+                <a href="/explorer" class="nav-link">Explorer</a>
+                <a href="/api-browser" class="nav-link active">API Browser</a>
+                <a href="/chat" class="nav-link">Chat</a>
+            </nav>
+        </div>
+        <div class="header-right">
+            <span class="mode-badge {{MODE_CLASS}}">{{MODE_LABEL}}</span>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <aside class="sidebar">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">🔌</span>
+                    API Endpoints
+                </div>
+                <div class="card-body">
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Health & Status</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/health')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/health</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/api/metrics')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/api/metrics</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/metrics')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/metrics (Prometheus)</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Blockchain Config</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/blockchain/config')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/blockchain/config</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Aeron Cluster</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/aeron/cluster-state')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/aeron/cluster-state</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/aeron/raft-metrics')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/aeron/raft-metrics</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/aeron/node-status?nodeId=0')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/aeron/node-status</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/aeron/leadership-history?limit=10')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/aeron/leadership-history</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Consensus & Proposals</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/consensus/status')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/consensus/status</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('POST', '/v1/propose-write')">
+                            <span class="method-badge method-post">POST</span>
+                            <span class="endpoint-path">/v1/propose-write</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('POST', '/v1/propose-delete')">
+                            <span class="method-badge method-post">POST</span>
+                            <span class="endpoint-path">/v1/propose-delete</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/proposals/pending/count')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/proposals/pending/count</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Content Explorer</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/api/explore?path=/')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/api/explore?path=/</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/api/segments/tars')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/api/segments/tars</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/api/segments/recent')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/api/segments/recent</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/api/blob/{blobId}')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/api/blob/{blobId}</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/api/cid/{oakBlobId}')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/api/cid/{oakBlobId}</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Wallets</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/wallets/stats')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/wallets/stats</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/wallets/content?wallet=0x...')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/wallets/content</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Garbage Collection</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/gc/estimate')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/gc/estimate</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/gc/status')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/gc/status</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('POST', '/v1/propose-gc')">
+                            <span class="method-badge method-post">POST</span>
+                            <span class="endpoint-path">/v1/propose-gc</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('POST', '/v1/gc/trigger')">
+                            <span class="method-badge method-post">POST</span>
+                            <span class="endpoint-path">/v1/gc/trigger</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/compaction/proposals')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/compaction/proposals</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">GC Accounts</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/gc/account/{walletAddress}')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/gc/account/{wallet}</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('POST', '/v1/gc/account/{walletAddress}/pay?amount=100')">
+                            <span class="method-badge method-post">POST</span>
+                            <span class="endpoint-path">/v1/gc/account/.../pay</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Fragmentation</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/fragmentation/metrics')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/fragmentation/metrics</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/fragmentation/top?limit=20')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/fragmentation/top</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Peers & Registration</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('POST', '/v1/register-client')">
+                            <span class="method-badge method-post">POST</span>
+                            <span class="endpoint-path">/v1/register-client</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/peers')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/peers</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/v1/ngrok-url')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/v1/ngrok-url</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Segments (Raw)</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/journal.log')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/journal.log</span>
+                        </div>
+                        <div class="endpoint-item" onclick="loadEndpoint('GET', '/manifest')">
+                            <span class="method-badge method-get">GET</span>
+                            <span class="endpoint-path">/manifest</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">Mock Mode</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('POST', '/api/mock/advance-epoch?epochs=1')">
+                            <span class="method-badge method-post">POST</span>
+                            <span class="endpoint-path">/api/mock/advance-epoch</span>
+                        </div>
+                    </div>
+
+                    <div class="endpoint-group">
+                        <div class="endpoint-group-title">LLM Chat</div>
+                        <div class="endpoint-item" onclick="loadEndpoint('POST', '/v1/chat')">
+                            <span class="method-badge method-post">POST</span>
+                            <span class="endpoint-path">/v1/chat</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <section class="content">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">🧪</span>
+                    Request Builder
+                </div>
+                <div class="card-body">
+                    <div class="request-section">
+                        <div class="url-bar">
+                            <select id="method" class="param-input" style="flex: 0 0 100px;">
+                                <option value="GET">GET</option>
+                                <option value="POST">POST</option>
+                            </select>
+                            <input type="text" id="url" class="url-input" placeholder="/api/explore?path=/" value="/health">
+                            <button class="send-btn" onclick="sendRequest()" id="sendBtn">
+                                Send Request
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="request-section" id="params-section" style="display: none;">
+                        <div class="section-title">Request Body (JSON)</div>
+                        <textarea id="request-body" class="url-input" rows="6" placeholder='{"key": "value"}'></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 16px;">
+                <div class="card-header">
+                    <span class="icon">📄</span>
+                    Response
+                </div>
+                <div class="response-container">
+                    <div class="response-header" id="response-header" style="display: none;">
+                        <span class="response-status" id="response-status">200 OK</span>
+                        <span class="response-time" id="response-time">123ms</span>
+                    </div>
+                    <div class="response-body" id="response-body">
+                        <div class="empty-response">
+                            <div class="icon">📡</div>
+                            <div>Send a request to see the response</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>© 2025 Blockchain AEM • Powered by <a href="https://github.com/apache/jackrabbit-oak" target="_blank">Apache Jackrabbit Oak</a></p>
+    </footer>
+
+    <script>
+        // Show/hide body input for POST
+        document.getElementById('method').addEventListener('change', function() {
+            document.getElementById('params-section').style.display = 
+                this.value === 'POST' ? 'block' : 'none';
+        });
+
+        function loadEndpoint(method, url) {
+            document.getElementById('method').value = method;
+            document.getElementById('url').value = url;
+            document.getElementById('params-section').style.display = 
+                method === 'POST' ? 'block' : 'none';
+            
+            // Highlight active
+            document.querySelectorAll('.endpoint-item').forEach(el => el.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+        }
+
+        async function sendRequest() {
+            const method = document.getElementById('method').value;
+            const url = document.getElementById('url').value;
+            const bodyInput = document.getElementById('request-body').value;
+            
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Sending...';
+            
+            const startTime = performance.now();
+            
+            try {
+                const options = { method };
+                if (method === 'POST' && bodyInput) {
+                    options.headers = { 'Content-Type': 'application/json' };
+                    options.body = bodyInput;
+                }
+                
+                const response = await fetch(url, options);
+                const endTime = performance.now();
+                const duration = Math.round(endTime - startTime);
+                
+                // Update status
+                const statusEl = document.getElementById('response-status');
+                statusEl.textContent = response.status + ' ' + response.statusText;
+                statusEl.className = 'response-status ' + 
+                    (response.ok ? 'status-success' : 'status-error');
+                
+                document.getElementById('response-time').textContent = duration + 'ms';
+                document.getElementById('response-header').style.display = 'flex';
+                
+                // Format response
+                const contentType = response.headers.get('content-type') || '';
+                let text = await response.text();
+                
+                if (contentType.includes('application/json')) {
+                    try {
+                        const json = JSON.parse(text);
+                        text = syntaxHighlight(JSON.stringify(json, null, 2));
+                    } catch (e) {}
+                }
+                
+                document.getElementById('response-body').innerHTML = text;
+                
+            } catch (e) {
+                document.getElementById('response-status').textContent = 'Error';
+                document.getElementById('response-status').className = 'response-status status-error';
+                document.getElementById('response-header').style.display = 'flex';
+                document.getElementById('response-body').textContent = e.message;
+            }
+            
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send Request';
+        }
+
+        function syntaxHighlight(json) {
+            return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                let cls = 'json-number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) {
+                        cls = 'json-key';
+                        match = match.replace(/"/g, '').replace(/:$/, '') + ':';
+                    } else {
+                        cls = 'json-string';
+                    }
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-boolean';
+                } else if (/null/.test(match)) {
+                    cls = 'json-null';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+        }
+
+        // Allow Enter to send
+        document.getElementById('url').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') sendRequest();
+        });
+    </script>
+</body>
+</html>
+

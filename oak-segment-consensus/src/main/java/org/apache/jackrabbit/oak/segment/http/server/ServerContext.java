@@ -72,6 +72,11 @@ public class ServerContext {
     public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
     public volatile org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore; // For eager binary uploads
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService cidMappingService; // Oak ↔ IPFS CID mapping
+    public volatile String validatorWalletAddress = "0x0000000000000000000000000000000000000000"; // Validator's Ethereum address
+    
+    // API-level metrics (rejections before reaching queue)
+    public final java.util.concurrent.atomic.AtomicLong apiRejectedRequests = new java.util.concurrent.atomic.AtomicLong(0);
+    public final java.util.concurrent.atomic.AtomicLong apiAcceptedRequests = new java.util.concurrent.atomic.AtomicLong(0);
     
     // Shared state
     public final Map<String, ClientRegistration> registeredClients;

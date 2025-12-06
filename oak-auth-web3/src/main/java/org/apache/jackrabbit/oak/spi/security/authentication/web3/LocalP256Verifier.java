@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.spi.security.authentication.web3;
 
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -168,7 +169,14 @@ public final class LocalP256Verifier {
      */
     @NotNull
     private ECPublicKey parsePublicKey(@NotNull byte[] publicKeyBytes) {
-        log.debug("Parsing public key of {} bytes", publicKeyBytes.length);
+        log.info("🔑 Parsing public key of {} bytes", publicKeyBytes.length);
+        
+        // Debug: log first 20 bytes as hex for debugging
+        StringBuilder hexDump = new StringBuilder();
+        for (int i = 0; i < Math.min(publicKeyBytes.length, 20); i++) {
+            hexDump.append(String.format("%02x ", publicKeyBytes[i] & 0xFF));
+        }
+        log.info("🔑 First 20 bytes (hex): {}", hexDump.toString());
         
         try {
             // Try SPKI format first (from WebAuthn getPublicKey())
@@ -188,6 +196,13 @@ public final class LocalP256Verifier {
             byte[] rawKey = extractRawPublicKey(publicKeyBytes);
             
             if (rawKey.length != 65) {
+                // Log full hex dump for debugging
+                StringBuilder fullHex = new StringBuilder();
+                for (byte b : publicKeyBytes) {
+                    fullHex.append(String.format("%02x", b & 0xFF));
+                }
+                log.error("🔑 Full public key hex ({}b): {}", publicKeyBytes.length, fullHex.toString());
+                
                 throw new IllegalArgumentException(
                     "Invalid P-256 public key length: " + rawKey.length + 
                     " (expected 65 bytes: 0x04 + 32-byte x + 32-byte y)"
@@ -235,8 +250,8 @@ public final class LocalP256Verifier {
      * <p>Handles:
      * <ul>
      *   <li>Already raw (65 bytes starting with 0x04)</li>
-     *   <li>COSE_Key format (looks for 0x04 marker)</li>
-     *   <li>Other wrapped formats</li>
+     *   <li>COSE_Key format (71+ bytes, CBOR encoded with x/y coordinates)</li>
+     *   <li>Other wrapped formats (searches for 0x04 marker)</li>
      * </ul>
      */
     @NotNull
@@ -246,8 +261,22 @@ public final class LocalP256Verifier {
             return publicKeyBytes;
         }
         
+        // Try COSE_Key format (common from WebAuthn)
+        // COSE_Key for P-256 is typically 71-77 bytes with CBOR structure:
+        // { 1: 2 (EC2), 3: -7 (ES256), -1: 1 (P-256), -2: x (32 bytes), -3: y (32 bytes) }
+        if (publicKeyBytes.length >= 65 && publicKeyBytes.length <= 100) {
+            log.info("🔑 Attempting COSE_Key extraction for {}-byte key", publicKeyBytes.length);
+            byte[] extracted = extractFromCOSEKey(publicKeyBytes);
+            if (extracted != null) {
+                log.info("✅ Extracted raw public key from COSE_Key format");
+                return extracted;
+            } else {
+                log.info("⚠️ COSE_Key extraction failed, trying other methods");
+            }
+        }
+        
         // Search for 0x04 marker followed by 64 bytes (x and y coordinates)
-        // This handles COSE_Key and other wrapped formats
+        // This handles other wrapped formats
         for (int i = 0; i < publicKeyBytes.length - 64; i++) {
             if (publicKeyBytes[i] == 0x04) {
                 // Found potential uncompressed key marker
@@ -255,7 +284,7 @@ public final class LocalP256Verifier {
                 if (i + 65 <= publicKeyBytes.length) {
                     byte[] rawKey = new byte[65];
                     System.arraycopy(publicKeyBytes, i, rawKey, 0, 65);
-                    log.debug("Extracted raw public key from offset {}", i);
+                    log.debug("Extracted raw public key from offset {} using 0x04 marker", i);
                     return rawKey;
                 }
             }
@@ -264,6 +293,96 @@ public final class LocalP256Verifier {
         // Couldn't find raw key, return original (will fail validation with helpful error)
         log.warn("Could not extract raw P-256 key from {} bytes, returning as-is", publicKeyBytes.length);
         return publicKeyBytes;
+    }
+    
+    /**
+     * Extracts x and y coordinates from a COSE_Key formatted public key.
+     * 
+     * <p>COSE_Key structure for EC2 (P-256):
+     * <pre>
+     * {
+     *   1: 2,       // kty: EC2
+     *   3: -7,      // alg: ES256 (optional)
+     *   -1: 1,      // crv: P-256
+     *   -2: bytes,  // x coordinate (32 bytes)
+     *   -3: bytes   // y coordinate (32 bytes)
+     * }
+     * </pre>
+     * 
+     * <p>CBOR encoding notes:
+     * <ul>
+     *   <li>Negative keys (-1, -2, -3) are encoded as 0x20 + abs(n) - 1</li>
+     *   <li>So -1 = 0x20, -2 = 0x21, -3 = 0x22</li>
+     *   <li>Byte strings are prefixed with 0x58 0x20 (for 32-byte strings)</li>
+     * </ul>
+     * 
+     * @param coseKey COSE_Key formatted bytes
+     * @return raw 65-byte uncompressed key (0x04 + x + y), or null if parsing fails
+     */
+    @Nullable
+    private byte[] extractFromCOSEKey(@NotNull byte[] coseKey) {
+        try {
+            byte[] xCoord = null;
+            byte[] yCoord = null;
+            
+            // CBOR key markers for COSE_Key:
+            // -2 (x coordinate) = 0x21 in CBOR
+            // -3 (y coordinate) = 0x22 in CBOR
+            // 32-byte byte string prefix = 0x58 0x20
+            
+            for (int i = 0; i < coseKey.length - 34; i++) {
+                // Look for -2 key (x coordinate): 0x21 followed by 0x58 0x20 (32-byte bstr)
+                if (coseKey[i] == 0x21 && i + 35 <= coseKey.length) {
+                    if (coseKey[i + 1] == 0x58 && coseKey[i + 2] == 0x20) {
+                        xCoord = new byte[32];
+                        System.arraycopy(coseKey, i + 3, xCoord, 0, 32);
+                        log.debug("Found x coordinate at offset {}", i);
+                    } else if ((coseKey[i + 1] & 0xFF) >= 0x40 && (coseKey[i + 1] & 0xFF) <= 0x57) {
+                        // Short form: 0x40-0x57 means 0-23 byte string (0x58 = 24+ bytes)
+                        // For 32 bytes, we shouldn't see this, but handle edge case
+                        int len = (coseKey[i + 1] & 0xFF) - 0x40;
+                        if (len == 32 && i + 2 + len <= coseKey.length) {
+                            xCoord = new byte[32];
+                            System.arraycopy(coseKey, i + 2, xCoord, 0, 32);
+                            log.debug("Found x coordinate (short form) at offset {}", i);
+                        }
+                    }
+                }
+                
+                // Look for -3 key (y coordinate): 0x22 followed by 0x58 0x20 (32-byte bstr)
+                if (coseKey[i] == 0x22 && i + 35 <= coseKey.length) {
+                    if (coseKey[i + 1] == 0x58 && coseKey[i + 2] == 0x20) {
+                        yCoord = new byte[32];
+                        System.arraycopy(coseKey, i + 3, yCoord, 0, 32);
+                        log.debug("Found y coordinate at offset {}", i);
+                    } else if ((coseKey[i + 1] & 0xFF) >= 0x40 && (coseKey[i + 1] & 0xFF) <= 0x57) {
+                        int len = (coseKey[i + 1] & 0xFF) - 0x40;
+                        if (len == 32 && i + 2 + len <= coseKey.length) {
+                            yCoord = new byte[32];
+                            System.arraycopy(coseKey, i + 2, yCoord, 0, 32);
+                            log.debug("Found y coordinate (short form) at offset {}", i);
+                        }
+                    }
+                }
+            }
+            
+            // If we found both coordinates, construct raw uncompressed key
+            if (xCoord != null && yCoord != null) {
+                byte[] rawKey = new byte[65];
+                rawKey[0] = 0x04; // Uncompressed point marker
+                System.arraycopy(xCoord, 0, rawKey, 1, 32);
+                System.arraycopy(yCoord, 0, rawKey, 33, 32);
+                return rawKey;
+            }
+            
+            log.debug("Could not find x/y coordinates in COSE_Key (xFound={}, yFound={})", 
+                     xCoord != null, yCoord != null);
+            return null;
+            
+        } catch (Exception e) {
+            log.debug("COSE_Key parsing failed: {}", e.getMessage());
+            return null;
+        }
     }
     
     /**

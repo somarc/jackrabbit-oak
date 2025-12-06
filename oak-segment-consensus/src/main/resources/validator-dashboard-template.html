@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{VALIDATOR_TITLE}}</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            /* Cyberpunk-inspired dark theme with teal/cyan accents */
+            --bg-deep: #0a0e14;
+            --bg-surface: #111820;
+            --bg-elevated: #1a222e;
+            --bg-hover: #252f3f;
+            
+            --accent-primary: #00ffd5;
+            --accent-secondary: #00a3cc;
+            --accent-tertiary: #7c3aed;
+            --accent-gold: #ffd700;
+            --accent-glow: rgba(0, 255, 213, 0.15);
+            
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #484f58;
+            
+            --border-subtle: rgba(255, 255, 255, 0.08);
+            --border-accent: rgba(0, 255, 213, 0.3);
+            
+            --success: #3fb950;
+            --warning: #f0b429;
+            --error: #f85149;
+            --info: #58a6ff;
+            
+            --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            --font-mono: 'JetBrains Mono', 'SF Mono', Monaco, Consolas, monospace;
+            
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 16px;
+            
+            --shadow-glow: 0 0 40px rgba(0, 255, 213, 0.1);
+            --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        
+        /* Animated background pattern */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: 
+                radial-gradient(ellipse at 20% 20%, rgba(0, 255, 213, 0.05) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 80%, rgba(124, 58, 237, 0.05) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        /* Header */
+        .header {
+            margin-bottom: 32px;
+        }
+        
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .brand-icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-tertiary));
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--shadow-glow);
+        }
+        
+        .brand-icon svg {
+            width: 28px;
+            height: 28px;
+            fill: var(--bg-deep);
+        }
+        
+        .brand-text {
+            font-size: 32px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+        }
+        
+        .brand-text span {
+            color: var(--accent-primary);
+        }
+        
+        .validator-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            background: linear-gradient(135deg, rgba(0, 255, 213, 0.1), rgba(124, 58, 237, 0.1));
+            border: 1px solid var(--border-accent);
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent-primary);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-left: 16px;
+        }
+        
+        .subtitle {
+            font-size: 16px;
+            color: var(--text-secondary);
+        }
+        
+        /* Wallet Display */
+        .wallet-section {
+            margin: 24px 0;
+            padding: 20px 24px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .wallet-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        
+        .wallet-address {
+            font-family: var(--font-mono);
+            font-size: 16px;
+            color: var(--accent-primary);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .copy-btn {
+            padding: 6px 12px;
+            background: var(--accent-glow);
+            border: 1px solid var(--border-accent);
+            border-radius: var(--radius-sm);
+            color: var(--accent-primary);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .copy-btn:hover {
+            background: rgba(0, 255, 213, 0.25);
+            transform: translateY(-1px);
+        }
+        
+        /* Mode Banner */
+        .mode-banner {
+            margin-bottom: 24px;
+            padding: 16px 24px;
+            border-radius: var(--radius-md);
+            border: 2px solid;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-weight: 600;
+        }
+        
+        .mode-mock {
+            background: rgba(139, 92, 246, 0.15);
+            border-color: rgba(139, 92, 246, 0.5);
+            color: #a78bfa;
+        }
+        
+        .mode-sepolia {
+            background: rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.5);
+            color: #60a5fa;
+        }
+        
+        .mode-mainnet {
+            background: rgba(239, 68, 68, 0.15);
+            border-color: rgba(239, 68, 68, 0.5);
+            color: #f87171;
+        }
+        
+        .mode-label {
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .mode-detail {
+            font-size: 13px;
+            opacity: 0.8;
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+        
+        .stat-card {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 20px;
+            transition: all 0.2s ease;
+        }
+        
+        .stat-card:hover {
+            border-color: var(--border-accent);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-glow);
+        }
+        
+        .stat-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .stat-caption {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        /* Section Headers */
+        .section-header {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin: 32px 0 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--border-subtle);
+        }
+        
+        /* Action Cards */
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+            margin-top: 24px;
+        }
+        
+        .action-card {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 28px 24px;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+        
+        .action-card:hover {
+            border-color: var(--border-accent);
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-elevated);
+        }
+        
+        .action-icon {
+            font-size: 36px;
+            margin-bottom: 16px;
+        }
+        
+        .action-title {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+        }
+        
+        .action-description {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        
+        .action-link {
+            display: inline-block;
+            padding: 10px 24px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-tertiary));
+            color: var(--bg-deep);
+            text-decoration: none;
+            border-radius: var(--radius-sm);
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+        
+        .action-link:hover {
+            transform: scale(1.05);
+            box-shadow: 0 8px 20px rgba(0, 255, 213, 0.3);
+        }
+        
+        /* Badge */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .badge-leader {
+            background: rgba(250, 204, 21, 0.15);
+            color: #facc15;
+        }
+        
+        .badge-follower {
+            background: rgba(59, 130, 246, 0.15);
+            color: #60a5fa;
+        }
+        
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+            font-size: 13px;
+            border-top: 1px solid var(--border-subtle);
+            margin-top: 64px;
+        }
+        
+        .footer a {
+            color: var(--accent-primary);
+            text-decoration: none;
+        }
+        
+        .footer a:hover {
+            text-decoration: underline;
+        }
+        
+        /* Cluster Visualization */
+        .cluster-viz-container {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 32px 24px;
+            margin-bottom: 32px;
+        }
+        
+        .cluster-viz-container svg {
+            width: 100%;
+            height: auto;
+            max-width: 800px;
+            margin: 0 auto;
+            display: block;
+        }
+        
+        /* Connection Lines */
+        .cluster-line {
+            stroke: var(--border-subtle);
+            opacity: 0.3;
+            transition: all 0.3s ease;
+        }
+        
+        .cluster-line.active {
+            stroke: var(--accent-primary);
+            opacity: 0.6;
+            filter: drop-shadow(0 0 8px rgba(0, 255, 213, 0.4));
+        }
+        
+        /* Cluster Nodes */
+        .cluster-node {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .cluster-node .node-bg {
+            fill: var(--bg-surface);
+            transition: all 0.3s ease;
+        }
+        
+        .cluster-node .node-border {
+            fill: none;
+            stroke: var(--border-subtle);
+            stroke-width: 2;
+            transition: all 0.3s ease;
+        }
+        
+        .cluster-node:hover .node-bg {
+            fill: var(--bg-hover);
+        }
+        
+        .cluster-node:hover .node-border {
+            stroke: var(--accent-primary);
+            filter: drop-shadow(0 0 12px rgba(0, 255, 213, 0.5));
+        }
+        
+        /* Node States */
+        .cluster-node.leader .node-border {
+            stroke: var(--accent-gold);
+            stroke-width: 3;
+            filter: drop-shadow(0 0 12px rgba(255, 215, 0, 0.4));
+        }
+        
+        .cluster-node.leader .node-bg {
+            fill: rgba(255, 215, 0, 0.05);
+        }
+        
+        .cluster-node.follower .node-border {
+            stroke: var(--info);
+            stroke-width: 2;
+        }
+        
+        .cluster-node.self .node-border {
+            stroke: var(--accent-primary);
+            stroke-width: 4;
+            filter: drop-shadow(0 0 16px rgba(0, 255, 213, 0.6));
+        }
+        
+        .cluster-node.self .node-bg {
+            fill: rgba(0, 255, 213, 0.08);
+        }
+        
+        .cluster-node.leader.self .node-border {
+            stroke: var(--accent-gold);
+            stroke-width: 4;
+            filter: drop-shadow(0 0 16px rgba(255, 215, 0, 0.6));
+        }
+        
+        .cluster-node.leader.self .node-bg {
+            fill: rgba(255, 215, 0, 0.1);
+        }
+        
+        /* Node Text */
+        .node-label {
+            fill: var(--text-primary);
+            font-size: 14px;
+            font-weight: 600;
+            text-anchor: middle;
+            font-family: var(--font-sans);
+        }
+        
+        .node-id {
+            fill: var(--text-secondary);
+            font-size: 11px;
+            text-anchor: middle;
+            font-family: var(--font-mono);
+        }
+        
+        .node-role {
+            fill: var(--text-muted);
+            font-size: 10px;
+            font-weight: 700;
+            text-anchor: middle;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: var(--font-sans);
+        }
+        
+        .cluster-node.leader .node-role {
+            fill: var(--accent-gold);
+        }
+        
+        .cluster-node.self .node-role {
+            fill: var(--accent-primary);
+        }
+        
+        /* Consensus Info */
+        .consensus-info {
+            fill: var(--text-secondary);
+            font-size: 12px;
+            font-family: var(--font-mono);
+        }
+        
+        /* Legend */
+        .legend-leader {
+            fill: rgba(255, 215, 0, 0.15);
+            stroke: var(--accent-gold);
+            stroke-width: 2;
+        }
+        
+        .legend-follower {
+            fill: rgba(59, 130, 246, 0.15);
+            stroke: var(--info);
+            stroke-width: 2;
+        }
+        
+        .legend-self {
+            fill: rgba(0, 255, 213, 0.15);
+            stroke: var(--accent-primary);
+            stroke-width: 3;
+        }
+        
+        .legend-text {
+            fill: var(--text-secondary);
+            font-size: 12px;
+            font-family: var(--font-sans);
+        }
+        
+        /* Epoch Finality Pipeline */
+        .pipeline-container {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            margin-bottom: 32px;
+        }
+        
+        .pipeline-title {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .pipeline-subtitle {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        
+        .pipeline-economic {
+            color: var(--accent-gold);
+            font-size: 13px;
+            margin-bottom: 24px;
+        }
+        
+        .pipeline-stages {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+        
+        .pipeline-stage {
+            flex: 1;
+            min-width: 200px;
+            max-width: 280px;
+            padding: 20px;
+            border-radius: var(--radius-md);
+            position: relative;
+        }
+        
+        .pipeline-stage.stage-1 {
+            background: rgba(255, 215, 0, 0.08);
+            border: 2px solid rgba(255, 215, 0, 0.3);
+        }
+        
+        .pipeline-stage.stage-2 {
+            background: rgba(0, 163, 204, 0.08);
+            border: 2px solid rgba(0, 163, 204, 0.3);
+        }
+        
+        .pipeline-stage.stage-3 {
+            background: rgba(63, 185, 80, 0.08);
+            border: 2px solid rgba(63, 185, 80, 0.3);
+        }
+        
+        .stage-header {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+        
+        .stage-label {
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+        
+        .stage-1 .stage-label { color: var(--accent-gold); }
+        .stage-2 .stage-label { color: var(--accent-secondary); }
+        .stage-3 .stage-label { color: var(--success); }
+        
+        .stage-value {
+            font-size: 36px;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            margin-bottom: 8px;
+        }
+        
+        .stage-1 .stage-value { color: var(--accent-gold); }
+        .stage-2 .stage-value { color: var(--accent-secondary); }
+        .stage-3 .stage-value { color: var(--success); }
+        
+        .stage-status {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .stage-detail {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        .pipeline-arrow {
+            font-size: 24px;
+            color: var(--text-muted);
+        }
+        
+        .pipeline-info {
+            text-align: center;
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+        
+        /* Economic Finality Tiers */
+        .tiers-container {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            margin-bottom: 32px;
+        }
+        
+        .tiers-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--accent-tertiary);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .tiers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .tier-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            padding: 16px;
+        }
+        
+        .tier-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        
+        .tier-standard .tier-label { color: #f97316; }
+        .tier-express .tier-label { color: var(--accent-gold); }
+        .tier-priority .tier-label { color: var(--success); }
+        
+        .tier-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .tier-cost {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 2px;
+        }
+        
+        .tier-safety {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        
+        .tiers-economics {
+            background: var(--bg-surface);
+            border-radius: var(--radius-sm);
+            padding: 12px 16px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .tiers-economics strong {
+            color: var(--accent-gold);
+        }
+        
+        /* EVM Verification Stats */
+        .evm-stats-container {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            margin-bottom: 32px;
+        }
+        
+        .evm-stats-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--error);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .evm-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .evm-stat-card {
+            background: var(--bg-surface);
+            border-radius: var(--radius-md);
+            padding: 16px;
+            border-left: 4px solid;
+        }
+        
+        .evm-unverified {
+            border-left-color: var(--warning);
+        }
+        
+        .evm-verified {
+            border-left-color: var(--success);
+        }
+        
+        .evm-rejected {
+            border-left-color: var(--error);
+        }
+        
+        .evm-stat-label {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        
+        .evm-stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            margin-bottom: 4px;
+        }
+        
+        .evm-unverified .evm-stat-value { color: var(--warning); }
+        .evm-verified .evm-stat-value { color: var(--success); }
+        .evm-rejected .evm-stat-value { color: var(--error); }
+        
+        .evm-stat-caption {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        
+        .proposal-types {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-subtle);
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+        
+        .proposal-type strong {
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="brand">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M12 2L2 7v10l10 5 10-5V7L12 2zm0 2.5L19 8l-7 3.5L5 8l7-3.5zM4 9.17l7 3.5v7.16l-7-3.5V9.17zm9 10.66v-7.16l7-3.5v7.16l-7 3.5z"/>
+                    </svg>
+                </div>
+                <div>
+                    <div class="brand-text">Blockchain <span>AEM</span>
+                        <span class="validator-badge">🔗 Validator Node</span>
+                    </div>
+                    <div class="subtitle">Global P2P Oak Repository</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Validator Wallet -->
+        <div class="wallet-section">
+            <div>
+                <div class="wallet-label">Validator Ethereum Address</div>
+                <div class="wallet-address" id="wallet-address">
+                    {{WALLET_ADDRESS}}
+                    <button class="copy-btn" onclick="copyAddress()">📋 Copy</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Mode Banner -->
+        <div class="mode-banner {{MODE_CLASS}}">
+            <div class="mode-label">{{MODE_ICON}} {{MODE_LABEL}}</div>
+            <div class="mode-detail">{{MODE_DETAIL}}</div>
+        </div>
+        
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            {{STATS_CARDS}}
+        </div>
+        
+        <!-- Cluster Visualization -->
+        <div class="section-header">🔗 Aeron Raft Cluster</div>
+        <div class="cluster-viz-container">
+            <svg viewBox="0 0 800 420" xmlns="http://www.w3.org/2000/svg">
+                <!-- Triangle Mesh Connections (lines terminate at circle edges, not centers) -->
+                <!-- Validator 0 (top) <-> Validator 1 (bottom-left) -->
+                <!-- Calculated: from edge of V0 (361,139) to edge of V1 (239,261) -->
+                <line x1="361" y1="139" x2="239" y2="261" class="cluster-line {{LINE_0_1}}" stroke-width="3"/>
+                
+                <!-- Validator 1 (bottom-left) <-> Validator 2 (bottom-right) -->
+                <!-- Horizontal line from edge to edge -->
+                <line x1="255" y1="300" x2="545" y2="300" class="cluster-line {{LINE_1_2}}" stroke-width="3"/>
+                
+                <!-- Validator 0 (top) <-> Validator 2 (bottom-right) -->
+                <!-- Calculated: from edge of V0 (439,139) to edge of V2 (561,261) -->
+                <line x1="439" y1="139" x2="561" y2="261" class="cluster-line {{LINE_0_2}}" stroke-width="3"/>
+                
+                <!-- Animated pulse on active connections -->
+                <defs>
+                    <filter id="glow">
+                        <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                        <feMerge>
+                            <feMergeNode in="coloredBlur"/>
+                            <feMergeNode in="SourceGraphic"/>
+                        </feMerge>
+                    </filter>
+                </defs>
+                
+                <!-- Validator 0 - Top (Leader position) -->
+                <g class="cluster-node {{NODE_0_CLASS}}" transform="translate(400, 100)">
+                    <circle r="55" class="node-bg"/>
+                    <circle r="53" class="node-border"/>
+                    <text x="0" y="-12" class="node-label">Validator 0</text>
+                    <text x="0" y="8" class="node-id">Node ID: 0</text>
+                    <text x="0" y="26" class="node-role">{{ROLE_0}}</text>
+                </g>
+                
+                <!-- Validator 1 - Bottom Left -->
+                <g class="cluster-node {{NODE_1_CLASS}}" transform="translate(200, 300)">
+                    <circle r="55" class="node-bg"/>
+                    <circle r="53" class="node-border"/>
+                    <text x="0" y="-12" class="node-label">Validator 1</text>
+                    <text x="0" y="8" class="node-id">Node ID: 1</text>
+                    <text x="0" y="26" class="node-role">{{ROLE_1}}</text>
+                </g>
+                
+                <!-- Validator 2 - Bottom Right -->
+                <g class="cluster-node {{NODE_2_CLASS}}" transform="translate(600, 300)">
+                    <circle r="55" class="node-bg"/>
+                    <circle r="53" class="node-border"/>
+                    <text x="0" y="-12" class="node-label">Validator 2</text>
+                    <text x="0" y="8" class="node-id">Node ID: 2</text>
+                    <text x="0" y="26" class="node-role">{{ROLE_2}}</text>
+                </g>
+                
+                <!-- Consensus Info - Center of triangle -->
+                <text x="400" y="220" class="consensus-info" text-anchor="middle">
+                    {{CONSENSUS_INFO}}
+                </text>
+                
+                <!-- Legend -->
+                <g transform="translate(250, 390)">
+                    <circle r="8" cx="0" cy="0" class="legend-leader"/>
+                    <text x="15" y="5" class="legend-text">Leader</text>
+                    
+                    <circle r="8" cx="100" cy="0" class="legend-follower"/>
+                    <text x="115" y="5" class="legend-text">Follower</text>
+                    
+                    <circle r="8" cx="220" cy="0" class="legend-self"/>
+                    <text x="235" y="5" class="legend-text">This Node</text>
+                </g>
+            </svg>
+        </div>
+        
+        <!-- Ethereum Epoch Finality Pipeline -->
+        <div class="section-header">⛓️ Ethereum Epoch Finality Pipeline</div>
+        <div class="pipeline-container">
+            <div class="pipeline-subtitle">Proposals flow through a 3-stage pipeline based on Ethereum epoch finality (~6.4 min per epoch).</div>
+            <div class="pipeline-economic"><strong>Economic Finality:</strong> Users can pay to bump priority for faster inclusion.</div>
+            
+            <div class="pipeline-stages">
+                <div class="pipeline-stage stage-1">
+                    <div class="stage-header">STAGE 1</div>
+                    <div class="stage-label">🏷️ Current Epoch</div>
+                    <div class="stage-value">{{CURRENT_EPOCH}}</div>
+                    <div class="stage-status">{{STAGE1_PROPOSALS}} awaiting verification</div>
+                    <div class="stage-detail">EVM verification queue (fast in MOCK mode)</div>
+                </div>
+                
+                <div class="pipeline-arrow">→</div>
+                
+                <div class="pipeline-stage stage-2">
+                    <div class="stage-header">STAGE 2</div>
+                    <div class="stage-label">⏳ Epoch - 1</div>
+                    <div class="stage-value">{{PREVIOUS_EPOCH}}</div>
+                    <div class="stage-status">{{STAGE2_PROPOSALS}} proposals waiting</div>
+                    <div class="stage-detail">Verified & secured • ~6.4 min until finality</div>
+                </div>
+                
+                <div class="pipeline-arrow">→</div>
+                
+                <div class="pipeline-stage stage-3">
+                    <div class="stage-header">STAGE 3</div>
+                    <div class="stage-label">✅ Finalized</div>
+                    <div class="stage-value">{{FINALIZED_EPOCH}}</div>
+                    <div class="stage-status">Ready</div>
+                    <div class="stage-detail">Batched & replicated • Writing to SegmentStore</div>
+                </div>
+            </div>
+            
+            <div class="pipeline-info">
+                ⚪ Total Pipeline Time: ~12.8 minutes (2 Ethereum epochs) • Gap: 2 epochs (12.8 min)
+            </div>
+        </div>
+        
+        <!-- Economic Finality Tiers -->
+        <div class="tiers-container">
+            <div class="tiers-title">💎 Economic Finality Tiers</div>
+            
+            <div class="tiers-grid">
+                <div class="tier-card tier-standard">
+                    <div class="tier-label">🥉 STANDARD</div>
+                    <div class="tier-value">~12.8 min</div>
+                    <div class="tier-cost">Cost: 0.001 ETH</div>
+                    <div class="tier-safety">2 epoch safety</div>
+                </div>
+                
+                <div class="tier-card tier-express">
+                    <div class="tier-label">🥈 EXPRESS</div>
+                    <div class="tier-value">~6.4 min</div>
+                    <div class="tier-cost">Cost: 0.002 ETH (2×)</div>
+                    <div class="tier-safety">1 epoch safety</div>
+                </div>
+                
+                <div class="tier-card tier-priority">
+                    <div class="tier-label">🥇 PRIORITY</div>
+                    <div class="tier-value">~30 sec</div>
+                    <div class="tier-cost">Cost: 0.01 ETH (10×)</div>
+                    <div class="tier-safety">Immediate inclusion</div>
+                </div>
+            </div>
+            
+            <div class="tiers-economics">
+                <strong>💡 Economics:</strong> Users choose their latency-cost tradeoff. Standard tier maximizes batching efficiency (2-epoch safety). Express tier balances speed and cost (1-epoch safety). Priority tier provides immediate inclusion for time-critical updates.
+            </div>
+        </div>
+        
+        <!-- EVM Verification Stats (Queue Level) -->
+        <div class="evm-stats-container">
+            <div class="evm-stats-title">🛡️ EVM Verification Stats <span style="font-size: 12px; font-weight: normal; color: #6b7280;">(payment proof validation after queue)</span></div>
+            
+            <div class="evm-stats-grid">
+                <div class="evm-stat-card evm-unverified">
+                    <div class="evm-stat-label">⏳ Unverified</div>
+                    <div class="evm-stat-value">{{UNVERIFIED_COUNT}}</div>
+                    <div class="evm-stat-caption">Awaiting EVM confirmation</div>
+                </div>
+                
+                <div class="evm-stat-card evm-verified">
+                    <div class="evm-stat-label">✅ Verified</div>
+                    <div class="evm-stat-value">{{VERIFIED_COUNT}}</div>
+                    <div class="evm-stat-caption">Passed 3-checkpoint security</div>
+                </div>
+                
+                <div class="evm-stat-card evm-rejected">
+                    <div class="evm-stat-label">❌ Rejected</div>
+                    <div class="evm-stat-value">{{REJECTED_COUNT}}</div>
+                    <div class="evm-stat-caption">Failed security checks</div>
+                </div>
+            </div>
+            
+            <div class="proposal-types">
+                <span class="proposal-type">✏️ Writes: <strong>{{WRITE_PROPOSALS}}</strong></span>
+                <span class="proposal-type">🗑️ Deletes: <strong>{{DELETE_PROPOSALS}}</strong></span>
+                <span class="proposal-type">📊 Queued: <strong>{{TOTAL_PROPOSALS}}</strong></span>
+                <span class="proposal-type" style="color: #22d3ee;">✅ Finalized: <strong>{{TOTAL_FINALIZED}}</strong></span>
+            </div>
+            
+            <div class="api-stats" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(0, 255, 255, 0.1);">
+                <div style="font-size: 11px; color: #6b7280; margin-bottom: 8px;">API Layer (format validation before queue)</div>
+                <span class="proposal-type" style="color: #4ade80;">📥 Accepted: <strong>{{API_ACCEPTED}}</strong></span>
+                <span class="proposal-type" style="color: #f87171;">🚫 Rejected: <strong>{{API_REJECTED}}</strong></span>
+            </div>
+        </div>
+        
+        <!-- TarMK Growth State -->
+        <div class="section-header">📁 TarMK Growth State</div>
+        
+        <div class="stats-grid" style="margin-bottom: 24px;">
+            <div class="stat-card">
+                <div class="stat-label">TAR FILES</div>
+                <div class="stat-value" style="font-size: 48px;">{{TAR_FILE_COUNT}}</div>
+                <div class="stat-caption">Total TAR file generations</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">TOTAL SIZE</div>
+                <div class="stat-value" style="font-size: 48px;">{{TAR_TOTAL_SIZE}}</div>
+                <div class="stat-caption">Combined size of all TAR files</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">AVG TAR SIZE</div>
+                <div class="stat-value" style="font-size: 48px;">{{TAR_AVG_SIZE}}</div>
+                <div class="stat-caption">Average: {{TAR_AVG_SIZE}} (max: {{TAR_MAX_SIZE}}, min: {{TAR_MIN_SIZE}})</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">PACKING EFFICIENCY</div>
+                <div class="stat-value" style="font-size: 48px;">{{PACKING_EFFICIENCY}}%</div>
+                <div class="stat-caption">{{PACKING_STATUS}}</div>
+            </div>
+        </div>
+        
+        <!-- Storage Capacity -->
+        <div class="section-header">💾 Storage Capacity</div>
+        
+        <div style="background: rgba(0, 0, 0, 0.3); border-radius: 12px; padding: 24px; margin-bottom: 24px; border: 1px solid rgba(0, 255, 255, 0.1);">
+            <div style="color: #9ca3af; margin-bottom: 12px;">Production upper bound: 2 TB (pure SegmentStore metadata)</div>
+            
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                <span style="font-size: 18px; font-weight: 600;">{{TAR_TOTAL_SIZE}}</span>
+                <span style="color: #22d3ee; font-size: 18px; font-weight: 600;">{{STORAGE_PERCENT}}%</span>
+            </div>
+            
+            <div style="background: rgba(255, 255, 255, 0.1); border-radius: 8px; height: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(90deg, #22d3ee, #06b6d4); height: 100%; width: {{STORAGE_PERCENT}}%; min-width: 2px; border-radius: 8px;"></div>
+            </div>
+            
+            <div style="margin-top: 16px; display: flex; gap: 24px;">
+                <span>Status: <span style="color: {{STORAGE_STATUS_COLOR}};">{{STORAGE_STATUS_ICON}} {{STORAGE_STATUS}}</span></span>
+                <span>| Tax Multiplier: <strong>{{TAX_MULTIPLIER}}x</strong></span>
+            </div>
+        </div>
+        
+        <!-- AI TarMK Analysis -->
+        <div style="background: rgba(0, 0, 0, 0.3); border-radius: 12px; padding: 20px; margin-bottom: 24px; border-left: 3px solid #22d3ee;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <span style="font-size: 24px;">🤖</span>
+                    <span style="font-size: 18px; font-weight: 600;">AI TarMK Analysis</span>
+                </div>
+                <a href="/chat?prompt=Analyze%20TarMK%20growth%20state" style="padding: 8px 16px; background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.3); border-radius: 6px; color: #22d3ee; text-decoration: none; font-size: 14px;">Analyze with AI →</a>
+            </div>
+        </div>
+        
+        <div class="section-header">🔍 Validator Tools</div>
+        
+        <!-- Action Cards -->
+        <div class="action-grid">
+            <div class="action-card">
+                <div class="action-icon">🔍</div>
+                <div class="action-title">Content Explorer</div>
+                <div class="action-description">Browse the global repository content tree and inspect segments</div>
+                <a href="/explorer" class="action-link">Launch Explorer →</a>
+            </div>
+            
+            <div class="action-card">
+                <div class="action-icon">🧪</div>
+                <div class="action-title">API Browser</div>
+                <div class="action-description">Interactive API explorer and testing interface</div>
+                <a href="/api-browser" class="action-link">Launch API Browser →</a>
+            </div>
+            
+            <div class="action-card">
+                <div class="action-icon">💬</div>
+                <div class="action-title">LLM Chat</div>
+                <div class="action-description">Ask questions about Oak internals and query validator state</div>
+                <a href="/chat" class="action-link">Launch Chat →</a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="footer">
+        <p>© 2025 Blockchain AEM • Powered by <a href="https://github.com/apache/jackrabbit-oak" target="_blank">Apache Jackrabbit Oak</a></p>
+    </div>
+    
+    <script>
+        function copyAddress() {
+            const address = document.getElementById('wallet-address').textContent.trim().split('\n')[0];
+            navigator.clipboard.writeText(address).then(() => {
+                const btn = document.querySelector('.copy-btn');
+                btn.textContent = '✅ Copied!';
+                setTimeout(() => btn.textContent = '📋 Copy', 2000);
+            });
+        }
+    </script>
+</body>
+</html>
+

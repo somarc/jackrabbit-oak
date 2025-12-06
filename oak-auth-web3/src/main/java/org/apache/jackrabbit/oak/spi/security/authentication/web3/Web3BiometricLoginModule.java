@@ -245,12 +245,16 @@ public final class Web3BiometricLoginModule extends AbstractLoginModule {
                 String walletAddress = (String) simpleCreds.getAttribute("web3.biometric.walletAddress");
                 
                 log.info("🔄 Converting SimpleCredentials to Web3BiometricCredentials for wallet: {}", walletAddress);
+                log.info("   📐 Public key size: {} bytes, Signature size: {} bytes", 
+                    publicKey != null ? publicKey.length : 0,
+                    signature != null ? signature.length : 0);
                 
                 // Create Web3BiometricCredentials from servlet data
+                // Constructor order: credentialId, signature, publicKey, challenge, walletAddress
                 this.credentials = new Web3BiometricCredentials(
                     credentialId,
-                    publicKey,
-                    signature,
+                    signature,   // signature comes BEFORE publicKey!
+                    publicKey,   // publicKey comes AFTER signature!
                     challenge,
                     walletAddress
                 );

@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements.  See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License.  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Explorer | Blockchain AEM Validator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0f1a;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.8);
+            --border-color: rgba(0, 255, 255, 0.15);
+            --border-glow: rgba(0, 255, 255, 0.3);
+            --text-primary: #f0f4f8;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #00ffff;
+            --accent-secondary: #22d3ee;
+            --accent-purple: #a855f7;
+            --accent-green: #10b981;
+            --accent-orange: #f59e0b;
+            --accent-pink: #ec4899;
+            --gradient-cyber: linear-gradient(135deg, #0a0f1a 0%, #1a1a2e 50%, #0a0f1a 100%);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--gradient-cyber);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(180deg, rgba(0, 255, 255, 0.08) 0%, transparent 100%);
+            border-bottom: 1px solid var(--border-color);
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .logo-text {
+            font-size: 20px;
+            font-weight: 700;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 8px;
+        }
+
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            color: var(--text-primary);
+            background: rgba(0, 255, 255, 0.1);
+        }
+
+        .nav-link.active {
+            color: var(--accent-primary);
+            background: rgba(0, 255, 255, 0.15);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .mode-badge {
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .mode-mock {
+            background: rgba(168, 85, 247, 0.2);
+            color: #c084fc;
+            border: 1px solid rgba(168, 85, 247, 0.3);
+        }
+
+        /* Main Content */
+        .main-container {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 24px 32px;
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 24px;
+            min-height: calc(100vh - 80px);
+        }
+
+        @media (max-width: 1200px) {
+            .main-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Sidebar */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--text-primary);
+        }
+
+        .card-header .icon {
+            font-size: 18px;
+        }
+
+        .card-body {
+            padding: 16px;
+        }
+
+        /* Breadcrumb */
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 12px 16px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+        }
+
+        .breadcrumb a {
+            color: var(--accent-secondary);
+            text-decoration: none;
+            padding: 2px 6px;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .breadcrumb a:hover {
+            background: rgba(0, 255, 255, 0.15);
+        }
+
+        .breadcrumb .sep {
+            color: var(--text-muted);
+        }
+
+        /* Tree */
+        .tree-container {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .tree-node {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            margin: 4px 0;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            border-left: 3px solid transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tree-node:hover {
+            background: rgba(0, 255, 255, 0.08);
+            border-left-color: var(--accent-primary);
+            transform: translateX(4px);
+        }
+
+        .tree-node .icon {
+            font-size: 16px;
+        }
+
+        .tree-node .name {
+            flex: 1;
+            color: var(--accent-secondary);
+            font-weight: 500;
+            font-size: 13px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .tree-node.wallet { border-left-color: var(--accent-green); }
+        .tree-node.content { border-left-color: var(--accent-orange); }
+        .tree-node.file { border-left-color: var(--accent-pink); }
+        .tree-node.shard { border-left-color: var(--accent-purple); }
+
+        /* Stats */
+        .stats-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .stat-badge {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+        }
+
+        .stat-badge .label {
+            color: var(--text-muted);
+        }
+
+        .stat-badge .value {
+            color: var(--accent-secondary);
+            font-weight: 600;
+            margin-left: 6px;
+        }
+
+        /* Properties */
+        .property {
+            display: flex;
+            gap: 12px;
+            padding: 12px;
+            margin: 6px 0;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            border-left: 3px solid var(--border-color);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .property:hover {
+            background: rgba(0, 255, 255, 0.05);
+        }
+
+        .prop-icon {
+            font-size: 14px;
+            min-width: 20px;
+            text-align: center;
+        }
+
+        .prop-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .prop-name {
+            color: var(--accent-orange);
+            font-weight: 500;
+        }
+
+        .prop-type {
+            color: var(--text-muted);
+            font-size: 10px;
+            margin-left: 8px;
+        }
+
+        .prop-value {
+            color: var(--accent-green);
+            word-break: break-all;
+            margin-top: 4px;
+        }
+
+        .property.ipfs { border-left-color: var(--accent-primary); }
+        .property.ipfs .prop-value { color: var(--accent-primary); }
+        .property.wallet { border-left-color: var(--accent-green); }
+        .property.binary { border-left-color: var(--accent-pink); }
+        .property.binary .prop-value { color: var(--accent-pink); }
+        .property.timestamp { border-left-color: var(--accent-orange); }
+
+        .property a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .property a:hover {
+            text-decoration: underline;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state .icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+            opacity: 0.5;
+        }
+
+        /* Loading */
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            border: 2px solid var(--accent-primary);
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Copy Button */
+        .copy-btn {
+            background: rgba(0, 255, 255, 0.1);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: rgba(0, 255, 255, 0.2);
+            color: var(--text-primary);
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(0, 255, 255, 0.3);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 255, 255, 0.5);
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-muted);
+            font-size: 12px;
+            border-top: 1px solid var(--border-color);
+            margin-top: 40px;
+        }
+
+        .footer a {
+            color: var(--accent-secondary);
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <a href="/" class="logo">
+                <div class="logo-icon">⛓️</div>
+                <span class="logo-text">Blockchain AEM</span>
+            </a>
+            <nav class="nav-links">
+                <a href="/" class="nav-link">Dashboard</a>
+                <a href="/explorer" class="nav-link active">Explorer</a>
+                <a href="/api-browser" class="nav-link">API Browser</a>
+                <a href="/chat" class="nav-link">Chat</a>
+            </nav>
+        </div>
+        <div class="header-right">
+            <span class="mode-badge {{MODE_CLASS}}">{{MODE_LABEL}}</span>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <aside class="sidebar">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">🌳</span>
+                    Node Tree
+                </div>
+                <div class="card-body">
+                    <div class="breadcrumb" id="breadcrumb">
+                        <a href="#" onclick="loadNode('/'); return false;">🏠 root</a>
+                    </div>
+                    <div class="stats-row" id="node-stats" style="margin: 12px 0;"></div>
+                    <div class="tree-container" id="children">
+                        <div class="loading active" id="tree-loading">
+                            <span class="spinner"></span> Loading tree...
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">🔍</span>
+                    Quick Navigation
+                </div>
+                <div class="card-body">
+                    <div class="tree-node shard" onclick="loadNode('/oak-chain')">
+                        <span class="icon">⛓️</span>
+                        <span class="name">/oak-chain</span>
+                    </div>
+                    <div class="tree-node" onclick="loadNode('/oak-chain/00/00/00/0x0000000000000000000000000000000000000000/content/genesis')">
+                        <span class="icon">🌟</span>
+                        <span class="name">Genesis Node</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <section class="content">
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">📋</span>
+                    Properties
+                </div>
+                <div class="card-body">
+                    <div class="loading" id="loading">
+                        <span class="spinner"></span> Loading node...
+                    </div>
+                    <div id="node-content">
+                        <div id="properties">
+                            <div class="empty-state">
+                                <div class="icon">📁</div>
+                                <div>Select a node to view properties</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>© 2025 Blockchain AEM • Powered by <a href="https://github.com/apache/jackrabbit-oak" target="_blank">Apache Jackrabbit Oak</a></p>
+    </footer>
+
+    <script>
+        let currentPath = '/';
+        let nodeData = null;
+
+        async function loadNode(path) {
+            currentPath = path;
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('node-content').style.opacity = '0.5';
+            
+            try {
+                const response = await fetch('/api/explore?path=' + encodeURIComponent(path));
+                nodeData = await response.json();
+                if (nodeData.error) {
+                    displayError(nodeData.error);
+                } else {
+                    displayNode(nodeData);
+                }
+            } catch (e) {
+                displayError(e.message);
+            }
+            
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('node-content').style.opacity = '1';
+        }
+
+        function displayError(msg) {
+            document.getElementById('children').innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><div>' + msg + '</div></div>';
+            document.getElementById('properties').innerHTML = '';
+            document.getElementById('node-stats').innerHTML = '';
+        }
+
+        function displayNode(node) {
+            // Breadcrumb
+            const breadcrumb = document.getElementById('breadcrumb');
+            const parts = currentPath.split('/').filter(p => p);
+            let path = '';
+            breadcrumb.innerHTML = '<a href="#" onclick="loadNode(\'/\'); return false;">🏠 root</a>';
+            parts.forEach((part, idx) => {
+                path += '/' + part;
+                const icon = getNodeIcon(part);
+                breadcrumb.innerHTML += '<span class="sep">/</span><a href="#" onclick="loadNode(\'' + path + '\'); return false;">' + icon + ' ' + part + '</a>';
+            });
+
+            // Node stats
+            const stats = document.getElementById('node-stats');
+            const childCount = node.children ? node.children.length : 0;
+            const propCount = node.properties ? Object.keys(node.properties).length : 0;
+            stats.innerHTML = '<div class="stat-badge"><span class="label">Children:</span><span class="value">' + childCount + '</span></div>';
+            stats.innerHTML += '<div class="stat-badge"><span class="label">Properties:</span><span class="value">' + propCount + '</span></div>';
+            if (node.properties && node.properties['jcr:primaryType']) {
+                stats.innerHTML += '<div class="stat-badge"><span class="label">Type:</span><span class="value">' + node.properties['jcr:primaryType'] + '</span></div>';
+            }
+
+            // Children
+            const children = document.getElementById('children');
+            children.innerHTML = '';
+            if (node.children && node.children.length > 0) {
+                node.children.sort().forEach(child => {
+                    const div = document.createElement('div');
+                    const nodeClass = getNodeClass(child);
+                    div.className = 'tree-node ' + nodeClass;
+                    const icon = getNodeIcon(child);
+                    div.innerHTML = '<span class="icon">' + icon + '</span><span class="name">' + child + '</span>';
+                    div.onclick = () => loadNode(currentPath === '/' ? '/' + child : currentPath + '/' + child);
+                    children.appendChild(div);
+                });
+            } else {
+                children.innerHTML = '<div class="empty-state"><div class="icon">📭</div><div>No child nodes</div></div>';
+            }
+
+            // Properties
+            const props = document.getElementById('properties');
+            props.innerHTML = '';
+            if (node.properties && Object.keys(node.properties).length > 0) {
+                Object.entries(node.properties).sort((a,b) => a[0].localeCompare(b[0])).forEach(([key, value]) => {
+                    const div = document.createElement('div');
+                    const propClass = getPropClass(key, value);
+                    const propIcon = getPropIcon(key, value);
+                    div.className = 'property ' + propClass;
+                    const valueHtml = formatPropValue(key, value);
+                    div.innerHTML = '<span class="prop-icon">' + propIcon + '</span>' +
+                        '<div class="prop-content"><span class="prop-name">' + key + '</span>' +
+                        '<span class="prop-type">' + getPropType(value) + '</span><br>' +
+                        '<span class="prop-value">' + valueHtml + '</span></div>';
+                    props.appendChild(div);
+                });
+            } else {
+                props.innerHTML = '<div class="empty-state"><div class="icon">📋</div><div>No properties</div></div>';
+            }
+        }
+
+        function getNodeIcon(name) {
+            if (name.startsWith('0x')) return '👛';
+            if (name === 'oak-chain') return '⛓️';
+            if (name === 'content') return '📄';
+            if (name.startsWith('file-')) return '🖼️';
+            if (name.startsWith('page-')) return '📝';
+            if (name === 'ethereum' || name === 'epoch') return '💎';
+            if (name === 'genesis') return '🌟';
+            if (name === 'ipfs') return '🌐';
+            if (name.match(/^[0-9a-f]{2}$/)) return '📂';
+            return '📁';
+        }
+
+        function getNodeClass(name) {
+            if (name.startsWith('0x')) return 'wallet';
+            if (name === 'content') return 'content';
+            if (name.startsWith('file-')) return 'file';
+            if (name.match(/^[0-9a-f]{2}$/)) return 'shard';
+            return '';
+        }
+
+        function getPropClass(key, value) {
+            if (key === 'ipfsCid' || key === 'ipfsGateway' || (value && value.toString().startsWith('ipfs://'))) return 'ipfs';
+            if (key === 'wallet' || key.includes('address') || key.includes('Address')) return 'wallet';
+            if (key === 'jcr:data' || key === 'jcr:blobId') return 'binary';
+            if (key === 'timestamp' || key.includes('time') || key.includes('Time')) return 'timestamp';
+            return '';
+        }
+
+        function getPropIcon(key, value) {
+            if (key === 'ipfsCid' || key === 'ipfsGateway') return '🌐';
+            if (key === 'wallet' || key.includes('address')) return '👛';
+            if (key === 'jcr:data' || key === 'jcr:blobId') return '📦';
+            if (key === 'timestamp') return '🕐';
+            if (key === 'signature') return '✍️';
+            if (key === 'jcr:mimeType') return '🏷️';
+            if (key === 'jcr:primaryType') return '📋';
+            return '📌';
+        }
+
+        function getPropType(value) {
+            if (value === null || value === undefined) return 'null';
+            if (typeof value === 'number') return Number.isInteger(value) ? 'Long' : 'Double';
+            if (typeof value === 'boolean') return 'Boolean';
+            if (Array.isArray(value)) return 'Array[' + value.length + ']';
+            if (typeof value === 'string' && value.startsWith('[Binary:')) return 'Binary';
+            return 'String';
+        }
+
+        function formatPropValue(key, value) {
+            if (value === null || value === undefined) return '<em>null</em>';
+            
+            // IPFS links
+            if (key === 'ipfsCid' && value) {
+                return '<a href="https://ipfs.io/ipfs/' + value + '" target="_blank">' + value + '</a>';
+            }
+            if (key === 'ipfsGateway' && value) {
+                return '<a href="' + value + '" target="_blank">' + value + '</a>';
+            }
+            
+            // Timestamps
+            if (key === 'timestamp' && typeof value === 'number' && value > 1000000000000) {
+                return value + ' <span style="color: var(--text-muted)">(' + new Date(value).toLocaleString() + ')</span>';
+            }
+            
+            // Wallet addresses
+            if (key === 'wallet' && value && value.startsWith('0x')) {
+                return '<a href="https://sepolia.etherscan.io/address/' + value + '" target="_blank">' + value + '</a>';
+            }
+            
+            // Binary
+            if (typeof value === 'string' && value.startsWith('[Binary:')) {
+                return value;
+            }
+            
+            // Long strings
+            if (typeof value === 'string' && value.length > 100) {
+                return escapeHtml(value.substring(0, 100)) + '... <button class="copy-btn" onclick="copyToClipboard(\'' + escapeHtml(value.replace(/'/g, "\\'")) + '\')">Copy</button>';
+            }
+            
+            return escapeHtml(String(value));
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                // Could show toast notification
+            });
+        }
+
+        // Load root on page load
+        loadNode('/');
+    </script>
+</body>
+</html>
+
