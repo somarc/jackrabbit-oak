@@ -164,12 +164,11 @@ public class DashboardHandler {
         statsItems.append("</div></div>");
         
         // Mode indicator (far right, auto-margin pushes it)
-        String modeValueClass = "mode-" + paymentMode.toLowerCase();
         statsItems.append("<div class='stat-item mode-item'>");
         statsItems.append("<span class='stat-icon'>").append(modeIcon).append("</span>");
         statsItems.append("<div class='stat-content'>");
         statsItems.append("<span class='stat-label'>Mode</span>");
-        statsItems.append("<span class='stat-value ").append(modeValueClass).append("'>").append(modeLabel).append("</span>");
+        statsItems.append("<span class='stat-value ").append(modeClass).append("'>").append(modeLabel).append("</span>");
         statsItems.append("</div></div>");
         
         // Build cluster visualization data
