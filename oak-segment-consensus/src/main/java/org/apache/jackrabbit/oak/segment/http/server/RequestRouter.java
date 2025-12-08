@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.segment.http.server.handlers.*;
+import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
 import org.eclipse.jetty.server.Request;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +49,8 @@ public class RequestRouter {
     private final LeaderConsensusHandler leaderConsensusHandler;
     private final BinaryUploadHandler binaryUploadHandler;
     private final CidApiHandler cidApiHandler;
+    private final EventStreamHandler eventStreamHandler;
+    private final EventBroadcaster eventBroadcaster;
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
     
@@ -104,6 +107,11 @@ public class RequestRouter {
         
         // CID API handler (Oak ↔ IPFS CID mapping)
         this.cidApiHandler = new CidApiHandler(context);
+        
+        // SSE Event Broadcaster and Handler (ADR 036)
+        this.eventBroadcaster = new EventBroadcaster();
+        this.eventStreamHandler = new EventStreamHandler(context, eventBroadcaster);
+        context.setEventBroadcaster(eventBroadcaster); // Make available to other components
         
         // Chat handler will be initialized lazily on first use (after selfUrl is set)
         this.chatHandler = null;
@@ -317,6 +325,27 @@ public class RequestRouter {
             }
             if (path.startsWith("/api/cid/") && "GET".equals(method)) {
                 cidApiHandler.handleGetCid(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // SSE Event Streaming API (ADR 036)
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            if ("/v1/events/stream".equals(path) && "GET".equals(method)) {
+                eventStreamHandler.handleEventStream(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/events/recent".equals(path) && "GET".equals(method)) {
+                eventStreamHandler.handleRecentEvents(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            if ("/v1/events/stats".equals(path) && "GET".equals(method)) {
+                eventStreamHandler.handleStats(request, response);
                 baseRequest.setHandled(true);
                 return;
             }
@@ -708,6 +737,15 @@ public class RequestRouter {
      */
     public BinaryUploadHandler getBinaryUploadHandler() {
         return binaryUploadHandler;
+    }
+    
+    /**
+     * Get the event broadcaster (for emitting SSE events from other components).
+     * 
+     * @return the event broadcaster
+     */
+    public EventBroadcaster getEventBroadcaster() {
+        return eventBroadcaster;
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

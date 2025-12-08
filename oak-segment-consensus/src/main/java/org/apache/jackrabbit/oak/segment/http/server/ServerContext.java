@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.http.server;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
 import org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusStateService;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
@@ -73,6 +74,7 @@ public class ServerContext {
     public volatile org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore; // For eager binary uploads
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService cidMappingService; // Oak ↔ IPFS CID mapping
     public volatile String validatorWalletAddress = "0x0000000000000000000000000000000000000000"; // Validator's Ethereum address
+    public volatile EventBroadcaster eventBroadcaster; // SSE event broadcasting (ADR 036)
     
     // API-level metrics (rejections before reaching queue)
     public final java.util.concurrent.atomic.AtomicLong apiRejectedRequests = new java.util.concurrent.atomic.AtomicLong(0);
@@ -203,6 +205,11 @@ public class ServerContext {
     public void setUploadSessionManager(org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager) {
         this.uploadSessionManager = uploadSessionManager;
         log.info("✅ Upload Session Manager initialized (ADR 020 lazy binary upload)");
+    }
+    
+    public void setEventBroadcaster(EventBroadcaster eventBroadcaster) {
+        this.eventBroadcaster = eventBroadcaster;
+        log.info("📡 Event Broadcaster initialized (ADR 036 SSE streaming)");
     }
 }
 

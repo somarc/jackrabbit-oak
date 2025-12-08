@@ -84,6 +84,7 @@ public class ConsensusApiHandler {
             String ethereumTxHash = null;
             String intentToken = null;
             String paymentTier = null;
+            String organization = null;  // ADR 037: Organization-scoped content paths
             byte[] binaryBytes = null;
             String mimeType = null;
             String fileName = null;
@@ -122,8 +123,8 @@ public class ConsensusApiHandler {
                             case "ethereumTxHash": ethereumTxHash = value; break;
                             case "intentToken": intentToken = value; break;
                             case "paymentTier": paymentTier = value; break;
+                            case "organization": organization = value; break;  // ADR 037
                             // TODO ADR 016: case "ipfsCid": ipfsCid = value; break;
-                            // TODO ADR 020: case "intentToken": intentToken = value; break;
                         }
                     }
                 }
@@ -139,6 +140,7 @@ public class ConsensusApiHandler {
                 ethereumTxHash = request.getParameter("ethereumTxHash");
                 intentToken = request.getParameter("intentToken");
                 paymentTier = request.getParameter("paymentTier");
+                organization = request.getParameter("organization");  // ADR 037
                 
                 // Legacy base64 binary (for backward compatibility, but discouraged)
                 String binaryData = request.getParameter("binaryData");
@@ -185,6 +187,21 @@ public class ConsensusApiHandler {
             
             // Normalize wallet addresses for comparison (case-insensitive)
             String normalizedWallet = wallet.toLowerCase();
+            
+            // ============================================================
+            // ORGANIZATION VALIDATION (ADR 037)
+            // ============================================================
+            // Optional: allows multi-brand wallets (one wallet, multiple orgs)
+            String orgValidationError = WalletPathUtil.validateOrganization(organization);
+            if (orgValidationError != null) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.warn("❌ API REJECTED: Invalid organization '{}': {}", organization, orgValidationError);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, orgValidationError);
+                return;
+            }
+            if (organization != null && !organization.isEmpty()) {
+                log.info("🏢 Organization: {} (wallet: {})", organization, normalizedWallet.substring(0, 10) + "...");
+            }
             
             // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
             // This is the primary identifier - clientId is secondary
@@ -490,10 +507,11 @@ public class ConsensusApiHandler {
                 }
             }
             
-            // Build wallet-scoped content path
+            // Build wallet-scoped content path (with optional organization - ADR 037)
             String shardId = WalletPathUtil.getShardId(normalizedWallet);
-            String contentRoot = WalletPathUtil.getContentPath(normalizedWallet);
-            log.debug("🪣 Using wallet shard: {} (contentRoot: {})", shardId, contentRoot);
+            String contentRoot = WalletPathUtil.getContentPath(normalizedWallet, organization);
+            log.debug("🪣 Using wallet shard: {} (org: {}, contentRoot: {})", shardId, 
+                organization != null ? organization : "none", contentRoot);
             
             // Generate content ID and full path
             String contentId = contentType + "-" + System.currentTimeMillis();
@@ -517,7 +535,9 @@ public class ConsensusApiHandler {
                     fullPath,
                     contentType != null ? contentType : "page",
                     message != null ? message : "",
-                    signature // Already validated - no fallback needed
+                    signature,
+                    blobId,      // Include binary reference for Aeron replication
+                    mimeType     // Include mimeType for binary handling
                 );
                 
                 if (!success) {
@@ -1134,6 +1154,15 @@ public class ConsensusApiHandler {
             contentNode.setProperty("signature", signature); // Already validated - no fallback
             contentNode.setProperty("source", "aeron-replicated");
             
+            // ADR 037: Extract and store organization from path
+            // Path format: /oak-chain/XX/YY/ZZ/0xWALLET/{organization}/content/{contentId}
+            // Organization is the segment after wallet, before "content"
+            String extractedOrg = extractOrganizationFromPath(path);
+            if (extractedOrg != null && !extractedOrg.isEmpty()) {
+                contentNode.setProperty("organization", extractedOrg);
+                log.debug("🏢 Stored organization property: {}", extractedOrg);
+            }
+            
             // 📦 Store binary reference as jcr:data (proper Oak BINARY property type)
             if (blobId != null && !blobId.isEmpty() && context.blobStore != null) {
                 try {
@@ -1235,6 +1264,61 @@ public class ConsensusApiHandler {
                 context.aeronConsensusEngine.updateLatestHead(newHead);
             }
             
+            // 📡 ADR 036: Emit SSE event for real-time discovery
+            if (context.eventBroadcaster != null) {
+                try {
+                    String sseOrg = extractOrganizationFromPath(path);
+                    if (blobId != null && !blobId.isEmpty()) {
+                        // Binary upload event - try to get IPFS CID
+                        String eventCid = null;
+                        
+                        // Method 1: Try CID mapping service first (most reliable)
+                        if (context.cidMappingService != null) {
+                            try {
+                                java.util.Optional<String> mappedCid = context.cidMappingService.getCid(blobId);
+                                if (mappedCid.isPresent()) {
+                                    eventCid = mappedCid.get();
+                                    log.debug("📡 SSE: Got CID from mapping service: {}", eventCid);
+                                }
+                            } catch (Exception e) {
+                                log.debug("CID mapping lookup failed: {}", e.getMessage());
+                            }
+                        }
+                        
+                        // Method 2: Fallback to reading from node
+                        if (eventCid == null) {
+                            try {
+                                org.apache.jackrabbit.oak.spi.state.NodeState newRoot = context.nodeStore.getRoot();
+                                for (String part : path.substring(1).split("/")) {
+                                    if (!part.isEmpty() && newRoot.hasChildNode(part)) {
+                                        newRoot = newRoot.getChildNode(part);
+                                    }
+                                }
+                                org.apache.jackrabbit.oak.api.PropertyState cidProp = newRoot.getProperty("ipfsCid");
+                                if (cidProp != null) {
+                                    eventCid = cidProp.getValue(org.apache.jackrabbit.oak.api.Type.STRING);
+                                    log.debug("📡 SSE: Got CID from node property: {}", eventCid);
+                                }
+                            } catch (Exception e) {
+                                log.debug("Node CID lookup failed: {}", e.getMessage());
+                            }
+                        }
+                        
+                        context.eventBroadcaster.emitBinaryUpload(
+                            path, walletAddress, sseOrg, message, eventCid, null, mimeType
+                        );
+                        log.debug("📡 SSE binary event emitted: path={}, cid={}, mimeType={}", path, eventCid, mimeType);
+                    } else {
+                        // Content write event
+                        context.eventBroadcaster.emitContentWrite(
+                            path, walletAddress, sseOrg, message, signature, contentType
+                        );
+                    }
+                } catch (Exception e) {
+                    log.debug("Failed to emit SSE event: {}", e.getMessage());
+                }
+            }
+            
             // 🎯 ALL nodes now have IDENTICAL HEAD - no broadcast needed!
             log.debug("✅ Deterministic write applied successfully");
             
@@ -1318,6 +1402,16 @@ public class ConsensusApiHandler {
             // Update latest HEAD cache
             if (context.aeronConsensusEngine != null) {
                 context.aeronConsensusEngine.updateLatestHead(newHead);
+            }
+            
+            // 📡 ADR 036: Emit SSE delete event for real-time discovery
+            if (context.eventBroadcaster != null) {
+                try {
+                    String extractedOrg = extractOrganizationFromPath(path);
+                    context.eventBroadcaster.emitContentDelete(path, walletAddress, extractedOrg, signature);
+                } catch (Exception e) {
+                    log.debug("Failed to emit SSE delete event: {}", e.getMessage());
+                }
             }
             
             log.info("✅ Deterministic delete applied successfully - old segments remain until GC");
@@ -1633,6 +1727,42 @@ public class ConsensusApiHandler {
             response.getWriter().write("{\"error\":\"GC cost estimation failed: " + 
                 FormatUtils.escapeJson(e.getMessage()) + "\"}");
         }
+    }
+    
+    /**
+     * Extract organization from a content path (ADR 037).
+     * 
+     * <p>Path format: /oak-chain/XX/YY/ZZ/0xWALLET/{organization}/content/{contentId}
+     * Organization is the segment after wallet address, before "content".
+     * 
+     * @param path The full content path
+     * @return Organization name, or null if not present
+     */
+    private String extractOrganizationFromPath(String path) {
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+        
+        String[] parts = path.split("/");
+        // Path: ["", "oak-chain", "XX", "YY", "ZZ", "0xWALLET", "Organization", "content", "contentId"]
+        // Index:  0       1         2     3     4        5            6            7          8
+        // Or without org:
+        // Path: ["", "oak-chain", "XX", "YY", "ZZ", "0xWALLET", "content", "contentId"]
+        // Index:  0       1         2     3     4        5          6          7
+        
+        if (parts.length < 8) {
+            return null; // No organization in path
+        }
+        
+        // Check if index 6 is an organization (not "content")
+        // The wallet is at index 5 (starts with "0x")
+        // If index 6 is not "content", it's the organization
+        String potentialOrg = parts[6];
+        if (!"content".equals(potentialOrg) && !potentialOrg.startsWith("0x")) {
+            return potentialOrg;
+        }
+        
+        return null;
     }
     
     /**

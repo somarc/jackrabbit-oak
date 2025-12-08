@@ -130,6 +130,56 @@ public class WalletPathUtil {
     }
     
     /**
+     * Get the content root path for a wallet with optional organization.
+     * 
+     * <p>Structure: /oak-chain/XX/YY/ZZ/0xWALLETADDRESS/{organization}/content
+     * 
+     * <p>A single wallet can own multiple organizations/brands:
+     * <pre>
+     *   /oak-chain/74/2d/35/0x742d35Cc.../
+     *       ├── PixelPirates/content/       ← Gaming NFT brand
+     *       ├── CryptoKitchenware/content/  ← eCommerce brand
+     *       └── PersonalBlog/content/       ← Personal content
+     * </pre>
+     * 
+     * @param walletAddress Ethereum wallet address (0x... format)
+     * @param organization Optional organization/brand name (null = no org folder)
+     * @return Content path with organization
+     */
+    public static String getContentPath(String walletAddress, String organization) {
+        String shardRoot = getShardRoot(walletAddress);
+        if (organization == null || organization.isEmpty()) {
+            return shardRoot + "/content";
+        }
+        return shardRoot + "/" + organization + "/content";
+    }
+    
+    /**
+     * Validate an organization name.
+     * 
+     * <p>Organization names must be:
+     * - Non-empty
+     * - Alphanumeric with hyphens and underscores only
+     * - Max 64 characters
+     * - No path traversal characters (/, ..)
+     * 
+     * @param organization The organization name to validate
+     * @return null if valid, error message if invalid
+     */
+    public static String validateOrganization(String organization) {
+        if (organization == null || organization.isEmpty()) {
+            return null; // Optional - empty is valid
+        }
+        if (organization.length() > 64) {
+            return "Organization name too long (max 64 chars)";
+        }
+        if (!organization.matches("^[a-zA-Z0-9_-]+$")) {
+            return "Organization name must be alphanumeric, hyphens, underscores only";
+        }
+        return null; // Valid
+    }
+    
+    /**
      * Get the config root path for a wallet.
      * 
      * <p>Structure: /oak-chain/XX/YY/ZZ/0xWALLETADDRESS/conf

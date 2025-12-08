@@ -45,7 +45,7 @@ import java.util.Optional;
  *   "oakBlobId": "ed06f9cb...",
  *   "ipfsCid": "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3",
  *   "gatewayUrl": "https://ipfs.io/ipfs/Qmf4F3...",
- *   "localUrl": "http://localhost:8080/ipfs/Qmf4F3..."
+ *   "localUrl": "http://localhost:8099/ipfs/Qmf4F3..."
  * }
  * </pre>
  */
@@ -89,7 +89,7 @@ public class CidApiHandler {
         json.append("\"oakBlobId\":\"").append(escapeJson(oakBlobId)).append("\",");
         json.append("\"ipfsCid\":\"").append(escapeJson(cid.get())).append("\",");
         json.append("\"gatewayUrl\":\"https://ipfs.io/ipfs/").append(escapeJson(cid.get())).append("\",");
-        json.append("\"localUrl\":\"http://localhost:8080/ipfs/").append(escapeJson(cid.get())).append("\"");
+        json.append("\"localUrl\":\"http://localhost:8099/ipfs/").append(escapeJson(cid.get())).append("\"");
         json.append("}");
 
         sendJson(response, 200, json.toString());
