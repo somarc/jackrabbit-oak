@@ -32,11 +32,12 @@
 
 ### Critical Gaps Summary
 
-1. **Signature Verification**: Real ECDSA/secp256k1 verification not implemented (marked TODO)
-2. **Aeron Step-Down**: Leader step-down API not integrated
-3. **IPFS CID Persistence**: CID mappings only in-memory (lost on restart)
-4. **Snapshot Restoration**: Aeron snapshot restore not implemented
+1. ~~**Signature Verification**~~: ✅ Implemented with Bouncy Castle
+2. ~~**Aeron Step-Down**~~: ✅ Implemented via session close
+3. ~~**IPFS CID Persistence**~~: ✅ Resolved by client-side upload architecture (CID on content node)
+4. ~~**Snapshot Restoration**~~: ✅ Implemented in SnapshotService
 5. **Test Coverage**: Most modules lack comprehensive unit tests
+6. **Cluster Wallet Consolidation**: Each validator generates own wallet; should share one per cluster (ADR 046)
 
 ---
 
@@ -50,9 +51,10 @@
 |-----|----------|---------------|----------------|
 | ~~**Signature Verification**~~ | `EthereumSignatureVerifier.java` | ✅ **Implemented** | Full secp256k1 ECDSA with Bouncy Castle |
 | ~~**Leader Step-Down**~~ | `AeronConsensusEngine.java:3493` | ✅ **Implemented** | Session-based step-down with fallback |
-| **Snapshot Restoration** | `SnapshotService.java:171` | TODO comment | Implement full snapshot restore |
+| ~~**Snapshot Restoration**~~ | `SnapshotService.java` | ✅ **Implemented** | Full TAR + journal restore from image |
 | **Mainnet Contract** | `BlockchainConfig.java:106` | Zero address | Deploy V3.1 to Sepolia first, then mainnet |
-| ~~**Event Subscription**~~ | ~~`EventDrivenEvmBridge.java`~~ | ✅ **Implemented** | Web3j event subscription for WriteAuthorized |
+| ~~**Event Subscription**~~ | `EventDrivenEvmBridge.java` | ✅ **Implemented** | Web3j event subscription for WriteAuthorized |
+| **Cluster Wallet** | `EthereumWallet.java` | Per-node wallet | Single wallet per cluster (ADR 046) |
 
 #### State Machine Gaps
 
