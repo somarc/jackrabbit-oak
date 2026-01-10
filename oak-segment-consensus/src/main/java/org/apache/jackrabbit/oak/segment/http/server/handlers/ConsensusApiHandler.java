@@ -20,6 +20,8 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
+import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
+import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
@@ -157,37 +159,15 @@ public class ConsensusApiHandler {
                 }
             }
             
-            // Validate Ethereum address format FIRST (REQUIRED)
-            if (wallet == null || wallet.isEmpty()) {
+            // ✅ REFACTORED: Validate Ethereum address using WalletValidator
+            ValidationResult<String> walletValidation = WalletValidator.validate(wallet);
+            if (!walletValidation.isValid()) {
                 context.apiRejectedRequests.incrementAndGet();
-                log.warn("❌ API REJECTED: Missing wallet address");
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
-                    "Missing walletAddress parameter. Writes require a valid 0x Ethereum address.");
+                log.warn("❌ API REJECTED: {}", walletValidation.getError());
+                response.sendError(walletValidation.getHttpStatus(), walletValidation.getError());
                 return;
             }
-            
-            // Validate Ethereum address format (strict validation)
-            wallet = wallet.trim();
-            if (!wallet.startsWith("0x") || wallet.length() < 10) {
-                context.apiRejectedRequests.incrementAndGet();
-                log.warn("❌ API REJECTED: Invalid wallet format: {}", wallet);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
-                    "Invalid Ethereum address format. Must start with '0x' and be at least 10 characters.");
-                return;
-            }
-            
-            // Validate wallet is valid hex after 0x prefix
-            String walletHex = wallet.substring(2);
-            if (!walletHex.matches("[a-fA-F0-9]+")) {
-                context.apiRejectedRequests.incrementAndGet();
-                log.warn("❌ API REJECTED: Wallet contains non-hex characters: {}", wallet);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
-                    "Invalid Ethereum address: must be valid hexadecimal after '0x'");
-                return;
-            }
-            
-            // Normalize wallet addresses for comparison (case-insensitive)
-            String normalizedWallet = wallet.toLowerCase();
+            String normalizedWallet = walletValidation.getNormalizedValue();
             
             // ============================================================
             // ORGANIZATION VALIDATION (ADR 037)
@@ -742,11 +722,6 @@ public class ConsensusApiHandler {
             String contentPath = request.getParameter("contentPath");
             
             // Validate required parameters
-            if (wallet == null || wallet.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
-                    "Missing walletAddress parameter. Deletes require a valid 0x Ethereum address.");
-                return;
-            }
             if (signature == null || signature.isEmpty()) {
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Missing signature parameter");
                 return;
@@ -756,17 +731,16 @@ public class ConsensusApiHandler {
                 return;
             }
             
-            // Validate Ethereum address format
-            wallet = wallet.trim();
-            if (!wallet.startsWith("0x") || wallet.length() < 10) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
-                    "Invalid Ethereum address format. Must start with '0x' and be at least 10 characters.");
+            // ✅ REFACTORED: Validate Ethereum address using WalletValidator
+            ValidationResult<String> walletValidation = WalletValidator.validate(wallet);
+            if (!walletValidation.isValid()) {
+                response.sendError(walletValidation.getHttpStatus(), walletValidation.getError());
                 return;
             }
+            String normalizedWallet = walletValidation.getNormalizedValue();
             
             // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
             // This is the primary identifier - clientId is secondary
-            String normalizedWallet = wallet.toLowerCase();
             ClientRegistration clientReg = null;
             String clientId = null;
             
