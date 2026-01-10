@@ -350,11 +350,29 @@ public class FragmentationApiHandler {
                 return;
             }
             
-            // Create proposal
+            // Create proposal locally first
             org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal = gcManager.proposeGC(proposerWallet, targetRevision);
             
-            // TODO: Send through Aeron for replication
-            // For now, proposal is created locally
+            // ✈️ AERON CLUSTER: Replicate GC proposal to all validators
+            // This ensures all nodes receive the proposal and can vote on it
+            if (context.aeronConsensusEngine != null) {
+                boolean replicated = context.aeronConsensusEngine.sendGCProposalThroughIngress(
+                    proposal.proposalId,
+                    proposal.proposerWallet,
+                    proposal.targetRevision,
+                    proposal.estimatedReclaimableSizeMB,
+                    proposal.estimatedCostUSDC != null ? proposal.estimatedCostUSDC.toPlainString() : "0"
+                );
+                
+                if (replicated) {
+                    log.info("✅ GC proposal {} replicated through Aeron cluster", proposal.proposalId);
+                } else {
+                    log.warn("⚠️  GC proposal {} created locally but Aeron replication failed", proposal.proposalId);
+                    // Continue anyway - proposal exists locally, can be retried
+                }
+            } else {
+                log.debug("Aeron consensus engine not available - GC proposal created locally only");
+            }
             
             // Return proposal
             StringBuilder json = new StringBuilder();

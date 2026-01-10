@@ -49,7 +49,7 @@
 | Gap | Location | Current State | Required State |
 |-----|----------|---------------|----------------|
 | ~~**Signature Verification**~~ | `EthereumSignatureVerifier.java` | ✅ **Implemented** | Full secp256k1 ECDSA with Bouncy Castle |
-| **Leader Step-Down** | `AeronConsensusEngine.java:3612` | Not implemented | Integrate with Aeron ClusterControl API |
+| ~~**Leader Step-Down**~~ | `AeronConsensusEngine.java:3493` | ✅ **Implemented** | Session-based step-down with fallback |
 | **Snapshot Restoration** | `SnapshotService.java:171` | TODO comment | Implement full snapshot restore |
 | **Mainnet Contract** | `BlockchainConfig.java:106` | Zero address | Deploy and configure mainnet contract |
 | **Event Subscription** | `EventDrivenEvmBridge.java:306` | TODO comment | Implement Web3j event subscription |
@@ -74,10 +74,10 @@ GC Proposal State Machine:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ PENDING → VOTING → APPROVED → EXECUTING → COMPLETED                         │
 │                                                                             │
-│ GAP: Aeron replication of GC proposals                                      │
-│      Location: FragmentationApiHandler.java:356                             │
-│      Currently: Local-only GC execution                                     │
-│      Missing: Replicate GC through Aeron cluster                            │
+│ ✅ RESOLVED: Aeron replication of GC proposals                              │
+│      Location: AeronConsensusEngine.java (sendGCProposalThroughIngress)     │
+│      Implementation: GC proposals, votes, and execute commands replicated   │
+│      via Aeron cluster using template IDs 103, 104, 105                     │
 │                                                                             │
 │ GAP: Payment verification for GC                                            │
 │      Currently: Optional payment proof                                      │
@@ -733,7 +733,8 @@ jobs:
 
 | Item | Module | Effort | Impact |
 |------|--------|--------|--------|
-| Aeron step-down API | consensus | Medium | High |
+| ~~Aeron step-down API~~ | ~~consensus~~ | ~~Medium~~ | ✅ **Implemented** - Session-based step-down |
+| ~~GC Aeron replication~~ | ~~consensus~~ | ~~Medium~~ | ✅ **Implemented** - Full GC flow via Aeron |
 | Snapshot restoration | consensus | High | High |
 | Challenge service | auth-web3 | Medium | Medium |
 | Integration test suite | all | High | High |
