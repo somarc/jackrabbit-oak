@@ -2303,175 +2303,20 @@ public class GlobalStoreServer {
         }
     }
     
-    /**
-     * Sync genesis state from a peer (like downloading genesis block in Ethereum).
-     * This ensures all validators start from the same initial HEAD.
-     */
-    private void syncGenesisFromPeer(String peerUrl) throws Exception {
-        System.out.println("      Fetching genesis HEAD from: " + peerUrl);
-        
-        // Fetch peer's journal to get their HEAD
-        String journalUrl = peerUrl + "/journal.log";
-        java.net.URL url = new java.net.URL(journalUrl);
-        try (java.io.BufferedReader reader = new java.io.BufferedReader(
-                new java.io.InputStreamReader(url.openStream()))) {
-            String firstLine = reader.readLine();
-            if (firstLine == null || firstLine.trim().isEmpty()) {
-                throw new Exception("Peer journal is empty");
-            }
-            
-            // Parse HEAD from journal (format: "segmentId:offset root timestamp")
-            String genesisHead = firstLine.split("\\s+")[0];
-            System.out.println("      Genesis HEAD: " + genesisHead.substring(0, 16) + "...");
-            
-            // Check if we already have this HEAD
-            org.apache.jackrabbit.oak.segment.RecordId currentHead = fileStore.getHead().getRecordId();
-            if (currentHead.toString10().equals(genesisHead)) {
-                System.out.println("      ✅ Already at genesis HEAD, skipping");
-                return;
-            }
-            
-            System.out.println("      ⚠️  Genesis mismatch detected");
-            System.out.println("         Local:  " + currentHead.toString10().substring(0, 16) + "...");
-            System.out.println("         Remote: " + genesisHead.substring(0, 16) + "...");
-            System.out.println("      🔄 Syncing all segments from genesis...");
-            
-            // Fetch all missing segments to reach genesis HEAD
-            int segmentsFetched = fetchMissingSegmentsForGenesis(peerUrl, genesisHead);
-            System.out.println("      ✅ Fetched " + segmentsFetched + " genesis segments");
-            
-            // Update our HEAD to match genesis
-            org.apache.jackrabbit.oak.segment.RecordId genesisRecordId = 
-                org.apache.jackrabbit.oak.segment.RecordId.fromString(
-                    fileStore.getSegmentIdProvider(),
-                    genesisHead
-                );
-            
-            // Force update HEAD (not using CAS since we're syncing genesis)
-            boolean updated = fileStore.getRevisions().setHead(currentHead, genesisRecordId);
-            if (!updated) {
-                throw new Exception("Failed to update HEAD to genesis");
-            }
-            
-            // Flush to persist
-            fileStore.flush();
-            
-            System.out.println("      ✅ Genesis sync complete! HEAD updated: " + genesisHead.substring(0, 16) + "...");
-        }
-    }
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // REMOVED: syncGenesisFromPeer() and fetchMissingSegmentsForGenesis()
+    // 
+    // These methods were pre-Aeron legacy code for manual HTTP-based genesis sync.
+    // With Aeron Cluster, genesis is handled automatically:
+    //   1. Leader creates genesis via Raft consensus
+    //   2. Followers receive genesis via Aeron's replicated log (onSessionMessage)
+    //   3. Late-joining nodes receive state via Aeron snapshots
+    //
+    // See: AeronConsensusEngine.java lines 548-551
+    // Removed: January 2026 (tech debt cleanup)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
-    /**
-     * Fetch all missing segments needed to reach genesis HEAD.
-     * This is similar to ConsensusEngine.fetchMissingSegmentsForHead but for genesis sync.
-     */
-    private int fetchMissingSegmentsForGenesis(String peerUrl, String targetHead) throws Exception {
-        // Parse the target HEAD to get segment ID
-        org.apache.jackrabbit.oak.segment.RecordId targetRecordId = 
-            org.apache.jackrabbit.oak.segment.RecordId.fromString(
-                fileStore.getSegmentIdProvider(),
-                targetHead
-            );
-        
-        java.util.UUID targetSegmentId = targetRecordId.getSegmentId().asUUID();
-        
-        // Use a simple approach: fetch segments working backwards from HEAD
-        // For genesis, we expect relatively few segments
-        java.util.Set<java.util.UUID> toFetch = new java.util.LinkedHashSet<>();
-        java.util.Set<java.util.UUID> fetched = new java.util.HashSet<>();
-        java.util.List<java.util.UUID> fetchOrder = new java.util.ArrayList<>();
-        
-        // Start with HEAD segment
-        toFetch.add(targetSegmentId);
-        
-        // Recursively fetch referenced segments (DFS)
-        while (!toFetch.isEmpty()) {
-            java.util.Iterator<java.util.UUID> iter = toFetch.iterator();
-            java.util.UUID segmentId = iter.next();
-            iter.remove();
-            
-            if (fetched.contains(segmentId)) {
-                continue;
-            }
-            
-            // Check if we already have this segment locally
-            try {
-                fileStore.readSegment(fileStore.getSegmentIdProvider().newSegmentId(
-                    segmentId.getMostSignificantBits(),
-                    segmentId.getLeastSignificantBits()
-                ));
-                fetched.add(segmentId);
-                continue; // We have it, skip fetching
-            } catch (org.apache.jackrabbit.oak.segment.SegmentNotFoundException e) {
-                // We don't have it, need to fetch
-            }
-            
-            // Fetch segment data from peer
-            String segmentUrl = peerUrl + "/segments/" + segmentId.toString();
-            byte[] segmentData = fetchSegmentBytesFromUrl(segmentUrl);
-            
-            if (segmentData == null) {
-                throw new Exception("Failed to fetch segment: " + segmentId);
-            }
-            
-            // TODO: Parse segment to find references
-            // For now, just fetch the segment without traversing references
-            // This is a simplified approach - full implementation would parse SegmentData
-            // org.apache.jackrabbit.oak.commons.Buffer buffer = org.apache.jackrabbit.oak.commons.Buffer.wrap(segmentData);
-            // Then extract referenced segments and add to toFetch
-            
-            // Add to fetch order (will write after all references are written)
-            fetchOrder.add(segmentId);
-            fetched.add(segmentId);
-        }
-        
-        // Now write all segments in correct order (references first)
-        for (java.util.UUID segmentId : fetchOrder) {
-            String segmentUrl = peerUrl + "/segments/" + segmentId.toString();
-            byte[] segmentData = fetchSegmentBytesFromUrl(segmentUrl);
-            
-            // Write segment to our TAR files
-            org.apache.jackrabbit.oak.segment.SegmentId oakSegmentId = 
-                fileStore.getSegmentIdProvider().newSegmentId(
-                    segmentId.getMostSignificantBits(),
-                    segmentId.getLeastSignificantBits()
-                );
-            
-            org.apache.jackrabbit.oak.commons.Buffer buffer = org.apache.jackrabbit.oak.commons.Buffer.wrap(segmentData);
-            fileStore.writeSegment(oakSegmentId, buffer.array(), 0, buffer.remaining());
-        }
-        
-        return fetchOrder.size();
-    }
-    
-    /**
-     * Fetch segment bytes from URL.
-     */
-    private byte[] fetchSegmentBytesFromUrl(String urlString) {
-        try {
-            java.net.URL url = new java.net.URL(urlString);
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(5000);
-            conn.setReadTimeout(5000);
-            
-            int responseCode = conn.getResponseCode();
-            if (responseCode != 200) {
-                return null;
-            }
-            
-            try (java.io.InputStream in = conn.getInputStream();
-                 java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
-                byte[] buffer = new byte[8192];
-                int bytesRead;
-                while ((bytesRead = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, bytesRead);
-                }
-                return out.toByteArray();
-            }
-        } catch (Exception e) {
-            return null;
-        }
-    }
+    // REMOVED: fetchSegmentBytesFromUrl() - only used by removed syncGenesisFromPeer()
     
     /**
      * Observe elections for a period to verify cluster health.

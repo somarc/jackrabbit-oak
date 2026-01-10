@@ -3056,80 +3056,18 @@ public class AeronConsensusEngine implements ClusteredService {
         return false;
     }
     
-    /**
-     * Broadcast HEAD update to all followers (internal implementation).
-     * 
-     * This replicates writes across the cluster using HTTP-based replication
-     * (similar to Leader Mode). In the future, this will be replaced with
-     * proper Aeron ingress channel replication.
-     * 
-     * @param newHeadStr The new HEAD RecordId as string
-     */
-    private void broadcastHeadToFollowers(String newHeadStr) {
-        // ✅ ADR 025: Method body removed - obsolete with Aeron Raft
-        // Keeping method stub to avoid breaking any remaining references
-        // TODO: Remove all callers and delete this method entirely
-        log.trace("broadcastHeadToFollowers() called but disabled (Aeron Raft handles consistency)");
-    }
-    
-    /**
-     * Notify followers to sync segments via HTTP segment transfer.
-     * 
-     * This is needed when the leader creates content locally (like genesis)
-     * that doesn't go through the Aeron write proposal mechanism.
-     * 
-     * Aeron Raft replicates the state machine, but Oak FileStore segments
-     * are stored outside the state machine in TAR files. Followers must
-     * pull segments via HTTP.
-     */
-    private void notifyFollowersToSyncSegments(String newHeadStr) {
-        log.info("📡 Notifying followers to sync segments for HEAD: {}...", 
-            newHeadStr.substring(0, Math.min(20, newHeadStr.length())));
-        
-        // Get follower URLs from peer configuration
-        if (peerUrls == null || peerUrls.isEmpty()) {
-            log.warn("No peer URLs configured - cannot notify followers");
-            return;
-        }
-        
-        // Notify each follower in background threads
-        for (String peerUrl : peerUrls) {
-            if (peerUrl.equals(selfUrl)) {
-                continue; // Skip self
-            }
-            
-            // Spawn thread for each follower (non-blocking)
-            new Thread(() -> {
-                try {
-                    String url = peerUrl + "/v1/follower/head-update";
-                    log.info("   → Notifying follower: {}", peerUrl);
-                    
-                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) 
-                        new java.net.URL(url).openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setDoOutput(true);
-                    conn.setConnectTimeout(5000);
-                    conn.setReadTimeout(10000);
-                    
-                    // Send HEAD as form parameter
-                    String params = "head=" + java.net.URLEncoder.encode(newHeadStr, "UTF-8") +
-                                  "&leaderUrl=" + java.net.URLEncoder.encode(selfUrl, "UTF-8");
-                    conn.getOutputStream().write(params.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                    
-                    int responseCode = conn.getResponseCode();
-                    if (responseCode == 200) {
-                        log.info("   ✅ Follower {} acknowledged HEAD update", peerUrl);
-                    } else {
-                        log.warn("   ⚠️  Follower {} returned HTTP {}", peerUrl, responseCode);
-                    }
-                    
-                    conn.disconnect();
-                } catch (Exception e) {
-                    log.warn("   ⚠️  Failed to notify follower {}: {}", peerUrl, e.getMessage());
-                }
-            }, "notify-follower-" + peerUrl.hashCode()).start();
-        }
-    }
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // REMOVED: broadcastHeadToFollowers() and notifyFollowersToSyncSegments()
+    // 
+    // These methods were pre-Aeron legacy code for HTTP-based HEAD broadcasting.
+    // With Aeron Cluster, HEAD consistency is handled automatically:
+    //   1. All writes go through Aeron's Raft consensus log
+    //   2. All nodes execute identical replicated writes deterministically
+    //   3. HEAD consistency is guaranteed by Raft - no manual broadcasts needed
+    //
+    // See: ADR 025 - Aeron Raft handles consistency
+    // Removed: January 2026 (tech debt cleanup)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
     /**
      * Sync HEAD from leader on startup (for followers starting fresh).
