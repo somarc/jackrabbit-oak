@@ -783,7 +783,7 @@ ProposalQueueManagerOptimized.java:691 - Retry count tracking
 EventDrivenEvmBridge.java:302-306 - Web3j event subscription
 BlockchainConfig.java:106       - Deploy mainnet contract
 SnapshotService.java:147        - Get epoch from tracker
-SnapshotService.java:171        - Implement snapshot restoration
+~~SnapshotService.java:171        - Implement snapshot restoration~~ ✅ DONE
 LeaderDiscoveryService.java:177 - Aeron API for leaderMemberId
 AeronConsensusEngine.java:3609  - ClusterControl step-down
 DashboardHandler.java:1125      - Full signature verification

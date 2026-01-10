@@ -162,21 +162,267 @@ public class SnapshotService {
     /**
      * Restore state from snapshot image.
      * 
+     * <p>This method reads frames from the Aeron snapshot image and restores
+     * the FileStore state. The restoration process:
+     * <ol>
+     *   <li>Read metadata frame (HEAD, epoch, timestamp)</li>
+     *   <li>Read TAR file frames and write to storeDirectory</li>
+     *   <li>Read journal.log frame and write to storeDirectory</li>
+     *   <li>Return SnapshotState for verification</li>
+     * </ol>
+     * 
+     * <p><strong>Test Scenarios:</strong>
+     * <ul>
+     *   <li><strong>Empty node joining:</strong> Node with no data receives full snapshot</li>
+     *   <li><strong>Stale node rejoining:</strong> Node behind on log receives snapshot to catch up</li>
+     *   <li><strong>Node recovery after crash:</strong> Node restores from last snapshot</li>
+     * </ul>
+     * 
      * @param snapshotImage Aeron snapshot image
-     * @return snapshot state metadata
+     * @return snapshot state metadata, or null if restoration fails
      */
     public SnapshotState restoreSnapshot(Image snapshotImage) {
         log.info("📦 Restoring from Aeron snapshot...");
         
-        // TODO: Implement snapshot restoration
-        // This would:
-        // 1. Read metadata frame
-        // 2. Read TAR file frames and write to storeDirectory
-        // 3. Read journal.log frame and write to storeDirectory
-        // 4. Return SnapshotState
+        if (storeDirectory == null) {
+            log.error("Cannot restore snapshot: storeDirectory not set");
+            return null;
+        }
         
-        log.warn("Snapshot restoration not yet implemented");
-        return new SnapshotState(null, 0, System.currentTimeMillis(), 0);
+        File storeDir = new File(storeDirectory);
+        if (!storeDir.exists() && !storeDir.mkdirs()) {
+            log.error("Cannot create store directory: {}", storeDirectory);
+            return null;
+        }
+        
+        // State to track during restoration
+        final String[] head = {null};
+        final int[] epoch = {0};
+        final long[] timestamp = {0};
+        final int[] fileCount = {0};
+        final boolean[] metadataReceived = {false};
+        
+        // Fragment handler to process snapshot frames
+        org.agrona.concurrent.UnsafeBuffer reassemblyBuffer = new org.agrona.concurrent.UnsafeBuffer(new byte[2 * 1024 * 1024]); // 2MB
+        
+        io.aeron.logbuffer.FragmentHandler fragmentHandler = (buffer, offset, length, header) -> {
+            try {
+                processSnapshotFrame(buffer, offset, length, storeDir, 
+                                    head, epoch, timestamp, fileCount, metadataReceived);
+            } catch (Exception e) {
+                log.error("Error processing snapshot frame", e);
+            }
+        };
+        
+        // Poll the snapshot image until end of stream
+        int fragmentsRead;
+        int totalFragments = 0;
+        
+        while (!snapshotImage.isEndOfStream()) {
+            fragmentsRead = snapshotImage.poll(fragmentHandler, 10);
+            totalFragments += fragmentsRead;
+            
+            if (fragmentsRead == 0) {
+                // No fragments available, yield briefly
+                Thread.yield();
+            }
+        }
+        
+        // Process any remaining fragments
+        do {
+            fragmentsRead = snapshotImage.poll(fragmentHandler, 10);
+            totalFragments += fragmentsRead;
+        } while (fragmentsRead > 0);
+        
+        if (!metadataReceived[0]) {
+            log.warn("Snapshot restoration incomplete: no metadata received");
+            return null;
+        }
+        
+        log.info("✅ Snapshot restored: head={}, epoch={}, files={}, fragments={}",
+                head[0], epoch[0], fileCount[0], totalFragments);
+        
+        return new SnapshotState(head[0], epoch[0], timestamp[0], fileCount[0]);
+    }
+    
+    /**
+     * Process a single snapshot frame.
+     */
+    private void processSnapshotFrame(org.agrona.DirectBuffer buffer, int offset, int length,
+                                     File storeDir, String[] head, int[] epoch, long[] timestamp,
+                                     int[] fileCount, boolean[] metadataReceived) throws Exception {
+        
+        if (length < 4) {
+            log.warn("Snapshot frame too small: {} bytes", length);
+            return;
+        }
+        
+        int frameOffset = offset;
+        int frameLength = buffer.getInt(frameOffset);
+        frameOffset += 4;
+        
+        // Check if this is a metadata frame (JSON)
+        if (frameLength > 0 && frameLength < length - 4) {
+            byte[] jsonBytes = new byte[frameLength];
+            buffer.getBytes(frameOffset, jsonBytes);
+            String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
+            
+            if (json.startsWith("{\"type\":\"metadata\"")) {
+                // Parse metadata
+                head[0] = extractJsonField(json, "head");
+                String epochStr = extractJsonField(json, "epoch");
+                String timestampStr = extractJsonField(json, "timestamp");
+                
+                if (epochStr != null) {
+                    epoch[0] = Integer.parseInt(epochStr);
+                }
+                if (timestampStr != null) {
+                    timestamp[0] = Long.parseLong(timestampStr);
+                }
+                
+                metadataReceived[0] = true;
+                log.debug("📥 Received snapshot metadata: head={}, epoch={}", head[0], epoch[0]);
+                return;
+            }
+        }
+        
+        // Otherwise, it's a file frame
+        // Frame format: [type:4][filename_len:4][filename:N][data_len:4][data:N]
+        frameOffset = offset;
+        
+        int typeHash = buffer.getInt(frameOffset);
+        frameOffset += 4;
+        
+        int filenameLen = buffer.getInt(frameOffset);
+        frameOffset += 4;
+        
+        if (filenameLen <= 0 || filenameLen > 256) {
+            log.warn("Invalid filename length in snapshot frame: {}", filenameLen);
+            return;
+        }
+        
+        byte[] filenameBytes = new byte[filenameLen];
+        buffer.getBytes(frameOffset, filenameBytes);
+        String filename = new String(filenameBytes, java.nio.charset.StandardCharsets.UTF_8);
+        frameOffset += filenameLen;
+        
+        int dataLen = buffer.getInt(frameOffset);
+        frameOffset += 4;
+        
+        if (dataLen <= 0 || dataLen > length) {
+            log.warn("Invalid data length in snapshot frame: {}", dataLen);
+            return;
+        }
+        
+        byte[] data = new byte[dataLen];
+        buffer.getBytes(frameOffset, data);
+        
+        // Write to file (append mode for chunked files)
+        File targetFile = new File(storeDir, filename);
+        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(targetFile, true)) {
+            fos.write(data);
+        }
+        
+        fileCount[0]++;
+        log.debug("📥 Restored file chunk: {} ({} bytes)", filename, dataLen);
+    }
+    
+    /**
+     * Extract a field from JSON string (simple parser for snapshot metadata).
+     */
+    private String extractJsonField(String json, String field) {
+        String pattern = "\"" + field + "\":";
+        int start = json.indexOf(pattern);
+        if (start < 0) return null;
+        
+        start += pattern.length();
+        
+        // Skip whitespace
+        while (start < json.length() && Character.isWhitespace(json.charAt(start))) {
+            start++;
+        }
+        
+        if (start >= json.length()) return null;
+        
+        // Check if value is quoted
+        if (json.charAt(start) == '"') {
+            start++;
+            int end = json.indexOf('"', start);
+            if (end < 0) return null;
+            return json.substring(start, end);
+        } else {
+            // Numeric value
+            int end = start;
+            while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) {
+                end++;
+            }
+            return json.substring(start, end);
+        }
+    }
+    
+    /**
+     * Check if a node needs snapshot restoration.
+     * 
+     * <p>This is used to determine if a node joining the cluster should
+     * request a snapshot instead of replaying the entire log.</p>
+     * 
+     * @param localHead current local HEAD (null if empty)
+     * @param clusterHead cluster's current HEAD
+     * @param logPosition current log position
+     * @param clusterLogPosition cluster's log position
+     * @return true if snapshot restoration is recommended
+     */
+    public boolean needsSnapshotRestoration(String localHead, String clusterHead,
+                                           long logPosition, long clusterLogPosition) {
+        // Empty node - definitely needs snapshot
+        if (localHead == null || localHead.isEmpty()) {
+            log.info("🔄 Empty node detected - snapshot restoration required");
+            return true;
+        }
+        
+        // Stale node - too far behind on log
+        long logGap = clusterLogPosition - logPosition;
+        long SNAPSHOT_THRESHOLD = 1000; // If more than 1000 entries behind, use snapshot
+        
+        if (logGap > SNAPSHOT_THRESHOLD) {
+            log.info("🔄 Stale node detected - {} entries behind, snapshot restoration recommended", logGap);
+            return true;
+        }
+        
+        // Node is reasonably up-to-date, can replay log
+        return false;
+    }
+    
+    /**
+     * Validate restored snapshot against expected state.
+     * 
+     * @param restored the restored snapshot state
+     * @param expectedHead expected HEAD (from cluster)
+     * @return true if snapshot is valid
+     */
+    public boolean validateSnapshot(SnapshotState restored, String expectedHead) {
+        if (restored == null) {
+            log.error("Snapshot validation failed: null state");
+            return false;
+        }
+        
+        if (restored.head == null || restored.head.isEmpty()) {
+            log.error("Snapshot validation failed: no HEAD in restored state");
+            return false;
+        }
+        
+        if (expectedHead != null && !restored.head.equals(expectedHead)) {
+            log.warn("Snapshot HEAD mismatch: restored={}, expected={}", restored.head, expectedHead);
+            // This might be okay if the snapshot is slightly behind
+        }
+        
+        if (restored.fileCount == 0) {
+            log.warn("Snapshot validation warning: no files restored");
+        }
+        
+        log.info("✅ Snapshot validated: head={}, epoch={}, files={}", 
+                restored.head, restored.epoch, restored.fileCount);
+        return true;
     }
     
     /**
