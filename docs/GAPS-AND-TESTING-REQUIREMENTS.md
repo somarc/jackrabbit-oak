@@ -25,19 +25,46 @@
 
 | Module | Implementation | Unit Tests | Integration Tests | Production Ready |
 |--------|---------------|------------|-------------------|------------------|
-| **oak-segment-consensus** | 🟡 80% | 🟡 ~40% | 🔴 ~10% | ❌ No |
-| **oak-segment-http** | 🟢 90% | 🟡 ~30% | 🟡 ~20% | ❌ No |
-| **oak-blob-cloud-ipfs** | 🟡 70% | 🔴 0% | 🔴 0% | ❌ No |
-| **oak-auth-web3** | 🟢 85% | 🔴 0% | 🔴 0% | ❌ No |
+| **oak-segment-consensus** | 🟢 90% | 🟡 ~40% | 🔴 ~10% | ❌ No |
+| **oak-segment-http** | 🟢 95% | 🟡 ~30% | 🟡 ~20% | ❌ No |
+| **oak-blob-cloud-ipfs** | 🟢 85% | 🔴 ~5% | 🔴 0% | ❌ No |
+| **oak-auth-web3** | 🟢 95% | 🟢 ~60% | 🔴 0% | ❌ No |
 
-### Critical Gaps Summary
+### Implementation Gaps (Remaining)
 
-1. ~~**Signature Verification**~~: ✅ Implemented with Bouncy Castle
-2. ~~**Aeron Step-Down**~~: ✅ Implemented via session close
-3. ~~**IPFS CID Persistence**~~: ✅ Resolved by client-side upload architecture (CID on content node)
-4. ~~**Snapshot Restoration**~~: ✅ Implemented in SnapshotService
-5. **Test Coverage**: Most modules lack comprehensive unit tests
-6. **Cluster Wallet Consolidation**: Each validator generates own wallet; should share one per cluster (ADR 046)
+| # | Gap | Module | Priority | Effort |
+|---|-----|--------|----------|--------|
+| 1 | **Cluster Wallet Consolidation** | consensus | Medium | Medium |
+| 2 | **Mainnet Contract Deployment** | consensus | High | Low |
+| 3 | **GC Payment Enforcement** | consensus | Medium | Low |
+| 4 | **Segment Reference Parsing** | consensus | Low | Medium |
+
+### Testing Gaps (Critical)
+
+| # | Gap | Module | Priority | Effort |
+|---|-----|--------|----------|--------|
+| 1 | **AeronConsensusEngine tests** | consensus | Critical | High |
+| 2 | **ConsensusApiHandler tests** | consensus | Critical | High |
+| 3 | **GlobalStoreServer tests** | consensus | High | High |
+| 4 | **Integration test suite** | all | Critical | Very High |
+| 5 | **IPFSBackend tests** | ipfs | Medium | Medium |
+| 6 | **HttpPersistence tests** | http | Medium | Medium |
+
+### Completed (January 2026)
+
+✅ Signature Verification (EthereumSignatureVerifier + Bouncy Castle)
+✅ Aeron Step-Down (session-based with fallback)
+✅ IPFS CID Persistence (client-side upload, CID on content node)
+✅ Snapshot Restoration (SnapshotService)
+✅ Event Subscription (Web3j WriteAuthorized events)
+✅ Challenge Service (ChallengeService + 28 tests)
+✅ Passkey Storage (PasskeyStore)
+✅ OSGi Factory (Web3BiometricLoginModuleFactory)
+✅ Wallet-based Registration (IP fallback removed)
+✅ Genesis Hash Verification (SHA-256 cryptographic)
+✅ Content Size Estimation (NodeStore traversal)
+✅ Leader Discovery (multi-strategy approach)
+✅ GC Aeron Replication (proposals, votes, execute via Aeron)
 
 ---
 
@@ -332,13 +359,16 @@ Biometric Authentication Flow:
 
 | Test Class | Tests | Coverage Area |
 |------------|-------|---------------|
-| **None** | **0** | |
+| `Web3PrincipalTest` | 8 | Principal POJO, equals/hashCode |
+| `Web3BiometricCredentialsTest` | 12 | Credentials validation, defensive copy |
+| `LocalP256VerifierTest` | 15 | P-256 signature verification |
+| `ChallengeServiceTest` | 28 | Challenge generation, validation, expiry |
+| `PasskeyStoreTest` | 9 | Passkey CRUD operations |
+| **Total** | **~72** | |
 
 **Missing Test Coverage:**
-- `Web3BiometricLoginModule` - 0 tests
-- `LocalP256Verifier` - 0 tests
-- `Web3BiometricCredentials` - 0 tests
-- `Web3Principal` - 0 tests
+- `Web3BiometricLoginModule` - 0 tests (JAAS integration)
+- `Web3BiometricLoginModuleFactory` - 0 tests (OSGi factory)
 
 ---
 
@@ -725,41 +755,42 @@ jobs:
 
 ## Priority Matrix
 
-### Immediate (Before Demo)
+### Immediate (Next Sprint)
 
-| Item | Module | Effort | Impact |
-|------|--------|--------|--------|
-| ~~Signature verification~~ | ~~consensus~~ | ~~Medium~~ | ✅ **Implemented** - EthereumSignatureVerifier |
-| ~~IPFS CID persistence~~ | ~~ipfs~~ | ~~Medium~~ | ✅ **Resolved** - CID from client proposal |
-| ~~Accept ipfsCid in proposal API~~ | ~~consensus~~ | ~~Low~~ | ✅ **Implemented** - Full flow |
-| Basic unit tests for state machines | all | High | High |
+| Item | Module | Effort | Impact | Status |
+|------|--------|--------|--------|--------|
+| **AeronConsensusEngine unit tests** | consensus | High | Critical | 🔲 TODO |
+| **ConsensusApiHandler unit tests** | consensus | High | Critical | 🔲 TODO |
+| **State machine unit tests** | consensus | Medium | High | 🔲 TODO |
+| **Integration test infrastructure** | all | High | Critical | 🔲 TODO |
 
 ### Short-Term (Q1 2026)
 
-| Item | Module | Effort | Impact |
-|------|--------|--------|--------|
-| ~~Aeron step-down API~~ | ~~consensus~~ | ~~Medium~~ | ✅ **Implemented** - Session-based step-down |
-| ~~GC Aeron replication~~ | ~~consensus~~ | ~~Medium~~ | ✅ **Implemented** - Full GC flow via Aeron |
-| Snapshot restoration | consensus | High | High |
-| ~~Challenge service~~ | ~~auth-web3~~ | ~~Medium~~ | ✅ **Implemented** - ChallengeService with 28 tests |
-| Integration test suite | all | High | High |
+| Item | Module | Effort | Impact | Status |
+|------|--------|--------|--------|--------|
+| Cluster wallet consolidation | consensus | Medium | Medium | 🔲 TODO |
+| Sepolia contract deployment | contracts | Low | High | 🔲 TODO |
+| GlobalStoreServer unit tests | consensus | High | High | 🔲 TODO |
+| HttpPersistence tests | http | Medium | Medium | 🔲 TODO |
+| IPFSBackend tests | ipfs | Medium | Medium | 🔲 TODO |
 
 ### Medium-Term (Q2 2026)
 
-| Item | Module | Effort | Impact |
-|------|--------|--------|--------|
-| Event subscription | consensus | High | Medium |
-| IPFS Cluster support | ipfs | High | Medium |
-| S3 fallback | ipfs | Medium | Medium |
-| Full test coverage (>80%) | all | Very High | High |
+| Item | Module | Effort | Impact | Status |
+|------|--------|--------|--------|--------|
+| GC payment enforcement | consensus | Low | Medium | 🔲 TODO |
+| IPFS Cluster support | ipfs | High | Medium | 🔲 TODO |
+| Full test coverage (>80%) | all | Very High | High | 🔲 TODO |
+| Performance benchmarks | all | High | Medium | 🔲 TODO |
 
 ### Long-Term (Q3+ 2026)
 
-| Item | Module | Effort | Impact |
-|------|--------|--------|--------|
-| Mainnet contract deployment | consensus | Medium | Critical |
-| Production hardening | all | Very High | Critical |
-| Performance benchmarks | all | High | Medium |
+| Item | Module | Effort | Impact | Status |
+|------|--------|--------|--------|--------|
+| Mainnet contract deployment | consensus | Medium | Critical | 🔲 TODO |
+| Production hardening | all | Very High | Critical | 🔲 TODO |
+| Relay routing (cross-cluster) | consensus | High | Medium | 🔲 TODO |
+| Visual path abstraction | sling | Medium | Low | 🔲 TODO |
 
 ---
 
