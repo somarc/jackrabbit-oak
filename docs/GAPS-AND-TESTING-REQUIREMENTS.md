@@ -237,7 +237,7 @@ Core JAAS integration is complete; needs testing and OSGi deployment.
 | Gap | Location | Current State | Required State |
 |-----|----------|---------------|----------------|
 | ~~**Unit Tests**~~ | `src/test/` | ✅ **Implemented** | 110 tests total |
-| **OSGi Factory** | N/A | Basic factory exists | Full ConfigAdmin integration |
+| ~~**OSGi Factory**~~ | `Web3BiometricLoginModuleFactory.java` | ✅ **Implemented** | Full ConfigAdmin integration |
 | ~~**Challenge Service**~~ | `ChallengeService.java` | ✅ **Implemented** | Secure challenge generation/validation |
 | ~~**Passkey Storage**~~ | `PasskeyStore.java` | ✅ **Implemented** | Store registered passkeys in Oak |
 

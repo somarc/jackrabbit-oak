@@ -154,10 +154,48 @@ public final class Web3BiometricLoginModule extends AbstractLoginModule {
     private String userId;
     
     /**
+     * Factory options from OSGi ConfigAdmin.
+     */
+    private java.util.Map<String, Object> factoryOptions = java.util.Collections.emptyMap();
+    
+    /**
      * Default constructor for JAAS and OSGi LoginModuleFactory.
      */
     public Web3BiometricLoginModule() {
         // Empty constructor required by JAAS
+    }
+    
+    /**
+     * Sets factory options from the OSGi LoginModuleFactory.
+     * Called by {@link Web3BiometricLoginModuleFactory} after creating the module.
+     * 
+     * @param options configuration options from OSGi ConfigAdmin
+     */
+    public void setFactoryOptions(java.util.Map<String, Object> options) {
+        this.factoryOptions = options != null ? options : java.util.Collections.emptyMap();
+    }
+    
+    /**
+     * Gets a factory option value.
+     * 
+     * @param key the option key
+     * @param defaultValue default value if not set
+     * @param <T> the value type
+     * @return the option value or default
+     */
+    @SuppressWarnings("unchecked")
+    protected <T> T getFactoryOption(String key, T defaultValue) {
+        Object value = factoryOptions.get(key);
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return (T) value;
+        } catch (ClassCastException e) {
+            log.warn("Invalid type for factory option {}: expected {}, got {}", 
+                    key, defaultValue.getClass().getSimpleName(), value.getClass().getSimpleName());
+            return defaultValue;
+        }
     }
     
     //--------------------------------------------------------< LoginModule >---
