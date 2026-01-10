@@ -16,19 +16,16 @@
  */
 package org.apache.jackrabbit.oak.segment.agentic.tools;
 
-import com.google.gson.Gson;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
-import org.apache.http.util.EntityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -44,7 +41,6 @@ import java.util.Map;
 public class ConnectivityDiagnosticTool implements AgenticTool {
     private static final Logger log = LoggerFactory.getLogger(ConnectivityDiagnosticTool.class);
     
-    private final Gson gson = new Gson();
     private final CloseableHttpClient httpClient;
     
     public ConnectivityDiagnosticTool() {

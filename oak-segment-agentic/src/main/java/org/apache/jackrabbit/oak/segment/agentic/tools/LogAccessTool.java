@@ -57,12 +57,10 @@ public class LogAccessTool implements AgenticTool {
             Object loggerFactory = LoggerFactory.getILoggerFactory();
             if (loggerFactory != null && loggerFactory.getClass().getName().contains("logback")) {
                 java.lang.reflect.Method getLoggerListMethod = loggerFactory.getClass().getMethod("getLoggerList");
-                @SuppressWarnings("unchecked")
                 List<?> loggers = (List<?>) getLoggerListMethod.invoke(loggerFactory);
                 
                 for (Object logger : loggers) {
                     java.lang.reflect.Method iteratorForAppendersMethod = logger.getClass().getMethod("iteratorForAppenders");
-                    @SuppressWarnings("unchecked")
                     Enumeration<?> appenders = (Enumeration<?>) iteratorForAppendersMethod.invoke(logger);
                     
                     while (appenders.hasMoreElements()) {

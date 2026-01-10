@@ -219,7 +219,8 @@ public class ValidatorLLMChatTool implements AgenticTool {
                 if (statusCode >= 200 && statusCode < 300) {
                     // Parse response to extract answer and agent metadata
                     try {
-                        Map<String, Object> chatResponse = gson.fromJson(responseBody, Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> chatResponse = (Map<String, Object>) gson.fromJson(responseBody, Map.class);
                         String answer = (String) chatResponse.get("answer");
                         
                         // Extract agent response metadata if present

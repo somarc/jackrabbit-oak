@@ -94,8 +94,7 @@ public class RAGService {
             System.getProperty("oak.codebase.path"),
             System.getProperty("user.dir") + "/jackrabbit-oak",
             System.getProperty("user.dir") + "/../jackrabbit-oak",
-            System.getProperty("user.dir"),
-            "/Users/mhess/aem/AEM Code/OAK/jackrabbit-oak"  // Fallback for development
+            System.getProperty("user.dir")
         };
         
         Path oakRoot = null;
