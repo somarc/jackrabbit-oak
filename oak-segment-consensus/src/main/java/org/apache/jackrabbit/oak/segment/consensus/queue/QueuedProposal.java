@@ -48,6 +48,9 @@ public class QueuedProposal {
     private volatile String intentToken; // Intent token for lazy binary upload (ADR 020)
     private volatile String blobId; // Oak blob ID for eager binary upload
     private volatile String mimeType; // MIME type for binary
+    private volatile String ipfsCid; // IPFS CID from client-side upload (ADR 016)
+    private volatile int retryCount = 0; // Number of times this proposal has been retried
+    private volatile long lastRetryTimestamp = 0; // Timestamp of last retry attempt
     
     public QueuedProposal(
             String proposalId,
@@ -189,6 +192,52 @@ public class QueuedProposal {
     
     public void setMimeType(String mimeType) {
         this.mimeType = mimeType;
+    }
+    
+    /**
+     * Get the IPFS CID from client-side upload (ADR 016).
+     * 
+     * @return IPFS CID string, or null if not provided
+     */
+    public String getIpfsCid() {
+        return ipfsCid;
+    }
+    
+    /**
+     * Set the IPFS CID from client-side upload (ADR 016).
+     * 
+     * @param ipfsCid IPFS CID string
+     */
+    public void setIpfsCid(String ipfsCid) {
+        this.ipfsCid = ipfsCid;
+    }
+    
+    /**
+     * Get the number of times this proposal has been retried.
+     * 
+     * @return retry count (0 = first attempt)
+     */
+    public int getRetryCount() {
+        return retryCount;
+    }
+    
+    /**
+     * Increment the retry count and update the last retry timestamp.
+     * 
+     * @return the new retry count
+     */
+    public int incrementRetryCount() {
+        this.lastRetryTimestamp = System.currentTimeMillis();
+        return ++this.retryCount;
+    }
+    
+    /**
+     * Get the timestamp of the last retry attempt.
+     * 
+     * @return timestamp in milliseconds, or 0 if never retried
+     */
+    public long getLastRetryTimestamp() {
+        return lastRetryTimestamp;
     }
 }
 

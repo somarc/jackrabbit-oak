@@ -74,6 +74,7 @@ public class ProposalQueueManagerOptimized {
     // Configuration
     private static final long CONFIRMATION_TIMEOUT_MS = 300_000; // 5 minutes
     private static final int MAX_MESSAGE_BATCH = 10; // Process up to 10 messages per Aeron cycle
+    private static final int MAX_RETRY_COUNT = 5; // Maximum retries before rejecting a proposal
     // 🌐 PRODUCTION WAN: Aeron default MTU = 1408 bytes (safe for AWS/GCP/Azure)
     // maxPayloadLength = 1408 - 32 (frame header) = 1376 bytes
     // Each proposal ~366 bytes: 3 proposals = 1098 bytes + overhead (~20 bytes) = ~1118 bytes
@@ -266,6 +267,18 @@ public class ProposalQueueManagerOptimized {
         stats.put("priorityProposalsSent", priorityProposalsSent.get());
         stats.put("batchedProposalsSent", batchedProposalsSent.get());
         stats.put("totalProposalsSent", priorityProposalsSent.get() + batchedProposalsSent.get());
+        
+        // Retry stats
+        long proposalsWithRetries = allProposals.values().stream()
+            .filter(p -> p.getRetryCount() > 0)
+            .count();
+        long maxRetryCount = allProposals.values().stream()
+            .mapToInt(QueuedProposal::getRetryCount)
+            .max()
+            .orElse(0);
+        stats.put("proposalsWithRetries", proposalsWithRetries);
+        stats.put("maxRetryCount", maxRetryCount);
+        stats.put("maxRetryLimit", MAX_RETRY_COUNT);
         
         return stats;
     }
@@ -636,7 +649,8 @@ public class ProposalQueueManagerOptimized {
                                 proposal.getSignature()
                             );
                         } else {
-                            log.info("📝 Sending WRITE proposal (templateId 100) blobId={}", proposal.getBlobId());
+                            log.info("📝 Sending WRITE proposal (templateId 100) blobId={}, ipfsCid={}", 
+                                proposal.getBlobId(), proposal.getIpfsCid());
                             raftAppendCallback.appendProposal(
                                 proposal.getWalletAddress(),
                                 proposal.getPath(),
@@ -644,7 +658,8 @@ public class ProposalQueueManagerOptimized {
                                 proposal.getMessage(),
                                 proposal.getSignature(),
                                 proposal.getBlobId(),
-                                proposal.getMimeType()
+                                proposal.getMimeType(),
+                                proposal.getIpfsCid()
                             );
                         }
                         sent = 1; // appendProposal/appendDeleteProposal returns void, assume success
@@ -684,13 +699,36 @@ public class ProposalQueueManagerOptimized {
                     log.warn("⚠️  Backpressure timeout - re-queuing batch ({} proposals)", batch.size());
                     break;
                 } catch (Exception e) {
-                    log.error("❌ Error sending batch to Aeron ({} proposals) - re-queuing for retry", batch.size(), e);
+                    log.error("❌ Error sending batch to Aeron ({} proposals) - checking retry eligibility", batch.size(), e);
                     
-                    // SAFETY NET: Re-queue for retry instead of immediately rejecting
-                    // Note: For now, re-queue without retry limit (backpressure will prevent infinite loops)
-                    // TODO: Add retry count tracking once QueuedProposal has metadata support
-                    batchQueue.offer(batch);
-                    log.warn("🔄 Re-queuing batch for retry");
+                    // Track retry count for each proposal in the batch
+                    boolean allExhausted = true;
+                    for (QueuedProposal proposal : batch) {
+                        int retries = proposal.incrementRetryCount();
+                        if (retries <= MAX_RETRY_COUNT) {
+                            allExhausted = false;
+                        }
+                        log.debug("  Proposal {} retry count: {}/{}", 
+                            proposal.getProposalId(), retries, MAX_RETRY_COUNT);
+                    }
+                    
+                    if (allExhausted) {
+                        // All proposals in batch have exceeded retry limit - reject them
+                        log.error("❌ Batch exceeded max retries ({}) - rejecting {} proposals", 
+                            MAX_RETRY_COUNT, batch.size());
+                        for (QueuedProposal proposal : batch) {
+                            proposal.setState(ProposalState.REJECTED);
+                            proposal.setRejectionReason("Exceeded max retry count (" + MAX_RETRY_COUNT + 
+                                ") after Aeron send failures: " + e.getMessage());
+                            allProposals.remove(proposal.getProposalId());
+                            totalRejectedCount.incrementAndGet();
+                        }
+                    } else {
+                        // Re-queue for retry
+                        batchQueue.offer(batch);
+                        log.warn("🔄 Re-queuing batch for retry (attempt {}/{})", 
+                            batch.get(0).getRetryCount(), MAX_RETRY_COUNT);
+                    }
                     break;
                 }
             }
@@ -883,13 +921,16 @@ public class ProposalQueueManagerOptimized {
                                     proposal.getSignature()
                                 );
                             } else {
-                                log.info("📝 PRIORITY WRITE: Sending directly to Aeron");
+                                log.info("📝 PRIORITY WRITE: Sending directly to Aeron (ipfsCid={})", proposal.getIpfsCid());
                                 raftAppendCallback.appendProposal(
                                     proposal.getWalletAddress(),
                                     proposal.getPath(),
                                     proposal.getContentType(),
                                     proposal.getMessage(),
-                                    proposal.getSignature()
+                                    proposal.getSignature(),
+                                    proposal.getBlobId(),
+                                    proposal.getMimeType(),
+                                    proposal.getIpfsCid()
                                 );
                             }
                             

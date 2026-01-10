@@ -46,6 +46,24 @@ public interface RaftAppendCallback {
      */
     default void appendProposal(String walletAddress, String path, String contentType, String message, 
                                String signature, String blobId, String mimeType) {
+        // Default: call overload with null ipfsCid
+        appendProposal(walletAddress, path, contentType, message, signature, blobId, mimeType, null);
+    }
+    
+    /**
+     * Append a verified write proposal with binary and IPFS CID to Raft log (ADR 016).
+     * 
+     * @param walletAddress Ethereum wallet address
+     * @param path Shard path
+     * @param contentType Content type
+     * @param message Content message
+     * @param signature Transaction signature
+     * @param blobId Oak blob ID for attached binary
+     * @param mimeType MIME type of binary
+     * @param ipfsCid IPFS CID from client-side upload (may be null)
+     */
+    default void appendProposal(String walletAddress, String path, String contentType, String message, 
+                               String signature, String blobId, String mimeType, String ipfsCid) {
         // Default: ignore binary metadata and call base method
         appendProposal(walletAddress, path, contentType, message, signature);
     }

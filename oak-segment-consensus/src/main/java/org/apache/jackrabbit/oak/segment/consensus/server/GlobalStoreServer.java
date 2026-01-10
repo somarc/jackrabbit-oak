@@ -1037,9 +1037,9 @@ public class GlobalStoreServer {
                 aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
                     @Override
                     public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message, 
-                                                     String signature, String intentToken, String blobId, String mimeType) {
+                                                     String signature, String intentToken, String blobId, String mimeType, String ipfsCid) {
                         httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                            walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType
+                            walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid
                         );
                     }
                     
@@ -1967,9 +1967,9 @@ public class GlobalStoreServer {
         aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
             @Override
             public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message, 
-                                             String signature, String intentToken, String blobId, String mimeType) {
+                                             String signature, String intentToken, String blobId, String mimeType, String ipfsCid) {
                 httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                    walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType
+                    walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid
                 );
             }
             

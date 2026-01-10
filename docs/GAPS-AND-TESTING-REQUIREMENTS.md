@@ -152,34 +152,72 @@ Delete Proposal Flow:
 
 ### oak-blob-cloud-ipfs
 
-#### Critical Gaps (Must Fix for Production)
+#### Architecture Clarification (January 2026)
+
+**Key Insight**: The original gaps assumed validator-side IPFS upload. The actual architecture
+uses **client-side IPFS upload** where the CID flows through the proposal:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CLIENT-SIDE IPFS UPLOAD (Correct Architecture)                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Browser/Client                                                             │
+│  ├── User uploads binary to IPFS (js-ipfs / HTTP gateway)                   │
+│  ├── Gets CID: "QmXyz..."                                                   │
+│  └── Submits write proposal with ipfsCid parameter                          │
+│                                                                             │
+│  Sling Author (NO IPFS BlobStore needed)                                    │
+│  ├── Receives proposal with ipfsCid                                         │
+│  ├── Signs and forwards to validator                                        │
+│  └── Reads ipfs:cid property for rendering                                  │
+│                                                                             │
+│  Validator                                                                  │
+│  ├── Receives proposal with ipfsCid FROM CLIENT                             │
+│  ├── Stores ipfs:cid property on content node                               │
+│  ├── Optionally: Pins CID to local IPFS for redundancy                      │
+│  └── IPFSBackend.cidCache NOT needed for this flow                          │
+│                                                                             │
+│  EDS Layer / Readers                                                        │
+│  └── Read ipfs:cid property, fetch via IPFS gateway                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Revised Gap Analysis
+
+| Original Gap | Status | Resolution |
+|--------------|--------|------------|
+| ~~CID Persistence~~ | ✅ **Not a gap** | CID stored as `ipfs:cid` property on content node |
+| ~~CID Recovery~~ | ✅ **Not a gap** | CID comes from client proposal, not derived |
+| **Accept ipfsCid param** | 🔲 **NEW** | `ConsensusApiHandler` needs to accept `ipfsCid` in proposal |
+| IPFS Cluster | 🟡 Future | Nice-to-have for validator redundancy |
+| S3 Fallback | 🟡 Future | Nice-to-have for hybrid storage |
+
+#### Remaining Work
 
 | Gap | Location | Current State | Required State |
 |-----|----------|---------------|----------------|
-| **CID Persistence** | `IPFSBackend.java:68` | In-memory HashMap | Persist to Oak metadata nodes |
-| **CID Recovery** | `IPFSBackend.java:146` | Throws exception if not cached | Query IPFS for existing CIDs |
-| **IPFS Cluster** | N/A | Single node | IPFS Cluster for HA |
-| **S3 Fallback** | N/A | Not implemented | Hybrid S3+IPFS mode |
+| **Accept ipfsCid** | `ConsensusApiHandler.java:126` | TODO comment | Parse and store from proposal |
+| **Simplify cidCache** | `IPFSBackend.java:68` | In-memory HashMap | Can be removed or made optional |
 
-#### State Machine Gaps
+#### State Machine (Revised)
 
 ```
-Binary Lifecycle State Machine:
+Binary Lifecycle State Machine (Client-Side Upload):
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ ADDING → PINNING → STORED → UNPINNED → DELETED                              │
 │                                                                             │
-│ GAP: CID mapping persistence                                                │
-│      Currently: cidCache is in-memory HashMap                               │
-│      Impact: After restart, all CID mappings lost                           │
-│      Required: Store mappings in Oak metadata or external DB                │
+│  CLIENT: UPLOAD → GET_CID → SUBMIT_PROPOSAL                                 │
+│                      │                                                      │
+│                      ▼                                                      │
+│  VALIDATOR: RECEIVE → VERIFY_PAYMENT → STORE_NODE → REPLICATE               │
+│                                            │                                │
+│                                            ▼                                │
+│  CONTENT NODE:  ipfs:cid = "QmXyz..."  (persisted in Oak, replicated)       │
 │                                                                             │
-│ GAP: CID recovery on read                                                   │
-│      Currently: Throws DataStoreException if CID not in cache               │
-│      Required: Query IPFS for CID by content hash                           │
+│  READER: READ_NODE → GET_CID_PROPERTY → FETCH_FROM_GATEWAY                  │
 │                                                                             │
-│ GAP: Garbage collection coordination                                        │
-│      Currently: Unpin removes from local cache only                         │
-│      Required: Coordinate GC across validator IPFS nodes                    │
+│  STATUS: ✅ Architecture is sound                                           │
+│  REMAINING: Accept ipfsCid parameter in proposal API                        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -241,10 +279,14 @@ Biometric Authentication Flow:
 | `GCCostEstimateTest` | 7 | GC estimate data structure |
 | `EvmBridgeTest` | 12 | EVM payment verification |
 | `EventDrivenEvmBridgeTest` | 4 | Event-driven bridge |
-| `SegmentGossipTest` | 9 | P2P segment gossip |
-| `ProposalQueueIntegrationTest` | 4 | Proposal queue |
+| ~~`SegmentGossipTest`~~ | ~~9~~ | ~~P2P segment gossip~~ (deleted - P2P package removed) |
+| `ProposalQueueIntegrationTest` | 6 | **ProposalQueueManagerOptimized** (migrated Jan 2026) |
 | `CompositeStoreTest` | 9 | Composite store |
-| **Total** | **~55** | |
+| **Total** | **~48** | |
+
+**Recent Improvements (January 2026):**
+- `ProposalQueueIntegrationTest` migrated to use production `ProposalQueueManagerOptimized`
+- Tests now cover: PRIORITY tier fast-path, STANDARD tier epoch batching, DELETE proposals, queue stats
 
 **Missing Test Coverage:**
 - `AeronConsensusEngine` - 0 tests (4400+ lines of code!)
@@ -683,7 +725,8 @@ jobs:
 | Item | Module | Effort | Impact |
 |------|--------|--------|--------|
 | Signature verification | consensus | Medium | Critical |
-| IPFS CID persistence | ipfs | Medium | Critical |
+| ~~IPFS CID persistence~~ | ~~ipfs~~ | ~~Medium~~ | ✅ **Resolved** - CID from client proposal |
+| Accept ipfsCid in proposal API | consensus | Low | Critical |
 | Basic unit tests for state machines | all | High | High |
 
 ### Short-Term (Q1 2026)

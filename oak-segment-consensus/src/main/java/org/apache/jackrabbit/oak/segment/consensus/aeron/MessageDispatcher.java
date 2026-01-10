@@ -60,7 +60,7 @@ public class MessageDispatcher {
     public interface WriteCallback {
         void applyWrite(String walletAddress, String path, String contentType, 
                        String message, String signature, String intentToken, 
-                       String blobId, String mimeType);
+                       String blobId, String mimeType, String ipfsCid);
         void applyDelete(String walletAddress, String path, String signature);
     }
     

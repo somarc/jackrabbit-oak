@@ -130,6 +130,32 @@ This evolution left behind code from earlier phases that is no longer used but s
 
 ---
 
+### Category 4: ProposalQueueManager (Superseded) ✅ DELETED
+
+**Location**: ~~`oak-segment-consensus/src/main/java/org/apache/jackrabbit/oak/segment/consensus/queue/ProposalQueueManager.java`~~
+
+| File | Lines | Status | Recommendation |
+|------|-------|--------|----------------|
+| ~~`ProposalQueueManager.java`~~ | ~~314~~ | ✅ **DELETED** | Done |
+
+**Resolution (January 10, 2026)**:
+1. ✅ Added `@Deprecated` annotation
+2. ✅ Tests migrated to use `ProposalQueueManagerOptimized`
+3. ✅ **DELETED** - File removed from codebase
+
+**What was replaced**:
+
+| Feature | Old (Deleted) | New (Production) |
+|---------|---------------|------------------|
+| Architecture | Single-threaded scheduler | Tri-agent (Agrona Agents) |
+| Batching | None | Epoch-based wallet batching |
+| Payment Tiers | None | STANDARD/EXPRESS/PRIORITY |
+| Retry Tracking | None | MAX_RETRY_COUNT with metrics |
+| Backpressure | Basic | Advanced with timeout |
+| Finality | None | Ethereum epoch-based |
+
+---
+
 ## Deprecated Code (Keep but Mark)
 
 ### Category 1: EpochLeaderEngine (Legacy Fallback)

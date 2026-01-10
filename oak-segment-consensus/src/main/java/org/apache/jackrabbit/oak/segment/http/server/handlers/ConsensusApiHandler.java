@@ -84,6 +84,7 @@ public class ConsensusApiHandler {
             String intentToken = null;
             String paymentTier = null;
             String organization = null;  // ADR 037: Organization-scoped content paths
+            String ipfsCid = null;        // ADR 016: Client-side IPFS upload - CID from client
             byte[] binaryBytes = null;
             String mimeType = null;
             String fileName = null;
@@ -123,7 +124,7 @@ public class ConsensusApiHandler {
                             case "intentToken": intentToken = value; break;
                             case "paymentTier": paymentTier = value; break;
                             case "organization": organization = value; break;  // ADR 037
-                            // TODO ADR 016: case "ipfsCid": ipfsCid = value; break;
+                            case "ipfsCid": ipfsCid = value; break;  // ADR 016: Client-side IPFS CID
                         }
                     }
                 }
@@ -140,6 +141,7 @@ public class ConsensusApiHandler {
                 intentToken = request.getParameter("intentToken");
                 paymentTier = request.getParameter("paymentTier");
                 organization = request.getParameter("organization");  // ADR 037
+                ipfsCid = request.getParameter("ipfsCid");  // ADR 016: Client-side IPFS CID
                 
                 // Legacy base64 binary (for backward compatibility, but discouraged)
                 String binaryData = request.getParameter("binaryData");
@@ -654,6 +656,12 @@ public class ConsensusApiHandler {
                 log.info("📝 Text-only proposal {} (no binary)", proposalId);
             }
             
+            // ADR 016: Set IPFS CID from client-side upload
+            if (ipfsCid != null && !ipfsCid.isEmpty()) {
+                queuedProposal.setIpfsCid(ipfsCid);
+                log.info("🔗 IPFS CID attached to proposal {}: ipfsCid={}", proposalId, ipfsCid);
+            }
+            
             // Track API acceptance (proposal successfully queued)
             context.apiAcceptedRequests.incrementAndGet();
             
@@ -846,9 +854,8 @@ public class ConsensusApiHandler {
             
             if (context.gcAccountManager != null) {
                 try {
-                    // Estimate content size (TODO: get actual size from Oak NodeStore)
-                    // For now, use a heuristic: 1MB per content item
-                    long estimatedSizeMB = 1L;
+                    // Estimate content size from Oak NodeStore
+                    long estimatedSizeMB = estimateContentSizeMB(contentPath);
                     
                     // Add debt to account (pending until GC executes)
                     java.math.BigDecimal debtCost = context.gcAccountManager.addDebt(normalizedWallet, contentPath, estimatedSizeMB);
@@ -1066,13 +1073,15 @@ public class ConsensusApiHandler {
     /**
      * ✈️ AERON NATIVE: Apply replicated write to FileStore.
      * This is called from AeronConsensusEngine.onSessionMessage() after Aeron replicates the write.
+     * 
+     * @param ipfsCid IPFS CID from client-side upload (ADR 016), may be null
      */
     public void applyReplicatedWrite(String walletAddress, String path, String contentType, 
                                      String message, String signature, String intentToken, 
-                                     String blobId, String mimeType) {
+                                     String blobId, String mimeType, String ipfsCid) {
         try {
-            log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}", 
-                     walletAddress, path, intentToken, blobId);
+            log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
+                     walletAddress, path, intentToken, blobId, ipfsCid);
             
             // Get current HEAD
             String previousHead = context.fileStore.getHead().getRecordId().toString();
@@ -1166,36 +1175,46 @@ public class ConsensusApiHandler {
                     // Store raw blob ID
                     contentNode.setProperty("jcr:blobId", blobId);
                     
-                    // 🔗 Try to get IPFS CID and store it as property (persists across restarts!)
-                    String ipfsCid = null;
-                    if (context.blobStore instanceof org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) {
-                        try {
-                            org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore dsBlobStore = 
-                                (org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) context.blobStore;
-                            Object dataStore = dsBlobStore.getDataStore();
-                            if (dataStore instanceof org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) {
-                                org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfsDataStore = 
-                                    (org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) dataStore;
-                                
-                                // Try a few times (async upload may still be in progress)
-                                for (int retry = 0; retry < 5 && ipfsCid == null; retry++) {
-                                    ipfsCid = ipfsDataStore.getCID(blobId);
-                                    if (ipfsCid == null && retry < 4) {
-                                        Thread.sleep(200); // Wait 200ms between retries
-                                    }
-                                }
-                            }
-                        } catch (Exception e) {
-                            log.debug("Could not get IPFS CID: {}", e.getMessage());
-                        }
-                    }
-                    
-                    if (ipfsCid != null) {
+                    // 🔗 ADR 016: Store IPFS CID from client-side upload
+                    // The client uploads to IPFS first and provides the CID in the proposal
+                    // This is the preferred architecture - no validator-side IPFS upload needed
+                    if (ipfsCid != null && !ipfsCid.isEmpty()) {
                         contentNode.setProperty("ipfsCid", ipfsCid);
                         contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + ipfsCid);
-                        log.info("✅ Binary stored with IPFS CID: jcr:blobId={}, ipfsCid={}", blobId, ipfsCid);
+                        log.info("✅ Binary stored with client-provided IPFS CID: jcr:blobId={}, ipfsCid={}", blobId, ipfsCid);
                     } else {
-                        log.info("✅ Binary stored (IPFS CID pending async): jcr:blobId={}", blobId);
+                        // Fallback: Try to get CID from validator's IPFSDataStore (legacy path)
+                        // This path is deprecated - clients should provide CID directly
+                        String derivedCid = null;
+                        if (context.blobStore instanceof org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) {
+                            try {
+                                org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore dsBlobStore = 
+                                    (org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) context.blobStore;
+                                Object dataStore = dsBlobStore.getDataStore();
+                                if (dataStore instanceof org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) {
+                                    org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfsDataStore = 
+                                        (org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) dataStore;
+                                    
+                                    // Try a few times (async upload may still be in progress)
+                                    for (int retry = 0; retry < 5 && derivedCid == null; retry++) {
+                                        derivedCid = ipfsDataStore.getCID(blobId);
+                                        if (derivedCid == null && retry < 4) {
+                                            Thread.sleep(200); // Wait 200ms between retries
+                                        }
+                                    }
+                                }
+                            } catch (Exception e) {
+                                log.debug("Could not get IPFS CID from validator: {}", e.getMessage());
+                            }
+                        }
+                        
+                        if (derivedCid != null) {
+                            contentNode.setProperty("ipfsCid", derivedCid);
+                            contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + derivedCid);
+                            log.info("✅ Binary stored with validator-derived IPFS CID (legacy): jcr:blobId={}, ipfsCid={}", blobId, derivedCid);
+                        } else {
+                            log.info("✅ Binary stored (no IPFS CID - client should provide): jcr:blobId={}", blobId);
+                        }
                     }
                     
                 } catch (Exception e) {
@@ -1206,6 +1225,14 @@ public class ConsensusApiHandler {
                         contentNode.setProperty("jcr:mimeType", mimeType);
                     }
                 }
+            }
+            
+            // 🔗 ADR 016: Store ipfsCid even without blobId (pure IPFS reference)
+            // This supports content that exists only on IPFS without local blob storage
+            if ((blobId == null || blobId.isEmpty()) && ipfsCid != null && !ipfsCid.isEmpty()) {
+                contentNode.setProperty("ipfsCid", ipfsCid);
+                contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + ipfsCid);
+                log.info("🔗 Stored pure IPFS reference (no local blob): ipfsCid={}", ipfsCid);
             }
             
             // 🔗 ADR 020: Store intentToken for lazy binary upload
@@ -2112,6 +2139,99 @@ public class ConsensusApiHandler {
             log.error("❌ Failed to build genesis structure", e);
             // Don't throw - genesis properties are still valid, just missing elaborate structure
         }
+    }
+    
+    /**
+     * Estimate content size in megabytes for a given path.
+     * 
+     * <p>This method traverses the node tree at the given path and estimates
+     * the storage size based on node count and property sizes.</p>
+     * 
+     * @param contentPath Path to the content node
+     * @return Estimated size in megabytes (minimum 1 MB)
+     */
+    private long estimateContentSizeMB(String contentPath) {
+        if (context.nodeStore == null) {
+            log.debug("NodeStore not available, using default size estimate");
+            return 1L;
+        }
+        
+        try {
+            org.apache.jackrabbit.oak.spi.state.NodeState root = context.nodeStore.getRoot();
+            
+            // Navigate to the content path
+            String[] pathParts = contentPath.split("/");
+            org.apache.jackrabbit.oak.spi.state.NodeState current = root;
+            
+            for (String part : pathParts) {
+                if (part.isEmpty()) continue;
+                current = current.getChildNode(part);
+                if (!current.exists()) {
+                    log.debug("Path {} does not exist, using default size estimate", contentPath);
+                    return 1L;
+                }
+            }
+            
+            // Estimate size: count nodes and properties recursively
+            long[] counts = countNodesAndProperties(current, 0, 1000); // Max 1000 nodes to avoid long traversals
+            long nodeCount = counts[0];
+            long propertyCount = counts[1];
+            
+            // Rough estimate: each node ≈ 1 KB, each property ≈ 100 bytes
+            long estimatedBytes = (nodeCount * 1024) + (propertyCount * 100);
+            long estimatedMB = Math.max(1, estimatedBytes / (1024 * 1024));
+            
+            log.debug("Content size estimate for {}: {} nodes, {} properties, ~{} MB", 
+                contentPath, nodeCount, propertyCount, estimatedMB);
+            
+            return estimatedMB;
+            
+        } catch (Exception e) {
+            log.warn("Failed to estimate content size for {}: {}", contentPath, e.getMessage());
+            return 1L;
+        }
+    }
+    
+    /**
+     * Recursively count nodes and properties in a node tree.
+     * 
+     * @param node Starting node
+     * @param currentDepth Current recursion depth
+     * @param maxNodes Maximum nodes to count (prevents runaway traversals)
+     * @return Array of [nodeCount, propertyCount]
+     */
+    private long[] countNodesAndProperties(org.apache.jackrabbit.oak.spi.state.NodeState node, int currentDepth, int maxNodes) {
+        long nodeCount = 1;
+        long propertyCount = 0;
+        
+        // Count properties on this node
+        for (org.apache.jackrabbit.oak.api.PropertyState prop : node.getProperties()) {
+            propertyCount++;
+            // For binary properties, add extra weight based on size
+            if (prop.getType() == org.apache.jackrabbit.oak.api.Type.BINARY) {
+                try {
+                    org.apache.jackrabbit.oak.api.Blob blob = prop.getValue(org.apache.jackrabbit.oak.api.Type.BINARY);
+                    // Add 1 "property" per 100 bytes of binary
+                    propertyCount += blob.length() / 100;
+                } catch (Exception e) {
+                    // Ignore - just use default property count
+                }
+            }
+        }
+        
+        // Recursively count children (with depth limit)
+        if (currentDepth < 10 && nodeCount < maxNodes) {
+            for (String childName : node.getChildNodeNames()) {
+                if (nodeCount >= maxNodes) break;
+                
+                org.apache.jackrabbit.oak.spi.state.NodeState child = node.getChildNode(childName);
+                long[] childCounts = countNodesAndProperties(child, currentDepth + 1, maxNodes - (int) nodeCount);
+                nodeCount += childCounts[0];
+                propertyCount += childCounts[1];
+            }
+        }
+        
+        return new long[] { nodeCount, propertyCount };
     }
     
     /**

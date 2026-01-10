@@ -151,7 +151,7 @@ public class AeronConsensusEngine implements ClusteredService {
     // ✈️ AERON NATIVE: Callback interface for applying replicated writes and deletes
     public interface WriteApplicationCallback {
         void applyReplicatedWrite(String walletAddress, String path, String contentType, String message, 
-                                 String signature, String intentToken, String blobId, String mimeType);
+                                 String signature, String intentToken, String blobId, String mimeType, String ipfsCid);
         void applyReplicatedDelete(String walletAddress, String path, String signature);
     }
     private WriteApplicationCallback writeCallback;
@@ -257,12 +257,12 @@ public class AeronConsensusEngine implements ClusteredService {
                 @Override
                 public void applyWrite(String walletAddress, String path, String contentType, 
                                      String message, String signature, String intentToken, 
-                                     String blobId, String mimeType) {
+                                     String blobId, String mimeType, String ipfsCid) {
                     // Delegate to existing write application logic
                     if (writeCallback != null) {
                         writeCallback.applyReplicatedWrite(walletAddress, path, contentType, 
                                                           message, signature, intentToken, 
-                                                          blobId, mimeType);
+                                                          blobId, mimeType, ipfsCid);
                     }
                 }
                 
@@ -885,6 +885,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 String intentToken = extractJsonField(json, "intentToken"); // ADR 020
                 String blobId = extractJsonField(json, "blobId");
                 String mimeType = extractJsonField(json, "mimeType");
+                String ipfsCid = extractJsonField(json, "ipfsCid"); // ADR 016: Client-side IPFS CID
                 
                 if (walletAddress == null || path == null) {
                     log.error("❌ Invalid write proposal: missing required fields (walletAddress: {}, path: {})", 
@@ -895,9 +896,9 @@ public class AeronConsensusEngine implements ClusteredService {
                 // Apply write to FileStore via callback
                 // This ensures the write is applied on ALL nodes after replication
                 if (writeCallback != null) {
-                    log.debug("✅ APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}", 
-                        walletAddress, path, intentToken != null ? intentToken : "none");
-                    writeCallback.applyReplicatedWrite(walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType);
+                    log.debug("✅ APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, ipfsCid={}", 
+                        walletAddress, path, intentToken != null ? intentToken : "none", ipfsCid != null ? ipfsCid : "none");
+                    writeCallback.applyReplicatedWrite(walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid);
                     log.debug("✅ Replicated write applied successfully on node {}", 
                         cluster != null ? cluster.memberId() : "?");
                     
@@ -1019,19 +1020,20 @@ public class AeronConsensusEngine implements ClusteredService {
                     String intentToken = extractJsonField(proposalJson, "intentToken"); // ADR 020
                     String blobId = extractJsonField(proposalJson, "blobId");
                     String mimeType = extractJsonField(proposalJson, "mimeType");
+                    String ipfsCid = extractJsonField(proposalJson, "ipfsCid"); // ADR 016: Client-side IPFS CID
                     
                     if (walletAddress == null || path == null) {
                         log.error("❌ Invalid proposal in batch: missing required fields");
                         continue;
                     }
                     
-                    log.debug("🔍DEBUG_BATCH [RCV-11]: Processing proposal {} of {} - wallet: {}, path: {}, intentToken: {}", 
-                        processed + 1, proposals.size(), walletAddress, path, intentToken != null ? intentToken : "none");
+                    log.debug("🔍DEBUG_BATCH [RCV-11]: Processing proposal {} of {} - wallet: {}, path: {}, intentToken: {}, ipfsCid: {}", 
+                        processed + 1, proposals.size(), walletAddress, path, intentToken != null ? intentToken : "none", ipfsCid != null ? ipfsCid : "none");
                     
                     // Apply write to FileStore via callback
                     if (writeCallback != null) {
                         log.debug("🔍DEBUG_BATCH [RCV-12]: Calling writeCallback.applyReplicatedWrite()...");
-                        writeCallback.applyReplicatedWrite(walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType);
+                        writeCallback.applyReplicatedWrite(walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid);
                         log.debug("🔍DEBUG_BATCH [RCV-13]: writeCallback.applyWrite() COMPLETE");
                         
                         // Track acknowledgment for backpressure management
@@ -2166,6 +2168,13 @@ public class AeronConsensusEngine implements ClusteredService {
                     json.append(",\"blobId\":\"").append(escapeJson(pBlobId)).append("\"");
                     json.append(",\"mimeType\":\"").append(escapeJson(proposal.getMimeType() != null ? proposal.getMimeType() : "application/octet-stream")).append("\"");
                     log.info("📎 Including blobId in Aeron JSON: {}", pBlobId);
+                }
+                
+                // ADR 016: Add ipfsCid if present (client-side IPFS upload)
+                String pIpfsCid = proposal.getIpfsCid();
+                if (pIpfsCid != null && !pIpfsCid.isEmpty()) {
+                    json.append(",\"ipfsCid\":\"").append(escapeJson(pIpfsCid)).append("\"");
+                    log.info("🔗 Including ipfsCid in Aeron JSON: {}", pIpfsCid);
                 }
                 
                 json.append("}");
