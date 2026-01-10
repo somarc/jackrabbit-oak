@@ -1983,7 +1983,6 @@ public class GlobalStoreServer {
         System.out.println("   ✅ Write application callback configured");
         
         // Wire Aeron engine to HTTP server context
-        httpServer.setEpochLeaderEngine(null);
         httpServer.setAeronConsensusEngine(aeronEngine);
         
         // Launch Aeron Cluster

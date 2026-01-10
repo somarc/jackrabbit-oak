@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
-import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
@@ -51,7 +50,6 @@ public class HealthHandler {
             FileStore fileStore,
             NodeStore nodeStore,
             Path storeDirectory,
-            EpochLeaderEngine epochLeaderEngine,
             AeronConsensusEngine aeronConsensusEngine,
             Map<String, ?> registeredClients,
             Map<String, ?> registeredValidators,
@@ -289,10 +287,9 @@ public class HealthHandler {
             json.append("  },\n");
         }
         
-        // 5. Check consensus engine (if configured) - check Aeron first, then Leader
+        // 5. Check consensus engine (Aeron Cluster only)
         // Use context fields directly (volatile) to get current state, not constructor snapshot
         AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
-        EpochLeaderEngine leaderEngine = (context != null) ? context.epochLeaderEngine : null;
         
         if (aeronEngine != null) {
             json.append("  \"consensus\": {\n");
@@ -305,21 +302,6 @@ public class HealthHandler {
                 json.append("    \"term\": ").append(aeronEngine.getCurrentTerm()).append(",\n");
                 json.append("    \"reachableValidators\": ").append(aeronEngine.getReachableValidatorCount()).append(",\n");
                 json.append("    \"currentLeader\": \"").append(aeronEngine.getCurrentLeader() != null ? aeronEngine.getCurrentLeader() : "none").append("\"\n");
-            } catch (Exception e) {
-                json.append("    \"status\": \"DOWN\",\n");
-                json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
-                allHealthy = false;
-            }
-            json.append("  },\n");
-        } else if (leaderEngine != null) {
-            json.append("  \"consensus\": {\n");
-            try {
-                json.append("    \"status\": \"UP\",\n");
-                json.append("    \"mode\": \"leader\",\n");
-                json.append("    \"role\": \"").append(leaderEngine.getCurrentRole()).append("\",\n");
-                json.append("    \"isLeader\": ").append(leaderEngine.isLeader()).append(",\n");
-                json.append("    \"epoch\": ").append(leaderEngine.getCurrentEpoch()).append(",\n");
-                json.append("    \"reachableValidators\": ").append(leaderEngine.getReachableValidatorCount()).append("\n");
             } catch (Exception e) {
                 json.append("    \"status\": \"DOWN\",\n");
                 json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");

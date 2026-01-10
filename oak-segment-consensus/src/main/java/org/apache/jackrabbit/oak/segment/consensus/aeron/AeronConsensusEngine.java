@@ -2466,7 +2466,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Public API (Compatible with EpochLeaderEngine interface)
+    // Public API
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
     /**
@@ -3799,7 +3799,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Get all followers (for compatibility with EpochLeaderEngine).
+     * Get all followers.
      * 
      * ✈️ AERON CLUSTER SOURCE OF TRUTH:
      * Returns all peer URLs. In Aeron Cluster, all non-leader nodes are followers.
@@ -3813,7 +3813,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Get non-voting followers (for compatibility with EpochLeaderEngine).
+     * Get non-voting followers (validators on probation).
      */
     public List<String> getNonVotingFollowers() {
         // TODO: Implement probation logic if needed
@@ -4207,7 +4207,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Get validator join times (for compatibility with EpochLeaderEngine).
+     * Get validator join times for probation tracking.
      */
     public Map<String, Long> getValidatorJoinTimes() {
         return new java.util.HashMap<>(validatorJoinTimes);

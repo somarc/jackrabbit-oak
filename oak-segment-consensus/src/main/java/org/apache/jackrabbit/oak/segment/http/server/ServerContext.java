@@ -17,11 +17,9 @@
 package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
-import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
 import org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier;
-import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusStateService;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -51,14 +49,12 @@ public class ServerContext {
     public final FileStore fileStore;
     public final NodeStore nodeStore;
     public final Path storeDirectory;
-    public volatile EpochLeaderEngine epochLeaderEngine;
     public volatile AeronConsensusEngine aeronConsensusEngine;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient aeronWriteClient;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics aeronPrometheusMetrics;
     public volatile ProofVerifier proofVerifier;
     public volatile String selfUrl;
-    public volatile ConsensusStateService consensusStateService;
     public volatile GCCostEstimator gcCostEstimator;
     public volatile GCProposalManager gcProposalManager;
     public volatile org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager gcAccountManager;
@@ -109,28 +105,12 @@ public class ServerContext {
     }
     
     // Setters for consensus engines (can be set after construction)
-    public void setEpochLeaderEngine(EpochLeaderEngine epochLeaderEngine) {
-        this.epochLeaderEngine = epochLeaderEngine;
-        // Create ConsensusStateService when epochLeaderEngine is set
-        if (epochLeaderEngine != null && selfUrl != null) {
-            this.consensusStateService = new ConsensusStateService(epochLeaderEngine, selfUrl);
-        }
-    }
-    
     public void setProofVerifier(ProofVerifier proofVerifier) {
         this.proofVerifier = proofVerifier;
     }
     
     public void setSelfUrl(String selfUrl) {
         this.selfUrl = selfUrl;
-        // Create ConsensusStateService if epochLeaderEngine is already set
-        if (epochLeaderEngine != null && selfUrl != null) {
-            this.consensusStateService = new ConsensusStateService(epochLeaderEngine, selfUrl);
-        }
-    }
-    
-    public void setConsensusStateService(ConsensusStateService consensusStateService) {
-        this.consensusStateService = consensusStateService;
     }
     
     public void setAeronConsensusEngine(AeronConsensusEngine aeronConsensusEngine) {

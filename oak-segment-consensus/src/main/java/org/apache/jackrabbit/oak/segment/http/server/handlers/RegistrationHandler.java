@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
-import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
@@ -230,104 +229,18 @@ public class RegistrationHandler {
     }
     
     /**
-     * Handle heartbeat from leader.
-     * Followers receive these periodically to confirm leader is alive.
-     */
-    /**
      * Handle POST /v1/heartbeat - Receive heartbeat from leader
      * 
-     * @deprecated This endpoint is only available with EpochLeaderEngine consensus.
-     *             When using Aeron Cluster, heartbeats are handled internally by Aeron.
+     * @deprecated This endpoint is deprecated. Aeron Cluster handles heartbeats internally via Raft.
      */
     public void handleHeartbeat(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        // Check if Aeron is active - if so, this endpoint is not applicable
-        if (context.aeronConsensusEngine != null) {
-            response.setContentType("application/json");
-            response.setStatus(HttpServletResponse.SC_GONE);
-            response.getWriter().write(String.format(
-                "{\"success\":false,\"error\":{\"code\":\"ENDPOINT_DEPRECATED\",\"message\":\"This endpoint is only available with EpochLeaderEngine consensus\",\"details\":\"Aeron Cluster handles heartbeats internally\"},\"timestamp\":%d}",
-                System.currentTimeMillis()
-            ));
-            return;
-        }
-        
-        if (context.epochLeaderEngine == null) {
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Leader consensus not configured");
-            return;
-        }
-        
-        // Only followers should receive heartbeats
-        if (context.epochLeaderEngine.isLeader()) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "I am the leader, not a follower");
-            return;
-        }
-        
-        try {
-            // Read JSON body
-            StringBuilder json = new StringBuilder();
-            BufferedReader reader = request.getReader();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                json.append(line);
-            }
-            
-            String body = json.toString();
-            
-            // Parse heartbeat
-            String leaderUrl = JsonParser.extractField(body, "leaderUrl");
-            String epochStr = JsonParser.extractField(body, "epoch");
-            
-            // Verify this is from the legitimate leader
-            if (!leaderUrl.equals(context.epochLeaderEngine.getCurrentLeader())) {
-                log.debug("🚫 Heartbeat from non-leader: {} (expected: {})", 
-                    leaderUrl, context.epochLeaderEngine.getCurrentLeader());
-                response.sendError(HttpServletResponse.SC_FORBIDDEN, "Not current leader");
-                return;
-            }
-            
-            // CRITICAL FIX: Synchronize epoch from leader's heartbeat
-            // This prevents followers from being stuck at their initial epoch
-            if (epochStr != null) {
-                try {
-                    int leaderEpoch = Integer.parseInt(epochStr);
-                    context.epochLeaderEngine.updateCurrentEpoch(leaderEpoch);
-                } catch (NumberFormatException e) {
-                    log.warn("⚠️  Invalid epoch in heartbeat: {}", epochStr);
-                }
-            }
-            
-            // Record the heartbeat
-            context.epochLeaderEngine.getHealthMonitor().recordHeartbeat();
-            
-            // Register the leader in our validator registry (if not already registered)
-            // This ensures followers learn about the leader via heartbeat
-            // Extract leaderId (wallet address) from heartbeat payload
-            String leaderId = JsonParser.extractField(body, "leaderId");
-            if (leaderId == null || leaderId.isEmpty()) {
-                // Fallback: derive from URL (for backward compatibility)
-                leaderId = leaderUrl.contains("validator-") 
-                    ? leaderUrl.substring(leaderUrl.indexOf("validator-")).split(":")[0]
-                    : "leader-" + leaderUrl.hashCode();
-                log.warn("⚠️  No leaderId in heartbeat, using derived ID: {}", leaderId);
-            }
-            
-            if (!context.registeredValidators.containsKey(leaderId)) {
-                ValidatorRegistration leaderReg = new ValidatorRegistration(leaderId, leaderUrl);
-                leaderReg.updateStatus(ValidatorRegistration.Status.READY);
-                context.registeredValidators.put(leaderId, leaderReg);
-                log.info("✅ Leader registered via heartbeat: {} ({})", leaderId, leaderUrl);
-            }
-            
-            // Return success
-            response.setContentType("application/json");
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write("{\"success\":true}");
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to process heartbeat", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
-                "Failed to process heartbeat: " + e.getMessage());
-        }
+        // Aeron Cluster handles heartbeats internally - this endpoint is deprecated
+        response.setContentType("application/json");
+        response.setStatus(HttpServletResponse.SC_GONE);
+        response.getWriter().write(String.format(
+            "{\"success\":false,\"error\":{\"code\":\"ENDPOINT_DEPRECATED\",\"message\":\"This endpoint is deprecated\",\"details\":\"Aeron Cluster handles heartbeats internally via Raft consensus\"},\"timestamp\":%d}",
+            System.currentTimeMillis()
+        ));
     }
 }
 

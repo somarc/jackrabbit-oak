@@ -16,156 +16,67 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.state;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 /**
- * Normalized consensus state - single source of truth for all consensus information.
+ * Immutable consensus state data class.
  * 
- * <p>This class provides a consistent view of consensus state that all components
- * (APIs, dashboard, heartbeats, leader election) can use. This eliminates
- * inconsistencies from multiple sources of truth.</p>
- * 
- * <p>All validator lists are sorted alphabetically for deterministic ordering.</p>
+ * <p>Used by dashboard and APIs to represent the current consensus state
+ * in a normalized, consistent format.</p>
  */
 public class ConsensusState {
     
-    /**
-     * Consensus type: "leader-based", "blockchain-poa", "dag", or "none"
-     */
     public final String consensusType;
-    
-    /**
-     * Current role: "LEADER", "FOLLOWER", or "STANDALONE"
-     */
     public final String currentRole;
-    
-    /**
-     * URL of the current leader (null if standalone)
-     */
     public final String currentLeader;
-    
-    /**
-     * Current epoch number
-     */
     public final int currentEpoch;
-    
-    /**
-     * Leader term duration in seconds
-     */
     public final int leaderTermSeconds;
-    
-    /**
-     * Seconds until next epoch transition (leader rotation)
-     */
     public final int secondsUntilRotation;
-    
-    /**
-     * Number of voting validators (electorate size)
-     */
     public final int electorateSize;
-    
-    /**
-     * Total number of validators (voting + non-voting)
-     */
     public final int totalValidators;
-    
-    /**
-     * All validators in the network (voting + non-voting), sorted alphabetically.
-     * Includes self.
-     */
     public final List<String> allValidators;
-    
-    /**
-     * Voting validators only (electorate), sorted alphabetically.
-     * These validators can vote and become leaders.
-     */
     public final List<String> electorate;
-    
-    /**
-     * Non-voting followers (on probation), sorted alphabetically.
-     * These validators receive heartbeats and replicate data but cannot vote or lead.
-     */
     public final List<String> nonVotingFollowers;
-    
-    /**
-     * Next leader for the next epoch (calculated deterministically)
-     */
     public final String nextLeader;
-    
-    /**
-     * Self URL (this validator's URL)
-     */
     public final String selfUrl;
     
-    public ConsensusState(String consensusType, String currentRole, String currentLeader,
-                         int currentEpoch, int leaderTermSeconds, int secondsUntilRotation,
-                         int electorateSize, int totalValidators,
-                         List<String> allValidators, List<String> electorate,
-                         List<String> nonVotingFollowers, String nextLeader, String selfUrl) {
-        this.consensusType = consensusType;
-        this.currentRole = currentRole;
-        this.currentLeader = currentLeader;
-        this.currentEpoch = currentEpoch;
-        this.leaderTermSeconds = leaderTermSeconds;
-        this.secondsUntilRotation = secondsUntilRotation;
-        this.electorateSize = electorateSize;
-        this.totalValidators = totalValidators;
-        this.allValidators = Collections.unmodifiableList(new ArrayList<>(allValidators));
-        this.electorate = Collections.unmodifiableList(new ArrayList<>(electorate));
-        this.nonVotingFollowers = Collections.unmodifiableList(new ArrayList<>(nonVotingFollowers));
-        this.nextLeader = nextLeader;
-        this.selfUrl = selfUrl;
+    private ConsensusState(Builder builder) {
+        this.consensusType = builder.consensusType;
+        this.currentRole = builder.currentRole;
+        this.currentLeader = builder.currentLeader;
+        this.currentEpoch = builder.currentEpoch;
+        this.leaderTermSeconds = builder.leaderTermSeconds;
+        this.secondsUntilRotation = builder.secondsUntilRotation;
+        this.electorateSize = builder.electorateSize;
+        this.totalValidators = builder.totalValidators;
+        this.allValidators = builder.allValidators != null ? 
+            Collections.unmodifiableList(builder.allValidators) : Collections.emptyList();
+        this.electorate = builder.electorate != null ? 
+            Collections.unmodifiableList(builder.electorate) : Collections.emptyList();
+        this.nonVotingFollowers = builder.nonVotingFollowers != null ? 
+            Collections.unmodifiableList(builder.nonVotingFollowers) : Collections.emptyList();
+        this.nextLeader = builder.nextLeader;
+        this.selfUrl = builder.selfUrl;
     }
     
     /**
-     * Check if this validator is the leader.
-     */
-    public boolean isLeader() {
-        return "LEADER".equals(currentRole);
-    }
-    
-    /**
-     * Check if this validator is a follower.
-     */
-    public boolean isFollower() {
-        return "FOLLOWER".equals(currentRole);
-    }
-    
-    /**
-     * Check if this validator is on probation (non-voting).
-     */
-    public boolean isOnProbation() {
-        return nonVotingFollowers.contains(selfUrl);
-    }
-    
-    /**
-     * Get peer validators (all validators except self).
-     */
-    public List<String> getPeerValidators() {
-        List<String> peers = new ArrayList<>(allValidators);
-        peers.remove(selfUrl);
-        return peers;
-    }
-    
-    /**
-     * Builder for creating ConsensusState instances.
+     * Builder for ConsensusState.
      */
     public static class Builder {
-        private String consensusType = "none";
-        private String currentRole = "STANDALONE";
-        private String currentLeader = null;
-        private int currentEpoch = 0;
-        private int leaderTermSeconds = 60;
-        private int secondsUntilRotation = 0;
-        private int electorateSize = 0;
-        private int totalValidators = 1;
-        private List<String> allValidators = new ArrayList<>();
-        private List<String> electorate = new ArrayList<>();
-        private List<String> nonVotingFollowers = new ArrayList<>();
-        private String nextLeader = null;
-        private String selfUrl = null;
+        private String consensusType;
+        private String currentRole;
+        private String currentLeader;
+        private int currentEpoch;
+        private int leaderTermSeconds;
+        private int secondsUntilRotation;
+        private int electorateSize;
+        private int totalValidators;
+        private List<String> allValidators;
+        private List<String> electorate;
+        private List<String> nonVotingFollowers;
+        private String nextLeader;
+        private String selfUrl;
         
         public Builder consensusType(String consensusType) {
             this.consensusType = consensusType;
@@ -208,20 +119,17 @@ public class ConsensusState {
         }
         
         public Builder allValidators(List<String> allValidators) {
-            this.allValidators = new ArrayList<>(allValidators);
-            Collections.sort(this.allValidators);
+            this.allValidators = allValidators;
             return this;
         }
         
         public Builder electorate(List<String> electorate) {
-            this.electorate = new ArrayList<>(electorate);
-            Collections.sort(this.electorate);
+            this.electorate = electorate;
             return this;
         }
         
         public Builder nonVotingFollowers(List<String> nonVotingFollowers) {
-            this.nonVotingFollowers = new ArrayList<>(nonVotingFollowers);
-            Collections.sort(this.nonVotingFollowers);
+            this.nonVotingFollowers = nonVotingFollowers;
             return this;
         }
         
@@ -236,14 +144,7 @@ public class ConsensusState {
         }
         
         public ConsensusState build() {
-            return new ConsensusState(
-                consensusType, currentRole, currentLeader,
-                currentEpoch, leaderTermSeconds, secondsUntilRotation,
-                electorateSize, totalValidators,
-                allValidators, electorate, nonVotingFollowers,
-                nextLeader, selfUrl
-            );
+            return new ConsensusState(this);
         }
     }
 }
-

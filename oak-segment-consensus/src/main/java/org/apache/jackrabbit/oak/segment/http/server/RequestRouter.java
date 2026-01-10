@@ -65,14 +65,12 @@ public class RequestRouter {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            context.epochLeaderEngine,
             context.aeronConsensusEngine,
             context.registeredClients,
             context.registeredValidators,
             context
         );
         this.metricsHandler = new MetricsHandler(
-            context.epochLeaderEngine,
             context.aeronConsensusEngine,
             context.storeDirectory,
             context.registeredClients,

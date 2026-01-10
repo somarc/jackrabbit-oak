@@ -97,25 +97,6 @@ public class SegmentHttpServer {
     }
     
     /**
-     * Set the Leader consensus engine (leader-based mode).
-     * Must be called before start() if Leader consensus is needed.
-     */
-    public void setEpochLeaderEngine(org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine engine) {
-        context.setEpochLeaderEngine(engine);
-        log.info("🎖️  Epoch-based leader consensus engine configured");
-        
-        // Initialize proof verifier for Byzantine fault tolerance
-        if (engine != null) {
-            int leaderTermSeconds = engine.getElection().getLeaderTermSeconds();
-            org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier proofVerifier = 
-                new org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier(
-                    fileStore, leaderTermSeconds);
-            context.setProofVerifier(proofVerifier);
-            log.info("🛡️  Proof-of-Readiness verifier initialized");
-        }
-    }
-    
-    /**
      * Set the Aeron Cluster consensus engine (Raft-based mode).
      * Must be called before start() if Aeron Cluster consensus is needed.
      */
@@ -174,9 +155,9 @@ public class SegmentHttpServer {
             proof.setHeadSegmentId(currentHead);
             proof.setHeadCapturedAt(System.currentTimeMillis());
             
-            // 2. Proof of Epoch Alignment - Current epoch
-            if (context.epochLeaderEngine != null) {
-                int currentEpoch = context.epochLeaderEngine.getElection().getCurrentEpoch();
+            // 2. Proof of Epoch Alignment - Current epoch (from Aeron consensus)
+            if (context.aeronConsensusEngine != null) {
+                int currentEpoch = context.aeronConsensusEngine.getCurrentEpoch();
                 proof.setCurrentEpoch(currentEpoch);
                 proof.setEpochCalculatedAt(System.currentTimeMillis());
             }
@@ -445,8 +426,8 @@ public class SegmentHttpServer {
                 String peerJoinedUrl = peerUrlIP + "/v1/consensus/peer-joined";
                 
                 // PHASE 3: Get public key for Byzantine fault tolerance
-                String publicKeyHex = context.epochLeaderEngine != null ? 
-                    context.epochLeaderEngine.getPublicKeyHex() : "";
+                // Note: Public key exchange now handled via Aeron cluster membership
+                String publicKeyHex = "";
                 
                 // Build JSON payload with proof and public key (PHASE 3)
                 String jsonPayload = String.format(
@@ -487,25 +468,7 @@ public class SegmentHttpServer {
                     log.info("   ✅ Accepted by peer: {} → {}", peerUrl, peerUrlIP);
                     log.debug("      Response: {}", response);
                     
-                    // CRITICAL: Extract peer's public key from response and register it
-                    // This allows us to verify their leadership claims later
-                    try {
-                        int pkStart = response.indexOf("\"publicKey\"");
-                        if (pkStart != -1 && context.epochLeaderEngine != null) {
-                            pkStart = response.indexOf(":", pkStart) + 1;
-                            int pkEnd = response.indexOf("\"", pkStart + 2);
-                            if (pkEnd != -1) {
-                                String peerPublicKey = response.substring(pkStart + 1, pkEnd);
-                                if (!peerPublicKey.isEmpty()) {
-                                    context.epochLeaderEngine.getClaimVerifier().registerPublicKey(peerUrl, peerPublicKey);
-                                    log.info("   🔑 Registered public key from peer: {}...", 
-                                        peerPublicKey.substring(0, Math.min(18, peerPublicKey.length())));
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.warn("   ⚠️  Failed to extract peer public key: {}", e.getMessage());
-                    }
+                    // Note: Public key exchange now handled via Aeron cluster membership
                     
                     successCount++;
                     

@@ -159,48 +159,7 @@ public class DashboardDataService {
             return builder.build();
         }
         
-        // Check for ConsensusStateService (EpochLeaderEngine)
-        // EXACT same order as ConsensusApiHandler.handleGetConsensusStatus()
-        if (context.consensusStateService != null) {
-            return context.consensusStateService.getConsensusState();
-        }
-        
-        // Check for EpochLeaderEngine directly (fallback)
-        // This matches the fallback logic in API handler
-        if (context.epochLeaderEngine != null) {
-            java.util.List<String> allFollowers = context.epochLeaderEngine.getAllFollowers();
-            java.util.List<String> allValidators = new java.util.ArrayList<>();
-            allValidators.add(context.selfUrl);
-            allValidators.addAll(allFollowers);
-            java.util.Collections.sort(allValidators);
-            
-            java.util.List<String> electorate = context.epochLeaderEngine.getElection().getAllValidators();
-            java.util.Collections.sort(electorate);
-            java.util.List<String> nonVotingFollowers = context.epochLeaderEngine.getNonVotingFollowers();
-            java.util.Collections.sort(nonVotingFollowers);
-            
-            // Calculate next leader
-            int currentEpoch = context.epochLeaderEngine.getCurrentEpoch();
-            String nextLeader = calculateNextLeader(currentEpoch, electorate);
-            
-            return new ConsensusState.Builder()
-                .consensusType("leader-based")
-                .currentRole(context.epochLeaderEngine.getCurrentRole().toString())
-                .currentLeader(context.epochLeaderEngine.getCurrentLeader())
-                .currentEpoch(currentEpoch)
-                .leaderTermSeconds(context.epochLeaderEngine.getElection().getLeaderTermSeconds())
-                .secondsUntilRotation(context.epochLeaderEngine.getElection().getSecondsUntilRotation())
-                .electorateSize(electorate.size())
-                .totalValidators(allValidators.size())
-                .allValidators(allValidators)
-                .electorate(electorate)
-                .nonVotingFollowers(nonVotingFollowers)
-                .nextLeader(nextLeader)
-                .selfUrl(context.selfUrl)
-                .build();
-        }
-        
-        // No consensus engine (same as API handler)
+        // No consensus engine configured
         return null;
     }
     
@@ -302,7 +261,7 @@ public class DashboardDataService {
     }
     
     /**
-     * Calculate next leader for next epoch (same logic as ConsensusStateService).
+     * Calculate next leader for next epoch using deterministic algorithm.
      */
     private String calculateNextLeader(int currentEpoch, java.util.List<String> electorate) {
         if (electorate.isEmpty()) {

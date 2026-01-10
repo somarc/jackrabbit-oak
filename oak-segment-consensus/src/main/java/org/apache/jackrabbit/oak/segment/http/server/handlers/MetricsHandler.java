@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
-import org.apache.jackrabbit.oak.segment.consensus.leader.EpochLeaderEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
@@ -42,7 +41,6 @@ import java.util.Map;
 public class MetricsHandler {
     private static final Logger log = LoggerFactory.getLogger(MetricsHandler.class);
     
-    private final EpochLeaderEngine epochLeaderEngine;
     private final AeronConsensusEngine aeronConsensusEngine;
     private final Path storeDirectory;
     private final Map<String, ?> registeredClients;
@@ -50,13 +48,11 @@ public class MetricsHandler {
     private final ServerContext context;
     
     public MetricsHandler(
-            EpochLeaderEngine epochLeaderEngine,
             AeronConsensusEngine aeronConsensusEngine,
             Path storeDirectory,
             Map<String, ?> registeredClients,
             Map<String, ?> registeredValidators,
             ServerContext context) {
-        this.epochLeaderEngine = epochLeaderEngine;
         this.aeronConsensusEngine = aeronConsensusEngine;
         this.storeDirectory = storeDirectory;
         this.registeredClients = registeredClients;
@@ -116,15 +112,6 @@ public class MetricsHandler {
             ConsensusMetrics.validatorsReachable.set(aeronConsensusEngine.getReachableValidatorCount());
             ConsensusMetrics.timeSinceLastHeartbeat.set(
                 (System.currentTimeMillis() - aeronConsensusEngine.getLastHeartbeatTime()) / 1000.0
-            );
-        } else if (epochLeaderEngine != null) {
-            ConsensusMetrics.updateLeaderStatus(
-                epochLeaderEngine.isLeader(),
-                epochLeaderEngine.getCurrentEpoch()
-            );
-            ConsensusMetrics.validatorsReachable.set(epochLeaderEngine.getReachableValidatorCount());
-            ConsensusMetrics.timeSinceLastHeartbeat.set(
-                (System.currentTimeMillis() - epochLeaderEngine.getLastHeartbeatTime()) / 1000.0
             );
         }
         

@@ -18,7 +18,6 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
-import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,7 +66,7 @@ public class PeerDiscoveryHandler {
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_OK);
             
-            // BLOCKCHAIN CONSENSUS: Use ConsensusStateService for single source of truth
+            // BLOCKCHAIN CONSENSUS: Use Aeron Cluster for single source of truth
             // This ensures /v1/peers returns the same validator list as /v1/consensus/status
             final long now = System.currentTimeMillis();
             final List<String> nonVotingFollowers;
@@ -96,20 +95,6 @@ public class PeerDiscoveryHandler {
                 // Convert to sorted list (ensures deterministic ordering)
                 allValidatorUrls = new ArrayList<>(validatorUrlSet);
                 Collections.sort(allValidatorUrls);
-            } else if (context.consensusStateService != null) {
-                // Use ConsensusStateService for normalized, deterministic state
-                ConsensusState state = context.consensusStateService.getConsensusState();
-                nonVotingFollowers = state.nonVotingFollowers;
-                allValidatorUrls = new ArrayList<>(state.allValidators); // Already sorted
-                leaderTermSeconds = state.leaderTermSeconds;
-            } else if (context.epochLeaderEngine != null) {
-                // Fallback to direct engine access (shouldn't happen if ConsensusStateService is set)
-                nonVotingFollowers = context.epochLeaderEngine.getNonVotingFollowers();
-                allValidatorUrls = new ArrayList<>();
-                allValidatorUrls.add(context.selfUrl);
-                allValidatorUrls.addAll(context.epochLeaderEngine.getAllFollowers());
-                Collections.sort(allValidatorUrls); // Deterministic ordering
-                leaderTermSeconds = context.epochLeaderEngine.getElection().getLeaderTermSeconds();
             } else {
                 // No consensus engine - standalone mode, but still show registered validators
                 nonVotingFollowers = new ArrayList<>();
@@ -187,34 +172,13 @@ public class PeerDiscoveryHandler {
                         }
                     }
                 } else {
-                    // EpochLeaderEngine or other consensus modes - use original logic
+                    // Standalone mode - use lastSeen for status
                     if (timeSinceLastSeen > offlineThresholdMs) {
                         status = "OFFLINE";
                     } else if (nonVotingFollowers.contains(validatorUrl)) {
-                        // Leader knows this validator is on probation
                         status = "PROBATION";
-                    } else if (isSelf && context.epochLeaderEngine != null) {
-                        // Self-check: Are WE still on probation?
-                        // Even if leader doesn't have us in nonVotingFollowers yet,
-                        // we know our own join time
-                        Map<String, Long> joinTimes = context.epochLeaderEngine.getValidatorJoinTimes();
-                        Long myJoinTime = joinTimes.get(context.selfUrl);
-                        
-                        if (myJoinTime != null) {
-                            long timeSinceJoin = now - myJoinTime;
-                            long probationPeriod = leaderTermSeconds * 1000L; // 300 seconds (1 epoch)
-                            
-                            if (timeSinceJoin < probationPeriod) {
-                                status = "PROBATION";  // Still within probationary period
-                            } else {
-                                status = "READY";  // Probation ended, fully participating
-                            }
-                        } else {
-                            // No join time recorded (shouldn't happen), assume READY
-                            status = "READY";
-                        }
                     } else {
-                        status = "READY";  // Voting member, fully participating
+                        status = "READY";
                     }
                 }
                 
@@ -241,19 +205,18 @@ public class PeerDiscoveryHandler {
                 json.append("\"lastSeen\":").append(lastSeen).append(",");
                 json.append("\"status\":\"").append(status).append("\"");
                 
-                // Add epoch information for probation status
-                if ("PROBATION".equals(status) && context.epochLeaderEngine != null) {
-                    Map<String, Long> joinTimes = context.epochLeaderEngine.getValidatorJoinTimes();
+                // Add epoch information for probation status (Aeron mode)
+                if ("PROBATION".equals(status) && context.aeronConsensusEngine != null) {
+                    Map<String, Long> joinTimes = context.aeronConsensusEngine.getValidatorJoinTimes();
                     Long joinTime = joinTimes.get(validatorUrl);
                     
                     if (joinTime != null) {
-                        // Reuse leaderTermSeconds from above (declared at line 3210)
                         long probationPeriod = leaderTermSeconds * 1000L;
                         long timeSinceJoin = now - joinTime;
                         
                         // Calculate epochs
                         int joinEpoch = (int) (joinTime / (leaderTermSeconds * 1000L));
-                        int currentEpoch = context.epochLeaderEngine.getCurrentEpoch();
+                        int currentEpoch = context.aeronConsensusEngine.getCurrentEpoch();
                         int eligibleEpoch = joinEpoch + 1; // Must wait 1 full epoch
                         
                         json.append(",");

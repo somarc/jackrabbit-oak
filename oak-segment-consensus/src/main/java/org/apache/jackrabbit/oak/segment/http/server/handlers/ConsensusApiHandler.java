@@ -23,7 +23,6 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
-import org.apache.jackrabbit.oak.segment.consensus.state.ConsensusState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -915,7 +914,7 @@ public class ConsensusApiHandler {
     /**
      * Handle GET /v1/consensus/status - Return comprehensive consensus state
      * 
-     * Uses ConsensusStateService for single source of truth.
+     * Uses Aeron Cluster for single source of truth.
      * 
      * Returns JSON with:
      * - consensusType: "leader-based" | "blockchain-poa" | "dag" | "none"
@@ -955,20 +954,6 @@ public class ConsensusApiHandler {
             status.put("reachableValidators", context.aeronConsensusEngine.getReachableValidatorCount());
             status.put("allFollowers", context.aeronConsensusEngine.getAllFollowers());
             status.put("ethereumEpoch", context.aeronConsensusEngine.getCurrentEthereumEpoch());
-        } else if (context.consensusStateService != null) {
-            // Use ConsensusStateService if available (leader-based consensus)
-            ConsensusState state = context.consensusStateService.getConsensusState();
-            status.put("consensusType", state.consensusType);
-            status.put("currentRole", state.currentRole);
-            status.put("currentLeader", state.currentLeader);
-            status.put("currentEpoch", state.currentEpoch);
-            status.put("leaderTermSeconds", state.leaderTermSeconds);
-            status.put("secondsUntilRotation", state.secondsUntilRotation);
-            status.put("electorateSize", state.electorateSize);
-            status.put("totalValidators", state.totalValidators);
-            status.put("nonVotingFollowers", state.nonVotingFollowers);
-            status.put("allValidators", state.allValidators);
-            status.put("nextLeader", state.nextLeader);
         } else {
             // No consensus engine
             status.put("consensusType", "none");
