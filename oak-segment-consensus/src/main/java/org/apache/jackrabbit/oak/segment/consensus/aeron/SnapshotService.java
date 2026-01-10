@@ -140,12 +140,25 @@ public class SnapshotService {
      * @throws Exception if snapshot creation fails
      */
     public void createSnapshot(ExclusivePublication pub, IdleStrategy idleStrategy) throws Exception {
+        createSnapshot(pub, idleStrategy, 0);
+    }
+    
+    /**
+     * Create a snapshot and stream to Aeron publication with epoch tracking.
+     * 
+     * @param pub snapshot publication
+     * @param idleStrategy idle strategy for publication
+     * @param currentEpoch current Ethereum epoch for snapshot metadata
+     * @throws Exception if snapshot creation fails
+     */
+    public void createSnapshot(ExclusivePublication pub, IdleStrategy idleStrategy, int currentEpoch) throws Exception {
         log.info("📸 Creating Aeron snapshot...");
         
         // Get current HEAD
         String currentHead = fileStore.getHead().getRecordId().toString();
-        int currentEpoch = 0; // TODO: get from epoch tracker
         long currentTimestamp = System.currentTimeMillis();
+        
+        log.info("Snapshot state - HEAD: {}, Epoch: {}, Dir: {}", currentHead, currentEpoch, storeDirectory);
         
         // Send metadata first
         sendSnapshotMetadata(pub, idleStrategy, currentHead, currentEpoch, currentTimestamp);
@@ -203,8 +216,6 @@ public class SnapshotService {
         final boolean[] metadataReceived = {false};
         
         // Fragment handler to process snapshot frames
-        org.agrona.concurrent.UnsafeBuffer reassemblyBuffer = new org.agrona.concurrent.UnsafeBuffer(new byte[2 * 1024 * 1024]); // 2MB
-        
         io.aeron.logbuffer.FragmentHandler fragmentHandler = (buffer, offset, length, header) -> {
             try {
                 processSnapshotFrame(buffer, offset, length, storeDir, 
@@ -290,7 +301,7 @@ public class SnapshotService {
         // Frame format: [type:4][filename_len:4][filename:N][data_len:4][data:N]
         frameOffset = offset;
         
-        int typeHash = buffer.getInt(frameOffset);
+        // Skip type hash (4 bytes)
         frameOffset += 4;
         
         int filenameLen = buffer.getInt(frameOffset);
@@ -426,20 +437,26 @@ public class SnapshotService {
     }
     
     /**
-     * Send snapshot metadata frame.
+     * Send snapshot metadata frame with SBE header.
      */
     private void sendSnapshotMetadata(ExclusivePublication pub, IdleStrategy idleStrategy,
                                      String head, int epoch, long timestamp) throws Exception {
         
-        String json = String.format("{\"type\":\"metadata\",\"head\":\"%s\",\"epoch\":%d,\"timestamp\":%d}",
+        // Use ethereumEpoch field name for compatibility with AeronConsensusEngine
+        String json = String.format("{\"type\":\"metadata\",\"head\":\"%s\",\"ethereumEpoch\":%d,\"timestamp\":%d}",
                                    head, epoch, timestamp);
         
         byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        UnsafeBuffer buffer = new UnsafeBuffer(new byte[jsonBytes.length + 4]);
-        buffer.putInt(0, jsonBytes.length);
-        buffer.putBytes(4, jsonBytes);
+        int totalLength = SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
+        UnsafeBuffer buffer = new UnsafeBuffer(new byte[totalLength]);
         
-        offerWithRetry(pub, idleStrategy, buffer, 0, buffer.capacity());
+        // Encode SBE header
+        SimpleMessageHeader.encode(buffer, 0, jsonBytes.length, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT);
+        
+        // Copy JSON payload after header
+        buffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+        
+        offerWithRetry(pub, idleStrategy, buffer, 0, totalLength);
         
         log.debug("📤 Sent snapshot metadata: head={}", head);
     }
@@ -479,7 +496,9 @@ public class SnapshotService {
     }
     
     /**
-     * Stream a single file to snapshot publication.
+     * Stream a single file to snapshot publication with SBE header.
+     * 
+     * <p>First sends a file_header JSON message, then streams file chunks.
      */
     private void streamFile(ExclusivePublication pub, IdleStrategy idleStrategy, 
                            File file, String fileType) throws Exception {
@@ -487,34 +506,35 @@ public class SnapshotService {
         final int CHUNK_SIZE = 1024 * 1024; // 1 MB chunks
         byte[] chunkBuffer = new byte[CHUNK_SIZE];
         
+        // Send file header first
+        String headerJson = String.format(
+            "{\"type\":\"file_header\",\"fileType\":\"%s\",\"fileName\":\"%s\",\"fileSize\":%d}",
+            fileType, file.getName(), file.length()
+        );
+        byte[] headerBytes = headerJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int headerTotalLength = SimpleMessageHeader.ENCODED_LENGTH + headerBytes.length;
+        UnsafeBuffer headerBuffer = new UnsafeBuffer(new byte[headerTotalLength]);
+        SimpleMessageHeader.encode(headerBuffer, 0, headerBytes.length, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT);
+        headerBuffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, headerBytes);
+        offerWithRetry(pub, idleStrategy, headerBuffer, 0, headerTotalLength);
+        
+        // Stream file chunks
         try (FileInputStream fis = new FileInputStream(file)) {
             long totalBytes = 0;
             int bytesRead;
             
             while ((bytesRead = fis.read(chunkBuffer)) != -1) {
-                // Frame format: [type:4][filename_len:4][filename:N][data_len:4][data:N]
-                byte[] filenameBytes = file.getName().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                int frameSize = 4 + 4 + filenameBytes.length + 4 + bytesRead;
+                // Chunk format: [SBE header][chunk data]
+                int chunkTotalLength = SimpleMessageHeader.ENCODED_LENGTH + bytesRead;
+                UnsafeBuffer buffer = new UnsafeBuffer(new byte[chunkTotalLength]);
                 
-                UnsafeBuffer buffer = new UnsafeBuffer(new byte[frameSize]);
-                int offset = 0;
+                // Encode SBE header
+                SimpleMessageHeader.encode(buffer, 0, bytesRead, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT);
                 
-                // Type
-                buffer.putInt(offset, fileType.hashCode());
-                offset += 4;
+                // Copy chunk data
+                buffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, chunkBuffer, 0, bytesRead);
                 
-                // Filename length + filename
-                buffer.putInt(offset, filenameBytes.length);
-                offset += 4;
-                buffer.putBytes(offset, filenameBytes);
-                offset += filenameBytes.length;
-                
-                // Data length + data
-                buffer.putInt(offset, bytesRead);
-                offset += 4;
-                buffer.putBytes(offset, chunkBuffer, 0, bytesRead);
-                
-                offerWithRetry(pub, idleStrategy, buffer, 0, frameSize);
+                offerWithRetry(pub, idleStrategy, buffer, 0, chunkTotalLength);
                 
                 totalBytes += bytesRead;
             }

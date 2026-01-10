@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import io.aeron.ExclusivePublication;
 import io.aeron.Image;
 import io.aeron.cluster.codecs.CloseReason;
 import io.aeron.cluster.service.ClientSession;
@@ -176,11 +175,6 @@ public class AeronConsensusEngine implements ClusteredService {
     
     // Map node IDs to URLs for leader lookup
     private final Map<Integer, String> nodeIdToUrl = new ConcurrentHashMap<>();
-    
-    // Leader discovery cache (performance optimization)
-    private volatile String cachedLeaderUrl = null;
-    private volatile long cachedLeaderTimestamp = 0;
-    private static final long LEADER_CACHE_TTL_MS = 10000; // 10 seconds
     
     // Write throughput tracking (for periodic summary logging)
     private final java.util.concurrent.atomic.AtomicLong totalWritesProcessed = new java.util.concurrent.atomic.AtomicLong(0);
@@ -372,7 +366,6 @@ public class AeronConsensusEngine implements ClusteredService {
             
             // Start background timer for checking pending HEAD broadcasts
             // This ensures broadcasts happen even when no new writes arrive
-            running = true;
             startHeadBroadcastTimer();
             
             log.info("Aeron Consensus Engine started - Status: Ready");
@@ -390,7 +383,6 @@ public class AeronConsensusEngine implements ClusteredService {
         log.info("🛑 Stopping Aeron Consensus Engine...");
         
         // Stop background timer
-        running = false;
         stopHeadBroadcastTimer();
         
         // TODO: Close Aeron Cluster components once initialized
@@ -603,166 +595,22 @@ public class AeronConsensusEngine implements ClusteredService {
         log.info("Taking FileStore snapshot");
         
         try {
-            // Get current state
-            String currentHead = fileStore.getHead().getRecordId().toString();
-            int currentEpoch = currentEthereumEpoch;
-            long timestamp = System.currentTimeMillis();
-            
-            log.info("Snapshot state - HEAD: {}, Epoch: {}, Dir: {}", currentHead, currentEpoch, storeDirectory);
-            
             // Use idleStrategy if available
             org.agrona.concurrent.IdleStrategy strategy = idleStrategy != null 
                 ? idleStrategy 
                 : new org.agrona.concurrent.BusySpinIdleStrategy();
             
-            // 1. Send metadata header
-            sendSnapshotMetadata(snapshotPublication, currentHead, currentEpoch, timestamp, strategy);
+            // ✅ REFACTORED: Delegate to SnapshotService
+            snapshotService.createSnapshot(snapshotPublication, strategy, currentEthereumEpoch);
             
-            // 2. Stream TAR files
-            streamTarFiles(snapshotPublication, strategy);
-            
-            // 3. Stream journal.log
-            streamJournal(snapshotPublication, strategy);
-            
-            log.info("FileStore snapshot complete - HEAD: {}, Epoch: {}", currentHead, currentEpoch);
         } catch (Exception e) {
             log.error("Failed to take snapshot", e);
         }
     }
     
-    private void sendSnapshotMetadata(io.aeron.ExclusivePublication pub, String head, int epoch, long timestamp, 
-                                      org.agrona.concurrent.IdleStrategy strategy) throws Exception {
-        // Create metadata JSON
-        String json = String.format(
-            "{\"type\":\"metadata\",\"head\":\"%s\",\"ethereumEpoch\":%d,\"timestamp\":%d}",
-            head, epoch, timestamp
-        );
-        
-        byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-        org.agrona.concurrent.UnsafeBuffer buffer = new org.agrona.concurrent.UnsafeBuffer(new byte[totalLength]);
-        
-        // Encode SBE header
-        org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
-            buffer, 0, jsonBytes.length, 
-            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT
-        );
-        buffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
-        
-        offerWithRetry(pub, buffer, 0, totalLength, strategy, "metadata");
-        log.info("Sent snapshot metadata ({} bytes)", totalLength);
-    }
-    
-    private void streamTarFiles(io.aeron.ExclusivePublication pub, org.agrona.concurrent.IdleStrategy strategy) throws Exception {
-        java.io.File storeDir = new java.io.File(storeDirectory);
-        java.io.File[] tarFiles = storeDir.listFiles((dir, name) -> name.endsWith(".tar"));
-        
-        if (tarFiles == null || tarFiles.length == 0) {
-            log.warn("No TAR files found in {}", storeDirectory);
-            return;
-        }
-        
-        log.info("Streaming {} TAR files", tarFiles.length);
-        
-        for (java.io.File tarFile : tarFiles) {
-            streamFile(pub, tarFile, "tar", strategy);
-        }
-    }
-    
-    private void streamJournal(io.aeron.ExclusivePublication pub, org.agrona.concurrent.IdleStrategy strategy) throws Exception {
-        java.io.File journalFile = new java.io.File(storeDirectory, "journal.log");
-        if (!journalFile.exists()) {
-            log.warn("journal.log not found in {}", storeDirectory);
-            return;
-        }
-        
-        log.info("Streaming journal.log");
-        streamFile(pub, journalFile, "journal", strategy);
-    }
-    
-    private void streamFile(io.aeron.ExclusivePublication pub, java.io.File file, String fileType, 
-                           org.agrona.concurrent.IdleStrategy strategy) throws Exception {
-        String fileName = file.getName();
-        long fileSize = file.length();
-        
-        log.info("Streaming {} file: {} ({} bytes)", fileType, fileName, fileSize);
-        
-        // Send file header
-        String headerJson = String.format(
-            "{\"type\":\"file_header\",\"fileType\":\"%s\",\"fileName\":\"%s\",\"fileSize\":%d}",
-            fileType, fileName, fileSize
-        );
-        byte[] headerBytes = headerJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        int headerTotalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + headerBytes.length;
-        org.agrona.concurrent.UnsafeBuffer headerBuffer = new org.agrona.concurrent.UnsafeBuffer(new byte[headerTotalLength]);
-        
-        org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
-            headerBuffer, 0, headerBytes.length,
-            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT
-        );
-        headerBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, headerBytes);
-        
-        offerWithRetry(pub, headerBuffer, 0, headerTotalLength, strategy, "file_header:" + fileName);
-        
-        // Stream file contents in chunks (1MB chunks to avoid MTU issues)
-        int CHUNK_SIZE = 1024 * 1024; // 1MB
-        byte[] chunk = new byte[CHUNK_SIZE];
-        long bytesStreamed = 0;
-        int chunkIndex = 0;
-        
-        try (java.io.FileInputStream fis = new java.io.FileInputStream(file)) {
-            int bytesRead;
-            while ((bytesRead = fis.read(chunk)) > 0) {
-                // Send chunk with header
-                int chunkTotalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + bytesRead;
-                org.agrona.concurrent.UnsafeBuffer chunkBuffer = new org.agrona.concurrent.UnsafeBuffer(new byte[chunkTotalLength]);
-                
-                org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
-                    chunkBuffer, 0, bytesRead,
-                    org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT
-                );
-                chunkBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, chunk, 0, bytesRead);
-                
-                offerWithRetry(pub, chunkBuffer, 0, chunkTotalLength, strategy, "chunk:" + chunkIndex);
-                
-                bytesStreamed += bytesRead;
-                chunkIndex++;
-                
-                if (chunkIndex % 10 == 0) {
-                    log.debug("Streamed {}/{} bytes ({} chunks)", bytesStreamed, fileSize, chunkIndex);
-                }
-            }
-        }
-        
-        log.info("Streamed {}: {} bytes in {} chunks", fileName, bytesStreamed, chunkIndex);
-    }
-    
-    private void offerWithRetry(io.aeron.ExclusivePublication pub, org.agrona.concurrent.UnsafeBuffer buffer, 
-                                int offset, int length, org.agrona.concurrent.IdleStrategy strategy, 
-                                String context) throws Exception {
-        strategy.reset();
-        long result;
-        int retries = 0;
-        int maxRetries = 1000; // Increased for large snapshots
-        
-        while ((result = pub.offer(buffer, offset, length)) < 0) {
-            if (result == io.aeron.Publication.BACK_PRESSURED) {
-                strategy.idle();
-                retries++;
-                if (retries > maxRetries) {
-                    throw new Exception("Snapshot back-pressured after " + retries + " retries (" + context + ")");
-                }
-            } else if (result == io.aeron.Publication.NOT_CONNECTED) {
-                strategy.idle();
-                retries++;
-                if (retries > maxRetries) {
-                    throw new Exception("Snapshot publication not connected after " + retries + " retries (" + context + ")");
-                }
-            } else {
-                throw new Exception("Failed to send snapshot (" + context + "): " + result);
-            }
-        }
-    }
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // MESSAGE PROCESSING (delegated to MessageDispatcher)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
     @Override
     public void onSessionMessage(ClientSession session, long timestamp, DirectBuffer buffer, 
@@ -841,43 +689,6 @@ public class AeronConsensusEngine implements ClusteredService {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // JSON PARSING HELPERS (used by snapshot loading and HEAD sync)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Helper to extract JSON field value for integer fields.
-     */
-    private Integer extractJsonFieldInt(String json, String field) {
-        String pattern = "\"" + field + "\":";
-        int start = json.indexOf(pattern);
-        if (start == -1) return null;
-        start += pattern.length();
-        int end = json.indexOf(",", start);
-        if (end == -1) {
-            end = json.indexOf("}", start);
-        }
-        if (end == -1) return null;
-        try {
-            return Integer.parseInt(json.substring(start, end).trim());
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-    
-    /**
-     * Helper to extract JSON field value for boolean fields.
-     */
-    private Boolean extractJsonFieldBoolean(String json, String field) {
-        String pattern = "\"" + field + "\":";
-        int start = json.indexOf(pattern);
-        if (start == -1) return null;
-        start += pattern.length();
-        int end = json.indexOf(",", start);
-        if (end == -1) {
-            end = json.indexOf("}", start);
-        }
-        if (end == -1) return null;
-        String value = json.substring(start, end).trim();
-        return "true".equals(value);
-    }
     
     /**
      * Helper to extract JSON field value for numeric fields.
@@ -2210,8 +2021,7 @@ public class AeronConsensusEngine implements ClusteredService {
         log.debug("Leadership history: {} total changes", leadershipHistory.size());
         
         // Invalidate leader cache on any role change
-        cachedLeaderUrl = null;
-        cachedLeaderTimestamp = 0;
+        leaderDiscoveryService.invalidateCache();
         
         if (newRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Now LEADER (term: {})", currentTerm);
@@ -2407,7 +2217,6 @@ public class AeronConsensusEngine implements ClusteredService {
     // Background timer for checking pending HEAD broadcasts
     // Ensures broadcasts happen even when no new writes arrive
     private java.util.concurrent.ScheduledExecutorService headBroadcastTimer = null;
-    private volatile boolean running = false;
     
     /**
      * Schedule HEAD broadcast (batched for efficiency during epoch bursts).
@@ -2770,7 +2579,6 @@ public class AeronConsensusEngine implements ClusteredService {
                 String responseJson = responseBody.toString();
                 String leaderCommittedHead = extractJsonField(responseJson, "committedHead");
                 String leaderLatestHead = extractJsonField(responseJson, "latestHead");
-                String leaderLatestEpochSeenStr = extractJsonField(responseJson, "latestEpochSeen");
                 String leaderCommittedEpochStr = extractJsonField(responseJson, "committedEpoch");
                 
                 // Determine which HEAD to sync:
@@ -3068,6 +2876,8 @@ public class AeronConsensusEngine implements ClusteredService {
      * 
      * ✈️ AERON NATIVE: Uses cluster.clusterMembers() to find leader directly from Aeron.
      * This is the authoritative source - no HTTP API calls needed.
+     * 
+     * ✅ REFACTORED: Delegates to LeaderDiscoveryService for leader discovery.
      */
     public String getCurrentLeader() {
         if (cluster == null) {
@@ -3079,27 +2889,11 @@ public class AeronConsensusEngine implements ClusteredService {
             return selfUrl;
         }
         
-        // ✈️ AERON NATIVE: Find leader from our nodeIdToUrl mapping
-        // Since Aeron doesn't expose clusterMembers() directly, we use our mapping
-        // The leader is identified by cluster.role() == LEADER for this node
-        // For followers, we need to discover via our mapping or fallback to HTTP API
-        
-        // Try to find leader from nodeIdToUrl mapping
-        // If we have a mapping, check if any member is the leader
-        // (For now, we'll need to query peers or use HTTP API as fallback)
-        
-        // Fallback: Use HTTP API discovery if native APIs don't provide leader info
-        if (peerUrls != null && !peerUrls.isEmpty()) {
-            try {
-                log.debug("🔍 getCurrentLeader() using fallback discovery from {} peers", peerUrls.size());
-                String leaderUrl = discoverLeaderFromAeronClusterState();
-                if (leaderUrl != null) {
-                    this.currentLeader = leaderUrl;
-                    return leaderUrl;
-                }
-            } catch (Exception e) {
-                log.debug("Fallback leader discovery failed: {}", e.getMessage());
-            }
+        // ✅ REFACTORED: Delegate to LeaderDiscoveryService
+        String leaderUrl = leaderDiscoveryService.discoverLeader(cluster);
+        if (leaderUrl != null) {
+            this.currentLeader = leaderUrl;
+            return leaderUrl;
         }
         
         return currentLeader;
@@ -3277,93 +3071,18 @@ public class AeronConsensusEngine implements ClusteredService {
      * 3. FALLBACK: Query /v1/aeron/cluster-state from peers (only during initial formation)
      * 
      * ⚡ PERFORMANCE: Once cluster is formed and leader discovered, essentially zero cost.
+     * 
+     * ✅ REFACTORED: Delegates to LeaderDiscoveryService for leader discovery.
      */
     private String discoverLeaderFromAeronClusterState() {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // STEP 1: Use tracked currentLeader (set by onRoleChange)
         if (currentLeader != null && currentLeader.equals(selfUrl)) {
-            cachedLeaderUrl = currentLeader;
-            cachedLeaderTimestamp = System.currentTimeMillis();
             return currentLeader;
         }
         
-        // STEP 2: Check cache before making HTTP calls
-        long now = System.currentTimeMillis();
-        if (cachedLeaderUrl != null && (now - cachedLeaderTimestamp) < LEADER_CACHE_TTL_MS) {
-            log.trace("Using cached leader: {} (age: {}ms)", cachedLeaderUrl, now - cachedLeaderTimestamp);
-            return cachedLeaderUrl;
-        }
-        
-        // STEP 3: Fallback - query peers via HTTP (only during cluster formation)
-        log.debug("Falling back to HTTP peer queries (leader not yet discovered)");
-        
-        // ✈️ AERON CLUSTER STATE API: Query /v1/aeron/cluster-state from peers
-        // This endpoint reflects Aeron's internal Raft state and is the authoritative source
-        java.util.List<String> allUrls = new java.util.ArrayList<>(peerUrls);
-        allUrls.add(selfUrl);
-        
-        log.debug("Querying Aeron Cluster state from {} nodes (cache miss)", allUrls.size());
-        
-        for (String url : allUrls) {
-            try {
-                // Ensure URL is IP-based for reliable networking (unless it's ngrok)
-                String queryUrl = url.contains("ngrok") ? url : resolveUrlToIP(url);
-                java.net.URL apiUrl = new java.net.URL(queryUrl + "/v1/aeron/cluster-state");
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
-                conn.setRequestMethod("GET");
-                // Bypass ngrok warning page (free tier requirement)
-                if (url.contains("ngrok")) {
-                    conn.setRequestProperty("ngrok-skip-browser-warning", "true");
-                }
-                conn.setConnectTimeout(2000);
-                conn.setReadTimeout(3000);
-                
-                int responseCode = conn.getResponseCode();
-                if (responseCode == 200) {
-                    java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(conn.getInputStream())
-                    );
-                    String response = reader.lines().collect(java.util.stream.Collectors.joining());
-                    reader.close();
-                    
-                    // Parse Aeron Cluster state JSON to find leader
-                    // Response format: {"members": [{"role": "LEADER", "url": "http://..."}, ...]}
-                    try {
-                        // Simple JSON parsing: look for leader in members array
-                        // First check if this node reports itself as leader
-                        if (response.contains("\"isLeader\":true") || response.contains("\"role\":\"LEADER\"")) {
-                            // Extract leader URL from members array
-                            // Look for pattern: "role":"LEADER" followed by "url":"..."
-                            int leaderRoleIndex = response.indexOf("\"role\":\"LEADER\"");
-                            if (leaderRoleIndex != -1) {
-                                // Find the URL field in the same member object
-                                int urlStart = response.indexOf("\"url\":\"", leaderRoleIndex);
-                                if (urlStart != -1) {
-                                    urlStart += 7; // Skip past "url":"
-                                    int urlEnd = response.indexOf("\"", urlStart);
-                                    if (urlEnd != -1) {
-                                        String leaderUrl = response.substring(urlStart, urlEnd);
-                                        log.debug("Found leader via Aeron Cluster state: {} (from {})", leaderUrl, url);
-                                        // Update cache
-                                        cachedLeaderUrl = leaderUrl;
-                                        cachedLeaderTimestamp = System.currentTimeMillis();
-                                        return leaderUrl;
-                                    }
-                                }
-                            }
-                            // Fallback: if we found isLeader:true, return the queried URL
-                            log.info("Found leader (isLeader:true): {} (from {})", url, url);
-                            return url;
-                        }
-                    } catch (Exception parseEx) {
-                        log.debug("Failed to parse Aeron Cluster state from {}: {}", url, parseEx.getMessage());
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("Failed to query Aeron Cluster state from {}: {}", url, e.getMessage());
-            }
-        }
-        return null;
+        // ✅ REFACTORED: Delegate to LeaderDiscoveryService
+        return leaderDiscoveryService.discoverLeader(cluster);
     }
     
     /**
@@ -3389,44 +3108,12 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Resolve hostname-based URL to IP-based URL for reliable networking.
-     * Similar to GlobalStoreServer.resolveUrlToIP() but available in this class.
-     */
-    private String resolveUrlToIP(String url) {
-        try {
-            java.net.URL parsedUrl = new java.net.URL(url);
-            String hostname = parsedUrl.getHost();
-            int port = parsedUrl.getPort();
-            String protocol = parsedUrl.getProtocol();
-            String path = parsedUrl.getPath();
-            
-            // If already an IP address, return as-is
-            if (hostname.matches("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) {
-                return url;
-            }
-            
-            // Resolve hostname to IP
-            try {
-                String ip = java.net.InetAddress.getByName(hostname).getHostAddress();
-                return String.format("%s://%s%s%s", 
-                    protocol, 
-                    ip, 
-                    port != -1 ? ":" + port : "", 
-                    path != null ? path : "");
-            } catch (java.net.UnknownHostException e) {
-                // If resolution fails, return original URL (may be ngrok/Ethos URL)
-                return url;
-            }
-        } catch (Exception e) {
-            return url;
-        }
-    }
-    
-    /**
      * Background task to discover leader from peers via Aeron Cluster state (called when becoming follower).
      * 
      * ✈️ AERON CLUSTER SOURCE OF TRUTH:
      * Uses /v1/aeron/cluster-state API which reflects Aeron's internal Raft state.
+     * 
+     * ✅ REFACTORED: Delegates to LeaderDiscoveryService for leader discovery.
      */
     private void discoverLeaderFromPeers() {
         // Run in background thread to avoid blocking
@@ -3441,18 +3128,20 @@ public class AeronConsensusEngine implements ClusteredService {
             try {
                 Thread.sleep(3000); // Wait 3s for cluster to stabilize
                 log.debug("Starting Aeron Cluster leader discovery");
-                String leaderUrl = discoverLeaderFromAeronClusterState();
+                
+                // ✅ REFACTORED: Delegate to LeaderDiscoveryService
+                String leaderUrl = leaderDiscoveryService.discoverLeader(cluster);
                 if (leaderUrl != null) {
                     this.currentLeader = leaderUrl;
-                    log.info("Discovered leader via Aeron Cluster state: {} (background discovery)", leaderUrl);
+                    log.info("Discovered leader via LeaderDiscoveryService: {} (background discovery)", leaderUrl);
                 } else {
-                    log.debug("Could not discover leader from Aeron Cluster state (will retry)");
+                    log.debug("Could not discover leader from LeaderDiscoveryService (will retry)");
                     // Try again after a longer delay
                     Thread.sleep(5000);
-                    leaderUrl = discoverLeaderFromAeronClusterState();
+                    leaderUrl = leaderDiscoveryService.discoverLeader(cluster);
                     if (leaderUrl != null) {
                         this.currentLeader = leaderUrl;
-                        log.info("Discovered leader via Aeron Cluster state: {} (retry)", leaderUrl);
+                        log.info("Discovered leader via LeaderDiscoveryService: {} (retry)", leaderUrl);
                     }
                 }
             } catch (Exception e) {
