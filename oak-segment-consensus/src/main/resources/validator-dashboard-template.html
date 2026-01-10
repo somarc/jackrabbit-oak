@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{VALIDATOR_TITLE}}</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%231a1a1a;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%230a0a0a;stop-opacity:1' /%3E%3C/linearGradient%3E%3ClinearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%2300ffd5;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%237c3aed;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='url(%23bg)'/%3E%3Cpath d='M16 8L8 12l8 4 8-4-8-4z' fill='url(%23grad)' stroke='%2300ffd5' stroke-width='1.2' stroke-linejoin='round'/%3E%3Cpath d='M8 18l8 4 8-4' fill='none' stroke='%2300ffd5' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round' opacity='0.7'/%3E%3Cpath d='M8 22l8 4 8-4' fill='none' stroke='%2300ffd5' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round' opacity='0.5'/%3E%3C/svg%3E">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -747,8 +748,8 @@
         
         /* Economic Finality Tiers */
         .tiers-container {
-            background: var(--bg-elevated);
-            border: 1px solid var(--border-subtle);
+            background: linear-gradient(135deg, rgba(124, 58, 237, 0.03), rgba(0, 163, 204, 0.03));
+            border: 1px solid rgba(124, 58, 237, 0.15);
             border-radius: var(--radius-lg);
             padding: 24px;
             margin-bottom: 32px;
@@ -757,7 +758,10 @@
         .tiers-title {
             font-size: 16px;
             font-weight: 700;
-            color: var(--accent-tertiary);
+            background: linear-gradient(135deg, #7c3aed, #00a3cc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
             margin-bottom: 16px;
             display: flex;
             align-items: center;
@@ -775,7 +779,40 @@
             background: var(--bg-surface);
             border: 1px solid var(--border-subtle);
             border-radius: var(--radius-md);
-            padding: 16px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.2s ease;
+        }
+        
+        .tier-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+        }
+        
+        .tier-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--tier-color-1), var(--tier-color-2));
+        }
+        
+        .tier-standard {
+            --tier-color-1: #cd7f32;
+            --tier-color-2: #b8860b;
+        }
+        
+        .tier-express {
+            --tier-color-1: #c0c0c0;
+            --tier-color-2: #e8e8e8;
+        }
+        
+        .tier-priority {
+            --tier-color-1: #ffd700;
+            --tier-color-2: #ffed4e;
         }
         
         .tier-label {
@@ -786,15 +823,16 @@
             margin-bottom: 8px;
         }
         
-        .tier-standard .tier-label { color: #f97316; }
-        .tier-express .tier-label { color: var(--accent-gold); }
-        .tier-priority .tier-label { color: var(--success); }
+        .tier-standard .tier-label { color: #cd7f32; }
+        .tier-express .tier-label { color: #c0c0c0; }
+        .tier-priority .tier-label { color: var(--accent-gold); }
         
         .tier-value {
-            font-size: 24px;
+            font-size: 28px;
             font-weight: 700;
             color: var(--text-primary);
             margin-bottom: 4px;
+            font-family: var(--font-mono);
         }
         
         .tier-cost {
@@ -809,21 +847,23 @@
         }
         
         .tiers-economics {
-            background: var(--bg-surface);
+            background: rgba(34, 211, 238, 0.05);
+            border-left: 3px solid rgba(34, 211, 238, 0.3);
             border-radius: var(--radius-sm);
             padding: 12px 16px;
             font-size: 13px;
             color: var(--text-secondary);
+            line-height: 1.6;
         }
         
         .tiers-economics strong {
-            color: var(--accent-gold);
+            color: #22d3ee;
         }
         
         /* EVM Verification Stats */
         .evm-stats-container {
-            background: var(--bg-elevated);
-            border: 1px solid var(--border-subtle);
+            background: linear-gradient(135deg, rgba(88, 166, 255, 0.03), rgba(63, 185, 80, 0.03));
+            border: 1px solid rgba(88, 166, 255, 0.15);
             border-radius: var(--radius-lg);
             padding: 24px;
             margin-bottom: 32px;
@@ -832,7 +872,10 @@
         .evm-stats-title {
             font-size: 16px;
             font-weight: 700;
-            color: var(--error);
+            background: linear-gradient(135deg, #58a6ff, #3fb950);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
             margin-bottom: 16px;
             display: flex;
             align-items: center;
@@ -849,20 +892,38 @@
         .evm-stat-card {
             background: var(--bg-surface);
             border-radius: var(--radius-md);
-            padding: 16px;
-            border-left: 4px solid;
+            padding: 20px;
+            border: 1px solid var(--border-subtle);
+            position: relative;
+            overflow: hidden;
+            transition: all 0.2s ease;
+        }
+        
+        .evm-stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+        }
+        
+        .evm-stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--card-accent);
         }
         
         .evm-unverified {
-            border-left-color: var(--warning);
+            --card-accent: linear-gradient(90deg, #f0b429, #fbbf24);
         }
         
         .evm-verified {
-            border-left-color: var(--success);
+            --card-accent: linear-gradient(90deg, #3fb950, #4ade80);
         }
         
         .evm-rejected {
-            border-left-color: var(--error);
+            --card-accent: linear-gradient(90deg, #8b5cf6, #a78bfa);
         }
         
         .evm-stat-label {
@@ -875,15 +936,15 @@
         }
         
         .evm-stat-value {
-            font-size: 32px;
+            font-size: 36px;
             font-weight: 700;
             font-family: var(--font-mono);
             margin-bottom: 4px;
         }
         
-        .evm-unverified .evm-stat-value { color: var(--warning); }
-        .evm-verified .evm-stat-value { color: var(--success); }
-        .evm-rejected .evm-stat-value { color: var(--error); }
+        .evm-unverified .evm-stat-value { color: #f0b429; }
+        .evm-verified .evm-stat-value { color: #3fb950; }
+        .evm-rejected .evm-stat-value { color: #a78bfa; }
         
         .evm-stat-caption {
             font-size: 12px;
@@ -1122,21 +1183,95 @@
                 <div class="stat-label">TAR FILES</div>
                 <div class="stat-value" style="font-size: 48px;">{{TAR_FILE_COUNT}}</div>
                 <div class="stat-caption">Total TAR file generations</div>
+                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 11px; color: #9ca3af;">
+                    <div style="margin-bottom: 4px;">📦 Segments: <strong>{{SEGMENT_COUNT}}</strong></div>
+                    <div style="opacity: 0.8;">New TAR created every ~256 MB of writes</div>
+                </div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">TOTAL SIZE</div>
                 <div class="stat-value" style="font-size: 48px;">{{TAR_TOTAL_SIZE}}</div>
                 <div class="stat-caption">Combined size of all TAR files</div>
+                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 11px; color: #9ca3af;">
+                    <div style="margin-bottom: 4px;">📊 Range: {{TAR_MIN_SIZE}} to {{TAR_MAX_SIZE}}</div>
+                    <div style="opacity: 0.8;">Excludes binary BlobStore</div>
+                </div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">AVG TAR SIZE</div>
                 <div class="stat-value" style="font-size: 48px;">{{TAR_AVG_SIZE}}</div>
-                <div class="stat-caption">Average: {{TAR_AVG_SIZE}} (max: {{TAR_MAX_SIZE}}, min: {{TAR_MIN_SIZE}})</div>
+                <div class="stat-caption">Mean TAR file size (target: ~256 MB)</div>
+                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 11px; color: #9ca3af;">
+                    <div style="margin-bottom: 4px;">📈 Max: {{TAR_MAX_SIZE}} | Min: {{TAR_MIN_SIZE}}</div>
+                    <div style="opacity: 0.8;">Lower avg = more fragmentation</div>
+                </div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">PACKING EFFICIENCY</div>
-                <div class="stat-value" style="font-size: 48px;">{{PACKING_EFFICIENCY}}%</div>
+                <div class="stat-value" style="font-size: 48px; color: {{PACKING_COLOR}};">{{PACKING_EFFICIENCY}}%</div>
                 <div class="stat-caption">{{PACKING_STATUS}}</div>
+                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 11px; color: #9ca3af;">
+                    <div style="margin-bottom: 4px;">📐 Formula: Avg Size ÷ 256 MB × 100%</div>
+                    <div style="opacity: 0.8;">Target: >50% (triggers fragmentation tax)</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Packing Efficiency Explanation -->
+        <div style="background: rgba(0, 0, 0, 0.3); border-radius: 12px; padding: 20px; margin-bottom: 24px; border-left: 3px solid {{PACKING_BORDER_COLOR}};">
+            <div style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: {{PACKING_COLOR}};">
+                💡 What This Means
+            </div>
+            <div style="font-size: 13px; line-height: 1.6; color: #d1d5db;">
+                <p style="margin-bottom: 8px;">
+                    <strong>Packing Efficiency</strong> measures how well your content fills TAR files before Oak creates a new generation.
+                    Oak's maximum TAR file size is <strong>256 MB</strong>.
+                </p>
+                <ul style="margin-left: 20px; margin-bottom: 8px;">
+                    <li><strong>&lt;10%</strong> 🔴 Many small TAR files (inefficient, high fragmentation tax)</li>
+                    <li><strong>10-50%</strong> 🟡 Moderate efficiency (typical during growth phase)</li>
+                    <li><strong>&gt;50%</strong> 🟢 Good efficiency (well-packed, lower tax)</li>
+                </ul>
+                <p style="margin-top: 12px; padding: 8px; background: rgba(34, 211, 238, 0.1); border-radius: 6px; border-left: 2px solid #22d3ee;">
+                    <strong>Why It Matters:</strong> Low packing efficiency indicates fragmentation, which triggers higher storage tax multipliers
+                    and may require compaction. Aim for TAR files close to 256 MB for optimal storage economics.
+                </p>
+            </div>
+        </div>
+        
+        <!-- TAR File Chain Visualization -->
+        <div class="section-header">🔗 TAR File Chain</div>
+        
+        <div style="background: rgba(0, 0, 0, 0.3); border-radius: 12px; padding: 24px; margin-bottom: 24px; border: 1px solid rgba(0, 255, 255, 0.1);">
+            <div style="color: #9ca3af; margin-bottom: 16px; font-size: 13px;">
+                Sequential TAR file generations showing segment grouping over time. Each block represents a TAR file, sized proportionally.
+            </div>
+            
+            <!-- TAR Chain Container -->
+            <div id="tarChainContainer" style="position: relative; min-height: 200px;">
+                <div style="text-align: center; padding: 60px 20px; color: #6b7280;">
+                    <div style="font-size: 24px; margin-bottom: 12px;">⏳</div>
+                    <div>Loading TAR file chain...</div>
+                </div>
+            </div>
+            
+            <!-- Legend -->
+            <div style="display: flex; gap: 24px; margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px;">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <div style="width: 20px; height: 14px; background: #4ade80; border-radius: 3px;"></div>
+                    <span style="color: #9ca3af;">Well-packed (&gt;50%)</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <div style="width: 20px; height: 14px; background: #fbbf24; border-radius: 3px;"></div>
+                    <span style="color: #9ca3af;">Moderate (10-50%)</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <div style="width: 20px; height: 14px; background: #f87171; border-radius: 3px;"></div>
+                    <span style="color: #9ca3af;">Inefficient (&lt;10%)</span>
+                </div>
+                <div style="margin-left: auto; color: #6b7280;">
+                    Target size: <strong style="color: #22d3ee;">256 MB</strong>
+                </div>
             </div>
         </div>
         
@@ -1212,6 +1347,140 @@
                 setTimeout(() => btn.textContent = '📋 Copy', 2000);
             });
         }
+        
+        // Render TAR file chain visualization
+        async function renderTarChain() {
+            const container = document.getElementById('tarChainContainer');
+            
+            try {
+                const response = await fetch('/api/segments/tars');
+                if (!response.ok) throw new Error('Failed to fetch TAR data');
+                
+                const tarFiles = await response.json();
+                
+                if (!tarFiles || tarFiles.length === 0) {
+                    container.innerHTML = '<div style="text-align: center; padding: 60px 20px; color: #6b7280;">No TAR files found</div>';
+                    return;
+                }
+                
+                // Calculate max size for scaling
+                const maxTarSize = 256 * 1024 * 1024; // 256 MB target
+                const largestActual = Math.max(...tarFiles.map(t => t.size));
+                const scalingMax = Math.max(maxTarSize, largestActual);
+                
+                // Build chain HTML
+                let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
+                
+                tarFiles.forEach((tar, index) => {
+                    const efficiency = (tar.size / maxTarSize) * 100;
+                    const widthPercent = (tar.size / scalingMax) * 100;
+                    
+                    // Color based on packing efficiency
+                    let color, borderColor;
+                    if (efficiency < 10) {
+                        color = '#f87171';
+                        borderColor = '#dc2626';
+                    } else if (efficiency < 50) {
+                        color = '#fbbf24';
+                        borderColor = '#f59e0b';
+                    } else {
+                        color = '#4ade80';
+                        borderColor = '#22c55e';
+                    }
+                    
+                    html += `
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <div style="width: 140px; font-size: 11px; color: #9ca3af; font-family: monospace; flex-shrink: 0;">
+                                ${tar.name}
+                            </div>
+                            <div style="flex: 1; position: relative; height: 40px; background: rgba(255,255,255,0.05); border-radius: 6px; overflow: hidden;">
+                                <div 
+                                    class="tar-block" 
+                                    style="
+                                        position: absolute;
+                                        left: 0;
+                                        top: 0;
+                                        height: 100%;
+                                        width: ${widthPercent}%;
+                                        background: linear-gradient(135deg, ${color}, ${color}dd);
+                                        border-right: 2px solid ${borderColor};
+                                        border-radius: 4px;
+                                        cursor: pointer;
+                                        transition: all 0.2s ease;
+                                        display: flex;
+                                        align-items: center;
+                                        padding: 0 12px;
+                                        font-size: 11px;
+                                        color: #000;
+                                        font-weight: 600;
+                                    "
+                                    onmouseover="this.style.opacity='0.8'; this.style.transform='scaleY(1.1)';"
+                                    onmouseout="this.style.opacity='1'; this.style.transform='scaleY(1)';"
+                                    title="${tar.name}\n${tar.sizeFormatted}\n~${tar.segmentCount} segments\nEfficiency: ${efficiency.toFixed(1)}%"
+                                >
+                                    <span style="text-shadow: 0 1px 2px rgba(255,255,255,0.3);">
+                                        ${tar.sizeFormatted} • ${tar.segmentCount} segs • ${efficiency.toFixed(0)}%
+                                    </span>
+                                </div>
+                                
+                                <!-- 256 MB reference line -->
+                                ${widthPercent < (maxTarSize / scalingMax * 100) ? `
+                                    <div style="
+                                        position: absolute;
+                                        left: ${(maxTarSize / scalingMax * 100)}%;
+                                        top: 0;
+                                        height: 100%;
+                                        width: 1px;
+                                        background: rgba(34, 211, 238, 0.4);
+                                        z-index: 1;
+                                    " title="256 MB target"></div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                
+                // Add summary footer
+                const totalSize = tarFiles.reduce((sum, t) => sum + t.size, 0);
+                const avgSize = totalSize / tarFiles.length;
+                const avgEfficiency = (avgSize / maxTarSize) * 100;
+                
+                html += `
+                    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px; color: #9ca3af; display: flex; justify-content: space-between;">
+                        <span>📊 Chain Overview: <strong>${tarFiles.length}</strong> TAR generations</span>
+                        <span>Total: <strong>${formatBytes(totalSize)}</strong></span>
+                        <span>Avg: <strong>${formatBytes(avgSize)}</strong> (${avgEfficiency.toFixed(1)}% efficiency)</span>
+                    </div>
+                `;
+                
+                container.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error rendering TAR chain:', error);
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 60px 20px; color: #f87171;">
+                        <div style="font-size: 24px; margin-bottom: 12px;">⚠️</div>
+                        <div>Failed to load TAR chain data</div>
+                        <div style="font-size: 11px; margin-top: 8px; opacity: 0.7;">${error.message}</div>
+                    </div>
+                `;
+            }
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+        }
+        
+        // Load TAR chain on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            renderTarChain();
+        });
     </script>
 </body>
 </html>

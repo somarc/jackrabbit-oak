@@ -331,13 +331,28 @@ public class DashboardHandler {
         // TarMK Growth Stats
         DashboardDataService.TarMkGrowthStats tarStats = dataService.getTarMkGrowthStats();
         String tarFileCount = String.valueOf(tarStats.tarFileCount);
+        String segmentCount = String.valueOf(tarStats.segmentCount);
         String tarTotalSize = FormatUtils.formatBytes(tarStats.totalSize);
         String tarAvgSize = FormatUtils.formatBytes(tarStats.averageTarSize);
         String tarMaxSize = FormatUtils.formatBytes(tarStats.largestTarSize);
         String tarMinSize = FormatUtils.formatBytes(tarStats.smallestTarSize);
         String packingEfficiency = String.format("%.1f", tarStats.packingEfficiency);
-        String packingStatus = tarStats.packingEfficiency < 10 ? "Many small TAR files (inefficient)" : 
-                              tarStats.packingEfficiency < 50 ? "Moderate packing efficiency" : "Good packing efficiency";
+        
+        // Packing efficiency status and colors
+        String packingStatus, packingColor, packingBorderColor;
+        if (tarStats.packingEfficiency < 10) {
+            packingStatus = "🔴 Many small TAR files (inefficient)";
+            packingColor = "#f87171";
+            packingBorderColor = "#dc2626";
+        } else if (tarStats.packingEfficiency < 50) {
+            packingStatus = "🟡 Moderate packing efficiency";
+            packingColor = "#fbbf24";
+            packingBorderColor = "#f59e0b";
+        } else {
+            packingStatus = "🟢 Good packing efficiency";
+            packingColor = "#4ade80";
+            packingBorderColor = "#22c55e";
+        }
         
         // Storage capacity (2 TB upper bound)
         long maxCapacity = 2L * 1024 * 1024 * 1024 * 1024; // 2 TB
@@ -408,12 +423,15 @@ public class DashboardHandler {
             .replace("{{API_REJECTED}}", apiRejected)
             // TarMK Growth Stats
             .replace("{{TAR_FILE_COUNT}}", tarFileCount)
+            .replace("{{SEGMENT_COUNT}}", segmentCount)
             .replace("{{TAR_TOTAL_SIZE}}", tarTotalSize)
             .replace("{{TAR_AVG_SIZE}}", tarAvgSize)
             .replace("{{TAR_MAX_SIZE}}", tarMaxSize)
             .replace("{{TAR_MIN_SIZE}}", tarMinSize)
             .replace("{{PACKING_EFFICIENCY}}", packingEfficiency)
             .replace("{{PACKING_STATUS}}", packingStatus)
+            .replace("{{PACKING_COLOR}}", packingColor)
+            .replace("{{PACKING_BORDER_COLOR}}", packingBorderColor)
             // Storage Capacity
             .replace("{{STORAGE_PERCENT}}", storagePercentStr)
             .replace("{{STORAGE_STATUS}}", storageStatus)
