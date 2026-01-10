@@ -242,6 +242,13 @@
             <version>1.78.1</version>
         </dependency>
         
+        <!-- Web3j for Ethereum blockchain interaction -->
+        <dependency>
+            <groupId>org.web3j</groupId>
+            <artifactId>core</artifactId>
+            <version>4.12.3</version>
+        </dependency>
+        
         <!-- Servlet API (compile scope for standalone JAR - needed by Jetty/oak-segment-http) -->
         <dependency>
             <groupId>javax.servlet</groupId>

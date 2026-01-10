@@ -16,13 +16,28 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.evm.impl;
 
+import io.reactivex.disposables.Disposable;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.web3j.abi.EventEncoder;
+import org.web3j.abi.TypeReference;
+import org.web3j.abi.datatypes.Address;
+import org.web3j.abi.datatypes.Event;
+import org.web3j.abi.datatypes.generated.Bytes32;
+import org.web3j.abi.datatypes.generated.Uint32;
+import org.web3j.abi.datatypes.generated.Uint96;
+import org.web3j.protocol.Web3j;
+import org.web3j.protocol.core.DefaultBlockParameterName;
+import org.web3j.protocol.core.methods.request.EthFilter;
+import org.web3j.protocol.http.HttpService;
+import org.web3j.utils.Numeric;
 
 import java.math.BigInteger;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -58,6 +73,20 @@ public class EventDrivenEvmBridge implements EvmBridge {
     private final String networkName;
     private final String contractAddress;
     private final boolean mockMode;
+    
+    // Web3j client (for real mode)
+    private Web3j web3j;
+    private Disposable eventSubscription;
+    
+    // WriteAuthorized event definition (matches OakWriteAuthorizationV5.sol)
+    private static final Event WRITE_AUTHORIZED_EVENT = new Event("WriteAuthorized",
+        Arrays.asList(
+            new TypeReference<Bytes32>(true) {},  // proposalId (indexed)
+            new TypeReference<Address>(true) {},   // payer (indexed)
+            new TypeReference<Bytes32>(true) {},   // shardHash (indexed)
+            new TypeReference<Uint96>() {},        // amount
+            new TypeReference<Uint32>() {}         // blockNumber
+        ));
     
     // Event listeners (for real mode - Web3j subscriptions)
     private final CopyOnWriteArrayList<Consumer<WriteAuthorizedEvent>> eventListeners = new CopyOnWriteArrayList<>();
@@ -225,6 +254,19 @@ public class EventDrivenEvmBridge implements EvmBridge {
     @Override
     public void stop() {
         running = false;
+        
+        // Clean up Web3j subscription
+        if (eventSubscription != null && !eventSubscription.isDisposed()) {
+            eventSubscription.dispose();
+            log.info("Web3j event subscription disposed");
+        }
+        
+        // Shutdown Web3j client
+        if (web3j != null) {
+            web3j.shutdown();
+            log.info("Web3j client shutdown");
+        }
+        
         log.info("EventDrivenEvmBridge stopped");
     }
     
@@ -297,31 +339,137 @@ public class EventDrivenEvmBridge implements EvmBridge {
     // ========== Real Mode (Mainnet) ==========
     
     /**
-     * Start Web3j event subscription (for real mainnet).
+     * Start Web3j event subscription (for real Sepolia/Mainnet).
      * 
-     * <p>TODO: Implement Web3j subscription to OakWriteAuthorizationV5 contract events.
-     * This will listen for WriteAuthorized events and process them.
+     * <p>Subscribes to WriteAuthorized events from OakWriteAuthorizationV5 contract.
+     * Events are processed as they arrive and stored as PaymentProofs.
      */
     private void startWeb3jEventSubscription() {
-        // TODO: Implement Web3j event subscription
-        // Example:
-        // Web3j web3j = Web3j.build(new HttpService(rpcUrl));
-        // OakWriteAuthorizationV5 contract = OakWriteAuthorizationV5.load(contractAddress, web3j, ...);
-        // 
-        // contract.writeAuthorizedEventFlowable(DefaultBlockParameterName.EARLIEST, DefaultBlockParameterName.LATEST)
-        //     .subscribe(event -> {
-        //         WriteAuthorizedEvent evt = new WriteAuthorizedEvent(
-        //             event.proposalId.toString(),
-        //             event.payer.toString(),
-        //             event.shardHash.toString(),
-        //             event.amount.getValue(),
-        //             event.blockNumber.longValue(),
-        //             event.log.getTransactionHash()
-        //         );
-        //         processWriteAuthorizedEvent(evt);
-        //     });
+        // Get RPC URL from config
+        BlockchainConfig config = BlockchainConfig.getInstance();
+        String rpcUrl = config.getRpcUrl();
         
-        log.warn("⚠️  Web3j event subscription not yet implemented - using mock mode");
+        if (rpcUrl == null || rpcUrl.isEmpty()) {
+            log.error("❌ Cannot start Web3j subscription: RPC URL not configured");
+            log.error("   Set OAK_BLOCKCHAIN_RPC_URL environment variable");
+            return;
+        }
+        
+        try {
+            // Initialize Web3j client
+            log.info("🔗 Connecting to Ethereum RPC: {}", maskRpcUrl(rpcUrl));
+            web3j = Web3j.build(new HttpService(rpcUrl));
+            
+            // Verify connection
+            String clientVersion = web3j.web3ClientVersion().send().getWeb3ClientVersion();
+            log.info("✅ Connected to Ethereum node: {}", clientVersion);
+            
+            // Get current block number
+            BigInteger blockNumber = web3j.ethBlockNumber().send().getBlockNumber();
+            currentBlock = blockNumber.longValue();
+            log.info("📦 Current block: {}", currentBlock);
+            
+            // Create event filter
+            EthFilter filter = new EthFilter(
+                DefaultBlockParameterName.LATEST,  // Start from latest block
+                DefaultBlockParameterName.LATEST,  // Subscribe to new blocks
+                contractAddress
+            );
+            
+            // Add event topic
+            String eventSignature = EventEncoder.encode(WRITE_AUTHORIZED_EVENT);
+            filter.addSingleTopic(eventSignature);
+            
+            log.info("📡 Subscribing to WriteAuthorized events on contract: {}", contractAddress);
+            
+            // Subscribe to events
+            eventSubscription = web3j.ethLogFlowable(filter)
+                .subscribe(
+                    ethLog -> {
+                        try {
+                            // Parse event data
+                            String proposalId = ethLog.getTopics().get(1); // First indexed param
+                            String payer = "0x" + ethLog.getTopics().get(2).substring(26); // Address from topic
+                            String shardHash = ethLog.getTopics().get(3); // Third indexed param
+                            
+                            // Parse non-indexed params from data
+                            String data = ethLog.getData();
+                            BigInteger amount = Numeric.toBigInt(data.substring(0, 66)); // First 32 bytes
+                            long eventBlockNumber = Numeric.toBigInt(data.substring(66, 130)).longValue(); // Next 32 bytes
+                            
+                            String txHash = ethLog.getTransactionHash();
+                            
+                            log.info("📨 Received WriteAuthorized event: proposalId={}, payer={}, block={}",
+                                proposalId, payer, eventBlockNumber);
+                            
+                            // Create and process event
+                            WriteAuthorizedEvent event = new WriteAuthorizedEvent(
+                                proposalId,
+                                payer,
+                                shardHash,
+                                amount,
+                                eventBlockNumber,
+                                txHash
+                            );
+                            
+                            processWriteAuthorizedEvent(event);
+                            
+                        } catch (Exception e) {
+                            log.error("Error parsing WriteAuthorized event", e);
+                        }
+                    },
+                    error -> {
+                        log.error("❌ Web3j subscription error", error);
+                        // Attempt to reconnect after delay
+                        scheduleReconnect();
+                    },
+                    () -> {
+                        log.info("Web3j subscription completed");
+                    }
+                );
+            
+            log.info("✅ Web3j event subscription started");
+            
+        } catch (Exception e) {
+            log.error("❌ Failed to start Web3j event subscription", e);
+            // Fall back to mock mode
+            log.warn("⚠️  Falling back to mock mode due to Web3j connection failure");
+        }
+    }
+    
+    /**
+     * Schedule reconnection attempt after subscription failure.
+     */
+    private void scheduleReconnect() {
+        if (!running) return;
+        
+        new Thread(() -> {
+            try {
+                Thread.sleep(30000); // Wait 30 seconds before reconnecting
+                if (running) {
+                    log.info("🔄 Attempting to reconnect Web3j subscription...");
+                    startWeb3jEventSubscription();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "Web3j-Reconnect").start();
+    }
+    
+    /**
+     * Mask RPC URL for logging (hide API keys).
+     */
+    private String maskRpcUrl(String url) {
+        if (url == null) return "null";
+        // Mask anything after the last slash that looks like an API key
+        int lastSlash = url.lastIndexOf('/');
+        if (lastSlash > 0 && lastSlash < url.length() - 8) {
+            String key = url.substring(lastSlash + 1);
+            if (key.length() > 8) {
+                return url.substring(0, lastSlash + 1) + key.substring(0, 4) + "***" + key.substring(key.length() - 4);
+            }
+        }
+        return url;
     }
     
     // ========== Event Processing ==========

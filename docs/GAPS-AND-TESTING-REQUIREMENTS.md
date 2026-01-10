@@ -52,7 +52,7 @@
 | ~~**Leader Step-Down**~~ | `AeronConsensusEngine.java:3493` | ✅ **Implemented** | Session-based step-down with fallback |
 | **Snapshot Restoration** | `SnapshotService.java:171` | TODO comment | Implement full snapshot restore |
 | **Mainnet Contract** | `BlockchainConfig.java:106` | Zero address | Deploy and configure mainnet contract |
-| **Event Subscription** | `EventDrivenEvmBridge.java:306` | TODO comment | Implement Web3j event subscription |
+| ~~**Event Subscription**~~ | ~~`EventDrivenEvmBridge.java`~~ | ✅ **Implemented** | Web3j event subscription for WriteAuthorized |
 
 #### State Machine Gaps
 
@@ -780,7 +780,7 @@ ProofVerifier.java:186          - Verify against actual genesis
 ProofVerifier.java:227          - Actual segment loading
 ProofVerifier.java:258          - Actual signature verification
 ProposalQueueManagerOptimized.java:691 - Retry count tracking
-EventDrivenEvmBridge.java:302-306 - Web3j event subscription
+~~EventDrivenEvmBridge.java:302-306 - Web3j event subscription~~ ✅ DONE
 BlockchainConfig.java:106       - Deploy mainnet contract
 SnapshotService.java:147        - Get epoch from tracker
 ~~SnapshotService.java:171        - Implement snapshot restoration~~ ✅ DONE
