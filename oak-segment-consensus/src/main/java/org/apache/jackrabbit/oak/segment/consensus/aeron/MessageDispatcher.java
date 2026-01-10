@@ -217,6 +217,7 @@ public class MessageDispatcher {
             String intentToken = extractJsonField(json, "intentToken"); // ADR 020
             String blobId = extractJsonField(json, "blobId");
             String mimeType = extractJsonField(json, "mimeType");
+            String ipfsCid = extractJsonField(json, "ipfsCid"); // ADR 016
             
             if (walletAddress == null || path == null) {
                 log.warn("Invalid write proposal: missing required fields");
@@ -225,7 +226,7 @@ public class MessageDispatcher {
             
             // Delegate to callback
             writeCallback.applyWrite(walletAddress, path, contentType, message, signature, 
-                                    intentToken, blobId, mimeType);
+                                    intentToken, blobId, mimeType, ipfsCid);
             
             return true;
             
@@ -325,10 +326,11 @@ public class MessageDispatcher {
                     String intentToken = extractJsonField(proposalJson, "intentToken");
                     String blobId = extractJsonField(proposalJson, "blobId");
                     String mimeType = extractJsonField(proposalJson, "mimeType");
+                    String ipfsCid = extractJsonField(proposalJson, "ipfsCid"); // ADR 016
                     
                     if (walletAddress != null && path != null) {
                         writeCallback.applyWrite(walletAddress, path, contentType, message, 
-                                                signature, intentToken, blobId, mimeType);
+                                                signature, intentToken, blobId, mimeType, ipfsCid);
                         successCount++;
                     }
                     

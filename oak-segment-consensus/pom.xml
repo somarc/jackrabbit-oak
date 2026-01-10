@@ -53,6 +53,12 @@
                 org.apache.jackrabbit.oak.segment.consensus.osgi,
                 org.apache.jackrabbit.oak.segment.consensus.mount
               </Export-Package>
+              
+              <!-- Import packages - Bouncy Castle is optional for signature verification -->
+              <Import-Package>
+                org.bouncycastle.*;resolution:=optional,
+                *
+              </Import-Package>
             </instructions>
           </configuration>
         </plugin>
@@ -227,6 +233,13 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
             <version>3.19.0</version>
+        </dependency>
+        
+        <!-- Bouncy Castle for Ethereum secp256k1 signature verification -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.78.1</version>
         </dependency>
         
         <!-- Servlet API (compile scope for standalone JAR - needed by Jetty/oak-segment-http) -->

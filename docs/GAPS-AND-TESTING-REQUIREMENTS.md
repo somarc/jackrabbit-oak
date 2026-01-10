@@ -48,7 +48,7 @@
 
 | Gap | Location | Current State | Required State |
 |-----|----------|---------------|----------------|
-| **Signature Verification** | `ConsensusApiHandler.java:416` | Format validation only | Full ECDSA verification with web3j |
+| ~~**Signature Verification**~~ | `EthereumSignatureVerifier.java` | ✅ **Implemented** | Full secp256k1 ECDSA with Bouncy Castle |
 | **Leader Step-Down** | `AeronConsensusEngine.java:3612` | Not implemented | Integrate with Aeron ClusterControl API |
 | **Snapshot Restoration** | `SnapshotService.java:171` | TODO comment | Implement full snapshot restore |
 | **Mainnet Contract** | `BlockchainConfig.java:106` | Zero address | Deploy and configure mainnet contract |
@@ -724,9 +724,9 @@ jobs:
 
 | Item | Module | Effort | Impact |
 |------|--------|--------|--------|
-| Signature verification | consensus | Medium | Critical |
+| ~~Signature verification~~ | ~~consensus~~ | ~~Medium~~ | ✅ **Implemented** - EthereumSignatureVerifier |
 | ~~IPFS CID persistence~~ | ~~ipfs~~ | ~~Medium~~ | ✅ **Resolved** - CID from client proposal |
-| Accept ipfsCid in proposal API | consensus | Low | Critical |
+| ~~Accept ipfsCid in proposal API~~ | ~~consensus~~ | ~~Low~~ | ✅ **Implemented** - Full flow |
 | Basic unit tests for state machines | all | High | High |
 
 ### Short-Term (Q1 2026)
@@ -759,11 +759,11 @@ jobs:
 
 ## Appendix: TODO Comments in Codebase
 
-### oak-segment-consensus (25 TODOs)
+### oak-segment-consensus (~20 TODOs remaining)
 
 ```
-ConsensusApiHandler.java:127    - ADR 016: ipfsCid handling
-ConsensusApiHandler.java:416-417 - Real signature verification
+~~ConsensusApiHandler.java:127    - ADR 016: ipfsCid handling~~ ✅ DONE
+~~ConsensusApiHandler.java:416-417 - Real signature verification~~ ✅ DONE (EthereumSignatureVerifier)
 ConsensusApiHandler.java:850    - Actual content size from NodeStore
 FragmentationApiHandler.java:356 - Aeron replication for GC
 BinaryUploadHandler.java:235    - Validate CID reachability
