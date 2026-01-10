@@ -51,7 +51,7 @@
 | ~~**Signature Verification**~~ | `EthereumSignatureVerifier.java` | ✅ **Implemented** | Full secp256k1 ECDSA with Bouncy Castle |
 | ~~**Leader Step-Down**~~ | `AeronConsensusEngine.java:3493` | ✅ **Implemented** | Session-based step-down with fallback |
 | **Snapshot Restoration** | `SnapshotService.java:171` | TODO comment | Implement full snapshot restore |
-| **Mainnet Contract** | `BlockchainConfig.java:106` | Zero address | Deploy and configure mainnet contract |
+| **Mainnet Contract** | `BlockchainConfig.java:106` | Zero address | Deploy V3.1 to Sepolia first, then mainnet |
 | ~~**Event Subscription**~~ | ~~`EventDrivenEvmBridge.java`~~ | ✅ **Implemented** | Web3j event subscription for WriteAuthorized |
 
 #### State Machine Gaps
