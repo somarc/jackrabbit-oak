@@ -278,8 +278,9 @@ public class ChallengeServiceTest {
         assertArrayEquals(bytes1, bytes2);
         
         // Modifying returned array should not affect stored challenge
-        bytes1[0] = (byte) 0xFF;
-        assertNotEquals((byte) 0xFF, challenge.getBytes()[0]);
+        byte originalValue = bytes1[0];
+        bytes1[0] = (byte) (originalValue ^ 0xFF); // XOR to ensure different value
+        assertNotEquals(bytes1[0], challenge.getBytes()[0]);
     }
     
     // ========================================================================

@@ -236,10 +236,10 @@ Core JAAS integration is complete; needs testing and OSGi deployment.
 
 | Gap | Location | Current State | Required State |
 |-----|----------|---------------|----------------|
-| ~~**Unit Tests**~~ | `src/test/` | ✅ **Implemented** | 28+ tests for ChallengeService |
+| ~~**Unit Tests**~~ | `src/test/` | ✅ **Implemented** | 110 tests total |
 | **OSGi Factory** | N/A | Basic factory exists | Full ConfigAdmin integration |
 | ~~**Challenge Service**~~ | `ChallengeService.java` | ✅ **Implemented** | Secure challenge generation/validation |
-| **Passkey Storage** | N/A | Not implemented | Store registered passkeys in Oak |
+| ~~**Passkey Storage**~~ | `PasskeyStore.java` | ✅ **Implemented** | Store registered passkeys in Oak |
 
 #### State Machine Completeness
 
