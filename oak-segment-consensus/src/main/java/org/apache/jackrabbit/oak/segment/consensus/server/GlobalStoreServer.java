@@ -22,7 +22,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import org.apache.jackrabbit.oak.segment.SegmentNodeStore;
 import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
@@ -110,7 +109,8 @@ public class GlobalStoreServer {
     private int bootstrapPrimaryPort;
     
     // Aeron Cluster initialization state (for deferred startup after bootstrap)
-    private volatile boolean aeronClusterDeferred = false; // Set to true if bootstrap is active
+    @SuppressWarnings("unused") // Used to track bootstrap state, read by bootstrap callback
+    private volatile boolean aeronClusterDeferred = false;
     private String aeronSelfUrl; // Stored for bootstrap callback
     private List<String> aeronPeerUrls; // Stored for bootstrap callback
     
@@ -634,31 +634,9 @@ public class GlobalStoreServer {
                 // if Oak creates initial segments, but directory emptiness is definitive
                 boolean storeIsEmpty = directoryIsEmpty;
                 
-                // Check if peers are reachable (reuse check from before FileStore build)
+                // Parse peer URLs for bootstrap
                 String peersConfig = System.getProperty("consensus.peers", "");
                 List<String> aeronPeers = parsePeerUrls(peersConfig);
-                boolean hasReachablePeers = false;
-                
-                if (!aeronPeers.isEmpty()) {
-                    // Try to reach at least one peer
-                    for (String peerUrl : aeronPeers) {
-                        try {
-                            java.net.URL url = new java.net.URL(peerUrl + "/health");
-                            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                            conn.setRequestMethod("GET");
-                            conn.setConnectTimeout(2000);
-                            conn.setReadTimeout(2000);
-                            
-                            if (conn.getResponseCode() == 200) {
-                                hasReachablePeers = true;
-                                System.out.println("✅ Found reachable peer for Oak FileStore bootstrap: " + peerUrl);
-                                break;
-                            }
-                        } catch (Exception e) {
-                            // Try next peer
-                        }
-                    }
-                }
                 
                 // If bootstrap was needed before build, ensure it runs NOW (immediately after FileStore build)
                 // CRITICAL: Re-verify peer reachability AFTER FileStore build (peer might have come online)
@@ -914,7 +892,6 @@ public class GlobalStoreServer {
             selfUrl = resolveUrlToIP("http://localhost:" + port); // Default: resolve to IP
         }
         String peersConfig = System.getProperty("consensus.peers", "");
-        String genesisNode = System.getProperty("consensus.genesis.node", "");  // Boot node for genesis sync
         
         // ✈️ AERON-ONLY: Allow consensus even with no peers (single validator can start cluster as genesis node)
         boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled) && 
@@ -1235,6 +1212,9 @@ public class GlobalStoreServer {
                     );
                 evmBridge.start();
                 
+                // Note: aeronEngine null checks are defensive - aeronEngine is captured from outer scope
+                // and could theoretically be null if callback is invoked before initialization completes
+                @SuppressWarnings("all") // Suppress false positive dead code warnings
                 org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback raftCallback = 
                     new org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback() {
                         @Override
@@ -1447,7 +1427,7 @@ public class GlobalStoreServer {
             String GENESIS_ADDRESS = "0x0000000000000000000000000000000000000000";
             
             // Use sharded path for genesis (00/00/00/0x0000.../)
-            String genesisShardedPath = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.toShardedPath(GENESIS_ADDRESS);
+            String genesisShardedPath = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.getContentPath(GENESIS_ADDRESS);
             // Result: /oak-chain/content/00/00/00/0x0000000000000000000000000000000000000000
             
             // Check if genesis content already exists
@@ -1693,17 +1673,8 @@ public class GlobalStoreServer {
                             imageContent.setProperty("ipfs:cid", ipfsCid);
                             System.out.println("      ✅ IPFS CID: " + ipfsCid);
                         } else {
-                            // Try to look up CID from blob metadata
-                            try {
-                                if (bStore instanceof org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) {
-                                    org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore dsBlobStore = 
-                                        (org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) bStore;
-                                    // CID might be stored in the underlying DataStore
-                                    ipfsCid = blobId; // Use blobId as fallback
-                                }
-                            } catch (Exception e) {
-                                // Ignore - CID lookup is optional
-                            }
+                            // Use blobId as fallback for non-IPFS blobs
+                            ipfsCid = blobId;
                             System.out.println("      ✅ Blob ID: " + blobId);
                         }
                     }
@@ -1824,63 +1795,6 @@ public class GlobalStoreServer {
             e.printStackTrace();
             throw new RuntimeException("Genesis creation failed - cannot start network", e);
         }
-    }
-    
-    /**
-     * Start consensus engine after being promoted from STANDBY to PRIMARY.
-     * This is called by the bootstrap promotion callback.
-     */
-    private void startConsensusPrimary() throws IOException {
-        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        System.out.println("🎯 PRIMARY MODE: Joining consensus network");
-        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        
-        String consensusEnabled = System.getProperty("consensus.enabled", "false");
-        // ✈️ AERON-ONLY: This method is only called for Aeron mode (startConsensusPrimary is deprecated)
-        // Get self URL from system property, or resolve localhost to IP
-        String selfUrlConfig = System.getProperty("consensus.self.url");
-        String selfUrl;
-        if (selfUrlConfig != null && !selfUrlConfig.isEmpty()) {
-            selfUrl = selfUrlConfig; // Use configured URL (can be ngrok/Ethos URL, IP, or hostname)
-        } else {
-            selfUrl = resolveUrlToIP("http://localhost:" + port); // Default: resolve to IP
-        }
-        String peersConfig = System.getProperty("consensus.peers", "");
-        
-        if (!"true".equalsIgnoreCase(consensusEnabled)) {
-            System.out.println("⚠️  Consensus disabled - running as standalone");
-            return;
-        }
-        
-        // If peers are empty but we bootstrapped, use the bootstrap primary as initial peer
-        if (peersConfig.isEmpty() && bootstrapPrimaryHost != null && !bootstrapPrimaryHost.isEmpty()) {
-            // Derive primary's HTTP URL from bootstrap host
-            // Bootstrap uses standby port (8091), consensus uses HTTP port (8090)
-            String primaryUrl = "http://" + bootstrapPrimaryHost + ":8090";
-            peersConfig = primaryUrl;
-            System.out.println("🔗 No static peers configured, using bootstrap primary as initial peer:");
-            System.out.println("   Bootstrap host: " + bootstrapPrimaryHost);
-            System.out.println("   Consensus peer: " + primaryUrl);
-        }
-        
-        List<String> peerUrls = parsePeerUrls(peersConfig);
-        System.out.println("   📋 Parsed peer URLs: " + peerUrls);
-        
-        // ✈️ AERON-ONLY: This method should not be called in Aeron mode
-        // Aeron mode uses startAeronClusterAfterBootstrap() instead
-        // This method is kept for backward compatibility but should not execute
-        System.err.println("⚠️  WARNING: startConsensusPrimary() called but this POC uses Aeron-only");
-        System.err.println("   This method is deprecated - use startAeronClusterAfterBootstrap() instead");
-        
-        // Start StandbyServerSync (now a primary, serve other standbys)
-        // ✈️ AERON MODE: Skip StandbyServerSync - Aeron Cluster handles replication
-        if (bootstrap != null) {
-            System.out.println("✈️  AERON MODE: Skipping StandbyServerSync (Aeron Cluster handles replication)");
-        }
-        
-        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        System.out.println("🚀 Validator is now PRIMARY and participating in consensus!");
-        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
     
     /**
