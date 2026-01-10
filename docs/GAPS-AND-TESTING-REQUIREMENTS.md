@@ -1,7 +1,7 @@
 # Blockchain AEM - Gaps Analysis & Testing Requirements
 
 **Purpose**: Identify implementation gaps and formalize testing requirements  
-**Date**: January 10, 2026  
+**Date**: January 10, 2026 (Updated)  
 **Status**: Active Development / POC  
 **Related**: [STATE-MACHINE-DIAGRAMS.md](STATE-MACHINE-DIAGRAMS.md)
 
@@ -25,30 +25,31 @@
 
 | Module | Implementation | Unit Tests | Integration Tests | Production Ready |
 |--------|---------------|------------|-------------------|------------------|
-| **oak-segment-consensus** | 🟢 90% | 🟡 ~40% | 🔴 ~10% | ❌ No |
-| **oak-segment-http** | 🟢 95% | 🟡 ~30% | 🟡 ~20% | ❌ No |
-| **oak-blob-cloud-ipfs** | 🟢 85% | 🔴 ~5% | 🔴 0% | ❌ No |
+| **oak-segment-consensus** | 🟢 90% | 🟡 ~50% | 🔴 ~10% | ❌ No |
+| **oak-segment-http** | 🟢 95% | 🟡 ~40% | 🟡 ~20% | ❌ No |
+| **oak-blob-cloud-ipfs** | 🟢 85% | 🟡 ~30% | 🔴 0% | ❌ No |
 | **oak-auth-web3** | 🟢 95% | 🟢 ~60% | 🔴 0% | ❌ No |
 
 ### Implementation Gaps (Remaining)
 
-| # | Gap | Module | Priority | Effort |
-|---|-----|--------|----------|--------|
-| 1 | **Cluster Wallet Consolidation** | consensus | Medium | Medium |
-| 2 | **Mainnet Contract Deployment** | consensus | High | Low |
-| 3 | **GC Payment Enforcement** | consensus | Medium | Low |
-| 4 | **Segment Reference Parsing** | consensus | Low | Medium |
+| # | Gap | Module | Priority | Effort | Status |
+|---|-----|--------|----------|--------|--------|
+| 1 | **Cluster Wallet Consolidation** | consensus | Medium | Medium | 🔲 TODO |
+| 2 | **Mainnet Contract Deployment** | consensus | High | Low | 🔲 TODO |
+| 3 | **GC Payment Enforcement** | consensus | Medium | Low | ✅ Implemented (POC mode) |
+| 4 | ~~**Segment Reference Parsing**~~ | ~~consensus~~ | ~~Low~~ | ~~Medium~~ | ✅ REMOVED (dead code) |
 
 ### Testing Gaps (Critical)
 
-| # | Gap | Module | Priority | Effort |
-|---|-----|--------|----------|--------|
-| 1 | **AeronConsensusEngine tests** | consensus | Critical | High |
-| 2 | **ConsensusApiHandler tests** | consensus | Critical | High |
-| 3 | **GlobalStoreServer tests** | consensus | High | High |
-| 4 | **Integration test suite** | all | Critical | Very High |
-| 5 | **IPFSBackend tests** | ipfs | Medium | Medium |
-| 6 | **HttpPersistence tests** | http | Medium | Medium |
+| # | Gap | Module | Priority | Effort | Status |
+|---|-----|--------|----------|--------|--------|
+| 1 | **AeronConsensusEngine tests** | consensus | Critical | High | 🔲 TODO |
+| 2 | **ConsensusApiHandler tests** | consensus | Critical | High | 🔲 TODO |
+| 3 | **GlobalStoreServer tests** | consensus | High | High | 🔲 TODO |
+| 4 | **Integration test suite** | all | Critical | Very High | 🔲 TODO |
+| 5 | **IPFSBackend tests** | ipfs | Medium | Medium | ✅ DONE |
+| 6 | **HttpPersistence tests** | http | Medium | Medium | ✅ DONE |
+| 7 | **State Machine tests** | consensus | High | Medium | ✅ DONE |
 
 ### Completed (January 2026)
 
@@ -65,6 +66,10 @@
 ✅ Content Size Estimation (NodeStore traversal)
 ✅ Leader Discovery (multi-strategy approach)
 ✅ GC Aeron Replication (proposals, votes, execute via Aeron)
+✅ State Machine Unit Tests (ProposalState, GCProposalState, ValidatorRole, LeadershipClaimTracker)
+✅ IPFSBackend Unit Tests (19 tests)
+✅ IPFSDataStore Unit Tests (14 tests)
+✅ HttpPersistence Unit Tests (15 tests)
 
 ---
 
@@ -135,7 +140,7 @@ Leadership Claim State Machine:
 | ~~Genesis hash verification~~ | ~~`SegmentHttpServer.java`~~ | ✅ **Implemented** - SHA-256 cryptographic hash |
 | ~~Wallet-based registration~~ | ~~`RegistrationHandler.java`~~ | ✅ **Implemented** - IP fallback removed |
 | Retry count tracking | `ProposalQueueManagerOptimized.java:691` | No retry metadata |
-| Segment reference parsing | `GlobalStoreServer.java:2417` | Incomplete segment graph traversal |
+| ~~Segment reference parsing~~ | ~~`GlobalStoreServer.java:2417`~~ | ✅ **REMOVED** - Dead code (syncGenesisFromPeer) |
 
 ---
 
@@ -311,23 +316,24 @@ Biometric Authentication Flow:
 | `GCCostEstimateTest` | 7 | GC estimate data structure |
 | `EvmBridgeTest` | 12 | EVM payment verification |
 | `EventDrivenEvmBridgeTest` | 4 | Event-driven bridge |
-| ~~`SegmentGossipTest`~~ | ~~9~~ | ~~P2P segment gossip~~ (deleted - P2P package removed) |
 | `ProposalQueueIntegrationTest` | 6 | **ProposalQueueManagerOptimized** (migrated Jan 2026) |
 | `CompositeStoreTest` | 9 | Composite store |
-| **Total** | **~48** | |
+| `ProposalStateTest` | 10 | Proposal state machine (NEW) |
+| `GCProposalStateTest` | 18 | GC proposal state machine (NEW) |
+| `LeadershipClaimTrackerTest` | 18 | Leadership claim quorum (NEW) |
+| `ValidatorRoleTest` | 9 | Validator role enum (NEW) |
+| **Total** | **~103** | |
 
 **Recent Improvements (January 2026):**
 - `ProposalQueueIntegrationTest` migrated to use production `ProposalQueueManagerOptimized`
 - Tests now cover: PRIORITY tier fast-path, STANDARD tier epoch batching, DELETE proposals, queue stats
+- **NEW**: State machine tests for `ProposalState`, `GCProposal`, `LeadershipClaimTracker`, `ValidatorRole`
 
 **Missing Test Coverage:**
 - `AeronConsensusEngine` - 0 tests (4400+ lines of code!)
 - `GlobalStoreServer` - 0 tests
-- `LeadershipClaimTracker` - 0 tests
 - `GCProposalManager` - 0 tests
 - `ConsensusApiHandler` - 0 tests
-- `ProposalState` transitions - 0 tests
-- `ValidatorRole` transitions - 0 tests
 
 ### oak-segment-http
 
@@ -335,11 +341,14 @@ Biometric Authentication Flow:
 |------------|-------|---------------|
 | `SlingWriteProposalServiceTest` | 5 | Write proposal client |
 | `EndToEndWriteFlowTest` | 3 | E2E write flow |
-| **Total** | **~8** | |
+| `HttpPersistenceTest` | 15 | HTTP persistence layer (NEW) |
+| **Total** | **~23** | |
+
+**Recent Improvements (January 2026):**
+- **NEW**: `HttpPersistenceTest` covers URL normalization, file creation, lock handling
 
 **Missing Test Coverage:**
-- `HttpPersistence` - 0 tests
-- `HttpPersistenceService` - 0 tests
+- `HttpPersistenceService` - 0 tests (OSGi lifecycle)
 - `HttpSegmentArchiveReader` - 0 tests
 - `SlingDeleteProposalService` - 0 tests
 - `SlingAuthorWalletService` - 0 tests
@@ -348,12 +357,17 @@ Biometric Authentication Flow:
 
 | Test Class | Tests | Coverage Area |
 |------------|-------|---------------|
-| **None** | **0** | |
+| `IPFSBackendTest` | 19 | Backend lifecycle, cache, metadata (NEW) |
+| `IPFSDataStoreTest` | 14 | DataStore wrapper, configuration (NEW) |
+| **Total** | **~33** | |
+
+**Recent Improvements (January 2026):**
+- **NEW**: `IPFSBackendTest` covers endpoint configuration, cache operations, metadata handling
+- **NEW**: `IPFSDataStoreTest` covers minRecordLength, properties, CID mappings
 
 **Missing Test Coverage:**
-- `IPFSDataStore` - 0 tests
-- `IPFSBackend` - 0 tests
-- Binary lifecycle - 0 tests
+- Integration tests with real IPFS node - 0 tests
+- Binary lifecycle end-to-end - 0 tests
 
 ### oak-auth-web3
 
@@ -796,7 +810,7 @@ jobs:
 
 ## Appendix: TODO Comments in Codebase
 
-### oak-segment-consensus (~20 TODOs remaining)
+### oak-segment-consensus (~18 TODOs remaining)
 
 ```
 ~~ConsensusApiHandler.java:127    - ADR 016: ipfsCid handling~~ ✅ DONE
@@ -808,7 +822,7 @@ SegmentHttpServer.java:187      - Actual genesis hash
 SegmentHttpServer.java:192      - Sign nonce for production
 ~~SegmentHttpServer.java:622      - Wallet-based registration~~ ✅ DONE (IP fallback removed)
 GlobalStoreServer.java:1389     - Smart contract event listener
-GlobalStoreServer.java:2417     - Parse segment references
+~~GlobalStoreServer.java:2417     - Parse segment references~~ ✅ REMOVED (dead code - syncGenesisFromPeer)
 ProofVerifier.java:186          - Verify against actual genesis
 ProofVerifier.java:227          - Actual segment loading
 ProofVerifier.java:258          - Actual signature verification
@@ -822,6 +836,16 @@ AeronConsensusEngine.java:3609  - ClusterControl step-down
 DashboardHandler.java:1125      - Full signature verification
 DashboardHandler.java:1155      - Aeron replication for GC
 ```
+
+### Dead Code Removed (January 2026)
+
+| Method | File | Reason |
+|--------|------|--------|
+| `syncGenesisFromPeer()` | GlobalStoreServer.java | Pre-Aeron legacy - Aeron handles genesis via Raft |
+| `fetchMissingSegmentsForGenesis()` | GlobalStoreServer.java | Only called by syncGenesisFromPeer |
+| `fetchSegmentBytesFromUrl()` | GlobalStoreServer.java | Only called by fetchMissingSegmentsForGenesis |
+| `broadcastHeadToFollowers()` | AeronConsensusEngine.java | ADR 025 - Aeron Raft handles consistency |
+| `notifyFollowersToSyncSegments()` | AeronConsensusEngine.java | Never called - HTTP broadcast obsolete |
 
 ### oak-segment-http (0 TODOs)
 
@@ -840,9 +864,10 @@ No TODO comments found - but needs tests and challenge service.
 ## Related Documentation
 
 - **[STATE-MACHINE-DIAGRAMS.md](STATE-MACHINE-DIAGRAMS.md)** - State machine documentation for all components
-- **[TECHNICAL-DEBT-ANALYSIS.md](TECHNICAL-DEBT-ANALYSIS.md)** - Dead code and deprecation analysis
+- **[TECHNICAL-DEBT-ANALYSIS.md](TECHNICAL-DEBT-ANALYSIS.md)** - Large class inventory for test coverage, dead code, and state machine review
 
 ---
 
 *Generated: January 10, 2026*  
-*Next Review: After unit test implementation*
+*Last Updated: January 10, 2026 (dead code removal, technical debt analysis)*  
+*Next Review: After Phase 1 technical debt review*
