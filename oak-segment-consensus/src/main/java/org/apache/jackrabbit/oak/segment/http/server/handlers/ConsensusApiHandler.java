@@ -20,6 +20,8 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
+import org.apache.jackrabbit.oak.segment.consensus.service.DeleteApplicationService;
+import org.apache.jackrabbit.oak.segment.consensus.service.WriteApplicationService;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -42,9 +44,90 @@ public class ConsensusApiHandler {
     private static final Logger log = LoggerFactory.getLogger(ConsensusApiHandler.class);
 
     private final ServerContext context;
+    private final WriteApplicationService writeApplicationService;
+    private final DeleteApplicationService deleteApplicationService;
 
     public ConsensusApiHandler(ServerContext context) {
         this.context = context;
+        
+        // Initialize application services
+        this.writeApplicationService = new WriteApplicationService(
+            context.fileStore,
+            context.nodeStore,
+            context.blobStore
+        );
+        this.deleteApplicationService = new DeleteApplicationService(
+            context.fileStore,
+            context.nodeStore
+        );
+        
+        // Wire callbacks for integration
+        wireServiceCallbacks();
+    }
+    
+    /**
+     * Wire callbacks to integrate services with the broader system.
+     */
+    private void wireServiceCallbacks() {
+        // HEAD update callback
+        WriteApplicationService.HeadUpdateCallback headCallback = newHead -> {
+            if (context.aeronConsensusEngine != null) {
+                context.aeronConsensusEngine.updateLatestHead(newHead);
+            }
+        };
+        writeApplicationService.setHeadUpdateCallback(headCallback);
+        deleteApplicationService.setHeadUpdateCallback(headCallback::updateHead);
+        
+        // SSE event callback for writes
+        if (context.eventBroadcaster != null) {
+            writeApplicationService.setSseEventCallback(new WriteApplicationService.SSEEventCallback() {
+                @Override
+                public void emitContentWrite(String path, String wallet, String org, 
+                                            String message, String signature, String contentType) {
+                    try {
+                        context.eventBroadcaster.emitContentWrite(path, wallet, org, message, signature, contentType);
+                    } catch (Exception e) {
+                        log.debug("Failed to emit SSE write event: {}", e.getMessage());
+                    }
+                }
+                
+                @Override
+                public void emitBinaryUpload(String path, String wallet, String org, 
+                                            String message, String ipfsCid, String mimeType) {
+                    try {
+                        context.eventBroadcaster.emitBinaryUpload(path, wallet, org, message, ipfsCid, null, mimeType);
+                    } catch (Exception e) {
+                        log.debug("Failed to emit SSE binary event: {}", e.getMessage());
+                    }
+                }
+            });
+            
+            // SSE event callback for deletes
+            deleteApplicationService.setSseEventCallback((path, wallet, org, signature) -> {
+                try {
+                    context.eventBroadcaster.emitContentDelete(path, wallet, org, signature);
+                } catch (Exception e) {
+                    log.debug("Failed to emit SSE delete event: {}", e.getMessage());
+                }
+            });
+        }
+        
+        // Fragmentation tracking callback
+        if (context.fragmentationTracker != null) {
+            writeApplicationService.setFragmentationCallback(this::trackFragmentation);
+        }
+        
+        // CID mapping callback
+        if (context.cidMappingService != null) {
+            writeApplicationService.setCidMappingCallback(blobId -> {
+                try {
+                    return context.cidMappingService.getCid(blobId).orElse(null);
+                } catch (Exception e) {
+                    log.debug("CID mapping lookup failed: {}", e.getMessage());
+                    return null;
+                }
+            });
+        }
     }
 
     /**
@@ -1068,434 +1151,32 @@ public class ConsensusApiHandler {
      * ✈️ AERON NATIVE: Apply replicated write to FileStore.
      * This is called from AeronConsensusEngine.onSessionMessage() after Aeron replicates the write.
      * 
+     * <p>Delegates to {@link WriteApplicationService} for the actual write application.
+     * 
      * @param ipfsCid IPFS CID from client-side upload (ADR 016), may be null
      */
     public void applyReplicatedWrite(String walletAddress, String path, String contentType, 
                                      String message, String signature, String intentToken, 
                                      String blobId, String mimeType, String ipfsCid) {
-        try {
-            log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
-                     walletAddress, path, intentToken, blobId, ipfsCid);
-            
-            // Get current HEAD
-            String previousHead = context.fileStore.getHead().getRecordId().toString();
-            log.debug("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
-            
-            // Parse path: /oak-chain/{shard}/content/{contentId}
-            // Example: /oak-chain/74-2d-35/content/page-1234567890
-            String[] pathParts = path.split("/");
-            if (pathParts.length < 4) {
-                log.error("❌ Invalid path format: {} (expected: /oak-chain/{shard}/content/...)", path);
-                return;
-            }
-            
-            // Build node structure using wallet-scoped paths
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = context.nodeStore.getRoot().builder();
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder current = rootBuilder;
-            
-            // Navigate to parent path (all parts except the last one)
-            // Track wallet node for metadata enrichment
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder walletNode = null;
-            String walletNodeName = null;
-            
-            for (int i = 1; i < pathParts.length - 1; i++) {
-                if (!pathParts[i].isEmpty()) {
-                    current = current.child(pathParts[i]);
-                    
-                    // Detect wallet node (matches pattern: 0x[a-f0-9]{40})
-                    if (pathParts[i].matches("0x[a-f0-9]{40}")) {
-                        walletNode = current;
-                        walletNodeName = pathParts[i];
-                    }
-                }
-            }
-            
-            // Enrich wallet node with metadata (if this is the first time we're seeing it)
-            if (walletNode != null && walletNodeName != null) {
-                enrichWalletNode(walletNode, walletNodeName, walletAddress);
-            }
-            
-            // Create content node (last path part)
-            String contentId = pathParts[pathParts.length - 1];
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder contentNode = current.child(contentId);
-            
-            // Set properties
-            // SECURITY: All fields should be non-null after Aeron replication
-            // If any are null, fail hard - indicates corruption or programming error
-            if (signature == null) {
-                throw new IllegalStateException(
-                    "SECURITY VIOLATION: Signature is null in replicated write. " +
-                    "This indicates Aeron message corruption or validation bypass. " +
-                    "Path: " + path + ", Wallet: " + walletAddress
-                );
-            }
-            
-            contentNode.setProperty("jcr:primaryType", "nt:unstructured");
-            contentNode.setProperty("contentType", contentType != null ? contentType : "page");
-            
-            // blobId and mimeType now passed as parameters (ADR 020)
-            String actualMessage = message != null ? message : "";
-            
-            contentNode.setProperty("message", actualMessage);
-            contentNode.setProperty("timestamp", System.currentTimeMillis());
-            contentNode.setProperty("wallet", walletAddress);
-            contentNode.setProperty("signature", signature); // Already validated - no fallback
-            contentNode.setProperty("source", "aeron-replicated");
-            
-            // ADR 037: Extract and store organization from path
-            // Path format: /oak-chain/XX/YY/ZZ/0xWALLET/{organization}/content/{contentId}
-            // Organization is the segment after wallet, before "content"
-            String extractedOrg = extractOrganizationFromPath(path);
-            if (extractedOrg != null && !extractedOrg.isEmpty()) {
-                contentNode.setProperty("organization", extractedOrg);
-                log.debug("🏢 Stored organization property: {}", extractedOrg);
-            }
-            
-            // 📦 Store binary reference as jcr:data (proper Oak BINARY property type)
-            if (blobId != null && !blobId.isEmpty() && context.blobStore != null) {
-                try {
-                    // Create proper Blob object from blob ID using BlobStoreBlob
-                    // This allows Oak to properly handle the binary as a BINARY property
-                    org.apache.jackrabbit.oak.api.Blob blob = 
-                        new org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob(context.blobStore, blobId);
-                    
-                    // Set as proper BINARY type property (not String!)
-                    contentNode.setProperty("jcr:data", blob, org.apache.jackrabbit.oak.api.Type.BINARY);
-                    
-                    if (mimeType != null && !mimeType.isEmpty()) {
-                        contentNode.setProperty("jcr:mimeType", mimeType);
-                    }
-                    
-                    // Store raw blob ID
-                    contentNode.setProperty("jcr:blobId", blobId);
-                    
-                    // 🔗 ADR 016: Store IPFS CID from client-side upload
-                    // The client uploads to IPFS first and provides the CID in the proposal
-                    // This is the preferred architecture - no validator-side IPFS upload needed
-                    if (ipfsCid != null && !ipfsCid.isEmpty()) {
-                        contentNode.setProperty("ipfsCid", ipfsCid);
-                        contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + ipfsCid);
-                        log.info("✅ Binary stored with client-provided IPFS CID: jcr:blobId={}, ipfsCid={}", blobId, ipfsCid);
-                    } else {
-                        // Fallback: Try to get CID from validator's IPFSDataStore (legacy path)
-                        // This path is deprecated - clients should provide CID directly
-                        String derivedCid = null;
-                        if (context.blobStore instanceof org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) {
-                            try {
-                                org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore dsBlobStore = 
-                                    (org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) context.blobStore;
-                                Object dataStore = dsBlobStore.getDataStore();
-                                if (dataStore instanceof org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) {
-                                    org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfsDataStore = 
-                                        (org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore) dataStore;
-                                    
-                                    // Try a few times (async upload may still be in progress)
-                                    for (int retry = 0; retry < 5 && derivedCid == null; retry++) {
-                                        derivedCid = ipfsDataStore.getCID(blobId);
-                                        if (derivedCid == null && retry < 4) {
-                                            Thread.sleep(200); // Wait 200ms between retries
-                                        }
-                                    }
-                                }
-                            } catch (Exception e) {
-                                log.debug("Could not get IPFS CID from validator: {}", e.getMessage());
-                            }
-                        }
-                        
-                        if (derivedCid != null) {
-                            contentNode.setProperty("ipfsCid", derivedCid);
-                            contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + derivedCid);
-                            log.info("✅ Binary stored with validator-derived IPFS CID (legacy): jcr:blobId={}, ipfsCid={}", blobId, derivedCid);
-                        } else {
-                            log.info("✅ Binary stored (no IPFS CID - client should provide): jcr:blobId={}", blobId);
-                        }
-                    }
-                    
-                } catch (Exception e) {
-                    log.error("❌ Failed to create Blob from blobId {}: {}", blobId, e.getMessage());
-                    // Fallback: store as string reference
-                    contentNode.setProperty("jcr:data", blobId);
-                    if (mimeType != null && !mimeType.isEmpty()) {
-                        contentNode.setProperty("jcr:mimeType", mimeType);
-                    }
-                }
-            }
-            
-            // 🔗 ADR 016: Store ipfsCid even without blobId (pure IPFS reference)
-            // This supports content that exists only on IPFS without local blob storage
-            if ((blobId == null || blobId.isEmpty()) && ipfsCid != null && !ipfsCid.isEmpty()) {
-                contentNode.setProperty("ipfsCid", ipfsCid);
-                contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + ipfsCid);
-                log.info("🔗 Stored pure IPFS reference (no local blob): ipfsCid={}", ipfsCid);
-            }
-            
-            // 🔗 ADR 020: Store intentToken for lazy binary upload
-            // If intentToken is present, it means this write is associated with a pending binary upload
-            // The client will upload the binary to IPFS after seeing this node replicate, then complete the upload
-            if (intentToken != null && !intentToken.isEmpty()) {
-                contentNode.setProperty("jcr:intentToken", intentToken);
-                contentNode.setProperty("jcr:pendingBinary", true);
-                log.debug("📎 Intent token stored for lazy binary upload: {}", intentToken);
-            }
-            
-            
-            // 🎯 DETERMINISTIC STATE MACHINE: ALL nodes commit identically
-            // Aeron guarantees: same messages, same order, on ALL nodes
-            // Therefore: same processing = same HEAD (guaranteed!)
-            // NO manual HEAD broadcasts needed - consistency by design
-            
-            // Commit info (SAME on all nodes)
-            org.apache.jackrabbit.oak.spi.commit.CommitInfo commitInfo = 
-                new org.apache.jackrabbit.oak.spi.commit.CommitInfo(
-                    "aeron-replication", 
-                    null, 
-                    java.util.Collections.singletonMap("replicated", "true")
-                );
-            
-            // Merge changes (SAME on all nodes)
-            context.nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, commitInfo);
-            
-            // Flush FileStore (SAME on all nodes)
-            context.fileStore.flush();
-            
-            // Track fragmentation (SAME on all nodes)
-            trackFragmentation(walletAddress);
-            
-            // Get new HEAD (SAME on all nodes because same processing!)
-            String newHead = context.fileStore.getHead().getRecordId().toString10();
-            log.debug("✅ Write applied, HEAD: {}...", newHead.substring(0, Math.min(20, newHead.length())));
-            
-            // Update latest HEAD cache (SAME on all nodes)
-            if (context.aeronConsensusEngine != null) {
-                context.aeronConsensusEngine.updateLatestHead(newHead);
-            }
-            
-            // 📡 ADR 036: Emit SSE event for real-time discovery
-            if (context.eventBroadcaster != null) {
-                try {
-                    String sseOrg = extractOrganizationFromPath(path);
-                    if (blobId != null && !blobId.isEmpty()) {
-                        // Binary upload event - try to get IPFS CID
-                        String eventCid = null;
-                        
-                        // Method 1: Try CID mapping service first (most reliable)
-                        if (context.cidMappingService != null) {
-                            try {
-                                java.util.Optional<String> mappedCid = context.cidMappingService.getCid(blobId);
-                                if (mappedCid.isPresent()) {
-                                    eventCid = mappedCid.get();
-                                    log.debug("📡 SSE: Got CID from mapping service: {}", eventCid);
-                                }
-                            } catch (Exception e) {
-                                log.debug("CID mapping lookup failed: {}", e.getMessage());
-                            }
-                        }
-                        
-                        // Method 2: Fallback to reading from node
-                        if (eventCid == null) {
-                            try {
-                                org.apache.jackrabbit.oak.spi.state.NodeState newRoot = context.nodeStore.getRoot();
-                                for (String part : path.substring(1).split("/")) {
-                                    if (!part.isEmpty() && newRoot.hasChildNode(part)) {
-                                        newRoot = newRoot.getChildNode(part);
-                                    }
-                                }
-                                org.apache.jackrabbit.oak.api.PropertyState cidProp = newRoot.getProperty("ipfsCid");
-                                if (cidProp != null) {
-                                    eventCid = cidProp.getValue(org.apache.jackrabbit.oak.api.Type.STRING);
-                                    log.debug("📡 SSE: Got CID from node property: {}", eventCid);
-                                }
-                            } catch (Exception e) {
-                                log.debug("Node CID lookup failed: {}", e.getMessage());
-                            }
-                        }
-                        
-                        context.eventBroadcaster.emitBinaryUpload(
-                            path, walletAddress, sseOrg, message, eventCid, null, mimeType
-                        );
-                        log.debug("📡 SSE binary event emitted: path={}, cid={}, mimeType={}", path, eventCid, mimeType);
-                    } else {
-                        // Content write event
-                        context.eventBroadcaster.emitContentWrite(
-                            path, walletAddress, sseOrg, message, signature, contentType
-                        );
-                    }
-                } catch (Exception e) {
-                    log.debug("Failed to emit SSE event: {}", e.getMessage());
-                }
-            }
-            
-            // 🎯 ALL nodes now have IDENTICAL HEAD - no broadcast needed!
-            log.debug("✅ Deterministic write applied successfully");
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to apply replicated write", e);
-            throw new RuntimeException("Failed to apply replicated write", e);
-        }
+        // Delegate to WriteApplicationService
+        writeApplicationService.applyWrite(
+            walletAddress, path, contentType, message, signature,
+            intentToken, blobId, mimeType, ipfsCid
+        );
     }
     
     /**
      * ✈️ AERON NATIVE: Apply replicated delete to FileStore.
      * This is called from AeronConsensusEngine.onSessionMessage() after Aeron replicates the delete.
      * 
+     * <p>Delegates to {@link DeleteApplicationService} for the actual delete application.
+     * 
      * Delete in Oak = Remove node from tree (writes new segment saying "path no longer exists")
      * Old segments remain until GC/compaction runs
      */
     public void applyReplicatedDelete(String walletAddress, String path, String signature) {
-        try {
-            log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
-            
-            // Get current HEAD
-            String previousHead = context.fileStore.getHead().getRecordId().toString();
-            log.debug("📍 Previous HEAD: {}", previousHead.substring(0, Math.min(20, previousHead.length())));
-            
-            // Parse path: /oak-chain/{shard}/content/{contentId}
-            String[] pathParts = path.split("/");
-            if (pathParts.length < 2) {
-                log.error("❌ Invalid path format: {} (expected: /oak-chain/...)", path);
-                return;
-            }
-            
-            // Build node structure and navigate to target
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = context.nodeStore.getRoot().builder();
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder current = rootBuilder;
-            
-            // Navigate to parent of node to delete
-            boolean pathExists = true;
-            for (int i = 1; i < pathParts.length - 1; i++) {
-                if (!pathParts[i].isEmpty()) {
-                    if (!current.hasChildNode(pathParts[i])) {
-                        log.warn("⚠️  Path does not exist: {} (stopping at segment: {})", path, pathParts[i]);
-                        pathExists = false;
-                        break;
-                    }
-                    current = current.getChildNode(pathParts[i]);
-                }
-            }
-            
-            if (!pathExists) {
-                log.warn("⚠️  Delete skipped - path doesn't exist: {}", path);
-                // Not an error - idempotent delete (already gone)
-                return;
-            }
-            
-            // Remove target node
-            String targetNodeName = pathParts[pathParts.length - 1];
-            if (current.hasChildNode(targetNodeName)) {
-                current.getChildNode(targetNodeName).remove();
-                log.info("✅ Node removed: {}", targetNodeName);
-            } else {
-                log.warn("⚠️  Target node doesn't exist: {} (idempotent delete)", targetNodeName);
-                // Not an error - already deleted
-                return;
-            }
-            
-            // Commit the deletion (deterministic on all nodes)
-            org.apache.jackrabbit.oak.spi.commit.CommitInfo commitInfo = 
-                new org.apache.jackrabbit.oak.spi.commit.CommitInfo(
-                    "aeron-replication-delete", 
-                    null, 
-                    java.util.Collections.singletonMap("replicated", "true")
-                );
-            
-            context.nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, commitInfo);
-            context.fileStore.flush();
-            
-            // Get new HEAD (all nodes have same HEAD after deterministic delete)
-            String newHead = context.fileStore.getHead().getRecordId().toString10();
-            log.info("✅ DELETE applied, HEAD: {}...", newHead.substring(0, Math.min(20, newHead.length())));
-            
-            // Update latest HEAD cache
-            if (context.aeronConsensusEngine != null) {
-                context.aeronConsensusEngine.updateLatestHead(newHead);
-            }
-            
-            // 📡 ADR 036: Emit SSE delete event for real-time discovery
-            if (context.eventBroadcaster != null) {
-                try {
-                    String extractedOrg = extractOrganizationFromPath(path);
-                    context.eventBroadcaster.emitContentDelete(path, walletAddress, extractedOrg, signature);
-                } catch (Exception e) {
-                    log.debug("Failed to emit SSE delete event: {}", e.getMessage());
-                }
-            }
-            
-            log.info("✅ Deterministic delete applied successfully - old segments remain until GC");
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to apply replicated delete", e);
-            throw new RuntimeException("Failed to apply replicated delete", e);
-        }
-    }
-    
-    /**
-     * Enrich wallet node with metadata about the wallet owner.
-     * 
-     * This method adds rich metadata to the wallet node itself (the node representing
-     * the Ethereum address) including:
-     * - Wallet address
-     * - Creation timestamp
-     * - Last updated timestamp
-     * - Content statistics (number of content items created)
-     * - Owner information (ENS name, if available - future feature)
-     * 
-     * Path example: /oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148
-     * 
-     * @param walletNode The NodeBuilder for the wallet node
-     * @param walletNodeName The wallet address (0x...)
-     * @param walletAddress The normalized wallet address from the proposal
-     */
-    private void enrichWalletNode(org.apache.jackrabbit.oak.spi.state.NodeBuilder walletNode, 
-                                   String walletNodeName, String walletAddress) {
-        try {
-            // Check if this is a new wallet node (no properties set yet)
-            boolean isNewWallet = !walletNode.hasProperty("wallet");
-            
-            if (isNewWallet) {
-                log.info("🆕 Creating new wallet node with metadata: {}", walletNodeName);
-                
-                // Set wallet metadata
-                walletNode.setProperty("jcr:primaryType", "nt:unstructured");
-                walletNode.setProperty("wallet", walletAddress);
-                walletNode.setProperty("walletCreated", System.currentTimeMillis());
-                walletNode.setProperty("nodeType", "wallet-root");
-                walletNode.setProperty("description", "Wallet-scoped content root for " + walletAddress);
-                
-                // Initialize statistics
-                walletNode.setProperty("contentCount", 0L);
-                walletNode.setProperty("totalWrites", 0L);
-                walletNode.setProperty("lastWrite", System.currentTimeMillis());
-                
-                // Future: ENS name lookup
-                // walletNode.setProperty("ensName", lookupENS(walletAddress));
-                
-                // Future: On-chain verification
-                // walletNode.setProperty("verifiedOnChain", false);
-                
-                log.debug("✅ Wallet node metadata initialized: {}", walletAddress);
-            } else {
-                // Update existing wallet node metadata
-                long contentCount = walletNode.getProperty("contentCount") != null 
-                    ? walletNode.getProperty("contentCount").getValue(org.apache.jackrabbit.oak.api.Type.LONG) 
-                    : 0L;
-                long totalWrites = walletNode.getProperty("totalWrites") != null 
-                    ? walletNode.getProperty("totalWrites").getValue(org.apache.jackrabbit.oak.api.Type.LONG) 
-                    : 0L;
-                
-                // Increment counters
-                walletNode.setProperty("contentCount", contentCount + 1);
-                walletNode.setProperty("totalWrites", totalWrites + 1);
-                walletNode.setProperty("lastWrite", System.currentTimeMillis());
-                
-                log.debug("📊 Wallet node updated: {} (contentCount: {}, totalWrites: {})", 
-                    walletAddress, contentCount + 1, totalWrites + 1);
-            }
-        } catch (Exception e) {
-            // Don't fail the write if metadata enrichment fails
-            // This is nice-to-have, not critical
-            log.warn("⚠️  Failed to enrich wallet node metadata for {}: {}", 
-                walletAddress, e.getMessage());
-        }
+        // Delegate to DeleteApplicationService
+        deleteApplicationService.applyDelete(walletAddress, path, signature);
     }
     
     /**
@@ -1733,42 +1414,6 @@ public class ConsensusApiHandler {
             response.getWriter().write("{\"error\":\"GC cost estimation failed: " + 
                 FormatUtils.escapeJson(e.getMessage()) + "\"}");
         }
-    }
-    
-    /**
-     * Extract organization from a content path (ADR 037).
-     * 
-     * <p>Path format: /oak-chain/XX/YY/ZZ/0xWALLET/{organization}/content/{contentId}
-     * Organization is the segment after wallet address, before "content".
-     * 
-     * @param path The full content path
-     * @return Organization name, or null if not present
-     */
-    private String extractOrganizationFromPath(String path) {
-        if (path == null || path.isEmpty()) {
-            return null;
-        }
-        
-        String[] parts = path.split("/");
-        // Path: ["", "oak-chain", "XX", "YY", "ZZ", "0xWALLET", "Organization", "content", "contentId"]
-        // Index:  0       1         2     3     4        5            6            7          8
-        // Or without org:
-        // Path: ["", "oak-chain", "XX", "YY", "ZZ", "0xWALLET", "content", "contentId"]
-        // Index:  0       1         2     3     4        5          6          7
-        
-        if (parts.length < 8) {
-            return null; // No organization in path
-        }
-        
-        // Check if index 6 is an organization (not "content")
-        // The wallet is at index 5 (starts with "0x")
-        // If index 6 is not "content", it's the organization
-        String potentialOrg = parts[6];
-        if (!"content".equals(potentialOrg) && !potentialOrg.startsWith("0x")) {
-            return potentialOrg;
-        }
-        
-        return null;
     }
     
     /**
