@@ -88,10 +88,13 @@ Leadership Claim State Machine:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ PENDING → ACCEPTED / REJECTED / SUPERSEDED                                  │
 │                                                                             │
-│ GAP: Aeron Cluster doesn't expose leaderMemberId() directly                 │
-│      Location: LeaderDiscoveryService.java:177                              │
-│      Workaround: Query peers via HTTP                                       │
-│      Ideal: Native Aeron API access                                         │
+│ ✅ RESOLVED: Leader discovery implementation                                │
+│      Location: LeaderDiscoveryService.java                                  │
+│      Implementation: Multi-strategy approach:                               │
+│        1. Check if current node is leader via cluster.role()                │
+│        2. Use tracked knownLeaderUrl from onRoleChange() callbacks          │
+│        3. Reflection-based leaderMemberId() lookup (version-dependent)      │
+│        4. HTTP peer polling via /v1/aeron/cluster-state                     │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 

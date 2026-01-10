@@ -70,11 +70,24 @@ public class LeaderDiscoveryService {
     /** Leader cache TTL (ms) */
     private static final long LEADER_CACHE_TTL_MS = 10000; // 10 seconds
     
+    /** HTTP connection timeout for peer polling (ms) */
+    private static final int HTTP_CONNECT_TIMEOUT_MS = 2000;
+    
+    /** HTTP read timeout for peer polling (ms) */
+    private static final int HTTP_READ_TIMEOUT_MS = 3000;
+    
     private final Map<Integer, String> nodeIdToUrl;
     private final List<String> peerUrls;
     
     private volatile String cachedLeaderUrl = null;
     private volatile long cachedLeaderTimestamp = 0;
+    
+    // Track known leader from role change callbacks
+    private volatile String knownLeaderUrl = null;
+    private volatile int knownLeaderMemberId = -1;
+    
+    // Self URL for comparison
+    private volatile String selfUrl = null;
     
     /**
      * Create a new leader discovery service (default constructor for OSGi).
@@ -131,6 +144,54 @@ public class LeaderDiscoveryService {
     }
     
     /**
+     * Set self URL for this validator.
+     */
+    public void setSelfUrl(String selfUrl) {
+        this.selfUrl = selfUrl;
+        log.debug("Set self URL: {}", selfUrl);
+    }
+    
+    /**
+     * Notify that this node became leader.
+     * Called from AeronConsensusEngine.onRoleChange() when role becomes LEADER.
+     * 
+     * @param memberId the Aeron member ID of this node
+     */
+    public void notifyBecameLeader(int memberId) {
+        this.knownLeaderUrl = selfUrl;
+        this.knownLeaderMemberId = memberId;
+        this.cachedLeaderUrl = selfUrl;
+        this.cachedLeaderTimestamp = System.currentTimeMillis();
+        log.info("🎯 This node is now leader (memberId: {}, url: {})", memberId, selfUrl);
+    }
+    
+    /**
+     * Notify that this node is no longer leader.
+     * Called from AeronConsensusEngine.onRoleChange() when role changes from LEADER.
+     */
+    public void notifyLostLeadership() {
+        // Clear known leader - we need to discover the new one
+        this.knownLeaderUrl = null;
+        this.knownLeaderMemberId = -1;
+        invalidateCache();
+        log.info("🔄 This node lost leadership - will discover new leader");
+    }
+    
+    /**
+     * Set the known leader (called when we discover leader from another source).
+     * 
+     * @param leaderUrl URL of the leader
+     * @param memberId Aeron member ID of the leader (-1 if unknown)
+     */
+    public void setKnownLeader(String leaderUrl, int memberId) {
+        this.knownLeaderUrl = leaderUrl;
+        this.knownLeaderMemberId = memberId;
+        this.cachedLeaderUrl = leaderUrl;
+        this.cachedLeaderTimestamp = System.currentTimeMillis();
+        log.debug("Set known leader: {} (memberId: {})", leaderUrl, memberId);
+    }
+    
+    /**
      * Discover the current leader URL.
      * 
      * @param cluster Aeron cluster instance
@@ -167,6 +228,15 @@ public class LeaderDiscoveryService {
     
     /**
      * Discover leader from Aeron cluster state.
+     * 
+     * <p><strong>Implementation Strategy:</strong>
+     * Aeron's ClusteredService interface doesn't expose leaderMemberId() directly.
+     * However, we can determine leadership through:
+     * <ol>
+     *   <li>Check if current node is leader via cluster.role()</li>
+     *   <li>Use tracked knownLeaderUrl from onRoleChange() callbacks</li>
+     *   <li>Map member ID to URL if we have the mapping</li>
+     * </ol>
      */
     private String discoverFromAeronCluster(Cluster cluster) {
         if (cluster == null) {
@@ -174,10 +244,49 @@ public class LeaderDiscoveryService {
         }
         
         try {
-            // TODO: Aeron Cluster API doesn't expose leaderMemberId() directly
-            // Need to use cluster state or role to determine leader
-            // For now, return null (fallback to peer polling will be used)
-            log.debug("Leader discovery from Aeron cluster not yet implemented (API limitations)");
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // STRATEGY 1: Check if WE are the leader
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            if (cluster.role() == Cluster.Role.LEADER) {
+                log.debug("This node is leader (role check)");
+                return selfUrl;
+            }
+            
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // STRATEGY 2: Use tracked leader from role change callbacks
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            if (knownLeaderUrl != null) {
+                log.debug("Using tracked leader: {}", knownLeaderUrl);
+                return knownLeaderUrl;
+            }
+            
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // STRATEGY 3: Try to get leader member ID from cluster
+            // Note: This uses reflection as a fallback since the API
+            // doesn't expose leaderMemberId() on the Cluster interface
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            try {
+                // Some Aeron versions expose leaderMemberId() on the implementation
+                java.lang.reflect.Method leaderMethod = cluster.getClass().getMethod("leaderMemberId");
+                Object result = leaderMethod.invoke(cluster);
+                if (result instanceof Integer) {
+                    int leaderMemberId = (Integer) result;
+                    if (leaderMemberId >= 0) {
+                        String leaderUrl = nodeIdToUrl.get(leaderMemberId);
+                        if (leaderUrl != null) {
+                            log.debug("Found leader via reflection: memberId={}, url={}", leaderMemberId, leaderUrl);
+                            return leaderUrl;
+                        }
+                    }
+                }
+            } catch (NoSuchMethodException e) {
+                // Expected - method not available in this Aeron version
+                log.trace("leaderMemberId() not available via reflection");
+            } catch (Exception e) {
+                log.debug("Reflection-based leader discovery failed: {}", e.getMessage());
+            }
+            
+            log.debug("Could not determine leader from Aeron cluster state");
             
         } catch (Exception e) {
             log.error("Failed to discover leader from Aeron cluster", e);
@@ -190,21 +299,135 @@ public class LeaderDiscoveryService {
      * Discover leader by polling peers.
      * 
      * <p>This is a fallback when Aeron cluster state is not available.
-     * It polls each peer's /api/health endpoint to find who reports as leader.
+     * It polls each peer's /v1/aeron/cluster-state endpoint to find who reports as leader.
      */
     private String discoverFromPeers() {
+        log.debug("Polling {} peers for leader discovery", peerUrls.size());
+        
         for (String peerUrl : peerUrls) {
             try {
-                // TODO: HTTP call to /api/health to check if peer is leader
-                // For now, just return null (not implemented)
-                log.debug("Polling peer: {}", peerUrl);
-                
+                String leaderUrl = pollPeerForLeader(peerUrl);
+                if (leaderUrl != null) {
+                    log.info("Discovered leader via peer polling: {}", leaderUrl);
+                    return leaderUrl;
+                }
             } catch (Exception e) {
                 log.debug("Failed to poll peer {}: {}", peerUrl, e.getMessage());
             }
         }
         
+        // Also check self if we're in the peer list
+        if (selfUrl != null && !peerUrls.contains(selfUrl)) {
+            try {
+                String leaderUrl = pollPeerForLeader(selfUrl);
+                if (leaderUrl != null) {
+                    return leaderUrl;
+                }
+            } catch (Exception e) {
+                log.debug("Failed to poll self: {}", e.getMessage());
+            }
+        }
+        
         return null;
+    }
+    
+    /**
+     * Poll a single peer for leader information.
+     * 
+     * @param peerUrl URL of the peer to poll
+     * @return leader URL if this peer knows the leader, null otherwise
+     */
+    private String pollPeerForLeader(String peerUrl) {
+        try {
+            // Query the Aeron cluster state endpoint
+            java.net.URL apiUrl = new java.net.URL(peerUrl + "/v1/aeron/cluster-state");
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(HTTP_READ_TIMEOUT_MS);
+            
+            // Handle ngrok URLs
+            if (peerUrl.contains("ngrok")) {
+                conn.setRequestProperty("ngrok-skip-browser-warning", "true");
+            }
+            
+            int responseCode = conn.getResponseCode();
+            if (responseCode == 200) {
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(conn.getInputStream())
+                );
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    response.append(line);
+                }
+                reader.close();
+                
+                String json = response.toString();
+                
+                // Parse role from response
+                String role = extractJsonField(json, "role");
+                
+                // If this peer is the leader, return its URL
+                if ("LEADER".equalsIgnoreCase(role)) {
+                    log.debug("Peer {} reports as LEADER", peerUrl);
+                    return peerUrl;
+                }
+                
+                // Check if peer knows who the leader is
+                String leaderUrl = extractJsonField(json, "leaderUrl");
+                if (leaderUrl != null && !leaderUrl.isEmpty() && !"null".equals(leaderUrl)) {
+                    log.debug("Peer {} reports leader as: {}", peerUrl, leaderUrl);
+                    return leaderUrl;
+                }
+            }
+            
+        } catch (java.net.SocketTimeoutException e) {
+            log.debug("Timeout polling peer {}", peerUrl);
+        } catch (java.io.IOException e) {
+            log.debug("IO error polling peer {}: {}", peerUrl, e.getMessage());
+        } catch (Exception e) {
+            log.debug("Error polling peer {}: {}", peerUrl, e.getMessage());
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Extract a field from JSON string (simple parser).
+     */
+    private String extractJsonField(String json, String field) {
+        String pattern = "\"" + field + "\":\"";
+        int startIdx = json.indexOf(pattern);
+        if (startIdx < 0) {
+            // Try without quotes (for non-string values)
+            pattern = "\"" + field + "\":";
+            startIdx = json.indexOf(pattern);
+            if (startIdx < 0) {
+                return null;
+            }
+            startIdx += pattern.length();
+            // Skip whitespace
+            while (startIdx < json.length() && Character.isWhitespace(json.charAt(startIdx))) {
+                startIdx++;
+            }
+            // Handle quoted or unquoted value
+            if (startIdx < json.length() && json.charAt(startIdx) == '"') {
+                startIdx++;
+                int endIdx = json.indexOf("\"", startIdx);
+                return endIdx > startIdx ? json.substring(startIdx, endIdx) : null;
+            }
+            // Unquoted value (number, boolean, null)
+            int endIdx = startIdx;
+            while (endIdx < json.length() && !Character.isWhitespace(json.charAt(endIdx)) 
+                   && json.charAt(endIdx) != ',' && json.charAt(endIdx) != '}') {
+                endIdx++;
+            }
+            return endIdx > startIdx ? json.substring(startIdx, endIdx) : null;
+        }
+        startIdx += pattern.length();
+        int endIdx = json.indexOf("\"", startIdx);
+        return endIdx > startIdx ? json.substring(startIdx, endIdx) : null;
     }
     
     /**
@@ -281,6 +504,37 @@ public class LeaderDiscoveryService {
      * Get cached leader URL (for testing/monitoring).
      */
     public String getCachedLeaderUrl() {
+        return cachedLeaderUrl;
+    }
+    
+    /**
+     * Get known leader URL (from role change tracking).
+     */
+    public String getKnownLeaderUrl() {
+        return knownLeaderUrl;
+    }
+    
+    /**
+     * Get known leader member ID.
+     */
+    public int getKnownLeaderMemberId() {
+        return knownLeaderMemberId;
+    }
+    
+    /**
+     * Check if leader is known (either cached or tracked).
+     */
+    public boolean isLeaderKnown() {
+        return knownLeaderUrl != null || cachedLeaderUrl != null;
+    }
+    
+    /**
+     * Get the best known leader URL (tracked > cached).
+     */
+    public String getBestKnownLeaderUrl() {
+        if (knownLeaderUrl != null) {
+            return knownLeaderUrl;
+        }
         return cachedLeaderUrl;
     }
 }
