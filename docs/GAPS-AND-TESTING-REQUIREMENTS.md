@@ -102,8 +102,8 @@ Leadership Claim State Machine:
 
 | Gap | Location | Impact |
 |-----|----------|--------|
-| Content size estimation | `ConsensusApiHandler.java:850` | Inaccurate storage cost calculation |
-| Genesis hash verification | `SegmentHttpServer.java:187` | POC placeholder, not cryptographic |
+| ~~Content size estimation~~ | ~~`ConsensusApiHandler.java`~~ | ✅ **Implemented** - NodeStore traversal |
+| ~~Genesis hash verification~~ | ~~`SegmentHttpServer.java`~~ | ✅ **Implemented** - SHA-256 cryptographic hash |
 | Wallet-based registration | `SegmentHttpServer.java:622` | IP-based fallback still in use |
 | Retry count tracking | `ProposalQueueManagerOptimized.java:691` | No retry metadata |
 | Segment reference parsing | `GlobalStoreServer.java:2417` | Incomplete segment graph traversal |

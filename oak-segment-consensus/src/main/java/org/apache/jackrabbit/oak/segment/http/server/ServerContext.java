@@ -87,6 +87,11 @@ public class ServerContext {
     public volatile String myValidatorUrl;
     public volatile java.util.List<String> myPeerUrls;
     
+    // Genesis tracking for proof verification
+    public volatile String genesisSegmentId;
+    public volatile String genesisHash;
+    public volatile long genesisTimestamp;
+    
     public ServerContext(
             FileStore fileStore,
             NodeStore nodeStore,

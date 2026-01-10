@@ -853,7 +853,7 @@ public class ProposalQueueManagerOptimized {
                     // Note: Initial verification happens in ConsensusApiHandler at API entry
                     // This is a secondary check for proposals that bypass the API (e.g., internal)
                     // Skip in mock mode - signature verification is done at API entry in real mode
-                    boolean isMockMode = org.apache.jackrabbit.oak.segment.consensus.BlockchainConfig.getInstance().isMockMode();
+                    boolean isMockMode = org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance().isMockMode();
                     
                     if (!isMockMode) {
                         String signedMessage = proposal.getMessage() != null ? proposal.getMessage() : "";
