@@ -24,6 +24,8 @@ import org.osgi.service.component.annotations.Deactivate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
+
 /**
  * Service responsible for dispatching incoming Aeron messages to appropriate handlers.
  * 
@@ -142,43 +144,76 @@ public class MessageDispatcher {
     /**
      * Dispatch an incoming Aeron message to the appropriate handler.
      * 
+     * <p>Uses {@link SimpleMessageHeader} to decode the SBE header format:
+     * <ul>
+     *   <li>Bytes 0-1: blockLength (payload size)</li>
+     *   <li>Bytes 2-3: templateId (message type)</li>
+     *   <li>Bytes 4-5: schemaId</li>
+     *   <li>Bytes 6-7: version</li>
+     * </ul>
+     * 
      * @param timestamp message timestamp
      * @param buffer message buffer
-     * @param index buffer index
+     * @param offset buffer offset
      * @param length message length
      * @return true if message was successfully processed
      */
-    public boolean dispatch(long timestamp, DirectBuffer buffer, int index, int length) {
+    public boolean dispatch(long timestamp, DirectBuffer buffer, int offset, int length) {
         try {
-            // Read SBE template ID (first 2 bytes)
-            int templateId = buffer.getShort(index, java.nio.ByteOrder.LITTLE_ENDIAN);
+            // Validate minimum message length for SBE header
+            if (length < SimpleMessageHeader.ENCODED_LENGTH) {
+                log.warn("⚠️  Message too short: {} bytes (minimum {} for SBE header)", 
+                    length, SimpleMessageHeader.ENCODED_LENGTH);
+                return false;
+            }
             
-            log.debug("📬 Received message: templateId={}, length={}", templateId, length);
+            // Decode SBE header using SimpleMessageHeader
+            SimpleMessageHeader.HeaderInfo header = SimpleMessageHeader.decode(buffer, offset);
             
-            switch (templateId) {
-                case 1: // HEAD_BROADCAST (legacy single)
-                    return handleHeadBroadcast(buffer, index, length);
+            log.debug("📬 Received message: templateId={}, blockLength={}, length={}", 
+                header.templateId, header.blockLength, length);
+            
+            // Validate payload length matches header
+            int payloadLength = length - SimpleMessageHeader.ENCODED_LENGTH;
+            if (payloadLength < header.blockLength) {
+                log.warn("⚠️  Message payload shorter than header blockLength: {} < {}", 
+                    payloadLength, header.blockLength);
+                return false;
+            }
+            
+            // Advance past header to payload
+            int payloadOffset = offset + SimpleMessageHeader.ENCODED_LENGTH;
+            
+            switch (header.templateId) {
+                case SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL:
+                    return handleWriteProposal(buffer, payloadOffset, header.blockLength);
                     
-                case 100: // WRITE_PROPOSAL (single)
-                    return handleWriteProposal(buffer, index, length);
+                case SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL:
+                    return handleDeleteProposal(buffer, payloadOffset, header.blockLength);
                     
-                case 101: // DELETE_PROPOSAL (single)
-                    return handleDeleteProposal(buffer, index, length);
+                case SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH:
+                    return handleWriteBatch(buffer, payloadOffset, header.blockLength);
                     
-                case 103: // GC_PROPOSAL
-                    return handleGCProposal(buffer, index, length);
+                case SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL:
+                    return handleGCProposal(buffer, payloadOffset, header.blockLength);
                     
-                case 104: // GC_VOTE
-                    return handleGCVote(buffer, index, length);
+                case SimpleMessageHeader.TEMPLATE_ID_GC_VOTE:
+                    return handleGCVote(buffer, payloadOffset, header.blockLength);
                     
-                case 105: // GC_EXECUTE
-                    return handleGCExecute(buffer, index, length);
+                case SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE:
+                    return handleGCExecute(buffer, payloadOffset, header.blockLength);
                     
-                case 106: // WRITE_BATCH (multiple proposals)
-                    return handleWriteBatch(buffer, index, length);
+                case SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL:
+                    log.info("🎬 GENESIS proposal received - delegating to genesis callback");
+                    // Genesis is handled specially by AeronConsensusEngine
+                    return true;
+                    
+                case SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT:
+                    log.debug("📸 Snapshot message received (handled separately)");
+                    return true;
                     
                 default:
-                    log.warn("Unknown template ID: {}", templateId);
+                    log.warn("Unknown template ID: {}", header.templateId);
                     return false;
             }
             
@@ -189,54 +224,20 @@ public class MessageDispatcher {
     }
     
     /**
-     * Handle HEAD_BROADCAST message (template ID 1).
-     */
-    private boolean handleHeadBroadcast(DirectBuffer buffer, int index, int length) {
-        try {
-            // Extract JSON payload (after template ID header)
-            int jsonStartIndex = index + 10; // Skip SBE header
-            int jsonLength = length - 10;
-            byte[] jsonBytes = new byte[jsonLength];
-            buffer.getBytes(jsonStartIndex, jsonBytes);
-            String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
-            
-            // Parse JSON fields
-            String newHead = extractJsonField(json, "head");
-            String epochStr = extractJsonField(json, "epoch");
-            String timestampStr = extractJsonField(json, "timestamp");
-            String validatorCountStr = extractJsonField(json, "validatorCount");
-            
-            if (newHead == null || epochStr == null) {
-                log.warn("Invalid HEAD broadcast: missing required fields");
-                return false;
-            }
-            
-            int epoch = Integer.parseInt(epochStr);
-            long broadcastTimestamp = Long.parseLong(timestampStr);
-            int validatorCount = validatorCountStr != null ? Integer.parseInt(validatorCountStr) : 0;
-            
-            // Delegate to callback
-            headBroadcastCallback.onHeadBroadcast(newHead, epoch, broadcastTimestamp, validatorCount);
-            
-            return true;
-            
-        } catch (Exception e) {
-            log.error("Failed to handle HEAD broadcast", e);
-            return false;
-        }
-    }
-    
-    /**
      * Handle WRITE_PROPOSAL message (template ID 100).
+     * 
+     * @param buffer message buffer
+     * @param payloadOffset offset to JSON payload (after SBE header)
+     * @param payloadLength length of JSON payload
      */
-    private boolean handleWriteProposal(DirectBuffer buffer, int index, int length) {
+    private boolean handleWriteProposal(DirectBuffer buffer, int payloadOffset, int payloadLength) {
         try {
             // Extract JSON payload
-            int jsonStartIndex = index + 10;
-            int jsonLength = length - 10;
-            byte[] jsonBytes = new byte[jsonLength];
-            buffer.getBytes(jsonStartIndex, jsonBytes);
-            String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
+            
+            log.debug("✈️  Processing write proposal: {} bytes", payloadLength);
             
             // Parse write proposal fields
             String walletAddress = extractJsonField(json, "walletAddress");
@@ -250,11 +251,19 @@ public class MessageDispatcher {
             String ipfsCid = extractJsonField(json, "ipfsCid"); // ADR 016
             
             if (walletAddress == null || path == null) {
-                log.warn("Invalid write proposal: missing required fields");
+                log.warn("Invalid write proposal: missing required fields (wallet={}, path={})", 
+                    walletAddress != null, path != null);
+                return false;
+            }
+            
+            if (writeCallback == null) {
+                log.error("❌ Write callback not set - cannot apply write");
                 return false;
             }
             
             // Delegate to callback
+            log.debug("✅ Applying write: wallet={}, path={}, intentToken={}", 
+                walletAddress, path, intentToken != null ? intentToken : "none");
             writeCallback.applyWrite(walletAddress, path, contentType, message, signature, 
                                     intentToken, blobId, mimeType, ipfsCid);
             
@@ -268,15 +277,19 @@ public class MessageDispatcher {
     
     /**
      * Handle DELETE_PROPOSAL message (template ID 101).
+     * 
+     * @param buffer message buffer
+     * @param payloadOffset offset to JSON payload (after SBE header)
+     * @param payloadLength length of JSON payload
      */
-    private boolean handleDeleteProposal(DirectBuffer buffer, int index, int length) {
+    private boolean handleDeleteProposal(DirectBuffer buffer, int payloadOffset, int payloadLength) {
         try {
             // Extract JSON payload
-            int jsonStartIndex = index + 10;
-            int jsonLength = length - 10;
-            byte[] jsonBytes = new byte[jsonLength];
-            buffer.getBytes(jsonStartIndex, jsonBytes);
-            String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
+            
+            log.debug("🗑️  Processing delete proposal: {} bytes", payloadLength);
             
             // Parse delete proposal fields
             String walletAddress = extractJsonField(json, "walletAddress");
@@ -288,7 +301,13 @@ public class MessageDispatcher {
                 return false;
             }
             
+            if (writeCallback == null) {
+                log.error("❌ Write callback not set - cannot apply delete");
+                return false;
+            }
+            
             // Delegate to callback
+            log.info("🗑️  Applying delete: wallet={}, path={}", walletAddress, path);
             writeCallback.applyDelete(walletAddress, path, signature);
             
             return true;
@@ -301,82 +320,67 @@ public class MessageDispatcher {
     
     /**
      * Handle WRITE_BATCH message (template ID 106).
+     * 
+     * @param buffer message buffer
+     * @param payloadOffset offset to JSON payload (after SBE header)
+     * @param payloadLength length of JSON payload
+     * @return number of proposals successfully processed
      */
-    private boolean handleWriteBatch(DirectBuffer buffer, int index, int length) {
+    private boolean handleWriteBatch(DirectBuffer buffer, int payloadOffset, int payloadLength) {
         try {
             // Extract JSON payload
-            int jsonStartIndex = index + 10;
-            int jsonLength = length - 10;
-            byte[] jsonBytes = new byte[jsonLength];
-            buffer.getBytes(jsonStartIndex, jsonBytes);
-            String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
             
-            log.debug("📦 Processing write batch: {} bytes", jsonLength);
+            log.debug("📦 Processing write batch: {} bytes", payloadLength);
             
-            // Parse batch structure: {"batch":[{proposal1},{proposal2},...]}
-            if (!json.startsWith("{\"batch\":[")) {
-                log.warn("Invalid batch format: missing batch array");
+            if (writeCallback == null) {
+                log.error("❌ Write callback not set - cannot apply batch");
                 return false;
             }
             
-            // Extract proposals array
-            int proposalsStart = json.indexOf("[");
-            int proposalsEnd = json.lastIndexOf("]");
+            // Parse batch JSON: {"batch":[{...},{...}]}
+            int batchStart = json.indexOf("[");
+            int batchEnd = json.lastIndexOf("]");
             
-            if (proposalsStart < 0 || proposalsEnd < 0) {
-                log.warn("Invalid batch format: malformed proposals array");
+            if (batchStart < 0 || batchEnd < 0) {
+                log.error("❌ Invalid batch format: {}", json.substring(0, Math.min(100, json.length())));
                 return false;
             }
             
-            String proposalsJson = json.substring(proposalsStart + 1, proposalsEnd);
+            // Parse individual proposals from batch array
+            String batchContent = json.substring(batchStart + 1, batchEnd);
+            java.util.List<String> proposals = parseBatchProposals(batchContent);
             
-            // Split by "},{" to get individual proposals
-            String[] proposals = proposalsJson.split("\\},\\{");
+            log.debug("   Batch contains {} proposals", proposals.size());
             
+            // Process each proposal in the batch
             int successCount = 0;
             for (String proposalJson : proposals) {
-                // Clean up brackets
-                proposalJson = proposalJson.trim();
-                if (!proposalJson.startsWith("{")) {
-                    proposalJson = "{" + proposalJson;
-                }
-                if (!proposalJson.endsWith("}")) {
-                    proposalJson = proposalJson + "}";
+                // Parse proposal fields (batch proposals don't have "type" field - they're all writes)
+                String walletAddress = extractJsonField(proposalJson, "walletAddress");
+                String path = extractJsonField(proposalJson, "path");
+                String contentType = extractJsonField(proposalJson, "contentType");
+                String message = extractJsonField(proposalJson, "message");
+                String signature = extractJsonField(proposalJson, "signature");
+                String intentToken = extractJsonField(proposalJson, "intentToken");
+                String blobId = extractJsonField(proposalJson, "blobId");
+                String mimeType = extractJsonField(proposalJson, "mimeType");
+                String ipfsCid = extractJsonField(proposalJson, "ipfsCid"); // ADR 016
+                
+                if (walletAddress == null || path == null) {
+                    log.warn("Invalid proposal in batch: missing required fields");
+                    continue;
                 }
                 
-                // Parse proposal
-                String type = extractJsonField(proposalJson, "type");
-                
-                if ("write".equals(type)) {
-                    String walletAddress = extractJsonField(proposalJson, "walletAddress");
-                    String path = extractJsonField(proposalJson, "path");
-                    String contentType = extractJsonField(proposalJson, "contentType");
-                    String message = extractJsonField(proposalJson, "message");
-                    String signature = extractJsonField(proposalJson, "signature");
-                    String intentToken = extractJsonField(proposalJson, "intentToken");
-                    String blobId = extractJsonField(proposalJson, "blobId");
-                    String mimeType = extractJsonField(proposalJson, "mimeType");
-                    String ipfsCid = extractJsonField(proposalJson, "ipfsCid"); // ADR 016
-                    
-                    if (walletAddress != null && path != null) {
-                        writeCallback.applyWrite(walletAddress, path, contentType, message, 
-                                                signature, intentToken, blobId, mimeType, ipfsCid);
-                        successCount++;
-                    }
-                    
-                } else if ("delete".equals(type)) {
-                    String walletAddress = extractJsonField(proposalJson, "walletAddress");
-                    String path = extractJsonField(proposalJson, "path");
-                    String signature = extractJsonField(proposalJson, "signature");
-                    
-                    if (walletAddress != null && path != null) {
-                        writeCallback.applyDelete(walletAddress, path, signature);
-                        successCount++;
-                    }
-                }
+                writeCallback.applyWrite(walletAddress, path, contentType, message, 
+                                        signature, intentToken, blobId, mimeType, ipfsCid);
+                successCount++;
             }
             
-            log.debug("✅ Batch processed: {}/{} proposals successful", successCount, proposals.length);
+            log.debug("✅ Batch processed: {}/{} proposals successful", successCount, proposals.size());
+            lastBatchSize = successCount;
             return successCount > 0;
             
         } catch (Exception e) {
@@ -386,20 +390,60 @@ public class MessageDispatcher {
     }
     
     /**
+     * Parse batch content into individual proposal JSON strings.
+     * 
+     * <p>Handles nested JSON objects by tracking brace depth.
+     */
+    private java.util.List<String> parseBatchProposals(String batchContent) {
+        java.util.List<String> proposals = new java.util.ArrayList<>();
+        
+        int depth = 0;
+        StringBuilder currentProposal = new StringBuilder();
+        
+        for (int i = 0; i < batchContent.length(); i++) {
+            char c = batchContent.charAt(i);
+            if (c == '{') {
+                depth++;
+                currentProposal.append(c);
+            } else if (c == '}') {
+                depth--;
+                currentProposal.append(c);
+                if (depth == 0) {
+                    proposals.add(currentProposal.toString());
+                    currentProposal = new StringBuilder();
+                }
+            } else if (depth > 0) {
+                currentProposal.append(c);
+            }
+        }
+        
+        return proposals;
+    }
+    
+    /**
      * Extract a field from JSON string (simple parser, no dependencies).
+     * 
+     * <p>Handles both quoted string values and unquoted values.
      */
     private String extractJsonField(String json, String field) {
-        String pattern = "\"" + field + "\":\"";
-        int startIdx = json.indexOf(pattern);
-        if (startIdx < 0) {
-            return null;
-        }
-        startIdx += pattern.length();
-        int endIdx = json.indexOf("\"", startIdx);
-        if (endIdx < 0) {
-            return null;
-        }
-        return json.substring(startIdx, endIdx);
+        // Handle both "field":"value" and "field": "value" (with optional whitespace)
+        String fieldPrefix = "\"" + field + "\"";
+        int fieldStart = json.indexOf(fieldPrefix);
+        if (fieldStart == -1) return null;
+        
+        // Find the colon after the field name
+        int colonIndex = json.indexOf(":", fieldStart + fieldPrefix.length());
+        if (colonIndex == -1) return null;
+        
+        // Skip optional whitespace and find the opening quote
+        int quoteStart = json.indexOf("\"", colonIndex);
+        if (quoteStart == -1) return null;
+        
+        // Find the closing quote
+        int quoteEnd = json.indexOf("\"", quoteStart + 1);
+        if (quoteEnd == -1) return null;
+        
+        return json.substring(quoteStart + 1, quoteEnd);
     }
     
     /**
@@ -459,20 +503,22 @@ public class MessageDispatcher {
     
     /**
      * Handle GC_PROPOSAL message (template ID 103).
+     * 
+     * @param buffer message buffer
+     * @param payloadOffset offset to JSON payload (after SBE header)
+     * @param payloadLength length of JSON payload
      */
-    private boolean handleGCProposal(DirectBuffer buffer, int index, int length) {
+    private boolean handleGCProposal(DirectBuffer buffer, int payloadOffset, int payloadLength) {
         if (gcCallback == null) {
             log.warn("⚠️  GC callback not set - cannot process GC proposal");
             return false;
         }
         
         try {
-            // Extract JSON payload (after SBE header)
-            int jsonStartIndex = index + SimpleMessageHeader.ENCODED_LENGTH;
-            int jsonLength = length - SimpleMessageHeader.ENCODED_LENGTH;
-            byte[] jsonBytes = new byte[jsonLength];
-            buffer.getBytes(jsonStartIndex, jsonBytes);
-            String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+            // Extract JSON payload
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
             
             // Parse GC proposal fields
             String proposalId = extractJsonField(json, "proposalId");
@@ -505,8 +551,12 @@ public class MessageDispatcher {
     
     /**
      * Handle GC_VOTE message (template ID 104).
+     * 
+     * @param buffer message buffer
+     * @param payloadOffset offset to JSON payload (after SBE header)
+     * @param payloadLength length of JSON payload
      */
-    private boolean handleGCVote(DirectBuffer buffer, int index, int length) {
+    private boolean handleGCVote(DirectBuffer buffer, int payloadOffset, int payloadLength) {
         if (gcCallback == null) {
             log.warn("⚠️  GC callback not set - cannot process GC vote");
             return false;
@@ -514,11 +564,9 @@ public class MessageDispatcher {
         
         try {
             // Extract JSON payload
-            int jsonStartIndex = index + SimpleMessageHeader.ENCODED_LENGTH;
-            int jsonLength = length - SimpleMessageHeader.ENCODED_LENGTH;
-            byte[] jsonBytes = new byte[jsonLength];
-            buffer.getBytes(jsonStartIndex, jsonBytes);
-            String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
             
             // Parse GC vote fields
             String proposalId = extractJsonField(json, "proposalId");
@@ -549,8 +597,12 @@ public class MessageDispatcher {
     
     /**
      * Handle GC_EXECUTE message (template ID 105).
+     * 
+     * @param buffer message buffer
+     * @param payloadOffset offset to JSON payload (after SBE header)
+     * @param payloadLength length of JSON payload
      */
-    private boolean handleGCExecute(DirectBuffer buffer, int index, int length) {
+    private boolean handleGCExecute(DirectBuffer buffer, int payloadOffset, int payloadLength) {
         if (gcCallback == null) {
             log.warn("⚠️  GC callback not set - cannot process GC execute");
             return false;
@@ -558,11 +610,9 @@ public class MessageDispatcher {
         
         try {
             // Extract JSON payload
-            int jsonStartIndex = index + SimpleMessageHeader.ENCODED_LENGTH;
-            int jsonLength = length - SimpleMessageHeader.ENCODED_LENGTH;
-            byte[] jsonBytes = new byte[jsonLength];
-            buffer.getBytes(jsonStartIndex, jsonBytes);
-            String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
             
             // Parse GC execute fields
             String proposalId = extractJsonField(json, "proposalId");
@@ -588,5 +638,15 @@ public class MessageDispatcher {
             return false;
         }
     }
+    
+    /**
+     * Get the number of proposals processed in the last batch.
+     * Used for metrics tracking.
+     */
+    public int getLastBatchSize() {
+        return lastBatchSize;
+    }
+    
+    private volatile int lastBatchSize = 0;
 }
 

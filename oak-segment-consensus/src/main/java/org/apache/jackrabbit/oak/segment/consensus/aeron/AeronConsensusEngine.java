@@ -263,6 +263,11 @@ public class AeronConsensusEngine implements ClusteredService {
                         writeCallback.applyReplicatedWrite(walletAddress, path, contentType, 
                                                           message, signature, intentToken, 
                                                           blobId, mimeType, ipfsCid);
+                        
+                        // Track metrics after successful write
+                        trackWriteMetrics();
+                    } else {
+                        log.error("❌ Write callback not set - cannot apply replicated write");
                     }
                 }
                 
@@ -271,6 +276,11 @@ public class AeronConsensusEngine implements ClusteredService {
                     // Delegate to existing delete application logic
                     if (writeCallback != null) {
                         writeCallback.applyReplicatedDelete(walletAddress, path, signature);
+                        
+                        // Track metrics after successful delete
+                        trackWriteMetrics();
+                    } else {
+                        log.error("❌ Write callback not set - cannot apply replicated delete");
                     }
                 }
             },
@@ -421,63 +431,6 @@ public class AeronConsensusEngine implements ClusteredService {
         beaconClient.startBackgroundPolling();
         
         log.info("Ethereum integration initialized with unified epoch polling");
-    }
-    
-    /**
-     * Start polling Ethereum Beacon Chain for epoch updates.
-     * 
-     * This replaces system-time epochs with Ethereum epochs, solving
-     * clock skew issues and aligning with blockchain consensus.
-     */
-    private void startEthereumEpochPolling() {
-        if (beaconClient == null) {
-            log.warn("⚠️  Ethereum Beacon Chain client not initialized - skipping epoch polling");
-            return;
-        }
-        
-        // Poll every 780 seconds (13 minutes) - aligned with Ethereum finality
-        // Ethereum achieves finality every 2 epochs (~12.8 minutes)
-        java.util.concurrent.ScheduledExecutorService scheduler = 
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
-        
-        scheduler.scheduleAtFixedRate(() -> {
-            try {
-                // Get current finalized epoch from Beacon Chain
-                // Use the same approach as EpochListener: getLatestFinalizedEpoch()
-                // This returns epochs that are finalized (2 epochs behind current)
-                org.apache.jackrabbit.oak.segment.consensus.eth.EpochData epochData = 
-                    beaconClient.getLatestFinalizedEpoch();
-                
-                // 🔄 FINALITY BOUNDARY DETECTION: Check if we've reached a new finality boundary
-                // When a new epoch reaches finality (2 epochs behind current), broadcast HEAD
-                // to ensure all validators sync at finality boundaries
-                // 🎯 DETERMINISTIC STATE MACHINE: Finality boundary broadcasting disabled
-                // All nodes process Ethereum epoch transitions identically via Aeron
-                // HEAD consistency guaranteed by deterministic processing
-                if (isLeader() && epochData.finalized) {
-                    log.debug("📊 Finality boundary detected (epoch {}), but broadcast disabled (deterministic consensus)", 
-                        epochData.epochNumber);
-                }
-                
-                if (epochData.epochNumber > currentEthereumEpoch) {
-                    log.info("Ethereum epoch update: {} -> {} (finalized: {}, source: Beacon Chain)", 
-                        currentEthereumEpoch, epochData.epochNumber, epochData.finalized);
-                    
-                    currentEthereumEpoch = (int) epochData.epochNumber;
-                    
-                    // TODO: Use Ethereum epoch for leader rotation timing
-                    // This replaces system-time epochs with blockchain epochs
-                    // Aeron Cluster uses terms, but we can align term transitions
-                    // with Ethereum epoch boundaries for blockchain alignment
-                }
-            } catch (Exception e) {
-                log.warn("⚠️  Failed to poll Ethereum Beacon Chain: {}", e.getMessage());
-            }
-        }, 0, 780, java.util.concurrent.TimeUnit.SECONDS);
-        
-        log.info("📡 Ethereum epoch polling started");
-        log.info("   Poll interval: 780 seconds (aligned with Ethereum finality)");
-        log.info("   Current epoch: {}", currentEthereumEpoch);
     }
     
     /**
@@ -818,356 +771,44 @@ public class AeronConsensusEngine implements ClusteredService {
         // This callback is invoked on ALL nodes after Aeron replicates the message via Raft
         // Deterministic state machine: ALL nodes process messages in same order
         
-        // 🔥 RAW MESSAGE INSPECTION (GROK DEBUG) - BEFORE ANY DECODING
-        // Read template ID directly from buffer to see if batch messages (106) arrive at all
-        if (length >= 8) {
-            int rawTemplateId = buffer.getShort(offset, java.nio.ByteOrder.LITTLE_ENDIAN);
-            int rawVersion = buffer.getShort(offset + 2, java.nio.ByteOrder.LITTLE_ENDIAN);
-            log.debug("🔥 RAW INCOMING MESSAGE - templateId: {} (0x{}), version: {}, length: {}, session: {}, role: {}",
-                rawTemplateId, Integer.toHexString(rawTemplateId), rawVersion, length, session.id(),
-                cluster != null ? cluster.role() : "UNKNOWN");
-        }
-        
-        log.debug("🔍DEBUG_BATCH [RCV-1]: onSessionMessage() CALLED - session: {}, length: {}, role: {}", 
-            session.id(), length, cluster != null ? cluster.role() : "UNKNOWN");
         log.debug("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}", 
             session.id(), length, cluster != null ? cluster.role() : "UNKNOWN", timestamp);
         
         // ✈️ AERON MESSAGE VALIDATION: Check SBE message header length first
-        // Header must be at least 8 bytes (MessageHeaderDecoder.ENCODED_LENGTH)
-        if (length < org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH) {
+        if (length < SimpleMessageHeader.ENCODED_LENGTH) {
             log.warn("⚠️  Message too short: {} (minimum {} bytes for SBE header)", 
-                length, org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH);
+                length, SimpleMessageHeader.ENCODED_LENGTH);
             return;
         }
         
         try {
-            // ✈️ AERON MESSAGE DECODING: Decode SBE message header
-            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.HeaderInfo headerInfo = 
-                org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.decode(buffer, offset);
+            // Peek at template ID to handle special cases (genesis, snapshot)
+            SimpleMessageHeader.HeaderInfo headerInfo = SimpleMessageHeader.decode(buffer, offset);
             
-            log.debug("🔍DEBUG_BATCH [RCV-2]: Header decoded - templateId: {} ({}), blockLength: {}", 
-                headerInfo.templateId,
-                headerInfo.templateId == 100 ? "WRITE_PROPOSAL" : 
-                headerInfo.templateId == 106 ? "WRITE_BATCH" : "UNKNOWN",
-                headerInfo.blockLength);
-            
-            log.debug("📨 SBE Header decoded - templateId: {}, blockLength: {}, schemaId: {}, version: {}", 
-                headerInfo.templateId, headerInfo.blockLength, headerInfo.schemaId, headerInfo.version);
-            
-            // Skip header and process message payload
-            offset += org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH;
-            length -= org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH;
-            
-            // Check if message length matches header blockLength
-            if (length < headerInfo.blockLength) {
-                log.warn("⚠️  Message payload shorter than header blockLength: {} < {}", 
-                    length, headerInfo.blockLength);
+            // Handle genesis proposal specially (not delegated to MessageDispatcher)
+            if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
+                log.info("🎬 GENESIS proposal received via Aeron - creating genesis on this node");
+                applyGenesisCreation();
+                log.info("✅ Genesis creation complete on this node");
                 return;
             }
             
-            // Process message based on template ID (like production switch on templateId)
-            if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL) {
-                // Read JSON string from buffer
-                byte[] jsonBytes = new byte[headerInfo.blockLength];
-                buffer.getBytes(offset, jsonBytes);
-                String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
-                
-                log.debug("✈️  Processing replicated write proposal via Aeron (templateId: {})", headerInfo.templateId);
-                log.debug("   JSON: {}", json);
-                
-                // Parse write proposal JSON
-                String walletAddress = extractJsonField(json, "walletAddress");
-                String path = extractJsonField(json, "path");
-                String contentType = extractJsonField(json, "contentType");
-                String message = extractJsonField(json, "message");
-                String signature = extractJsonField(json, "signature");
-                String intentToken = extractJsonField(json, "intentToken"); // ADR 020
-                String blobId = extractJsonField(json, "blobId");
-                String mimeType = extractJsonField(json, "mimeType");
-                String ipfsCid = extractJsonField(json, "ipfsCid"); // ADR 016: Client-side IPFS CID
-                
-                if (walletAddress == null || path == null) {
-                    log.error("❌ Invalid write proposal: missing required fields (walletAddress: {}, path: {})", 
-                        walletAddress != null, path != null);
-                    return;
-                }
-                
-                // Apply write to FileStore via callback
-                // This ensures the write is applied on ALL nodes after replication
-                if (writeCallback != null) {
-                    log.debug("✅ APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, ipfsCid={}", 
-                        walletAddress, path, intentToken != null ? intentToken : "none", ipfsCid != null ? ipfsCid : "none");
-                    writeCallback.applyReplicatedWrite(walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid);
-                    log.debug("✅ Replicated write applied successfully on node {}", 
-                        cluster != null ? cluster.memberId() : "?");
-                    
-                    // Track acknowledgment for backpressure management
-                    // This tells the system that Aeron has successfully replicated and applied a write
-                    backpressureManager.incrementAcknowledged();
-                    log.debug("   Backpressure stats: {}", backpressureManager.getStats());
-                    
-                    // 📊 Track replication latency for Raft performance metrics
-                    // Match with ingress timestamp from FIFO queue (Raft preserves message order)
-                    Long ingressTimestampNanos = ingressTimestamps.poll();
-                    if (ingressTimestampNanos != null) {
-                        performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
-                    } else {
-                        // Timestamp queue empty - might be from a different ingress path
-                        performanceMetrics.recordMessageReplicated(System.nanoTime());
-                    }
-                    
-                    // Track write throughput and log periodic summaries
-                    long currentWriteCount = totalWritesProcessed.incrementAndGet();
-                    long currentTime = System.currentTimeMillis();
-                    
-                    // Update queue depths for metrics
-                    performanceMetrics.updateQueueDepths(
-                        0, // Ingress queue depth (we don't track this separately yet)
-                        backpressureManager.getPendingCount()
-                    );
-                    
-                    // Log summary every 10 seconds
-                    if (currentTime - lastSummaryLogTime >= SUMMARY_LOG_INTERVAL_MS) {
-                        long writesInInterval = currentWriteCount - lastSummaryWriteCount;
-                        long intervalSeconds = (currentTime - lastSummaryLogTime) / 1000;
-                        double writesPerSecond = intervalSeconds > 0 ? (double) writesInInterval / intervalSeconds : 0;
-                        
-                        // Get Raft performance snapshot
-                        AeronPerformanceMetrics.Snapshot metrics = performanceMetrics.getSnapshot();
-                        
-                        log.info("📊 Write Throughput: {} writes in {}s ({} writes/sec) | Total: {}", 
-                            writesInInterval, intervalSeconds, String.format("%.1f", writesPerSecond),
-                            currentWriteCount);
-                        
-                        // Log detailed Raft metrics
-                        log.info(metrics.toSummaryString());
-                        
-                        lastSummaryLogTime = currentTime;
-                        lastSummaryWriteCount = currentWriteCount;
-                    }
-                } else {
-                    log.error("❌ Write callback not set - cannot apply replicated write");
-                    log.error("   This means setWriteApplicationCallback() was never called");
-                    log.error("   Check GlobalStoreServer initialization to ensure callback is set");
-                }
-            } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH) {
-                log.debug("🔍DEBUG_BATCH [RCV-3]: BATCH BRANCH ENTERED - processing batch message");
-                
-                // Read JSON batch array from buffer
-                byte[] jsonBytes = new byte[headerInfo.blockLength];
-                buffer.getBytes(offset, jsonBytes);
-                String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
-                
-                log.debug("🔍DEBUG_BATCH [RCV-4]: JSON read from buffer - size: {} bytes, first 100 chars: {}", 
-                    jsonBytes.length, json.substring(0, Math.min(100, json.length())));
-                
-                log.info("✈️  Processing replicated write BATCH via Aeron (templateId: {}, size: {} bytes)", headerInfo.templateId, headerInfo.blockLength);
-                
-                log.debug("🔍DEBUG_BATCH [RCV-5]: Parsing batch JSON...");
-                
-                // Parse batch JSON: {"batch":[{...},{...}]}
-                int batchStart = json.indexOf("[");
-                int batchEnd = json.lastIndexOf("]");
-                
-                log.debug("🔍DEBUG_BATCH [RCV-6]: JSON parse indices - batchStart: {}, batchEnd: {}", 
-                    batchStart, batchEnd);
-                
-                if (batchStart < 0 || batchEnd < 0) {
-                    log.debug("🔍DEBUG_BATCH [RCV-7]: ❌ Invalid batch format - ABORTING");
-                    log.error("❌ Invalid batch format: {}", json);
-                    return;
-                }
-                
-                // Split batch into individual proposals (simple JSON parsing)
-                String batchContent = json.substring(batchStart + 1, batchEnd);
-                java.util.List<String> proposals = new java.util.ArrayList<>();
-                
-                log.debug("🔍DEBUG_BATCH [RCV-8]: batchContent length: {} chars", batchContent.length());
-                
-                int depth = 0;
-                StringBuilder currentProposal = new StringBuilder();
-                for (int i = 0; i < batchContent.length(); i++) {
-                    char c = batchContent.charAt(i);
-                    if (c == '{') {
-                        depth++;
-                        currentProposal.append(c);
-                    } else if (c == '}') {
-                        depth--;
-                        currentProposal.append(c);
-                        if (depth == 0) {
-                            proposals.add(currentProposal.toString());
-                            currentProposal = new StringBuilder();
-                        }
-                    } else if (depth > 0) {
-                        currentProposal.append(c);
-                    }
-                }
-                
-                log.debug("🔍DEBUG_BATCH [RCV-9]: Batch parsing COMPLETE - found {} proposals", proposals.size());
-                log.debug("   Batch contains {} proposals", proposals.size());
-                
-                // Process each proposal in the batch
-                int processed = 0;
-                log.debug("🔍DEBUG_BATCH [RCV-10]: Starting to process {} proposals...", proposals.size());
-                
-                for (String proposalJson : proposals) {
-                    String walletAddress = extractJsonField(proposalJson, "walletAddress");
-                    String path = extractJsonField(proposalJson, "path");
-                    String contentType = extractJsonField(proposalJson, "contentType");
-                    String message = extractJsonField(proposalJson, "message");
-                    String signature = extractJsonField(proposalJson, "signature");
-                    String intentToken = extractJsonField(proposalJson, "intentToken"); // ADR 020
-                    String blobId = extractJsonField(proposalJson, "blobId");
-                    String mimeType = extractJsonField(proposalJson, "mimeType");
-                    String ipfsCid = extractJsonField(proposalJson, "ipfsCid"); // ADR 016: Client-side IPFS CID
-                    
-                    if (walletAddress == null || path == null) {
-                        log.error("❌ Invalid proposal in batch: missing required fields");
-                        continue;
-                    }
-                    
-                    log.debug("🔍DEBUG_BATCH [RCV-11]: Processing proposal {} of {} - wallet: {}, path: {}, intentToken: {}, ipfsCid: {}", 
-                        processed + 1, proposals.size(), walletAddress, path, intentToken != null ? intentToken : "none", ipfsCid != null ? ipfsCid : "none");
-                    
-                    // Apply write to FileStore via callback
-                    if (writeCallback != null) {
-                        log.debug("🔍DEBUG_BATCH [RCV-12]: Calling writeCallback.applyReplicatedWrite()...");
-                        writeCallback.applyReplicatedWrite(walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid);
-                        log.debug("🔍DEBUG_BATCH [RCV-13]: writeCallback.applyWrite() COMPLETE");
-                        
-                        // Track acknowledgment for backpressure management
-                        backpressureManager.incrementAcknowledged();
-                        
-                        processed++;
-                    } else {
-                        log.debug("🔍DEBUG_BATCH [RCV-14]: ❌ writeCallback is NULL!");
-                    }
-                }
-                
-                log.debug("🔍DEBUG_BATCH [RCV-15]: ✅ ALL PROPOSALS PROCESSED - processed: {}, total: {}", 
-                    processed, proposals.size());
-                
-                // 📊 Track replication latency for the batch
-                Long ingressTimestampNanos = ingressTimestamps.poll();
-                if (ingressTimestampNanos != null) {
-                    performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
-                    log.debug("🔍DEBUG_BATCH [RCV-16]: Tracked replication latency");
-                }
-                
-                // Track write throughput
-                long currentWriteCount = totalWritesProcessed.addAndGet(processed);
-                log.debug("🔍DEBUG_BATCH [RCV-17]: Updated metrics - currentWriteCount: {}", currentWriteCount);
-                long currentTime = System.currentTimeMillis();
-                
-                // Update queue depths for metrics
-                performanceMetrics.updateQueueDepths(
-                    0,
-                    backpressureManager.getPendingCount()
-                );
-                
-                // Log summary every 10 seconds
-                if (currentTime - lastSummaryLogTime >= SUMMARY_LOG_INTERVAL_MS) {
-                    long writesInInterval = currentWriteCount - lastSummaryWriteCount;
-                    long intervalMs = currentTime - lastSummaryLogTime;
-                    long intervalSeconds = intervalMs / 1000;
-                    if (intervalSeconds == 0) intervalSeconds = 1; // Avoid division by zero
-                    
-                    double writesPerSecond = (double) writesInInterval / intervalSeconds;
-                    
-                    // Get Raft performance snapshot
-                    AeronPerformanceMetrics.Snapshot metrics = performanceMetrics.getSnapshot();
-                    
-                    log.info("📊 Write Throughput: {} writes in {}s ({} writes/sec) | Total: {}", 
-                        writesInInterval, intervalSeconds, String.format("%.1f", writesPerSecond),
-                        currentWriteCount);
-                    
-                    // Log detailed Raft metrics
-                    log.info(metrics.toSummaryString());
-                    
-                    lastSummaryLogTime = currentTime;
-                    lastSummaryWriteCount = currentWriteCount;
-                }
-                
-                log.debug("✅ Batch replicated and applied: {}/{} proposals successful", processed, proposals.size());
-                
-            } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL) {
-                // Read JSON string from buffer
-                byte[] jsonBytes = new byte[headerInfo.blockLength];
-                buffer.getBytes(offset, jsonBytes);
-                String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
-                
-                log.debug("✈️  Processing replicated DELETE proposal via Aeron (templateId: {})", headerInfo.templateId);
-                log.debug("   JSON: {}", json);
-                
-                // Parse delete proposal JSON
-                String walletAddress = extractJsonField(json, "walletAddress");
-                String path = extractJsonField(json, "path");
-                String signature = extractJsonField(json, "signature");
-                
-                if (walletAddress == null || path == null) {
-                    log.error("❌ Invalid delete proposal: missing required fields (walletAddress: {}, path: {})", 
-                        walletAddress != null, path != null);
-                    return;
-                }
-                
-                // Apply delete to FileStore via callback
-                // This ensures the delete is applied on ALL nodes after replication
-                if (writeCallback != null) {
-                    log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
-                    writeCallback.applyReplicatedDelete(walletAddress, path, signature);
-                    log.info("✅ Replicated delete applied successfully on node {}", 
-                        cluster != null ? cluster.memberId() : "?");
-                    
-                    // Track acknowledgment for backpressure management
-                    backpressureManager.incrementAcknowledged();
-                    log.debug("   Backpressure stats: {}", backpressureManager.getStats());
-                    
-                    // Track metrics (same as writes)
-                    Long ingressTimestampNanos = ingressTimestamps.poll();
-                    if (ingressTimestampNanos != null) {
-                        performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
-                    } else {
-                        performanceMetrics.recordMessageReplicated(System.nanoTime());
-                    }
-                    
-                    totalWritesProcessed.incrementAndGet(); // Count deletes in throughput metrics
-                } else {
-                    log.error("❌ Write callback not set - cannot apply replicated delete");
-                }
-            } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL) {
-                // Read JSON string from buffer
-                byte[] jsonBytes = new byte[headerInfo.blockLength];
-                buffer.getBytes(offset, jsonBytes);
-                String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
-                handleGCProposal(json);
-            } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_GC_VOTE) {
-                // Read JSON string from buffer
-                byte[] jsonBytes = new byte[headerInfo.blockLength];
-                buffer.getBytes(offset, jsonBytes);
-                String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
-                handleGCVote(json);
-            } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE) {
-                // Read JSON string from buffer
-                byte[] jsonBytes = new byte[headerInfo.blockLength];
-                buffer.getBytes(offset, jsonBytes);
-                String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
-                handleGCExecution(json);
-            } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
-                log.info("🎬 GENESIS proposal received via Aeron - creating genesis on this node");
-                
-                // All nodes (including leader) receive this message and create genesis identically
-                // This ensures all validators have identical genesis from the start
-                applyGenesisCreation();
-                
-                log.info("✅ Genesis creation complete on this node");
-                
-            } else if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
-                log.debug("📸 Snapshot message received in onSessionMessage (unexpected but handled)");
-                // Snapshots are typically loaded in onStart(), but handle gracefully if received here
-            } else {
-                log.warn("📨 Unknown template ID: {} (ignoring)", headerInfo.templateId);
+            // Handle snapshot messages specially
+            if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
+                log.debug("📸 Snapshot message received in onSessionMessage (handled separately)");
+                return;
             }
+            
+            // ✅ REFACTORED: Delegate all other message processing to MessageDispatcher
+            // MessageDispatcher handles: WRITE_PROPOSAL, DELETE_PROPOSAL, WRITE_BATCH, GC_*
+            // Metrics tracking is done in the callbacks (trackWriteMetrics)
+            boolean success = messageDispatcher.dispatch(timestamp, buffer, offset, length);
+            
+            if (!success) {
+                log.warn("⚠️  MessageDispatcher failed to process message (templateId: {})", 
+                    headerInfo.templateId);
+            }
+            
         } catch (Exception e) {
             log.error("❌ Failed to process replicated message", e);
         }
@@ -1197,84 +838,9 @@ public class AeronConsensusEngine implements ClusteredService {
         return json.substring(quoteStart + 1, quoteEnd);
     }
     
-    /**
-     * Handle GC proposal message.
-     */
-    private void handleGCProposal(String proposalJson) {
-        try {
-            log.info("🗑️  GC proposal received via Aeron");
-            
-            // Parse proposal JSON
-            String proposalId = extractJsonField(proposalJson, "proposalId");
-            String proposerWallet = extractJsonField(proposalJson, "proposerWallet");
-            String targetRevision = extractJsonField(proposalJson, "targetRevision");
-            
-            log.info("   Proposal ID: {}", proposalId);
-            log.info("   Proposer: {}", proposerWallet);
-            log.info("   Target revision: {}", targetRevision != null ? targetRevision : "HEAD");
-            
-            // Note: GCProposalManager will be accessed via ServerContext
-            // For now, just log - actual handling will be done when GCProposalManager is set
-            log.info("✅ GC proposal received (will be processed by GCProposalManager)");
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to handle GC proposal", e);
-        }
-    }
-    
-    /**
-     * Handle GC vote message.
-     */
-    private void handleGCVote(String voteJson) {
-        try {
-            log.info("🗳️  GC vote received via Aeron");
-            
-            // Parse vote JSON
-            String proposalId = extractJsonField(voteJson, "proposalId");
-            Integer validatorId = extractJsonFieldInt(voteJson, "validatorId");
-            Boolean approve = extractJsonFieldBoolean(voteJson, "approve");
-            String reason = extractJsonField(voteJson, "reason");
-            
-            log.info("   Proposal ID: {}", proposalId);
-            log.info("   Validator: {}", validatorId);
-            log.info("   Vote: {}", approve ? "APPROVE" : "REJECT");
-            log.info("   Reason: {}", reason);
-            
-            // Note: GCProposalManager will be accessed via ServerContext
-            // For now, just log - actual handling will be done when GCProposalManager is set
-            log.info("✅ GC vote received (will be processed by GCProposalManager)");
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to handle GC vote", e);
-        }
-    }
-    
-    /**
-     * Handle GC execution message.
-     */
-    private void handleGCExecution(String executionJson) {
-        try {
-            log.info("🗑️  GC execution result received via Aeron");
-            
-            // Parse execution JSON
-            String proposalId = extractJsonField(executionJson, "proposalId");
-            Integer executorId = extractJsonFieldInt(executionJson, "executorId");
-            Long reclaimedSizeMB = extractJsonFieldLong(executionJson, "actualReclaimableSizeMB");
-            Boolean success = extractJsonFieldBoolean(executionJson, "success");
-            
-            log.info("   Proposal ID: {}", proposalId);
-            log.info("   Executor: {}", executorId);
-            log.info("   Reclaimed: {} MB", reclaimedSizeMB);
-            log.info("   Success: {}", success);
-            
-            // Note: GCProposalManager will be accessed via ServerContext
-            // For now, just log - actual handling will be done when GCProposalManager is set
-            log.info("✅ GC execution result received (will be processed by GCProposalManager)");
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to handle GC execution", e);
-        }
-    }
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // JSON PARSING HELPERS (used by snapshot loading and HEAD sync)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
     /**
      * Helper to extract JSON field value for integer fields.
@@ -2317,9 +1883,34 @@ public class AeronConsensusEngine implements ClusteredService {
     
     /**
      * Set the GC application callback.
+     * 
+     * <p>Also wires the callback to MessageDispatcher for delegated GC message handling.
      */
     public void setGCCallback(GCApplicationCallback callback) {
         this.gcCallback = callback;
+        
+        // Wire to MessageDispatcher for delegated GC message handling
+        if (messageDispatcher != null && callback != null) {
+            messageDispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
+                @Override
+                public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
+                                          long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
+                    callback.applyGCProposal(proposalId, proposerWallet, targetRevision,
+                                            estimatedReclaimableSizeMB, estimatedCostUSDC);
+                }
+                
+                @Override
+                public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
+                    callback.applyGCVote(proposalId, validatorId, approve, reason);
+                }
+                
+                @Override
+                public void applyGCExecute(String proposalId, int executorId) {
+                    callback.applyGCExecute(proposalId, executorId);
+                }
+            });
+        }
+        
         log.info("✅ GC application callback set");
     }
     
@@ -2792,11 +2383,6 @@ public class AeronConsensusEngine implements ClusteredService {
     // - Transactions arrive before 2-epoch finality, allowing look-ahead
     // - Batching adapts to actual transaction patterns dynamically
     private volatile String pendingHead = null;
-    private volatile long lastHeadBroadcastTime = 0;
-    private volatile int writesSinceLastBroadcast = 0;
-    
-    // Track last finalized epoch for finality boundary detection
-    private volatile int lastFinalizedEpoch = -1;
     
     // 🔄 IDEMPOTENT FINALITY BOUNDARY: Track last committed epoch for exactly-once semantics
     // This ensures we only commit once per finality boundary, even if polls are missed or delayed
@@ -3308,82 +2894,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Wait for genesis to be created by leader, then sync HEAD.
-     * This deferred approach prevents the race condition where followers try to sync
-     * before the leader has created genesis.
-     */
-    private void waitForGenesisAndSync() {
-        log.info("Waiting for genesis to be created by leader before syncing HEAD");
-        
-        int maxAttempts = 20; // Try for up to 2 minutes (20 * 6 seconds)
-        int attempt = 0;
-        
-        while (attempt < maxAttempts) {
-            try {
-                // Wait a bit before checking (give leader time to create genesis)
-                Thread.sleep(6000); // 6 seconds
-                attempt++;
-                
-                // Check if we can find a leader
-                String leaderUrl = discoverLeaderFromAeronClusterState();
-                if (leaderUrl == null) {
-                    log.debug("No leader found yet (attempt {}/{}), waiting", attempt, maxAttempts);
-                    continue;
-                }
-                
-                // Check if leader has genesis by querying its /v1/head endpoint
-                try {
-                    java.net.URL headUrl = new java.net.URL(leaderUrl + "/v1/head");
-                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) headUrl.openConnection();
-                    conn.setRequestMethod("GET");
-                    conn.setConnectTimeout(5000);
-                    conn.setReadTimeout(5000);
-                    
-                    if (conn.getResponseCode() == 200) {
-                        java.io.BufferedReader reader = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(conn.getInputStream())
-                        );
-                        String response = reader.lines().collect(java.util.stream.Collectors.joining());
-                        reader.close();
-                        
-                        // Parse HEAD from response
-                        if (response.contains("latestHead")) {
-                            // Extract HEAD value - look for something like "abc123-...:62"
-                            // If offset is > 10, it likely has genesis (genesis is ~62 bytes)
-                            int colonIndex = response.lastIndexOf(":");
-                            if (colonIndex > 0 && response.length() > colonIndex + 1) {
-                                String offsetStr = response.substring(colonIndex + 1).replaceAll("[^0-9]", "").trim();
-                                if (!offsetStr.isEmpty()) {
-                                    int offset = Integer.parseInt(offsetStr);
-                                    if (offset > 10) {
-                                        log.info("Leader has genesis (HEAD offset: {}), starting sync", offset);
-                                        syncHeadFromLeaderOnStartup();
-                                        return; // Success!
-                                    } else {
-                                        log.debug("Leader HEAD offset too small ({}), genesis not ready yet (attempt {}/{})", 
-                                                 offset, attempt, maxAttempts);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    log.debug("Could not check leader HEAD (attempt {}/{}): {}", attempt, maxAttempts, e.getMessage());
-                }
-                
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("Deferred HEAD sync interrupted");
-                return;
-            } catch (Exception e) {
-                log.debug("Error during deferred sync check (attempt {}/{}): {}", attempt, maxAttempts, e.getMessage());
-            }
-        }
-        
-        log.warn("Gave up waiting for genesis after {} attempts. Validators may have inconsistent state - consider manual intervention", maxAttempts);
-    }
-    
-    /**
      * Pull segments for a specific HEAD from the leader.
      * Called by followers when they receive a HEAD update broadcast.
      * 
@@ -3545,38 +3055,6 @@ public class AeronConsensusEngine implements ClusteredService {
     
     /**
      * Extract URL from Aeron endpoint string.
-     * Format: "aeron:udp?endpoint=host:port" -> "http://host:port"
-     */
-    private String extractUrlFromEndpoint(String endpoint) {
-        if (endpoint == null) return null;
-        
-        // Parse "aeron:udp?endpoint=host:port"
-        int endpointStart = endpoint.indexOf("endpoint=");
-        if (endpointStart == -1) return null;
-        
-        endpointStart += "endpoint=".length();
-        String hostPort = endpoint.substring(endpointStart);
-        
-        // Map to HTTP URL (assuming port 8090 for our validators)
-        // This is a heuristic - we should maintain proper nodeId->URL mapping
-        if (hostPort.contains(":")) {
-            String[] parts = hostPort.split(":");
-            String host = parts[0];
-            // Use default port 8090 or extract from endpoint
-            int port = 8090;
-            if (parts.length > 1) {
-                try {
-                    port = Integer.parseInt(parts[1]);
-                } catch (NumberFormatException e) {
-                    // Use default
-                }
-            }
-            return "http://" + host + ":" + port;
-        }
-        
-        return null;
-    }
-    
     /**
      * Get current leader URL.
      * 
@@ -4034,6 +3512,59 @@ public class AeronConsensusEngine implements ClusteredService {
         
         if (latestHead != null) {
             log.debug("📝 Updated latestHead: {}...", latestHead.substring(0, Math.min(20, latestHead.length())));
+        }
+    }
+    
+    /**
+     * Track metrics after a successful write/delete operation.
+     * 
+     * <p>Called from MessageDispatcher callbacks to track:
+     * <ul>
+     *   <li>Backpressure acknowledgment</li>
+     *   <li>Replication latency</li>
+     *   <li>Write throughput</li>
+     *   <li>Queue depths</li>
+     * </ul>
+     */
+    private void trackWriteMetrics() {
+        // Track acknowledgment for backpressure management
+        backpressureManager.incrementAcknowledged();
+        
+        // Track replication latency for Raft performance metrics
+        Long ingressTimestampNanos = ingressTimestamps.poll();
+        if (ingressTimestampNanos != null) {
+            performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
+        } else {
+            performanceMetrics.recordMessageReplicated(System.nanoTime());
+        }
+        
+        // Track write throughput and log periodic summaries
+        long currentWriteCount = totalWritesProcessed.incrementAndGet();
+        long currentTime = System.currentTimeMillis();
+        
+        // Update queue depths for metrics
+        performanceMetrics.updateQueueDepths(0, backpressureManager.getPendingCount());
+        
+        // Log summary every 10 seconds
+        if (currentTime - lastSummaryLogTime >= SUMMARY_LOG_INTERVAL_MS) {
+            long writesInInterval = currentWriteCount - lastSummaryWriteCount;
+            long intervalSeconds = (currentTime - lastSummaryLogTime) / 1000;
+            if (intervalSeconds == 0) intervalSeconds = 1;
+            
+            double writesPerSecond = (double) writesInInterval / intervalSeconds;
+            
+            // Get Raft performance snapshot
+            AeronPerformanceMetrics.Snapshot metrics = performanceMetrics.getSnapshot();
+            
+            log.info("📊 Write Throughput: {} writes in {}s ({} writes/sec) | Total: {}", 
+                writesInInterval, intervalSeconds, String.format("%.1f", writesPerSecond),
+                currentWriteCount);
+            
+            // Log detailed Raft metrics
+            log.info(metrics.toSummaryString());
+            
+            lastSummaryLogTime = currentTime;
+            lastSummaryWriteCount = currentWriteCount;
         }
     }
     
