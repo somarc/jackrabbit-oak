@@ -104,7 +104,7 @@ Leadership Claim State Machine:
 |-----|----------|--------|
 | ~~Content size estimation~~ | ~~`ConsensusApiHandler.java`~~ | ✅ **Implemented** - NodeStore traversal |
 | ~~Genesis hash verification~~ | ~~`SegmentHttpServer.java`~~ | ✅ **Implemented** - SHA-256 cryptographic hash |
-| Wallet-based registration | `SegmentHttpServer.java:622` | IP-based fallback still in use |
+| ~~Wallet-based registration~~ | ~~`RegistrationHandler.java`~~ | ✅ **Implemented** - IP fallback removed |
 | Retry count tracking | `ProposalQueueManagerOptimized.java:691` | No retry metadata |
 | Segment reference parsing | `GlobalStoreServer.java:2417` | Incomplete segment graph traversal |
 
@@ -773,7 +773,7 @@ FragmentationApiHandler.java:356 - Aeron replication for GC
 BinaryUploadHandler.java:235    - Validate CID reachability
 SegmentHttpServer.java:187      - Actual genesis hash
 SegmentHttpServer.java:192      - Sign nonce for production
-SegmentHttpServer.java:622      - Wallet-based registration
+~~SegmentHttpServer.java:622      - Wallet-based registration~~ ✅ DONE (IP fallback removed)
 GlobalStoreServer.java:1389     - Smart contract event listener
 GlobalStoreServer.java:2417     - Parse segment references
 ProofVerifier.java:186          - Verify against actual genesis

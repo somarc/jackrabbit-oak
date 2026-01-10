@@ -218,21 +218,19 @@ public class ConsensusApiHandler {
                 }
             }
             
-            // If not found by wallet, try clientId lookup (for backward compatibility)
+            // If not found by wallet, try clientId lookup (wallet address is preferred)
+            // Note: IP-based fallback has been removed - wallet address is required
             if (clientReg == null) {
                 String clientIdHeader = request.getHeader("X-Client-Id");
                 if (clientIdHeader == null || clientIdHeader.isEmpty()) {
                     clientIdHeader = request.getParameter("clientId");
                 }
-                if (clientIdHeader == null || clientIdHeader.isEmpty()) {
-                    String remoteAddr = request.getRemoteAddr();
-                    int remotePort = request.getRemotePort();
-                    clientIdHeader = remoteAddr + ":" + remotePort;
-                }
-                
-                clientReg = context.registeredClients.get(clientIdHeader);
-                if (clientReg != null) {
-                    clientId = clientIdHeader;
+                // Only use explicit clientId header/param, not IP address
+                if (clientIdHeader != null && !clientIdHeader.isEmpty()) {
+                    clientReg = context.registeredClients.get(clientIdHeader);
+                    if (clientReg != null) {
+                        clientId = clientIdHeader;
+                    }
                 }
             }
             
@@ -781,21 +779,19 @@ public class ConsensusApiHandler {
                 }
             }
             
-            // If not found by wallet, try clientId lookup (for backward compatibility)
+            // If not found by wallet, try clientId lookup (wallet address is preferred)
+            // Note: IP-based fallback has been removed - wallet address is required
             if (clientReg == null) {
                 String clientIdHeader = request.getHeader("X-Client-Id");
                 if (clientIdHeader == null || clientIdHeader.isEmpty()) {
                     clientIdHeader = request.getParameter("clientId");
                 }
-                if (clientIdHeader == null || clientIdHeader.isEmpty()) {
-                    String remoteAddr = request.getRemoteAddr();
-                    int remotePort = request.getRemotePort();
-                    clientIdHeader = remoteAddr + ":" + remotePort;
-                }
-                
-                clientReg = context.registeredClients.get(clientIdHeader);
-                if (clientReg != null) {
-                    clientId = clientIdHeader;
+                // Only use explicit clientId header/param, not IP address
+                if (clientIdHeader != null && !clientIdHeader.isEmpty()) {
+                    clientReg = context.registeredClients.get(clientIdHeader);
+                    if (clientReg != null) {
+                        clientId = clientIdHeader;
+                    }
                 }
             }
             

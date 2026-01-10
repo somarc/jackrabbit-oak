@@ -85,50 +85,59 @@ public class RegistrationHandler {
                 walletAddress = request.getParameter("walletAddress");
             }
             
-            // Use remote address as fallback for clientId/clientUrl
-            if (clientId == null || clientId.isEmpty()) {
-                String remoteAddr = request.getRemoteAddr();
-                int remotePort = request.getRemotePort();
-                clientId = remoteAddr + ":" + remotePort;
-            }
-            if (clientUrl == null || clientUrl.isEmpty()) {
-                String remoteAddr = request.getRemoteAddr();
-                int remotePort = request.getRemotePort();
-                clientUrl = "http://" + remoteAddr + ":" + remotePort;
-            }
-            
-            // REQUIRE Ethereum wallet address
+            // REQUIRE Ethereum wallet address - this is the primary identifier
+            // Note: IP-based fallback has been removed - wallet address is required
             if (walletAddress == null || walletAddress.isEmpty()) {
-                log.warn("🚫 Registration rejected: Missing walletAddress for client {}", clientId);
+                log.warn("🚫 Registration rejected: Missing walletAddress");
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
                     "Registration requires an Ethereum wallet address (0x...). Please provide walletAddress parameter.");
                 return;
             }
             
-            // Validate Ethereum address format
-            walletAddress = walletAddress.trim();
-            if (!walletAddress.startsWith("0x") || walletAddress.length() < 10) {
-                log.warn("🚫 Registration rejected: Invalid Ethereum address format for client {}", clientId);
+            // Validate Ethereum address format (full 42 chars: 0x + 40 hex)
+            walletAddress = walletAddress.trim().toLowerCase();
+            if (!walletAddress.matches("^0x[0-9a-f]{40}$")) {
+                log.warn("🚫 Registration rejected: Invalid Ethereum address format: {}", walletAddress);
                 response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
-                    "Invalid Ethereum address format. Must start with '0x' and be at least 10 characters.");
+                    "Invalid Ethereum address format. Must be 0x followed by 40 hex characters (e.g., 0x1234...abcd).");
                 return;
             }
             
-            // Register or update client
-            ClientRegistration registration = context.registeredClients.get(clientId);
+            // Use wallet address as primary identifier if clientId not provided
+            if (clientId == null || clientId.isEmpty()) {
+                clientId = walletAddress;
+            }
+            if (clientUrl == null || clientUrl.isEmpty()) {
+                // Use a placeholder URL - the wallet address is the real identifier
+                clientUrl = "wallet://" + walletAddress;
+            }
+            
+            // Register or update client - use wallet address as the lookup key
+            ClientRegistration registration = context.registeredClients.get(walletAddress);
+            if (registration == null) {
+                // Also check by clientId for backward compatibility
+                registration = context.registeredClients.get(clientId);
+            }
+            
             if (registration == null) {
                 registration = new ClientRegistration(clientId, clientUrl, walletAddress);
-                context.registeredClients.put(clientId, registration);
-                log.info("✅ New client registered: {} ({}) with wallet {}", clientId, clientUrl, walletAddress);
+                // Store by wallet address (primary) and clientId (secondary)
+                context.registeredClients.put(walletAddress, registration);
+                if (!walletAddress.equals(clientId)) {
+                    context.registeredClients.put(clientId, registration);
+                }
+                log.info("✅ New client registered: wallet={} (clientId={}, url={})", walletAddress, clientId, clientUrl);
             } else {
                 registration.updateLastSeen();
-                // Note: walletAddress is final in ClientRegistration, so we can't update it
-                // This is expected behavior - wallet is set at registration time
+                // Verify wallet matches
                 if (registration.walletAddress != null && !registration.walletAddress.equalsIgnoreCase(walletAddress)) {
-                    log.warn("⚠️  Client {} already registered with different wallet: {} (new: {})", 
+                    log.warn("⚠️  Client {} already registered with different wallet: {} (attempted: {})", 
                         clientId, registration.walletAddress, walletAddress);
+                    response.sendError(HttpServletResponse.SC_CONFLICT, 
+                        String.format("Client %s already registered with wallet %s", clientId, registration.walletAddress));
+                    return;
                 }
-                log.debug("Client heartbeat: {} ({}) wallet: {}", clientId, clientUrl, walletAddress);
+                log.debug("Client heartbeat: wallet={} (clientId={})", walletAddress, clientId);
             }
             
             // Return success
