@@ -236,9 +236,9 @@ Core JAAS integration is complete; needs testing and OSGi deployment.
 
 | Gap | Location | Current State | Required State |
 |-----|----------|---------------|----------------|
-| **Unit Tests** | `src/test/` | Empty directory | Comprehensive test suite |
+| ~~**Unit Tests**~~ | `src/test/` | ✅ **Implemented** | 28+ tests for ChallengeService |
 | **OSGi Factory** | N/A | Basic factory exists | Full ConfigAdmin integration |
-| **Challenge Service** | N/A | Not implemented | Server-side challenge generation |
+| ~~**Challenge Service**~~ | `ChallengeService.java` | ✅ **Implemented** | Secure challenge generation/validation |
 | **Passkey Storage** | N/A | Not implemented | Store registered passkeys in Oak |
 
 #### State Machine Completeness
@@ -739,7 +739,7 @@ jobs:
 | ~~Aeron step-down API~~ | ~~consensus~~ | ~~Medium~~ | ✅ **Implemented** - Session-based step-down |
 | ~~GC Aeron replication~~ | ~~consensus~~ | ~~Medium~~ | ✅ **Implemented** - Full GC flow via Aeron |
 | Snapshot restoration | consensus | High | High |
-| Challenge service | auth-web3 | Medium | Medium |
+| ~~Challenge service~~ | ~~auth-web3~~ | ~~Medium~~ | ✅ **Implemented** - ChallengeService with 28 tests |
 | Integration test suite | all | High | High |
 
 ### Medium-Term (Q2 2026)

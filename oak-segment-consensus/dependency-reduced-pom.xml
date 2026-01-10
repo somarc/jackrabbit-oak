@@ -27,6 +27,8 @@
                 org.apache.jackrabbit.oak.segment.consensus.servlets,
                 org.apache.jackrabbit.oak.segment.consensus.osgi,
                 org.apache.jackrabbit.oak.segment.consensus.mount</Export-Package>
+            <Import-Package>org.bouncycastle.*;resolution:=optional,
+                *</Import-Package>
           </instructions>
         </configuration>
       </plugin>
