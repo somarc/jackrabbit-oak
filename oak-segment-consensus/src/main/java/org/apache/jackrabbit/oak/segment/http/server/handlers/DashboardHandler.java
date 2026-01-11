@@ -1673,7 +1673,12 @@ public class DashboardHandler {
      * Get validator wallet address from ServerContext.
      */
     private String getValidatorWalletAddress() {
-        String address = context.validatorWalletAddress;
+        // ADR 046: Show cluster wallet (payment destination), not node wallet
+        String address = context.clusterWalletAddress;
+        if (address == null || address.equals("0x0000000000000000000000000000000000000000")) {
+            // Fallback to node wallet if no cluster wallet configured
+            address = context.validatorWalletAddress;
+        }
         return address != null ? address : "0x0000000000000000000000000000000000000000";
     }
     

@@ -131,18 +131,17 @@ public class GlobalStoreServer {
         }
         
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // ETHEREUM WALLETS: Node + Cluster (ADR 046)
-        // - Node wallet: Individual validator identity (for LIDO-like staking)
-        // - Cluster wallet: Shared cluster identity (for payments, external identity)
+        // ETHEREUM WALLETS (ADR 046)
+        // - Node wallet: This validator's identity (signing, consensus)
+        // - Cluster wallet: Payment destination (read-only awareness)
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         
-        // 1. Load/create NODE wallet (individual validator identity)
+        // 1. Load/create NODE wallet (this validator's identity for signing)
         String nodeKeystorePath = System.getProperty("wallet.keystore.path", 
             storeDirectory + "/validator-keystore.properties");
-        org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet nodeWallet;
         try {
-            nodeWallet = new org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet(nodeKeystorePath);
-            System.out.println("🔑 Node wallet loaded: " + nodeWallet.getWalletAddress());
+            this.wallet = new org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet(nodeKeystorePath);
+            System.out.println("🔑 Node wallet: " + this.wallet.getWalletAddress());
         } catch (Exception e) {
             System.err.println("❌ FATAL: Failed to load/generate node wallet");
             System.err.println("   Keystore path: " + nodeKeystorePath);
@@ -150,29 +149,34 @@ public class GlobalStoreServer {
             throw new IOException("Node wallet initialization failed", e);
         }
         
-        // 2. Load/create CLUSTER wallet (shared cluster identity - ADR 046)
+        // 2. Read CLUSTER wallet address (ADR 046: all payments go here)
+        // Validators only need awareness of the public address, not control
         Path nodeStorePath = Paths.get(storeDirectory);
         Path clusterPath = nodeStorePath.getParent();
-        String clusterKeystorePath = clusterPath != null 
-            ? clusterPath.resolve("cluster-keystore.properties").toString()
-            : storeDirectory + "/cluster-keystore.properties";
-        
-        try {
-            this.wallet = new org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet(clusterKeystorePath);
-            System.out.println("💎 Cluster wallet loaded: " + this.wallet.getWalletAddress());
-            
-            // Check if this node's wallet matches the cluster wallet
-            if (nodeWallet.getWalletAddress().equals(this.wallet.getWalletAddress())) {
-                System.out.println("   (This node created the cluster wallet)");
-            } else {
-                System.out.println("   Node wallet: " + nodeWallet.getWalletAddress());
+        String clusterWalletAddress = null;
+        if (clusterPath != null) {
+            Path clusterKeystorePath = clusterPath.resolve("cluster-keystore.properties");
+            if (Files.exists(clusterKeystorePath)) {
+                try {
+                    java.util.Properties props = new java.util.Properties();
+                    try (java.io.FileInputStream fis = new java.io.FileInputStream(clusterKeystorePath.toFile())) {
+                        props.load(fis);
+                    }
+                    clusterWalletAddress = props.getProperty("walletAddress");
+                    if (clusterWalletAddress != null) {
+                        System.out.println("💎 Cluster wallet: " + clusterWalletAddress + " (payments go here)");
+                    }
+                } catch (Exception e) {
+                    System.out.println("⚠️  Could not read cluster wallet: " + e.getMessage());
+                }
             }
-        } catch (Exception e) {
-            System.err.println("❌ FATAL: Failed to load/generate cluster wallet");
-            System.err.println("   Keystore path: " + clusterKeystorePath);
-            System.err.println("   Error: " + e.getMessage());
-            throw new IOException("Cluster wallet initialization failed", e);
         }
+        if (clusterWalletAddress == null) {
+            System.out.println("ℹ️  No cluster wallet configured - using node wallet for payments");
+            clusterWalletAddress = this.wallet.getWalletAddress();
+        }
+        // Store cluster wallet address for payment routing
+        final String finalClusterWallet = clusterWalletAddress;
         
         // Bootstrap mode (needs to be accessible throughout method)
         BootstrapMode detectedMode = BootstrapMode.PRIMARY;  // Default
@@ -1356,9 +1360,10 @@ public class GlobalStoreServer {
                 System.out.println("   ✅ Validator Earnings Tracker initialized (" + validatorWallets.size() + " validators)");
                 System.out.println("   - Self wallet: " + wallet.getWalletAddress());
                 
-                // Set validator wallet address in ServerContext for dashboard display
+                // Set wallet addresses in ServerContext for dashboard display
                 httpServer.getContext().validatorWalletAddress = wallet.getWalletAddress();
-                System.out.println("   - Earnings distributed equitably across all validators (regardless of Aeron leader)");
+                httpServer.getContext().clusterWalletAddress = finalClusterWallet;
+                System.out.println("   - Payments routed to cluster wallet: " + finalClusterWallet);
                 
                 // ✈️ AERON MODE: Skip HTTP peer registration
                 // Aeron Cluster handles membership via Raft consensus - HTTP registration is legacy
