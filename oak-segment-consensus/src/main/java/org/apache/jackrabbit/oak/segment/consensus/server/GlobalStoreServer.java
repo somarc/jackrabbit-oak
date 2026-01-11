@@ -131,38 +131,47 @@ public class GlobalStoreServer {
         }
         
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // ETHEREUM WALLET: Load cluster wallet (ADR 046)
-        // One wallet per cluster, not per node. All nodes share the same wallet.
+        // ETHEREUM WALLETS: Node + Cluster (ADR 046)
+        // - Node wallet: Individual validator identity (for LIDO-like staking)
+        // - Cluster wallet: Shared cluster identity (for payments, external identity)
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // Priority: 1) System property, 2) Parent directory (cluster level), 3) Node directory (legacy)
-        String keystorePath = System.getProperty("wallet.keystore.path");
-        if (keystorePath == null || keystorePath.isEmpty()) {
-            // ADR 046: Use cluster-level keystore (parent of node directory)
-            Path nodeStorePath = Paths.get(storeDirectory);
-            Path clusterPath = nodeStorePath.getParent();
-            if (clusterPath != null) {
-                Path clusterKeystore = clusterPath.resolve("cluster-keystore.properties");
-                if (Files.exists(clusterKeystore)) {
-                    keystorePath = clusterKeystore.toString();
-                    System.out.println("🔑 Using cluster wallet: " + keystorePath);
-                } else {
-                    // Fallback to legacy per-node keystore for backward compatibility
-                    keystorePath = storeDirectory + "/validator-keystore.properties";
-                    System.out.println("⚠️  No cluster wallet found, using legacy per-node wallet: " + keystorePath);
-                    System.out.println("   To use cluster wallet (ADR 046), create: " + clusterKeystore);
-                }
-            } else {
-                keystorePath = storeDirectory + "/validator-keystore.properties";
-            }
+        
+        // 1. Load/create NODE wallet (individual validator identity)
+        String nodeKeystorePath = System.getProperty("wallet.keystore.path", 
+            storeDirectory + "/validator-keystore.properties");
+        org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet nodeWallet;
+        try {
+            nodeWallet = new org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet(nodeKeystorePath);
+            System.out.println("🔑 Node wallet loaded: " + nodeWallet.getWalletAddress());
+        } catch (Exception e) {
+            System.err.println("❌ FATAL: Failed to load/generate node wallet");
+            System.err.println("   Keystore path: " + nodeKeystorePath);
+            System.err.println("   Error: " + e.getMessage());
+            throw new IOException("Node wallet initialization failed", e);
         }
         
+        // 2. Load/create CLUSTER wallet (shared cluster identity - ADR 046)
+        Path nodeStorePath = Paths.get(storeDirectory);
+        Path clusterPath = nodeStorePath.getParent();
+        String clusterKeystorePath = clusterPath != null 
+            ? clusterPath.resolve("cluster-keystore.properties").toString()
+            : storeDirectory + "/cluster-keystore.properties";
+        
         try {
-            this.wallet = new org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet(keystorePath);
+            this.wallet = new org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet(clusterKeystorePath);
+            System.out.println("💎 Cluster wallet loaded: " + this.wallet.getWalletAddress());
+            
+            // Check if this node's wallet matches the cluster wallet
+            if (nodeWallet.getWalletAddress().equals(this.wallet.getWalletAddress())) {
+                System.out.println("   (This node created the cluster wallet)");
+            } else {
+                System.out.println("   Node wallet: " + nodeWallet.getWalletAddress());
+            }
         } catch (Exception e) {
-            System.err.println("❌ FATAL: Failed to load/generate Ethereum wallet");
-            System.err.println("   Keystore path: " + keystorePath);
+            System.err.println("❌ FATAL: Failed to load/generate cluster wallet");
+            System.err.println("   Keystore path: " + clusterKeystorePath);
             System.err.println("   Error: " + e.getMessage());
-            throw new IOException("Wallet initialization failed", e);
+            throw new IOException("Cluster wallet initialization failed", e);
         }
         
         // Bootstrap mode (needs to be accessible throughout method)
