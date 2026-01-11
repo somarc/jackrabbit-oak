@@ -119,7 +119,7 @@ public class EthereumWallet {
      * Save key pair to disk (simple properties file for POC).
      * In production, use proper encryption (e.g., AES-256 with passphrase).
      */
-    private void saveKeyPair() throws IOException {
+    private void saveKeyPair() throws Exception {
         Properties props = new Properties();
         props.setProperty("privateKey", bytesToHex(keyPair.getPrivate().getEncoded()));
         props.setProperty("publicKey", bytesToHex(keyPair.getPublic().getEncoded()));
@@ -127,11 +127,15 @@ public class EthereumWallet {
         props.setProperty("format", keyPair.getPrivate().getFormat());
         props.setProperty("createdAt", String.valueOf(System.currentTimeMillis()));
         
+        // ADR 046: Save wallet address for easy reference (cluster wallet identification)
+        String address = deriveWalletAddress(keyPair.getPublic());
+        props.setProperty("walletAddress", address);
+        
         // Create parent directories if needed
         keystoreFile.getParentFile().mkdirs();
         
         try (FileOutputStream fos = new FileOutputStream(keystoreFile)) {
-            props.store(fos, "Ethereum Validator Wallet - KEEP SECURE!");
+            props.store(fos, "Ethereum Cluster Wallet (ADR 046) - KEEP SECURE! One wallet per cluster.");
         }
         
         // Set restrictive permissions (owner only)
@@ -141,7 +145,8 @@ public class EthereumWallet {
         keystoreFile.setWritable(true, true);
         
         log.info("✅ Keystore saved to {}", keystoreFile.getAbsolutePath());
-        log.warn("🔐 IMPORTANT: Back up this file! Loss = permanent validator identity loss");
+        log.info("💎 Cluster wallet address: {}", address);
+        log.warn("🔐 IMPORTANT: Back up this file! Loss = permanent cluster identity loss");
     }
     
     /**

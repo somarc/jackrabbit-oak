@@ -131,10 +131,30 @@ public class GlobalStoreServer {
         }
         
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // ETHEREUM WALLET: Load or generate validator identity
+        // ETHEREUM WALLET: Load cluster wallet (ADR 046)
+        // One wallet per cluster, not per node. All nodes share the same wallet.
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        String keystorePath = System.getProperty("wallet.keystore.path", 
-            storeDirectory + "/validator-keystore.properties");
+        // Priority: 1) System property, 2) Parent directory (cluster level), 3) Node directory (legacy)
+        String keystorePath = System.getProperty("wallet.keystore.path");
+        if (keystorePath == null || keystorePath.isEmpty()) {
+            // ADR 046: Use cluster-level keystore (parent of node directory)
+            Path nodeStorePath = Paths.get(storeDirectory);
+            Path clusterPath = nodeStorePath.getParent();
+            if (clusterPath != null) {
+                Path clusterKeystore = clusterPath.resolve("cluster-keystore.properties");
+                if (Files.exists(clusterKeystore)) {
+                    keystorePath = clusterKeystore.toString();
+                    System.out.println("🔑 Using cluster wallet: " + keystorePath);
+                } else {
+                    // Fallback to legacy per-node keystore for backward compatibility
+                    keystorePath = storeDirectory + "/validator-keystore.properties";
+                    System.out.println("⚠️  No cluster wallet found, using legacy per-node wallet: " + keystorePath);
+                    System.out.println("   To use cluster wallet (ADR 046), create: " + clusterKeystore);
+                }
+            } else {
+                keystorePath = storeDirectory + "/validator-keystore.properties";
+            }
+        }
         
         try {
             this.wallet = new org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet(keystorePath);

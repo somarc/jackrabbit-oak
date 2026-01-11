@@ -163,15 +163,15 @@ public class DashboardHandler {
         statsItems.append("<span class='stat-value'>").append(blobStoreType.toUpperCase()).append("</span>");
         statsItems.append("</div></div>");
         
-        // Wallet address (fills empty space, clickable to copy)
+        // Cluster wallet address (ADR 046: one wallet per cluster, not per node)
         String truncatedWallet = walletAddress.length() > 20 
             ? walletAddress.substring(0, 10) + "..." + walletAddress.substring(walletAddress.length() - 8)
             : walletAddress;
         statsItems.append("<div class='stat-item wallet-item'>");
         statsItems.append("<span class='stat-icon'>💎</span>");
         statsItems.append("<div class='stat-content'>");
-        statsItems.append("<span class='stat-label'>Validator</span>");
-        statsItems.append("<span class='wallet-addr' onclick=\"navigator.clipboard.writeText('").append(walletAddress).append("'); this.querySelector('.copy-icon').textContent='✓'; setTimeout(() => this.querySelector('.copy-icon').textContent='📋', 1500);\" title='").append(walletAddress).append("'>");
+        statsItems.append("<span class='stat-label'>Cluster</span>");
+        statsItems.append("<span class='wallet-addr' onclick=\"navigator.clipboard.writeText('").append(walletAddress).append("'); this.querySelector('.copy-icon').textContent='✓'; setTimeout(() => this.querySelector('.copy-icon').textContent='📋', 1500);\" title='Cluster Wallet (ADR 046): ").append(walletAddress).append("'>");
         statsItems.append(truncatedWallet);
         statsItems.append("<span class='copy-icon'>📋</span>");
         statsItems.append("</span>");
