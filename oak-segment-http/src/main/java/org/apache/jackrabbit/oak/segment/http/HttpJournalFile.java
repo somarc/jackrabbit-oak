@@ -16,11 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.http;
 
-import org.apache.http.HttpStatus;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
 import org.apache.jackrabbit.oak.segment.remote.WriteAccessController;
 import org.apache.jackrabbit.oak.segment.spi.persistence.JournalFile;
 import org.apache.jackrabbit.oak.segment.spi.persistence.JournalFileReader;
@@ -28,14 +23,13 @@ import org.apache.jackrabbit.oak.segment.spi.persistence.JournalFileWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
- * HTTP-based journal file implementation for read-only segment store access.
+ * HTTP/2-enabled journal file implementation for read-only segment store access.
  */
 public class HttpJournalFile implements JournalFile {
     
@@ -43,41 +37,37 @@ public class HttpJournalFile implements JournalFile {
     
     private final String baseUrl;
     private final WriteAccessController writeAccessController;
-    private final HttpClientPool httpClientPool;
-    private final CloseableHttpClient httpClient;
+    private final Http2ClientPool http2ClientPool;
     
-    public HttpJournalFile(String baseUrl, WriteAccessController writeAccessController, HttpClientPool httpClientPool) {
+    public HttpJournalFile(String baseUrl, WriteAccessController writeAccessController, Http2ClientPool http2ClientPool) {
         this.baseUrl = baseUrl;
         this.writeAccessController = writeAccessController;
-        this.httpClientPool = httpClientPool;
-        this.httpClient = httpClientPool.getHttpClient();
-        log.debug("Initialized HttpJournalFile for: {} (pool: {})", baseUrl, httpClientPool.getPoolStats());
+        this.http2ClientPool = http2ClientPool;
+        log.debug("Initialized HttpJournalFile (HTTP/2) for: {} (stats: {})", baseUrl, http2ClientPool.getPoolStats());
+    }
+    
+    /**
+     * Legacy constructor for backward compatibility.
+     * @deprecated Use constructor with Http2ClientPool instead
+     */
+    @Deprecated
+    public HttpJournalFile(String baseUrl, WriteAccessController writeAccessController, HttpClientPool httpClientPool) {
+        this(baseUrl, writeAccessController, new Http2ClientPool());
+        log.warn("Using deprecated HttpClientPool constructor - consider upgrading to Http2ClientPool");
     }
     
     @Override
     public JournalFileReader openJournalReader() throws IOException {
         String url = baseUrl + "/journal.log";
-        log.debug("Fetching journal from: {}", url);
+        log.debug("Fetching journal via HTTP/2 from: {}", url);
         
-        HttpGet request = new HttpGet(url);
-        try (CloseableHttpResponse response = httpClient.execute(request)) {
-            if (response.getStatusLine().getStatusCode() == HttpStatus.SC_OK) {
-                // Read all lines into memory
-                List<String> lines = new ArrayList<>();
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(response.getEntity().getContent()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        lines.add(line);
-                    }
-                }
-                
-                log.debug("Loaded {} journal entries from HTTP", lines.size());
-                return new HttpJournalFileReader(lines);
-            } else {
-                throw new IOException("Failed to fetch journal.log: HTTP " + 
-                    response.getStatusLine().getStatusCode());
-            }
+        try {
+            String content = http2ClientPool.getString(url);
+            List<String> lines = new ArrayList<>(Arrays.asList(content.split("\n")));
+            log.debug("Loaded {} journal entries via HTTP/2", lines.size());
+            return new HttpJournalFileReader(lines);
+        } catch (Exception e) {
+            throw new IOException("Failed to fetch journal.log via HTTP/2: " + e.getMessage(), e);
         }
     }
     
@@ -123,17 +113,8 @@ public class HttpJournalFile implements JournalFile {
     
     @Override
     public boolean exists() {
-        try {
-            String url = baseUrl + "/journal.log";
-            org.apache.http.client.methods.HttpHead request = 
-                new org.apache.http.client.methods.HttpHead(url);
-            try (CloseableHttpResponse response = httpClient.execute(request)) {
-                return response.getStatusLine().getStatusCode() == HttpStatus.SC_OK;
-            }
-        } catch (IOException e) {
-            log.debug("Error checking journal existence: {}", e.getMessage());
-            return false;
-        }
+        String url = baseUrl + "/journal.log";
+        return http2ClientPool.exists(url);
     }
     
     /**

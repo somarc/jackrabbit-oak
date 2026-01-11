@@ -16,74 +16,60 @@
  */
 package org.apache.jackrabbit.oak.segment.http;
 
-import org.apache.http.HttpStatus;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
 import org.apache.jackrabbit.oak.segment.spi.persistence.ManifestFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.StringReader;
 import java.util.Properties;
 
 /**
- * HTTP-based manifest file for read-only access.
+ * HTTP/2-enabled manifest file for read-only access.
  */
 public class HttpManifestFile implements ManifestFile {
     
     private static final Logger log = LoggerFactory.getLogger(HttpManifestFile.class);
     
     private final String baseUrl;
-    private final HttpClientPool httpClientPool;
-    private final CloseableHttpClient httpClient;
+    private final Http2ClientPool http2ClientPool;
     
-    public HttpManifestFile(String baseUrl, HttpClientPool httpClientPool) {
+    public HttpManifestFile(String baseUrl, Http2ClientPool http2ClientPool) {
         this.baseUrl = baseUrl;
-        this.httpClientPool = httpClientPool;
-        this.httpClient = httpClientPool.getHttpClient();
+        this.http2ClientPool = http2ClientPool;
+    }
+    
+    /**
+     * Legacy constructor for backward compatibility.
+     * @deprecated Use constructor with Http2ClientPool instead
+     */
+    @Deprecated
+    public HttpManifestFile(String baseUrl, HttpClientPool httpClientPool) {
+        this(baseUrl, new Http2ClientPool());
+        log.warn("Using deprecated HttpClientPool constructor - consider upgrading to Http2ClientPool");
     }
     
     @Override
     public boolean exists() {
         String manifestUrl = baseUrl + "/manifest";
-        log.debug("Checking if manifest exists at: {}", manifestUrl);
-        try {
-            org.apache.http.client.methods.HttpHead request = 
-                new org.apache.http.client.methods.HttpHead(manifestUrl);
-            try (CloseableHttpResponse response = httpClient.execute(request)) {
-                int statusCode = response.getStatusLine().getStatusCode();
-                boolean exists = (statusCode == HttpStatus.SC_OK);
-                log.debug("Manifest HEAD request: {} -> {} (exists: {})", manifestUrl, statusCode, exists);
-                return exists;
-            }
-        } catch (IOException e) {
-            log.debug("Failed to check manifest existence at {}: {}", manifestUrl, e.getMessage());
-            return false;
-        }
+        log.debug("Checking if manifest exists via HTTP/2 at: {}", manifestUrl);
+        return http2ClientPool.exists(manifestUrl);
     }
     
     @Override
     public Properties load() throws IOException {
-        HttpGet request = new HttpGet(baseUrl + "/manifest");
-        try (CloseableHttpResponse response = httpClient.execute(request)) {
-            if (response.getStatusLine().getStatusCode() == HttpStatus.SC_OK) {
-                Properties props = new Properties();
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(response.getEntity().getContent()))) {
-                    props.load(reader);
-                }
-                return props;
-            } else if (response.getStatusLine().getStatusCode() == HttpStatus.SC_NOT_FOUND) {
+        String url = baseUrl + "/manifest";
+        try {
+            String content = http2ClientPool.getString(url);
+            Properties props = new Properties();
+            props.load(new StringReader(content));
+            return props;
+        } catch (Exception e) {
+            if (e.getMessage() != null && e.getMessage().contains("404")) {
                 // Manifest doesn't exist - return empty properties
                 return new Properties();
-            } else {
-                throw new IOException("Failed to fetch manifest: HTTP " + 
-                    response.getStatusLine().getStatusCode());
             }
+            throw new IOException("Failed to fetch manifest via HTTP/2: " + e.getMessage(), e);
         }
     }
     

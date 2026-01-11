@@ -16,32 +16,38 @@
  */
 package org.apache.jackrabbit.oak.segment.http;
 
-import org.apache.http.HttpStatus;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
 import org.apache.jackrabbit.oak.segment.spi.persistence.GCJournalFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
- * HTTP-based GC journal file for read-only access.
+ * HTTP/2-enabled GC journal file for read-only access.
  */
 public class HttpGCJournalFile implements GCJournalFile {
     
-    private final String baseUrl;
-    private final HttpClientPool httpClientPool;
-    private final CloseableHttpClient httpClient;
+    private static final Logger log = LoggerFactory.getLogger(HttpGCJournalFile.class);
     
-    public HttpGCJournalFile(String baseUrl, HttpClientPool httpClientPool) {
+    private final String baseUrl;
+    private final Http2ClientPool http2ClientPool;
+    
+    public HttpGCJournalFile(String baseUrl, Http2ClientPool http2ClientPool) {
         this.baseUrl = baseUrl;
-        this.httpClientPool = httpClientPool;
-        this.httpClient = httpClientPool.getHttpClient();
+        this.http2ClientPool = http2ClientPool;
+    }
+    
+    /**
+     * Legacy constructor for backward compatibility.
+     * @deprecated Use constructor with Http2ClientPool instead
+     */
+    @Deprecated
+    public HttpGCJournalFile(String baseUrl, HttpClientPool httpClientPool) {
+        this(baseUrl, new Http2ClientPool());
+        log.warn("Using deprecated HttpClientPool constructor - consider upgrading to Http2ClientPool");
     }
     
     @Override
@@ -52,25 +58,16 @@ public class HttpGCJournalFile implements GCJournalFile {
     
     @Override
     public List<String> readLines() throws IOException {
-        HttpGet request = new HttpGet(baseUrl + "/gc.log");
-        try (CloseableHttpResponse response = httpClient.execute(request)) {
-            if (response.getStatusLine().getStatusCode() == HttpStatus.SC_OK) {
-                List<String> lines = new ArrayList<>();
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(response.getEntity().getContent()))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        lines.add(line);
-                    }
-                }
-                return lines;
-            } else if (response.getStatusLine().getStatusCode() == HttpStatus.SC_NOT_FOUND) {
+        String url = baseUrl + "/gc.log";
+        try {
+            String content = http2ClientPool.getString(url);
+            return new ArrayList<>(Arrays.asList(content.split("\n")));
+        } catch (Exception e) {
+            if (e.getMessage() != null && e.getMessage().contains("404")) {
                 // GC journal doesn't exist yet - return empty
                 return new ArrayList<>();
-            } else {
-                throw new IOException("Failed to fetch gc.log: HTTP " + 
-                    response.getStatusLine().getStatusCode());
             }
+            throw new IOException("Failed to fetch gc.log via HTTP/2: " + e.getMessage(), e);
         }
     }
     
