@@ -17,15 +17,32 @@
 package org.apache.jackrabbit.oak.segment.agentic.chat;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Response model for chat endpoint.
+ * 
+ * <p>Includes:
+ * <ul>
+ *   <li>answer: The LLM-generated response</li>
+ *   <li>sources: List of sources used (RAG chunks, API results, etc.)</li>
+ *   <li>metadata: Additional info (RAG mode, session info, etc.)</li>
+ * </ul>
  */
 public class ChatResponse {
+    /** LLM-generated answer */
     public String answer;
+    
+    /** Sources used to generate the answer */
     public List<Source> sources = new ArrayList<>();
+    
+    /** Confidence score (0.0 to 1.0) */
     public double confidence = 1.0;
+    
+    /** Additional metadata (ragMode, sessionId, conversationTurns, etc.) */
+    public Map<String, Object> metadata = new HashMap<>();
     
     public static class Source {
         public String type;  // "api", "metrics", "log", "rag"

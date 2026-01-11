@@ -1,6 +1,6 @@
 # Oak Segment Agentic - LLM Chat Module
 
-**Status**: 🧪 MVP / Exploration  
+**Status**: 🚀 Enhanced MVP  
 **Purpose**: Optional LLM chat interface for Oak Segment Consensus validators
 
 ## Overview
@@ -11,12 +11,15 @@ This module provides an optional LLM-powered chat interface that helps developer
 
 - ✅ **LLM Chat Endpoint** (`POST /v1/chat`) - Ask questions about Oak
 - ✅ **Ollama Integration** - Uses local LLM (no external API calls)
-- ✅ **Enhanced RAG** - Scans and indexes actual Oak codebase for semantic code search
+- ✅ **Hybrid RAG** - Combines vector embeddings + keyword search for superior code retrieval
+- ✅ **Dynamic Model Selection** - Automatically selects best model based on query complexity
+- ✅ **Conversation Memory** - Maintains context across multi-turn conversations
 - ✅ **Agentic Tools** - Can query validator APIs autonomously
 - ✅ **Log Access Tool** - Read and analyze log files with filtering
 - ✅ **API Documentation Tool** - Provides comprehensive API docs for agent-to-agent communication
 - ✅ **Agent-to-Agent Mode** - Enhanced mode for inter-agent communication with structured API knowledge
 - 🔜 **Metrics Tool** - Query Prometheus metrics
+- 🔜 **Code Knowledge Graph** - Graph-based code relationship traversal
 
 ## Setup
 
@@ -24,17 +27,17 @@ This module provides an optional LLM-powered chat interface that helps developer
 
 Download and install Ollama from https://ollama.ai
 
-### 2. Pull a Model
+### 2. Pull Models (All Apache 2.0 Licensed)
 
 ```bash
-# Default: Qwen2.5 Coder 7B (Apache 2.0 licensed, optimized for code)
+# Required: Code specialist model (fast responses)
 ollama pull qwen2.5-coder:7b
 
-# Alternative: Phi-3 Mini (fast, good for code, MIT licensed)
-ollama pull phi3
+# Recommended: Reasoning model (complex queries)
+ollama pull qwen3:8b
 
-# Alternative: Llama 3.1 8B (better understanding, slower, Meta license)
-ollama pull llama3.1:8b
+# Required: Embedding model for vector RAG
+ollama pull nomic-embed-text
 ```
 
 ### 3. Build the Module
@@ -74,6 +77,7 @@ java -jar oak-segment-consensus.jar --port 8090 --store /var/oak-chain/segmentst
 ### Chat via HTTP API
 
 ```bash
+# Simple query
 curl -X POST http://localhost:8090/v1/chat \
   -H "Content-Type: application/json" \
   -d '{
@@ -81,6 +85,14 @@ curl -X POST http://localhost:8090/v1/chat \
     "context": {
       "includeMetrics": true
     }
+  }'
+
+# With conversation memory (multi-turn)
+curl -X POST http://localhost:8090/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "How does it handle failover?",
+    "sessionId": "my-session-123"
   }'
 ```
 
@@ -91,7 +103,7 @@ curl -X POST http://localhost:8090/v1/chat \
 - "What is the cluster state?"
 - "Show me consensus status"
 
-**Code Understanding (RAG):**
+**Code Understanding (Hybrid RAG):**
 - "How does FileStore.cleanup() work?"
 - "Explain AeronConsensusEngine"
 - "Show me the consensus implementation"
@@ -107,23 +119,24 @@ curl -X POST http://localhost:8090/v1/chat \
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│  oak-segment-consensus              │
-│  ┌───────────────────────────────┐ │
-│  │ RequestRouter                 │ │
-│  │  - /v1/chat (optional)       │ │
-│  └───────────┬───────────────────┘ │
-│              │ (reflection)          │
-│  ┌───────────▼───────────────────┐ │
-│  │ oak-segment-agentic           │ │
-│  │  ┌─────────────────────────┐  │ │
-│  │  │ ChatHandler             │  │ │
-│  │  │  - LLMService          │  │ │
-│  │  │  - RAGService          │  │ │
-│  │  │  - AgenticTools        │  │ │
-│  │  └─────────────────────────┘  │ │
-│  └────────────────────────────────┘ │
-└─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  oak-segment-consensus                                                       │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │ RequestRouter                                                          │ │
+│  │  - /v1/chat (optional)                                                │ │
+│  └───────────┬───────────────────────────────────────────────────────────┘ │
+│              │ (reflection)                                                  │
+│  ┌───────────▼───────────────────────────────────────────────────────────┐ │
+│  │ oak-segment-agentic                                                    │ │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │ │
+│  │  │ ChatHandler                                                      │  │ │
+│  │  │  ├── OllamaLLMService (dynamic model selection)                 │  │ │
+│  │  │  ├── HybridRAGService (vector + keyword)                        │  │ │
+│  │  │  ├── ConversationMemory (session context)                       │  │ │
+│  │  │  └── AgenticTools (API queries, logs, etc.)                     │  │ │
+│  │  └─────────────────────────────────────────────────────────────────┘  │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Module Structure
@@ -133,86 +146,205 @@ oak-segment-agentic/
 ├── src/main/java/
 │   └── org/apache/jackrabbit/oak/segment/agentic/
 │       ├── chat/
-│       │   ├── ChatHandler.java      # HTTP endpoint handler
-│       │   ├── ChatRequest.java      # Request model
-│       │   └── ChatResponse.java     # Response model
+│       │   ├── ChatHandler.java        # HTTP endpoint handler
+│       │   ├── ChatRequest.java        # Request model (with sessionId)
+│       │   ├── ChatResponse.java       # Response model (with metadata)
+│       │   └── ConversationMemory.java # Session-based conversation history
 │       ├── llm/
-│       │   ├── LLMService.java       # LLM interface
-│       │   └── OllamaLLMService.java # Ollama implementation
+│       │   ├── LLMService.java         # LLM interface
+│       │   └── OllamaLLMService.java   # Ollama impl with model selection
 │       ├── rag/
-│       │   └── RAGService.java       # Code retrieval
+│       │   ├── RAGService.java         # Keyword-based retrieval (TF-IDF)
+│       │   ├── VectorRAGService.java   # Vector embeddings (nomic-embed-text)
+│       │   └── HybridRAGService.java   # Combined retrieval with RRF
 │       └── tools/
-│           ├── AgenticTool.java       # Tool interface
-│           ├── ToolResult.java        # Tool result model
-│           ├── ValidatorApiTool.java # Validator API tool
+│           ├── AgenticTool.java         # Tool interface
+│           ├── ToolResult.java          # Tool result model
+│           ├── ValidatorApiTool.java   # Validator API tool
 │           ├── ApiDocumentationTool.java # API documentation tool
-│           ├── LogAccessTool.java    # Log file access tool
+│           ├── LogAccessTool.java      # Log file access tool
 │           ├── AgentDiscoveryTool.java # Agent discovery tool
 │           └── ValidatorLLMChatTool.java # Validator LLM chat tool
 └── pom.xml
 ```
 
-## RAG (Retrieval-Augmented Generation)
+## Indexed Knowledge Base
 
-The RAG service automatically scans and indexes the Oak codebase on startup:
+The RAG system indexes the following Blockchain-AEM modules and documentation:
 
-- **Automatic Discovery**: Finds Oak codebase in common locations or via `-Doak.codebase.path=<path>`
-- **Module Focus**: Indexes key modules: `oak-segment-consensus`, `oak-segment-agentic`, `oak-segment-tar`, `oak-segment-http`, `oak-store-composite`, `oak-core`
-- **Smart Indexing**: Extracts class names, JavaDoc summaries, and splits large files into chunks
-- **Relevance Scoring**: Uses TF-IDF-like scoring for better code retrieval
-- **Persistent Cache**: Index is cached to disk for fast startup (only re-indexes when files change)
-- **Fallback**: If codebase not found, uses basic knowledge chunks
+### Java Modules (Code Understanding)
 
-### Configuring Codebase Path
+| Module | Purpose | Key Classes |
+|--------|---------|-------------|
+| `oak-segment-consensus` | Aeron Raft consensus | `AeronConsensusEngine`, `GlobalStoreServer`, `ConsensusApiHandler` |
+| `oak-segment-agentic` | This LLM chat module | `ChatHandler`, `RAGService`, `HybridRAGService` |
+| `oak-segment-tar` | TAR-based segment storage | `FileStore`, `SegmentNodeStore` |
+| `oak-segment-http` | HTTP segment transfer | `SegmentHttpClient`, `SegmentHttpServer` |
+| `oak-store-composite` | Composite mounts | `CompositeNodeStore` |
+| `oak-blob-cloud-ipfs` | IPFS binary storage | `IPFSBackend`, `IPFSDataStore` |
+| `oak-auth-web3` | Web3 biometric auth | `Web3BiometricAuthentication`, `ChallengeService` |
+| `oak-core` | Core Oak APIs | `NodeStore`, `PropertyState` |
+| `oak-api` | Public Oak API | `Tree`, `Root`, `ContentSession` |
 
-Set the system property to point to your Oak codebase:
+### Documentation (Architecture Understanding)
+
+| Path | Content |
+|------|---------|
+| `Blockchain-AEM/adr/` | Architecture Decision Records (46+ ADRs) |
+| `Blockchain-AEM/02-architecture/` | System architecture docs |
+| `Blockchain-AEM/08-technical-notes/` | Technical implementation notes |
+| `jackrabbit-oak/docs/` | Phase 1 analysis, state machines, gaps |
+
+### Example Queries
+
+**Blockchain-AEM Specific:**
+- "How does IPFS binary storage work?" → Retrieves `IPFSBackend.java`
+- "Explain Web3 biometric authentication" → Retrieves `Web3BiometricAuthentication.java`, `ChallengeService.java`
+- "What is ADR 015?" → Retrieves ADR documentation
+- "How does the 5-layer architecture work?" → Retrieves architecture docs
+
+**Consensus & Storage:**
+- "How does AeronConsensusEngine handle leader election?" → Retrieves consensus code + state machine docs
+- "Explain FileStore cleanup" → Retrieves `oak-segment-tar` code
+
+## Hybrid RAG (Retrieval-Augmented Generation)
+
+The RAG system uses a **hybrid approach** combining vector embeddings and keyword search:
+
+### How It Works
+
+```
+Query: "How does AeronConsensusEngine handle leader election?"
+  │
+  ├─────────────────────────────────────────┐
+  │                                         │
+  ▼                                         ▼
+┌──────────────────────┐     ┌──────────────────────┐
+│ VECTOR RETRIEVAL     │     │ KEYWORD RETRIEVAL    │
+│ (Semantic Similarity)│     │ (TF-IDF Scoring)     │
+│                      │     │                      │
+│ • nomic-embed-text   │     │ • Term frequency     │
+│ • Cosine similarity  │     │ • Class name boost   │
+│ • Top-K chunks       │     │ • Exact match boost  │
+└──────────┬───────────┘     └──────────┬───────────┘
+           │                            │
+           │ Semantic matches           │ Keyword matches
+           └─────────────┬──────────────┘
+                         │
+                         ▼
+              ┌──────────────────────┐
+              │ RECIPROCAL RANK      │
+              │ FUSION (RRF)         │
+              │                      │
+              │ Combined score =     │
+              │ 0.55 * vector_rrf +  │
+              │ 0.45 * keyword_rrf   │
+              └──────────┬───────────┘
+                         │
+                         ▼
+              ┌──────────────────────┐
+              │ Top-10 Results       │
+              │ (Best of both)       │
+              └──────────────────────┘
+```
+
+### Benefits
+
+- **Semantic Understanding**: Vector search finds conceptually related code even without exact keyword matches
+- **Exact Matching**: Keyword search ensures class names and specific terms are found
+- **Best of Both**: RRF fusion combines results for superior retrieval quality
+- **Cached Embeddings**: Embeddings are cached to disk for fast startup
+
+### Configuration
 
 ```bash
+# Set codebase path
 java -jar oak-segment-consensus.jar -Doak.codebase.path=/path/to/jackrabbit-oak
+
+# Set cache directory
+java -jar oak-segment-consensus.jar -Doak.rag.cache.dir=/path/to/cache
+
+# Set embedding model (default: nomic-embed-text)
+java -jar oak-segment-consensus.jar -Dollama.embedding.model=nomic-embed-text
 ```
 
-### RAG Cache
+### Cache Files
 
-The RAG index is automatically cached to disk for faster subsequent startups:
+```
+$TMPDIR/.oak-rag-cache/
+├── rag-index.json                    # Keyword index
+├── rag-metadata.json                 # Index metadata
+└── embeddings-nomic-embed-text.json  # Vector embeddings
+```
 
-- **Cache Location**: Defaults to `$TMPDIR/.oak-rag-cache/` (configurable via `-Doak.rag.cache.dir=<path>`)
-- **Cache Validation**: Checks file modification times to detect code changes
-- **Automatic Refresh**: Re-indexes automatically when files are modified
-- **First Run**: First startup indexes from scratch and saves to cache
-- **Subsequent Runs**: Loads from cache (much faster) unless files changed
+## Dynamic Model Selection
 
-To force a fresh index, delete the cache directory:
+The LLM service automatically selects the best model based on query complexity:
+
+| Query Type | Model | Reason |
+|------------|-------|--------|
+| Simple questions | `qwen2.5-coder:7b` | Fast responses |
+| "How does X work?" | `qwen3:8b` | Better reasoning |
+| "Explain..." | `qwen3:8b` | Better explanations |
+| "Why..." | `qwen3:8b` | Better reasoning |
+| Agent-to-agent | `qwen3:8b` | More accurate data synthesis |
+| Long queries (>200 chars) | `qwen3:8b` | Complex context handling |
+
+### Configuration
 
 ```bash
-rm -rf $TMPDIR/.oak-rag-cache
-# Or if using custom location:
-rm -rf /path/to/cache/.oak-rag-cache
+# Set default model
+java -jar oak-segment-consensus.jar -Dollama.model=qwen2.5-coder:7b
+
+# Set Ollama URL (for Docker)
+java -jar oak-segment-consensus.jar -Dollama.url=http://host.docker.internal:11434
 ```
 
-## Log Access Tool
+## Conversation Memory
 
-The log access tool can read and analyze log files:
+The chat endpoint supports multi-turn conversations via session IDs:
 
-- **Auto-Discovery**: Finds log files from Logback appenders (if available) or common locations
-- **Filtering**: Filter by log level (ERROR, WARN, INFO, DEBUG, TRACE)
-- **Search**: Search for specific terms in log entries
-- **Tail Mode**: Get recent log entries (e.g., "show last 50 lines")
-- **Multiple Files**: Supports multiple log files
-
-### Configuring Log File Path
-
-Set the system property to specify log file location:
+### Usage
 
 ```bash
-java -jar oak-segment-consensus.jar -Dlog.file.path=/path/to/validator.log
+# First turn
+curl -X POST http://localhost:8090/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What is AeronConsensusEngine?",
+    "sessionId": "session-123"
+  }'
+
+# Follow-up (remembers context)
+curl -X POST http://localhost:8090/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "How does it handle leader election?",
+    "sessionId": "session-123"
+  }'
 ```
 
-### Example Log Queries
+### Features
 
-- "Show recent errors" - Gets ERROR level entries
-- "Show last 100 log entries" - Tail mode with limit
-- "Find logs containing 'consensus'" - Search for specific term
-- "Show warnings" - Filter by log level
+- **Session Isolation**: Each session ID has its own conversation history
+- **Automatic Trimming**: Keeps last 10 turns to prevent context overflow
+- **TTL Cleanup**: Stale sessions (>30 min inactive) are automatically cleaned up
+- **Response Metadata**: Response includes session info and turn count
+
+### Response Example
+
+```json
+{
+  "answer": "AeronConsensusEngine handles leader election through...",
+  "sources": [...],
+  "metadata": {
+    "ragMode": "hybrid (vector + keyword)",
+    "chunksRetrieved": 8,
+    "sessionId": "session-123",
+    "conversationTurns": 2
+  }
+}
+```
 
 ## Agent-to-Agent Communication
 
@@ -222,25 +354,6 @@ The module supports enhanced **two-way agent-to-agent communication** mode. When
 2. **Include Actual Results** - Responses contain real data from API calls, not just instructions
 3. **Have Natural Conversations** - Agents synthesize tool results into conversational responses
 4. **Share Agent Metadata** - Information about requesting and responding agents (ID, type, capabilities)
-
-### How It Works
-
-When agent-to-agent mode is enabled:
-
-1. **Automatic Tool Execution**: The system automatically executes relevant API tools based on the query
-2. **Data-First Responses**: The LLM receives actual API results and synthesizes them into natural responses
-3. **Proactive Data Fetching**: If a query asks for data (e.g., "What is the current leader?"), the system proactively calls the appropriate API
-4. **Conversational Format**: Responses are natural conversations, not just API instructions
-
-### API Documentation Tool
-
-The `ApiDocumentationTool` provides structured documentation for all available APIs:
-
-- **Oak Segment Consensus APIs**: Explorer, Health, Consensus, Aeron Cluster, Registration, Oak Files
-- **Oak Segment HTTP APIs**: Client-side usage patterns and endpoint consumption
-- **Agent-to-Agent Guidance**: Best practices for inter-agent communication
-
-This tool is automatically included in agent-to-agent mode to ensure the LLM knows what APIs are available.
 
 ### Example Agent-to-Agent Conversation
 
@@ -263,35 +376,31 @@ The cluster has 3 members: node-0, node-1, and node-2.
 All nodes are healthy and responding. Node-0 has been the leader for the last 2 minutes.
 ```
 
-**Key Differences from Instruction Mode:**
-- ✅ **Before**: "To check the leader, query GET /v1/aeron/cluster-state"
-- ✅ **After**: "The current leader is node-0 (term 5)" - includes actual data!
+## Apache 2.0 Licensed Models
 
-### Two-Way Interaction Flow
+All recommended models are Apache 2.0 licensed for compatibility with Apache projects:
 
-1. **Agent A** sends a query with `agentToAgent: true`
-2. **Agent B** receives the query and:
-   - Automatically executes relevant API tools (e.g., `ValidatorApiTool`)
-   - Receives actual API response data
-   - Synthesizes the data into a natural response
-   - Includes the actual results in the answer
-3. **Agent A** receives a response with real data, not just instructions
-4. **Conversation continues** - agents can ask follow-up questions and get actual data
+| Model | Size | Purpose | License |
+|-------|------|---------|---------|
+| `qwen2.5-coder:7b` | 4.7 GB | Code specialist (fast) | Apache 2.0 |
+| `qwen3:8b` | 5.2 GB | Reasoning + code | Apache 2.0 |
+| `nomic-embed-text` | 274 MB | Vector embeddings | Apache 2.0 |
 
 ## Future Enhancements
 
-- [ ] Vector embeddings for better semantic code retrieval
+- [x] ~~Vector embeddings for better semantic code retrieval~~
+- [x] ~~Dynamic model selection~~
+- [x] ~~Conversation history~~
+- [ ] Code Knowledge Graph (class hierarchy, method calls)
 - [ ] Metrics tool (query Prometheus)
-- [ ] ONNX Runtime support (embedded LLM)
 - [ ] Streaming responses
-- [ ] Conversation history
-- [ ] Code change tracking (git integration)
+- [ ] Git integration (code change tracking)
+- [ ] Function calling / tool use
 
 ## Notes
 
 - This is **exploration/POC code** - not production-ready
 - Requires Ollama to be running locally
 - LLM responses may not always be accurate
-- RAG uses enhanced keyword matching with TF-IDF scoring (future: vector embeddings)
-- Log access works with or without Logback (uses reflection for optional dependency)
-
+- First startup generates embeddings (may take 1-2 minutes)
+- Subsequent startups load from cache (fast)

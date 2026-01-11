@@ -316,26 +316,114 @@
         }
 
         .message-content {
-            line-height: 1.6;
+            line-height: 1.7;
             color: var(--text-primary);
         }
 
-        .message-content pre {
-            background: rgba(0, 0, 0, 0.3);
-            padding: 12px;
-            border-radius: 6px;
-            overflow-x: auto;
-            margin: 8px 0;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
+        /* Markdown Headers */
+        .message-content .md-h2 {
+            font-size: 1.4em;
+            font-weight: 700;
+            color: var(--accent-primary);
+            margin: 16px 0 8px 0;
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--border-color);
         }
 
+        .message-content .md-h3 {
+            font-size: 1.2em;
+            font-weight: 600;
+            color: var(--accent-secondary);
+            margin: 14px 0 6px 0;
+        }
+
+        .message-content .md-h4 {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 12px 0 4px 0;
+        }
+
+        /* Markdown Lists */
+        .message-content .md-ul,
+        .message-content .md-ol {
+            margin: 8px 0;
+            padding-left: 24px;
+        }
+
+        .message-content .md-li,
+        .message-content .md-oli {
+            margin: 4px 0;
+            color: var(--text-secondary);
+        }
+
+        .message-content .md-li::marker {
+            color: var(--accent-purple);
+        }
+
+        .message-content .md-oli::marker {
+            color: var(--accent-secondary);
+        }
+
+        /* Markdown Horizontal Rule */
+        .message-content .md-hr {
+            border: none;
+            border-top: 1px solid var(--border-color);
+            margin: 16px 0;
+        }
+
+        /* Markdown Links */
+        .message-content .md-link {
+            color: var(--accent-secondary);
+            text-decoration: none;
+            border-bottom: 1px dotted var(--accent-secondary);
+        }
+
+        .message-content .md-link:hover {
+            color: var(--accent-primary);
+            border-bottom-color: var(--accent-primary);
+        }
+
+        /* Code Blocks */
+        .message-content pre,
+        .message-content .code-block {
+            background: rgba(0, 0, 0, 0.4);
+            padding: 14px 16px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 12px 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            border: 1px solid var(--border-color);
+            line-height: 1.5;
+        }
+
+        .message-content pre code,
+        .message-content .code-block code {
+            background: none;
+            padding: 0;
+            font-size: inherit;
+        }
+
+        /* Inline Code */
         .message-content code {
             font-family: 'JetBrains Mono', monospace;
-            background: rgba(0, 0, 0, 0.3);
+            background: rgba(168, 85, 247, 0.15);
+            color: var(--accent-purple);
             padding: 2px 6px;
             border-radius: 4px;
-            font-size: 12px;
+            font-size: 0.9em;
+        }
+
+        /* Bold and Italic */
+        .message-content strong {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        .message-content em {
+            color: var(--text-secondary);
+            font-style: italic;
         }
 
         /* Sources */
@@ -670,10 +758,59 @@
         }
 
         function formatContent(content) {
-            // Basic markdown-like formatting
-            return escapeHtml(content)
-                .replace(/`([^`]+)`/g, '<code>$1</code>')
-                .replace(/\n/g, '<br>');
+            if (!content) return '';
+            
+            // First escape HTML
+            let html = escapeHtml(content);
+            
+            // Code blocks (```...```) - must be before inline code
+            html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+                return `<pre class="code-block"><code class="language-${lang || 'text'}">${code.trim()}</code></pre>`;
+            });
+            
+            // Inline code (`...`)
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            
+            // Headers (### Header)
+            html = html.replace(/^### (.+)$/gm, '<h4 class="md-h4">$1</h4>');
+            html = html.replace(/^## (.+)$/gm, '<h3 class="md-h3">$1</h3>');
+            html = html.replace(/^# (.+)$/gm, '<h2 class="md-h2">$1</h2>');
+            
+            // Bold (**text**)
+            html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            
+            // Italic (*text* or _text_)
+            html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+            
+            // Horizontal rule (---)
+            html = html.replace(/^---$/gm, '<hr class="md-hr">');
+            
+            // Unordered lists (- item)
+            html = html.replace(/^- (.+)$/gm, '<li class="md-li">$1</li>');
+            // Wrap consecutive li elements in ul
+            html = html.replace(/(<li class="md-li">.*<\/li>\n?)+/g, (match) => {
+                return `<ul class="md-ul">${match}</ul>`;
+            });
+            
+            // Numbered lists (1. item)
+            html = html.replace(/^\d+\. (.+)$/gm, '<li class="md-oli">$1</li>');
+            // Wrap consecutive oli elements in ol
+            html = html.replace(/(<li class="md-oli">.*<\/li>\n?)+/g, (match) => {
+                return `<ol class="md-ol">${match}</ol>`;
+            });
+            
+            // Links [text](url)
+            html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="md-link">$1</a>');
+            
+            // Line breaks (but not inside pre blocks)
+            html = html.replace(/\n/g, '<br>');
+            
+            // Clean up extra <br> after block elements
+            html = html.replace(/<\/(h[234]|pre|ul|ol|hr)><br>/g, '</$1>');
+            html = html.replace(/<br><(h[234]|pre|ul|ol|hr)/g, '<$1');
+            
+            return html;
         }
 
         function escapeHtml(str) {
@@ -705,9 +842,10 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        message: message,
-                        agentMode: agentMode,
-                        history: conversationHistory
+                        query: message,
+                        context: {
+                            agentToAgent: agentMode
+                        }
                     })
                 });
                 
@@ -716,11 +854,11 @@
                 if (data.error) {
                     addMessage('assistant', '❌ Error: ' + data.error);
                 } else {
-                    addMessage('assistant', data.response || data.message, data.sources);
+                    addMessage('assistant', data.answer, data.sources);
                     
                     // Update conversation history
                     conversationHistory.push({ role: 'user', content: message });
-                    conversationHistory.push({ role: 'assistant', content: data.response || data.message });
+                    conversationHistory.push({ role: 'assistant', content: data.answer });
                     
                     // Keep last 10 exchanges
                     if (conversationHistory.length > 20) {

@@ -18,7 +18,9 @@ package org.apache.jackrabbit.oak.segment.agentic.chat;
 
 import com.google.gson.Gson;
 import org.apache.jackrabbit.oak.segment.agentic.llm.LLMService;
+import org.apache.jackrabbit.oak.segment.agentic.rag.HybridRAGService;
 import org.apache.jackrabbit.oak.segment.agentic.rag.RAGService;
+import org.apache.jackrabbit.oak.segment.agentic.rag.VectorRAGService;
 import org.apache.jackrabbit.oak.segment.agentic.tools.AgenticTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.AgentDiscoveryTool;
 import org.apache.jackrabbit.oak.segment.agentic.tools.ApiDocumentationTool;
@@ -45,12 +47,27 @@ import java.util.Map;
 
 /**
  * HTTP handler for chat endpoint.
+ * 
+ * <p>Features:
+ * <ul>
+ *   <li>Hybrid RAG (vector + keyword) for better code retrieval</li>
+ *   <li>Conversation memory for multi-turn context</li>
+ *   <li>Dynamic model selection based on query complexity</li>
+ *   <li>Agent-to-agent communication support</li>
+ * </ul>
+ * 
+ * @since 1.89
  */
 public class ChatHandler {
     private static final Logger log = LoggerFactory.getLogger(ChatHandler.class);
     
     private final LLMService llmService;
+    /** Keyword-based RAG service (used by hybridRAGService) */
+    @SuppressWarnings("unused") // Used internally by hybridRAGService
     private final RAGService ragService;
+    private final VectorRAGService vectorRAGService;
+    private final HybridRAGService hybridRAGService;
+    private final ConversationMemory conversationMemory;
     private final List<AgenticTool> tools;
     private final Gson gson = new Gson();
     private final String baseUrl;
@@ -62,9 +79,36 @@ public class ChatHandler {
         this.baseUrl = baseUrl;
         this.isSlingContext = detectSlingContext();
         this.tools = new ArrayList<>();
+        this.conversationMemory = new ConversationMemory();
+        
+        // Initialize vector RAG service
+        this.vectorRAGService = new VectorRAGService();
+        
+        // Initialize hybrid RAG service
+        this.hybridRAGService = new HybridRAGService(ragService, vectorRAGService);
         
         // Initialize tools based on context
         initializeTools();
+        
+        // Initialize hybrid RAG in background
+        initializeHybridRAG();
+    }
+    
+    /**
+     * Initialize hybrid RAG service in background thread.
+     */
+    private void initializeHybridRAG() {
+        Thread initThread = new Thread(() -> {
+            try {
+                log.info("🔄 Initializing hybrid RAG service...");
+                hybridRAGService.initialize();
+                log.info("✅ Hybrid RAG ready: {}", hybridRAGService.getMode());
+            } catch (Exception e) {
+                log.warn("⚠️  Hybrid RAG initialization failed, using keyword-only: {}", e.getMessage());
+            }
+        }, "hybrid-rag-init");
+        initThread.setDaemon(true);
+        initThread.start();
     }
     
     /**
@@ -228,11 +272,16 @@ public class ChatHandler {
             
             ChatRequest chatRequest = gson.fromJson(body.toString(), ChatRequest.class);
             
-            if (chatRequest.query == null || chatRequest.query.trim().isEmpty()) {
+            // Support both 'query' and 'message' field names for backward compatibility
+            String effectiveQuery = chatRequest.getEffectiveQuery();
+            if (effectiveQuery == null || effectiveQuery.trim().isEmpty()) {
                 response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-                response.getWriter().write(gson.toJson(Map.of("error", "Query is required")));
+                response.getWriter().write(gson.toJson(Map.of("error", "Query is required (use 'query' or 'message' field)")));
                 return;
             }
+            
+            // Normalize to query field for downstream processing
+            chatRequest.query = effectiveQuery;
             
             log.info("💬 Chat query: {}", chatRequest.query);
             
@@ -256,7 +305,19 @@ public class ChatHandler {
         // Check for agent-to-agent communication metadata
         boolean isAgentToAgent = false;
         Map<String, Object> agentMetadata = null;
-        if (request.context != null) {
+        
+        // Check for top-level agentMode flag (backward compatibility)
+        if (request.agentMode != null && request.agentMode) {
+            isAgentToAgent = true;
+            agentMetadata = new HashMap<>();
+            agentMetadata.put("requestingAgentId", getWalletAddress());
+            agentMetadata.put("requestingAgentType", isSlingContext ? "sling-author" : "validator");
+            agentMetadata.put("requestingCapabilities", getRespondingCapabilities());
+            log.info("🤖 Agent-to-Agent mode enabled (agentMode flag) - Agent: {} ({})", 
+                agentMetadata.get("requestingAgentId"), agentMetadata.get("requestingAgentType"));
+        }
+        
+        if (request.context != null && !isAgentToAgent) {
             // Check for explicit agentToAgent flag (from UI toggle)
             Object agentToAgentFlag = request.context.get("agentToAgent");
             if (agentToAgentFlag != null && Boolean.TRUE.equals(agentToAgentFlag)) {
@@ -282,8 +343,9 @@ public class ChatHandler {
             }
         }
         
-        // 1. RAG: Retrieve relevant code/docs
-        List<RAGService.CodeChunk> relevantChunks = ragService.retrieve(request.query);
+        // 1. RAG: Retrieve relevant code/docs using hybrid search (vector + keyword)
+        List<RAGService.CodeChunk> relevantChunks = hybridRAGService.retrieve(request.query, 10);
+        log.debug("RAG mode: {}, retrieved {} chunks", hybridRAGService.getMode(), relevantChunks.size());
         
         // 2. Determine which tools to use
         List<AgenticTool> activeTools = selectTools(request.query);
@@ -351,6 +413,15 @@ public class ChatHandler {
         
         // 4. Build LLM context
         StringBuilder context = new StringBuilder();
+        
+        // Add conversation history if session ID provided
+        if (request.sessionId != null && !request.sessionId.isEmpty()) {
+            String conversationContext = conversationMemory.getContextForLLM(request.sessionId);
+            if (!conversationContext.isEmpty()) {
+                context.append(conversationContext).append("\n");
+                log.debug("Added conversation context for session: {}", request.sessionId);
+            }
+        }
         
         // Add context-specific information
         if (isAgentToAgent) {
@@ -543,6 +614,21 @@ public class ChatHandler {
                 chunk.content
             );
             response.sources.add(source);
+        }
+        
+        // 8. Save to conversation memory if session ID provided
+        if (request.sessionId != null && !request.sessionId.isEmpty()) {
+            conversationMemory.addTurn(request.sessionId, request.query, response.answer);
+            log.debug("Saved turn to conversation memory for session: {}", request.sessionId);
+        }
+        
+        // 9. Add metadata about RAG mode to response
+        response.metadata = new HashMap<>();
+        response.metadata.put("ragMode", hybridRAGService.getMode());
+        response.metadata.put("chunksRetrieved", relevantChunks.size());
+        if (request.sessionId != null) {
+            response.metadata.put("sessionId", request.sessionId);
+            response.metadata.put("conversationTurns", conversationMemory.getTurnCount(request.sessionId));
         }
         
         return response;

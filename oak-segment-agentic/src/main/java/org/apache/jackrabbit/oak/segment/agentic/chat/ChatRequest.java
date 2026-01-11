@@ -21,9 +21,29 @@ import java.util.Map;
 
 /**
  * Request model for chat endpoint.
+ * 
+ * <p>Supports:
+ * <ul>
+ *   <li>query: The user's question (preferred)</li>
+ *   <li>message: Alias for query (backward compatibility)</li>
+ *   <li>sessionId: Optional session ID for conversation memory</li>
+ *   <li>context: Additional context (agentToAgent, includeMetrics, etc.)</li>
+ * </ul>
  */
 public class ChatRequest {
+    /** User's question (preferred field name) */
     public String query;
+    
+    /** Alias for query (backward compatibility with older frontends) */
+    public String message;
+    
+    /** Agent mode flag (backward compatibility - use context.agentToAgent instead) */
+    public Boolean agentMode;
+    
+    /** Optional session ID for conversation memory */
+    public String sessionId;
+    
+    /** Additional context flags and data */
     public Map<String, Object> context = new HashMap<>();
     
     public ChatRequest() {
@@ -32,6 +52,25 @@ public class ChatRequest {
     
     public ChatRequest(String query) {
         this.query = query;
+    }
+    
+    public ChatRequest(String query, String sessionId) {
+        this.query = query;
+        this.sessionId = sessionId;
+    }
+    
+    /**
+     * Get the effective query, checking both 'query' and 'message' fields.
+     * @return the query string, or null if neither is set
+     */
+    public String getEffectiveQuery() {
+        if (query != null && !query.trim().isEmpty()) {
+            return query;
+        }
+        if (message != null && !message.trim().isEmpty()) {
+            return message;
+        }
+        return null;
     }
 }
 

@@ -38,18 +38,34 @@ import java.io.IOException;
  * Example setup:
  * <pre>
  *   # Install Ollama: https://ollama.ai
- *   ollama pull qwen2.5-coder:7b
- *   # Default model: qwen2.5-coder:7b (Apache 2.0 licensed)
+ *   ollama pull qwen2.5-coder:7b   # Code specialist (Apache 2.0)
+ *   ollama pull qwen3:8b           # Reasoning + code (Apache 2.0)
+ *   ollama pull nomic-embed-text   # Embeddings for RAG (Apache 2.0)
  * </pre>
+ * 
+ * <p>Supports dynamic model selection based on query complexity:
+ * <ul>
+ *   <li>Fast model (qwen2.5-coder:7b): Quick responses for simple queries</li>
+ *   <li>Balanced model (qwen3:8b): Complex reasoning and explanations</li>
+ * </ul>
+ * 
+ * @since 1.89
  */
 public class OllamaLLMService implements LLMService {
     private static final Logger log = LoggerFactory.getLogger(OllamaLLMService.class);
     
+    /** Fast model for quick responses - Apache 2.0 licensed (used as default) */
+    public static final String MODEL_FAST = "qwen2.5-coder:7b";
+    
+    /** Balanced model for complex reasoning - Apache 2.0 licensed */
+    private static final String MODEL_BALANCED = "qwen3:8b";
+    
     private final String ollamaUrl;
-    private final String modelName;
+    private final String defaultModelName;
     private final Gson gson = new Gson();
     private final CloseableHttpClient httpClient;
     private volatile boolean available = false;
+    private volatile boolean balancedModelAvailable = false;
     
     public OllamaLLMService() {
         this(getOllamaUrlFromConfig(), getModelNameFromConfig());
@@ -105,12 +121,12 @@ public class OllamaLLMService implements LLMService {
     
     public OllamaLLMService(String ollamaUrl, String modelName) {
         this.ollamaUrl = ollamaUrl;
-        this.modelName = modelName;
+        this.defaultModelName = modelName;
         
         // Create HTTP client with longer timeouts for LLM inference
         RequestConfig requestConfig = RequestConfig.custom()
             .setConnectTimeout(10000)
-            .setSocketTimeout(120000)  // 2 minutes for LLM inference
+            .setSocketTimeout(180000)  // 3 minutes for LLM inference (qwen3 can be slower)
             .build();
         this.httpClient = HttpClients.custom()
             .setDefaultRequestConfig(requestConfig)
@@ -127,8 +143,18 @@ public class OllamaLLMService implements LLMService {
             try (CloseableHttpResponse response = httpClient.execute(request)) {
                 int statusCode = response.getStatusLine().getStatusCode();
                 if (statusCode >= 200 && statusCode < 300) {
+                    String responseBody = EntityUtils.toString(response.getEntity());
                     available = true;
-                    log.info("✅ Ollama LLM service available at {} with model {}", ollamaUrl, modelName);
+                    
+                    // Check if balanced model is available
+                    if (responseBody.contains(MODEL_BALANCED)) {
+                        balancedModelAvailable = true;
+                        log.info("✅ Ollama LLM service available at {} with models: {} (fast), {} (balanced)", 
+                            ollamaUrl, defaultModelName, MODEL_BALANCED);
+                    } else {
+                        log.info("✅ Ollama LLM service available at {} with model {}", ollamaUrl, defaultModelName);
+                        log.info("💡 For better reasoning, also pull: ollama pull {}", MODEL_BALANCED);
+                    }
                 } else {
                     log.warn("⚠️  Ollama service not available: HTTP {}", statusCode);
                     available = false;
@@ -136,9 +162,64 @@ public class OllamaLLMService implements LLMService {
             }
         } catch (Exception e) {
             log.warn("⚠️  Ollama LLM service not available: {}", e.getMessage());
-            log.debug("To enable LLM chat, install Ollama: https://ollama.ai and run: ollama pull {}", modelName);
+            log.debug("To enable LLM chat, install Ollama: https://ollama.ai and run: ollama pull {}", defaultModelName);
             available = false;
         }
+    }
+    
+    /**
+     * Select the best model for a query based on complexity.
+     * 
+     * @param query User's query
+     * @param isAgentToAgent Whether this is agent-to-agent communication
+     * @return Model name to use
+     */
+    private String selectModel(String query, boolean isAgentToAgent) {
+        // Agent-to-agent always uses balanced model for better reasoning
+        if (isAgentToAgent && balancedModelAvailable) {
+            return MODEL_BALANCED;
+        }
+        
+        String lowerQuery = query.toLowerCase();
+        
+        // Complex reasoning queries benefit from balanced model
+        boolean needsReasoning = 
+            lowerQuery.contains("explain") ||
+            lowerQuery.contains("how does") ||
+            lowerQuery.contains("why") ||
+            lowerQuery.contains("architecture") ||
+            lowerQuery.contains("design") ||
+            lowerQuery.contains("compare") ||
+            lowerQuery.contains("difference") ||
+            lowerQuery.contains("analyze") ||
+            lowerQuery.contains("debug") ||
+            lowerQuery.contains("troubleshoot") ||
+            lowerQuery.length() > 200;  // Long queries often need more reasoning
+        
+        if (needsReasoning && balancedModelAvailable) {
+            log.debug("Using balanced model ({}) for complex query", MODEL_BALANCED);
+            return MODEL_BALANCED;
+        }
+        
+        return defaultModelName;
+    }
+    
+    /**
+     * Get the current model being used.
+     * 
+     * @return Default model name
+     */
+    public String getModelName() {
+        return defaultModelName;
+    }
+    
+    /**
+     * Check if balanced model is available.
+     * 
+     * @return true if qwen3:8b is available
+     */
+    public boolean isBalancedModelAvailable() {
+        return balancedModelAvailable;
     }
     
     @Override
@@ -149,9 +230,9 @@ public class OllamaLLMService implements LLMService {
     @Override
     public String generate(String query, String context) {
         if (!available) {
-            return "LLM service is not available. Please ensure Ollama is running and model '" + modelName + "' is installed.\n" +
+            return "LLM service is not available. Please ensure Ollama is running and model '" + defaultModelName + "' is installed.\n" +
                    "Install: https://ollama.ai\n" +
-                   "Pull model: ollama pull " + modelName;
+                   "Pull model: ollama pull " + defaultModelName;
         }
         
         try {
@@ -161,6 +242,9 @@ public class OllamaLLMService implements LLMService {
                 context.contains("TWO-WAY CONVERSATION") ||
                 context.contains("TOOL RESULTS")
             );
+            
+            // Select best model for this query
+            String selectedModel = selectModel(query, isAgentToAgent);
             
             // Build prompt with context
             StringBuilder prompt = new StringBuilder();
@@ -208,9 +292,12 @@ public class OllamaLLMService implements LLMService {
             
             // Build JSON request
             JsonObject requestJson = new JsonObject();
-            requestJson.addProperty("model", modelName);
+            requestJson.addProperty("model", selectedModel);
             requestJson.addProperty("prompt", prompt.toString());
             requestJson.addProperty("stream", false);
+            
+            log.debug("Using model: {} for query: {}...", selectedModel, 
+                query.length() > 50 ? query.substring(0, 50) : query);
             
             // For agent-to-agent mode, use lower temperature for more deterministic responses
             // and higher top_p to focus on the most likely tokens

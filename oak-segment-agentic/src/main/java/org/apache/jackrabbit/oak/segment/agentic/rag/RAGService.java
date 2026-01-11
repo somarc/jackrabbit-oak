@@ -297,14 +297,21 @@ public class RAGService {
     private int scanAndIndex(Path root) throws IOException {
         AtomicInteger count = new AtomicInteger(0);
         
-        // Focus on key modules: consensus, agentic, segment-tar, segment-http
+        // Focus on key Blockchain-AEM modules
         String[] targetModules = {
+            // Core consensus & agentic
             "oak-segment-consensus",
             "oak-segment-agentic",
+            // Storage layer
             "oak-segment-tar",
             "oak-segment-http",
             "oak-store-composite",
-            "oak-core"
+            // Blockchain-native modules
+            "oak-blob-cloud-ipfs",   // IPFS binary storage (ADR 015)
+            "oak-auth-web3",         // Web3 biometric authentication
+            // Foundation
+            "oak-core",
+            "oak-api"
         };
         
         try (Stream<Path> paths = Files.walk(root)) {
@@ -330,7 +337,143 @@ public class RAGService {
                  });
         }
         
+        // Also index Blockchain-AEM documentation (ADRs, architecture docs)
+        count.addAndGet(scanAndIndexDocs(root));
+        
         return count.get();
+    }
+    
+    /**
+     * Scan and index Markdown documentation files.
+     */
+    private int scanAndIndexDocs(Path oakRoot) {
+        AtomicInteger count = new AtomicInteger(0);
+        
+        // Documentation paths to index (relative to workspace root, not Oak root)
+        String[] docPaths = {
+            "Blockchain-AEM/adr",                    // Architecture Decision Records
+            "Blockchain-AEM/02-architecture",        // Architecture docs
+            "Blockchain-AEM/08-technical-notes",    // Technical notes
+            "jackrabbit-oak/docs"                    // Oak analysis docs
+        };
+        
+        // Get workspace root (parent of jackrabbit-oak)
+        Path workspaceRoot = oakRoot.getParent();
+        if (workspaceRoot == null) {
+            log.debug("Cannot determine workspace root for doc indexing");
+            return 0;
+        }
+        
+        for (String docPath : docPaths) {
+            Path fullPath = workspaceRoot.resolve(docPath);
+            if (!Files.exists(fullPath)) {
+                log.debug("Doc path does not exist: {}", fullPath);
+                continue;
+            }
+            
+            try (Stream<Path> paths = Files.walk(fullPath, 2)) { // Max depth 2
+                paths.filter(Files::isRegularFile)
+                     .filter(p -> p.toString().endsWith(".md"))
+                     .forEach(p -> {
+                         try {
+                             indexMarkdownFile(p, workspaceRoot);
+                             count.incrementAndGet();
+                         } catch (Exception e) {
+                             log.debug("Error indexing doc {}: {}", p, e.getMessage());
+                         }
+                     });
+            } catch (IOException e) {
+                log.debug("Error walking doc path {}: {}", fullPath, e.getMessage());
+            }
+        }
+        
+        log.info("📚 Indexed {} documentation files", count.get());
+        return count.get();
+    }
+    
+    /**
+     * Index a single Markdown documentation file.
+     */
+    private void indexMarkdownFile(Path filePath, Path workspaceRoot) throws IOException {
+        String content = new String(Files.readAllBytes(filePath), StandardCharsets.UTF_8);
+        
+        // Extract title from first H1 or filename
+        String title = extractMarkdownTitle(content, filePath);
+        
+        // Get relative path
+        String relativePath = workspaceRoot.relativize(filePath).toString().replace('\\', '/');
+        
+        // Extract summary (first paragraph or abstract)
+        String summary = extractMarkdownSummary(content);
+        
+        // For docs, we want larger chunks to preserve context
+        if (content.length() > 4000) {
+            String[] chunks = splitIntoChunks(content, 4000);
+            for (int i = 0; i < chunks.length; i++) {
+                codeChunks.add(new CodeChunk(
+                    "[DOC] " + title + (chunks.length > 1 ? " (part " + (i + 1) + ")" : ""),
+                    relativePath,
+                    chunks[i],
+                    summary
+                ));
+            }
+        } else {
+            codeChunks.add(new CodeChunk(
+                "[DOC] " + title,
+                relativePath,
+                content,
+                summary
+            ));
+        }
+    }
+    
+    /**
+     * Extract title from Markdown file.
+     */
+    private String extractMarkdownTitle(String content, Path filePath) {
+        // Look for first H1 header
+        String[] lines = content.split("\n");
+        for (String line : lines) {
+            line = line.trim();
+            if (line.startsWith("# ")) {
+                return line.substring(2).trim();
+            }
+        }
+        // Fallback to filename without extension
+        String fileName = filePath.getFileName().toString();
+        return fileName.substring(0, fileName.length() - 3); // Remove .md
+    }
+    
+    /**
+     * Extract summary from Markdown file.
+     */
+    private String extractMarkdownSummary(String content) {
+        String[] lines = content.split("\n");
+        StringBuilder summary = new StringBuilder();
+        boolean foundContent = false;
+        
+        for (String line : lines) {
+            line = line.trim();
+            // Skip headers and empty lines at start
+            if (!foundContent) {
+                if (line.isEmpty() || line.startsWith("#") || line.startsWith("---")) {
+                    continue;
+                }
+                foundContent = true;
+            }
+            
+            // Stop at next header or after ~200 chars
+            if (line.startsWith("#") || summary.length() > 200) {
+                break;
+            }
+            
+            if (!line.isEmpty()) {
+                if (summary.length() > 0) summary.append(" ");
+                summary.append(line);
+            }
+        }
+        
+        return summary.toString();
     }
     
     /**
@@ -619,6 +762,34 @@ public class RAGService {
             return String.format("%s (%s): %s", name, filePath, 
                 content.length() > 500 ? content.substring(0, 500) + "..." : content);
         }
+    }
+    
+    /**
+     * Get all indexed code chunks.
+     * Used by HybridRAGService to index embeddings.
+     * 
+     * @return List of all code chunks
+     */
+    public List<CodeChunk> getAllChunks() {
+        return new ArrayList<>(codeChunks);
+    }
+    
+    /**
+     * Get the number of indexed chunks.
+     * 
+     * @return Number of chunks
+     */
+    public int getChunkCount() {
+        return codeChunks.size();
+    }
+    
+    /**
+     * Check if the service has indexed the codebase.
+     * 
+     * @return true if indexed
+     */
+    public boolean isIndexed() {
+        return indexed;
     }
     
     /**
