@@ -1,0 +1,32 @@
+{
+  "name": "oak-magnum-oakus",
+  "version": "1.0.0",
+  "description": "The Magnum OAKus - Comprehensive guide to Apache Oak repository maintenance and recovery",
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev docs",
+    "build": "vitepress build docs",
+    "preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.5.0",
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "mermaid": "^11.4.0",
+    "vue": "^3.4.0"
+  },
+  "keywords": [
+    "oak",
+    "jackrabbit",
+    "repository",
+    "maintenance",
+    "recovery",
+    "corruption",
+    "segmentstore",
+    "tarmk"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/somarc/jackrabbit-oak"
+  }
+}
