@@ -86,7 +86,6 @@
     <module>oak-benchmarks-lucene</module>
     <module>oak-benchmarks-elastic</module>
     <module>oak-run-elastic</module>
-    <module>oak-magnum-oakus</module>
   </modules>
 
   <build>
