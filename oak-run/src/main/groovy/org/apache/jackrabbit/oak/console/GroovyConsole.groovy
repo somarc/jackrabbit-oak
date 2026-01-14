@@ -128,7 +128,12 @@ class GroovyConsole {
                 new RetrieveCommand(shell),
                 new LuceneCommand(shell),
                 new ExportRelevantDocumentsCommand(shell),
-                new ExportCommand(shell)
+                new ExportCommand(shell),
+                // Recovery commands (from Magnum OAKus)
+                new CountNodesCommand(shell),
+                new RemoveNodeCommand(shell),
+                new RemoveNodesCommand(shell),
+                new BinaryPathsCommand(shell)
         ])
 
         if(session.store instanceof DocumentNodeStore){
