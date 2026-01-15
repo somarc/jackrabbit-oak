@@ -3,14 +3,14 @@
   <parent>
     <artifactId>oak-parent</artifactId>
     <groupId>org.apache.jackrabbit</groupId>
-    <version>1.89-SNAPSHOT</version>
+    <version>1.91-SNAPSHOT</version>
     <relativePath>../oak-parent/pom.xml</relativePath>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>oak-segment-consensus</artifactId>
   <packaging>bundle</packaging>
-  <name>Oak Segment Consensus (Blockchain AEM POC)</name>
-  <description>Distributed consensus layer for Oak Segment Store - Blockchain AEM proof of concept</description>
+  <name>Oak Segment Consensus (Blockchain AEM)</name>
+  <description>Distributed consensus layer for Oak Segment Store - Blockchain AEM with sharded Raft clusters</description>
   <build>
     <plugins>
       <plugin>
@@ -130,7 +130,7 @@
     <dependency>
       <groupId>org.apache.jackrabbit</groupId>
       <artifactId>oak-store-composite</artifactId>
-      <version>1.89-SNAPSHOT</version>
+      <version>1.91-SNAPSHOT</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
