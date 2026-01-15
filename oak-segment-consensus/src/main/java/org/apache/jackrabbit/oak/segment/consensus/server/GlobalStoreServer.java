@@ -1558,7 +1558,7 @@ public class GlobalStoreServer {
             org.apache.jackrabbit.oak.spi.state.NodeBuilder protocol = genesis.child("protocol");
             protocol.setProperty("jcr:primaryType", "nt:unstructured");
             protocol.setProperty("message", "DO IT LIVE!");
-            protocol.setProperty("version", "1.0.0-POC");
+            protocol.setProperty("version", "1.0.0");
             protocol.setProperty("chainId", "oak-blockchain-aem-poc");
             protocol.setProperty("genesisTimestamp", timestamp);
             protocol.setProperty("genesisDate", genesisDate);
@@ -1763,7 +1763,7 @@ public class GlobalStoreServer {
             System.out.println("   🔐 PROTOCOL:");
             System.out.println("      Chain ID: oak-blockchain-aem-poc");
             System.out.println("      Message: \"DO IT LIVE!\"");
-            System.out.println("      Version: 1.0.0-POC");
+            System.out.println("      Version: 1.0.0");
             System.out.println("      Birth: " + genesisDate);
             System.out.println("");
             System.out.println("   📦 IPFS (Decentralized Binary Storage):");

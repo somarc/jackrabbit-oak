@@ -25,8 +25,8 @@
   <modelVersion>4.0.0</modelVersion>
 
   <artifactId>oak-segment-consensus</artifactId>
-  <name>Oak Segment Consensus (Blockchain AEM POC)</name>
-  <description>Distributed consensus layer for Oak Segment Store - Blockchain AEM proof of concept</description>
+  <name>Oak Segment Consensus (Blockchain AEM)</name>
+  <description>Distributed consensus layer for Oak Segment Store - Blockchain AEM with sharded Raft clusters</description>
   <packaging>bundle</packaging>
 
   <build>

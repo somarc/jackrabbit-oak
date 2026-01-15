@@ -3447,7 +3447,7 @@ public class AeronConsensusEngine implements ClusteredService {
             org.apache.jackrabbit.oak.spi.state.NodeBuilder protocol = genesis.child("protocol");
             protocol.setProperty("jcr:primaryType", "nt:unstructured");
             protocol.setProperty("message", "DO IT LIVE!");
-            protocol.setProperty("version", "1.0.0-POC");
+            protocol.setProperty("version", "1.0.0");
             protocol.setProperty("chainId", "oak-blockchain-aem-poc");
             protocol.setProperty("genesisTimestamp", System.currentTimeMillis());
             protocol.setProperty("genesisDate", new java.util.Date().toString());

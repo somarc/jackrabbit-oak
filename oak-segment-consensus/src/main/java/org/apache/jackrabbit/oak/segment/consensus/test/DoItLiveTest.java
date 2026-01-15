@@ -112,7 +112,7 @@ public class DoItLiveTest {
             genesis.setProperty("message", "DO IT LIVE!");
             genesis.setProperty("description", "Blockchain AEM - Genesis block of the global TarMK chain");
             genesis.setProperty("timestamp", System.currentTimeMillis());
-            genesis.setProperty("author", "Blockchain AEM POC");
+            genesis.setProperty("author", "Blockchain AEM");
             genesis.setProperty("version", "1.0.0");
             
             // Add a reference to where the binary WOULD be stored (BYOD model)
