@@ -259,6 +259,10 @@
           <artifactId>apache-rat-plugin</artifactId>
           <configuration>
             <consoleOutput>true</consoleOutput>
+            <excludes>
+              <!-- Documentation files don't need license headers -->
+              <exclude>**/*.md</exclude>
+            </excludes>
           </configuration>
         </plugin>
         <plugin>

@@ -450,182 +450,182 @@ public class ValidatorAuthHandler {
     private String generateLoginPage(Challenge challenge, String returnUrl) {
         String challengeBase64 = Base64.getEncoder().encodeToString(challenge.challengeBytes);
         
-        return """
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Validator Login - Blockchain AEM</title>
-                <style>
-                    * { margin: 0; padding: 0; box-sizing: border-box; }
-                    body {
-                        font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
-                        background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
-                        min-height: 100vh;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        color: #fff;
-                    }
-                    .login-container {
-                        background: rgba(255, 255, 255, 0.05);
-                        backdrop-filter: blur(20px);
-                        border: 1px solid rgba(255, 255, 255, 0.1);
-                        border-radius: 24px;
-                        padding: 48px;
-                        max-width: 420px;
-                        width: 90%;
-                        text-align: center;
-                    }
-                    .logo {
-                        font-size: 48px;
-                        margin-bottom: 16px;
-                    }
-                    h1 {
-                        font-size: 24px;
-                        font-weight: 600;
-                        margin-bottom: 8px;
-                    }
-                    .subtitle {
-                        color: rgba(255, 255, 255, 0.6);
-                        margin-bottom: 32px;
-                    }
-                    .auth-button {
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        border: none;
-                        border-radius: 12px;
-                        padding: 16px 32px;
-                        font-size: 16px;
-                        font-weight: 600;
-                        color: #fff;
-                        cursor: pointer;
-                        width: 100%;
-                        transition: transform 0.2s, box-shadow 0.2s;
-                    }
-                    .auth-button:hover {
-                        transform: translateY(-2px);
-                        box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
-                    }
-                    .auth-button:disabled {
-                        opacity: 0.5;
-                        cursor: not-allowed;
-                        transform: none;
-                    }
-                    .status {
-                        margin-top: 24px;
-                        padding: 12px;
-                        border-radius: 8px;
-                        font-size: 14px;
-                    }
-                    .status.error {
-                        background: rgba(239, 68, 68, 0.2);
-                        color: #fca5a5;
-                    }
-                    .status.success {
-                        background: rgba(34, 197, 94, 0.2);
-                        color: #86efac;
-                    }
-                    .fingerprint-icon {
-                        font-size: 64px;
-                        margin-bottom: 24px;
-                        animation: pulse 2s infinite;
-                    }
-                    @keyframes pulse {
-                        0%, 100% { opacity: 1; }
-                        50% { opacity: 0.5; }
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="login-container">
-                    <div class="fingerprint-icon">🔐</div>
-                    <h1>Validator Access</h1>
-                    <p class="subtitle">Authenticate with your passkey to access the validator dashboard</p>
-                    
-                    <button id="authButton" class="auth-button" onclick="authenticate()">
-                        Authenticate with Passkey
-                    </button>
-                    
-                    <div id="status" class="status" style="display: none;"></div>
-                </div>
-                
-                <script>
-                    const challenge = Uint8Array.from(atob('%s'), c => c.charCodeAt(0));
-                    const challengeId = '%s';
-                    const returnUrl = '%s';
-                    
-                    async function authenticate() {
-                        const button = document.getElementById('authButton');
-                        const status = document.getElementById('status');
-                        
-                        button.disabled = true;
-                        button.textContent = 'Authenticating...';
-                        status.style.display = 'none';
-                        
-                        try {
-                            // Check WebAuthn support
-                            if (!window.PublicKeyCredential) {
-                                throw new Error('WebAuthn not supported in this browser');
-                            }
-                            
-                            // Request passkey authentication
-                            const credential = await navigator.credentials.get({
-                                publicKey: {
-                                    challenge: challenge,
-                                    timeout: 60000,
-                                    userVerification: 'required',
-                                    rpId: window.location.hostname
-                                }
-                            });
-                            
-                            // Extract authentication data
-                            const response = credential.response;
-                            const signature = new Uint8Array(response.signature);
-                            const authenticatorData = new Uint8Array(response.authenticatorData);
-                            const clientDataJSON = new Uint8Array(response.clientDataJSON);
-                            
-                            // Send to server for verification
-                            const verifyResponse = await fetch('/auth/verify', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    challengeId: challengeId,
-                                    credentialId: credential.id,
-                                    signature: btoa(String.fromCharCode(...signature)),
-                                    authenticatorData: btoa(String.fromCharCode(...authenticatorData)),
-                                    clientDataJSON: btoa(String.fromCharCode(...clientDataJSON))
-                                })
-                            });
-                            
-                            const result = await verifyResponse.json();
-                            
-                            if (result.success) {
-                                status.className = 'status success';
-                                status.textContent = '✅ Authentication successful! Redirecting...';
-                                status.style.display = 'block';
-                                
-                                // Redirect to original URL
-                                setTimeout(() => {
-                                    window.location.href = atob(returnUrl);
-                                }, 1000);
-                            } else {
-                                throw new Error(result.error || 'Authentication failed');
-                            }
-                            
-                        } catch (error) {
-                            console.error('Authentication error:', error);
-                            status.className = 'status error';
-                            status.textContent = '❌ ' + error.message;
-                            status.style.display = 'block';
-                            
-                            button.disabled = false;
-                            button.textContent = 'Authenticate with Passkey';
-                        }
-                    }
-                </script>
-            </body>
-            </html>
-            """.formatted(challengeBase64, challenge.challengeId, returnUrl);
+        return String.format(
+            "<!DOCTYPE html>\n" +
+            "<html lang=\"en\">\n" +
+            "<head>\n" +
+            "    <meta charset=\"UTF-8\">\n" +
+            "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
+            "    <title>Validator Login - Blockchain AEM</title>\n" +
+            "    <style>\n" +
+            "        * { margin: 0; padding: 0; box-sizing: border-box; }\n" +
+            "        body {\n" +
+            "            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;\n" +
+            "            background: linear-gradient(135deg, #0a0a0a 0%%, #1a1a2e 50%%, #16213e 100%%);\n" +
+            "            min-height: 100vh;\n" +
+            "            display: flex;\n" +
+            "            align-items: center;\n" +
+            "            justify-content: center;\n" +
+            "            color: #fff;\n" +
+            "        }\n" +
+            "        .login-container {\n" +
+            "            background: rgba(255, 255, 255, 0.05);\n" +
+            "            backdrop-filter: blur(20px);\n" +
+            "            border: 1px solid rgba(255, 255, 255, 0.1);\n" +
+            "            border-radius: 24px;\n" +
+            "            padding: 48px;\n" +
+            "            max-width: 420px;\n" +
+            "            width: 90%%;\n" +
+            "            text-align: center;\n" +
+            "        }\n" +
+            "        .logo {\n" +
+            "            font-size: 48px;\n" +
+            "            margin-bottom: 16px;\n" +
+            "        }\n" +
+            "        h1 {\n" +
+            "            font-size: 24px;\n" +
+            "            font-weight: 600;\n" +
+            "            margin-bottom: 8px;\n" +
+            "        }\n" +
+            "        .subtitle {\n" +
+            "            color: rgba(255, 255, 255, 0.6);\n" +
+            "            margin-bottom: 32px;\n" +
+            "        }\n" +
+            "        .auth-button {\n" +
+            "            background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%);\n" +
+            "            border: none;\n" +
+            "            border-radius: 12px;\n" +
+            "            padding: 16px 32px;\n" +
+            "            font-size: 16px;\n" +
+            "            font-weight: 600;\n" +
+            "            color: #fff;\n" +
+            "            cursor: pointer;\n" +
+            "            width: 100%%;\n" +
+            "            transition: transform 0.2s, box-shadow 0.2s;\n" +
+            "        }\n" +
+            "        .auth-button:hover {\n" +
+            "            transform: translateY(-2px);\n" +
+            "            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);\n" +
+            "        }\n" +
+            "        .auth-button:disabled {\n" +
+            "            opacity: 0.5;\n" +
+            "            cursor: not-allowed;\n" +
+            "            transform: none;\n" +
+            "        }\n" +
+            "        .status {\n" +
+            "            margin-top: 24px;\n" +
+            "            padding: 12px;\n" +
+            "            border-radius: 8px;\n" +
+            "            font-size: 14px;\n" +
+            "        }\n" +
+            "        .status.error {\n" +
+            "            background: rgba(239, 68, 68, 0.2);\n" +
+            "            color: #fca5a5;\n" +
+            "        }\n" +
+            "        .status.success {\n" +
+            "            background: rgba(34, 197, 94, 0.2);\n" +
+            "            color: #86efac;\n" +
+            "        }\n" +
+            "        .fingerprint-icon {\n" +
+            "            font-size: 64px;\n" +
+            "            margin-bottom: 24px;\n" +
+            "            animation: pulse 2s infinite;\n" +
+            "        }\n" +
+            "        @keyframes pulse {\n" +
+            "            0%%, 100%% { opacity: 1; }\n" +
+            "            50%% { opacity: 0.5; }\n" +
+            "        }\n" +
+            "    </style>\n" +
+            "</head>\n" +
+            "<body>\n" +
+            "    <div class=\"login-container\">\n" +
+            "        <div class=\"fingerprint-icon\">&#128274;</div>\n" +
+            "        <h1>Validator Access</h1>\n" +
+            "        <p class=\"subtitle\">Authenticate with your passkey to access the validator dashboard</p>\n" +
+            "        \n" +
+            "        <button id=\"authButton\" class=\"auth-button\" onclick=\"authenticate()\">\n" +
+            "            Authenticate with Passkey\n" +
+            "        </button>\n" +
+            "        \n" +
+            "        <div id=\"status\" class=\"status\" style=\"display: none;\"></div>\n" +
+            "    </div>\n" +
+            "    \n" +
+            "    <script>\n" +
+            "        const challenge = Uint8Array.from(atob('%s'), c => c.charCodeAt(0));\n" +
+            "        const challengeId = '%s';\n" +
+            "        const returnUrl = '%s';\n" +
+            "        \n" +
+            "        async function authenticate() {\n" +
+            "            const button = document.getElementById('authButton');\n" +
+            "            const status = document.getElementById('status');\n" +
+            "            \n" +
+            "            button.disabled = true;\n" +
+            "            button.textContent = 'Authenticating...';\n" +
+            "            status.style.display = 'none';\n" +
+            "            \n" +
+            "            try {\n" +
+            "                // Check WebAuthn support\n" +
+            "                if (!window.PublicKeyCredential) {\n" +
+            "                    throw new Error('WebAuthn not supported in this browser');\n" +
+            "                }\n" +
+            "                \n" +
+            "                // Request passkey authentication\n" +
+            "                const credential = await navigator.credentials.get({\n" +
+            "                    publicKey: {\n" +
+            "                        challenge: challenge,\n" +
+            "                        timeout: 60000,\n" +
+            "                        userVerification: 'required',\n" +
+            "                        rpId: window.location.hostname\n" +
+            "                    }\n" +
+            "                });\n" +
+            "                \n" +
+            "                // Extract authentication data\n" +
+            "                const response = credential.response;\n" +
+            "                const signature = new Uint8Array(response.signature);\n" +
+            "                const authenticatorData = new Uint8Array(response.authenticatorData);\n" +
+            "                const clientDataJSON = new Uint8Array(response.clientDataJSON);\n" +
+            "                \n" +
+            "                // Send to server for verification\n" +
+            "                const verifyResponse = await fetch('/auth/verify', {\n" +
+            "                    method: 'POST',\n" +
+            "                    headers: { 'Content-Type': 'application/json' },\n" +
+            "                    body: JSON.stringify({\n" +
+            "                        challengeId: challengeId,\n" +
+            "                        credentialId: credential.id,\n" +
+            "                        signature: btoa(String.fromCharCode(...signature)),\n" +
+            "                        authenticatorData: btoa(String.fromCharCode(...authenticatorData)),\n" +
+            "                        clientDataJSON: btoa(String.fromCharCode(...clientDataJSON))\n" +
+            "                    })\n" +
+            "                });\n" +
+            "                \n" +
+            "                const result = await verifyResponse.json();\n" +
+            "                \n" +
+            "                if (result.success) {\n" +
+            "                    status.className = 'status success';\n" +
+            "                    status.textContent = 'Authentication successful! Redirecting...';\n" +
+            "                    status.style.display = 'block';\n" +
+            "                    \n" +
+            "                    // Redirect to original URL\n" +
+            "                    setTimeout(() => {\n" +
+            "                        window.location.href = atob(returnUrl);\n" +
+            "                    }, 1000);\n" +
+            "                } else {\n" +
+            "                    throw new Error(result.error || 'Authentication failed');\n" +
+            "                }\n" +
+            "                \n" +
+            "            } catch (error) {\n" +
+            "                console.error('Authentication error:', error);\n" +
+            "                status.className = 'status error';\n" +
+            "                status.textContent = 'Error: ' + error.message;\n" +
+            "                status.style.display = 'block';\n" +
+            "                \n" +
+            "                button.disabled = false;\n" +
+            "                button.textContent = 'Authenticate with Passkey';\n" +
+            "            }\n" +
+            "        }\n" +
+            "    </script>\n" +
+            "</body>\n" +
+            "</html>",
+            challengeBase64, challenge.challengeId, returnUrl);
     }
 }

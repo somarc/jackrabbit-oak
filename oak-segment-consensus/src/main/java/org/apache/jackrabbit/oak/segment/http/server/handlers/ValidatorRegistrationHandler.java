@@ -436,213 +436,213 @@ public class ValidatorRegistrationHandler {
         String challengeBase64 = Base64.getEncoder().encodeToString(challenge.challengeBytes);
         String userIdBase64 = Base64.getEncoder().encodeToString(challenge.userId.getBytes(StandardCharsets.UTF_8));
         
-        return """
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Validator Registration - Oak Chain</title>
-                <style>
-                    * { margin: 0; padding: 0; box-sizing: border-box; }
-                    body {
-                        font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
-                        background: linear-gradient(135deg, #0a0a0a 0%%, #1a1a2e 50%%, #16213e 100%%);
-                        min-height: 100vh;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        color: #fff;
-                    }
-                    .container {
-                        background: rgba(255, 255, 255, 0.05);
-                        backdrop-filter: blur(20px);
-                        border: 1px solid rgba(255, 255, 255, 0.1);
-                        border-radius: 24px;
-                        padding: 48px;
-                        max-width: 480px;
-                        width: 90%%;
-                    }
-                    .logo { font-size: 48px; text-align: center; margin-bottom: 16px; }
-                    h1 { font-size: 24px; font-weight: 600; text-align: center; margin-bottom: 8px; }
-                    .subtitle { color: rgba(255, 255, 255, 0.6); text-align: center; margin-bottom: 32px; }
-                    .form-group { margin-bottom: 24px; }
-                    label { display: block; margin-bottom: 8px; font-weight: 500; }
-                    input {
-                        width: 100%%;
-                        padding: 12px 16px;
-                        border: 1px solid rgba(255, 255, 255, 0.2);
-                        border-radius: 8px;
-                        background: rgba(255, 255, 255, 0.05);
-                        color: #fff;
-                        font-size: 16px;
-                    }
-                    input:focus { outline: none; border-color: #667eea; }
-                    .register-button {
-                        background: linear-gradient(135deg, #10b981 0%%, #059669 100%%);
-                        border: none;
-                        border-radius: 12px;
-                        padding: 16px 32px;
-                        font-size: 16px;
-                        font-weight: 600;
-                        color: #fff;
-                        cursor: pointer;
-                        width: 100%%;
-                        transition: transform 0.2s, box-shadow 0.2s;
-                    }
-                    .register-button:hover {
-                        transform: translateY(-2px);
-                        box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);
-                    }
-                    .register-button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-                    .status {
-                        margin-top: 24px;
-                        padding: 16px;
-                        border-radius: 8px;
-                        font-size: 14px;
-                    }
-                    .status.error { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
-                    .status.success { background: rgba(34, 197, 94, 0.2); color: #86efac; }
-                    .status.pending { background: rgba(234, 179, 8, 0.2); color: #fde047; }
-                    .info-box {
-                        background: rgba(59, 130, 246, 0.1);
-                        border: 1px solid rgba(59, 130, 246, 0.3);
-                        border-radius: 8px;
-                        padding: 16px;
-                        margin-bottom: 24px;
-                        font-size: 14px;
-                        line-height: 1.6;
-                    }
-                    .wallet-preview {
-                        font-family: monospace;
-                        background: rgba(0, 0, 0, 0.3);
-                        padding: 12px;
-                        border-radius: 8px;
-                        margin-top: 16px;
-                        word-break: break-all;
-                        display: none;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="logo">🔑</div>
-                    <h1>Validator Registration</h1>
-                    <p class="subtitle">Create a passkey to become a validator operator</p>
-                    
-                    <div class="info-box">
-                        <strong>What happens:</strong><br>
-                        1. You'll create a passkey using Face ID, Touch ID, or security key<br>
-                        2. An Ethereum address will be derived from your passkey<br>
-                        3. This address becomes your validator identity
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="displayName">Display Name</label>
-                        <input type="text" id="displayName" placeholder="e.g., Alice's Validator" />
-                    </div>
-                    
-                    <button id="registerButton" class="register-button" onclick="register()">
-                        Create Passkey & Register
-                    </button>
-                    
-                    <div id="walletPreview" class="wallet-preview"></div>
-                    <div id="status" class="status" style="display: none;"></div>
-                </div>
-                
-                <script>
-                    const challenge = Uint8Array.from(atob('%s'), c => c.charCodeAt(0));
-                    const userId = Uint8Array.from(atob('%s'), c => c.charCodeAt(0));
-                    const challengeId = '%s';
-                    const rpId = '%s';
-                    const rpName = '%s';
-                    
-                    async function register() {
-                        const button = document.getElementById('registerButton');
-                        const status = document.getElementById('status');
-                        const walletPreview = document.getElementById('walletPreview');
-                        const displayName = document.getElementById('displayName').value || 'Validator';
-                        
-                        button.disabled = true;
-                        button.textContent = 'Creating passkey...';
-                        status.style.display = 'none';
-                        
-                        try {
-                            if (!window.PublicKeyCredential) {
-                                throw new Error('WebAuthn not supported');
-                            }
-                            
-                            // Create credential
-                            const credential = await navigator.credentials.create({
-                                publicKey: {
-                                    challenge: challenge,
-                                    rp: { id: rpId, name: rpName },
-                                    user: {
-                                        id: userId,
-                                        name: displayName,
-                                        displayName: displayName
-                                    },
-                                    pubKeyCredParams: [
-                                        { alg: -7, type: 'public-key' },   // ES256 (P-256)
-                                        { alg: -257, type: 'public-key' }  // RS256
-                                    ],
-                                    authenticatorSelection: {
-                                        authenticatorAttachment: 'platform',
-                                        userVerification: 'required',
-                                        residentKey: 'required'
-                                    },
-                                    timeout: 60000
-                                }
-                            });
-                            
-                            // Extract public key
-                            const response = credential.response;
-                            const attestationObject = new Uint8Array(response.attestationObject);
-                            
-                            // Send to server
-                            const registerResponse = await fetch('/auth/register/complete', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    challengeId: challengeId,
-                                    credentialId: credential.id,
-                                    publicKey: btoa(String.fromCharCode(...new Uint8Array(response.getPublicKey()))),
-                                    displayName: displayName
-                                })
-                            });
-                            
-                            const result = await registerResponse.json();
-                            
-                            if (result.success) {
-                                walletPreview.textContent = 'Your Validator Address: ' + result.walletAddress;
-                                walletPreview.style.display = 'block';
-                                
-                                if (result.status === 'pending') {
-                                    status.className = 'status pending';
-                                    status.innerHTML = '⏳ ' + result.message + '<br><br>An administrator will review your registration.';
-                                } else {
-                                    status.className = 'status success';
-                                    status.innerHTML = '✅ ' + result.message + '<br><br>You can now <a href="/auth/login" style="color: #86efac;">login to the dashboard</a>.';
-                                }
-                                status.style.display = 'block';
-                                button.textContent = 'Registration Complete';
-                            } else {
-                                throw new Error(result.error || 'Registration failed');
-                            }
-                            
-                        } catch (error) {
-                            console.error('Registration error:', error);
-                            status.className = 'status error';
-                            status.textContent = '❌ ' + error.message;
-                            status.style.display = 'block';
-                            
-                            button.disabled = false;
-                            button.textContent = 'Create Passkey & Register';
-                        }
-                    }
-                </script>
-            </body>
-            </html>
-            """.formatted(challengeBase64, userIdBase64, challenge.challengeId, rpId, rpName);
+        return String.format(
+            "<!DOCTYPE html>\n" +
+            "<html lang=\"en\">\n" +
+            "<head>\n" +
+            "    <meta charset=\"UTF-8\">\n" +
+            "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
+            "    <title>Validator Registration - Oak Chain</title>\n" +
+            "    <style>\n" +
+            "        * { margin: 0; padding: 0; box-sizing: border-box; }\n" +
+            "        body {\n" +
+            "            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;\n" +
+            "            background: linear-gradient(135deg, #0a0a0a 0%%, #1a1a2e 50%%, #16213e 100%%);\n" +
+            "            min-height: 100vh;\n" +
+            "            display: flex;\n" +
+            "            align-items: center;\n" +
+            "            justify-content: center;\n" +
+            "            color: #fff;\n" +
+            "        }\n" +
+            "        .container {\n" +
+            "            background: rgba(255, 255, 255, 0.05);\n" +
+            "            backdrop-filter: blur(20px);\n" +
+            "            border: 1px solid rgba(255, 255, 255, 0.1);\n" +
+            "            border-radius: 24px;\n" +
+            "            padding: 48px;\n" +
+            "            max-width: 480px;\n" +
+            "            width: 90%%;\n" +
+            "        }\n" +
+            "        .logo { font-size: 48px; text-align: center; margin-bottom: 16px; }\n" +
+            "        h1 { font-size: 24px; font-weight: 600; text-align: center; margin-bottom: 8px; }\n" +
+            "        .subtitle { color: rgba(255, 255, 255, 0.6); text-align: center; margin-bottom: 32px; }\n" +
+            "        .form-group { margin-bottom: 24px; }\n" +
+            "        label { display: block; margin-bottom: 8px; font-weight: 500; }\n" +
+            "        input {\n" +
+            "            width: 100%%;\n" +
+            "            padding: 12px 16px;\n" +
+            "            border: 1px solid rgba(255, 255, 255, 0.2);\n" +
+            "            border-radius: 8px;\n" +
+            "            background: rgba(255, 255, 255, 0.05);\n" +
+            "            color: #fff;\n" +
+            "            font-size: 16px;\n" +
+            "        }\n" +
+            "        input:focus { outline: none; border-color: #667eea; }\n" +
+            "        .register-button {\n" +
+            "            background: linear-gradient(135deg, #10b981 0%%, #059669 100%%);\n" +
+            "            border: none;\n" +
+            "            border-radius: 12px;\n" +
+            "            padding: 16px 32px;\n" +
+            "            font-size: 16px;\n" +
+            "            font-weight: 600;\n" +
+            "            color: #fff;\n" +
+            "            cursor: pointer;\n" +
+            "            width: 100%%;\n" +
+            "            transition: transform 0.2s, box-shadow 0.2s;\n" +
+            "        }\n" +
+            "        .register-button:hover {\n" +
+            "            transform: translateY(-2px);\n" +
+            "            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);\n" +
+            "        }\n" +
+            "        .register-button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }\n" +
+            "        .status {\n" +
+            "            margin-top: 24px;\n" +
+            "            padding: 16px;\n" +
+            "            border-radius: 8px;\n" +
+            "            font-size: 14px;\n" +
+            "        }\n" +
+            "        .status.error { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }\n" +
+            "        .status.success { background: rgba(34, 197, 94, 0.2); color: #86efac; }\n" +
+            "        .status.pending { background: rgba(234, 179, 8, 0.2); color: #fde047; }\n" +
+            "        .info-box {\n" +
+            "            background: rgba(59, 130, 246, 0.1);\n" +
+            "            border: 1px solid rgba(59, 130, 246, 0.3);\n" +
+            "            border-radius: 8px;\n" +
+            "            padding: 16px;\n" +
+            "            margin-bottom: 24px;\n" +
+            "            font-size: 14px;\n" +
+            "            line-height: 1.6;\n" +
+            "        }\n" +
+            "        .wallet-preview {\n" +
+            "            font-family: monospace;\n" +
+            "            background: rgba(0, 0, 0, 0.3);\n" +
+            "            padding: 12px;\n" +
+            "            border-radius: 8px;\n" +
+            "            margin-top: 16px;\n" +
+            "            word-break: break-all;\n" +
+            "            display: none;\n" +
+            "        }\n" +
+            "    </style>\n" +
+            "</head>\n" +
+            "<body>\n" +
+            "    <div class=\"container\">\n" +
+            "        <div class=\"logo\">&#128273;</div>\n" +
+            "        <h1>Validator Registration</h1>\n" +
+            "        <p class=\"subtitle\">Create a passkey to become a validator operator</p>\n" +
+            "        \n" +
+            "        <div class=\"info-box\">\n" +
+            "            <strong>What happens:</strong><br>\n" +
+            "            1. You'll create a passkey using Face ID, Touch ID, or security key<br>\n" +
+            "            2. An Ethereum address will be derived from your passkey<br>\n" +
+            "            3. This address becomes your validator identity\n" +
+            "        </div>\n" +
+            "        \n" +
+            "        <div class=\"form-group\">\n" +
+            "            <label for=\"displayName\">Display Name</label>\n" +
+            "            <input type=\"text\" id=\"displayName\" placeholder=\"e.g., Alice's Validator\" />\n" +
+            "        </div>\n" +
+            "        \n" +
+            "        <button id=\"registerButton\" class=\"register-button\" onclick=\"register()\">\n" +
+            "            Create Passkey &amp; Register\n" +
+            "        </button>\n" +
+            "        \n" +
+            "        <div id=\"walletPreview\" class=\"wallet-preview\"></div>\n" +
+            "        <div id=\"status\" class=\"status\" style=\"display: none;\"></div>\n" +
+            "    </div>\n" +
+            "    \n" +
+            "    <script>\n" +
+            "        const challenge = Uint8Array.from(atob('%s'), c => c.charCodeAt(0));\n" +
+            "        const userId = Uint8Array.from(atob('%s'), c => c.charCodeAt(0));\n" +
+            "        const challengeId = '%s';\n" +
+            "        const rpId = '%s';\n" +
+            "        const rpName = '%s';\n" +
+            "        \n" +
+            "        async function register() {\n" +
+            "            const button = document.getElementById('registerButton');\n" +
+            "            const status = document.getElementById('status');\n" +
+            "            const walletPreview = document.getElementById('walletPreview');\n" +
+            "            const displayName = document.getElementById('displayName').value || 'Validator';\n" +
+            "            \n" +
+            "            button.disabled = true;\n" +
+            "            button.textContent = 'Creating passkey...';\n" +
+            "            status.style.display = 'none';\n" +
+            "            \n" +
+            "            try {\n" +
+            "                if (!window.PublicKeyCredential) {\n" +
+            "                    throw new Error('WebAuthn not supported');\n" +
+            "                }\n" +
+            "                \n" +
+            "                // Create credential\n" +
+            "                const credential = await navigator.credentials.create({\n" +
+            "                    publicKey: {\n" +
+            "                        challenge: challenge,\n" +
+            "                        rp: { id: rpId, name: rpName },\n" +
+            "                        user: {\n" +
+            "                            id: userId,\n" +
+            "                            name: displayName,\n" +
+            "                            displayName: displayName\n" +
+            "                        },\n" +
+            "                        pubKeyCredParams: [\n" +
+            "                            { alg: -7, type: 'public-key' },   // ES256 (P-256)\n" +
+            "                            { alg: -257, type: 'public-key' }  // RS256\n" +
+            "                        ],\n" +
+            "                        authenticatorSelection: {\n" +
+            "                            authenticatorAttachment: 'platform',\n" +
+            "                            userVerification: 'required',\n" +
+            "                            residentKey: 'required'\n" +
+            "                        },\n" +
+            "                        timeout: 60000\n" +
+            "                    }\n" +
+            "                });\n" +
+            "                \n" +
+            "                // Extract public key\n" +
+            "                const response = credential.response;\n" +
+            "                const attestationObject = new Uint8Array(response.attestationObject);\n" +
+            "                \n" +
+            "                // Send to server\n" +
+            "                const registerResponse = await fetch('/auth/register/complete', {\n" +
+            "                    method: 'POST',\n" +
+            "                    headers: { 'Content-Type': 'application/json' },\n" +
+            "                    body: JSON.stringify({\n" +
+            "                        challengeId: challengeId,\n" +
+            "                        credentialId: credential.id,\n" +
+            "                        publicKey: btoa(String.fromCharCode(...new Uint8Array(response.getPublicKey()))),\n" +
+            "                        displayName: displayName\n" +
+            "                    })\n" +
+            "                });\n" +
+            "                \n" +
+            "                const result = await registerResponse.json();\n" +
+            "                \n" +
+            "                if (result.success) {\n" +
+            "                    walletPreview.textContent = 'Your Validator Address: ' + result.walletAddress;\n" +
+            "                    walletPreview.style.display = 'block';\n" +
+            "                    \n" +
+            "                    if (result.status === 'pending') {\n" +
+            "                        status.className = 'status pending';\n" +
+            "                        status.innerHTML = 'Pending: ' + result.message + '<br><br>An administrator will review your registration.';\n" +
+            "                    } else {\n" +
+            "                        status.className = 'status success';\n" +
+            "                        status.innerHTML = 'Success: ' + result.message + '<br><br>You can now <a href=\"/auth/login\" style=\"color: #86efac;\">login to the dashboard</a>.';\n" +
+            "                    }\n" +
+            "                    status.style.display = 'block';\n" +
+            "                    button.textContent = 'Registration Complete';\n" +
+            "                } else {\n" +
+            "                    throw new Error(result.error || 'Registration failed');\n" +
+            "                }\n" +
+            "                \n" +
+            "            } catch (error) {\n" +
+            "                console.error('Registration error:', error);\n" +
+            "                status.className = 'status error';\n" +
+            "                status.textContent = 'Error: ' + error.message;\n" +
+            "                status.style.display = 'block';\n" +
+            "                \n" +
+            "                button.disabled = false;\n" +
+            "                button.textContent = 'Create Passkey & Register';\n" +
+            "            }\n" +
+            "        }\n" +
+            "    </script>\n" +
+            "</body>\n" +
+            "</html>",
+            challengeBase64, userIdBase64, challenge.challengeId, rpId, rpName);
     }
 }

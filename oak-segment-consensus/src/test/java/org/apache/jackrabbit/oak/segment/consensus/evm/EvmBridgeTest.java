@@ -92,16 +92,16 @@ public class EvmBridgeTest {
     @Test
     public void testPaymentVerification() {
         String proposalId = "proposal-123";
+        String walletAddress = "0x1234567890123456789012345678901234567890";
         
-        // Initially no payment
-        PaymentProof proof1 = bridge.verifyPayment(proposalId);
-        assertNull("Should have no payment initially", proof1);
+        // Register wallet for proposal (required in MOCK mode before verifyPayment)
+        bridge.registerProposalWallet(proposalId, walletAddress);
         
         // Simulate a payment
         PaymentProof payment = new SimplePaymentProof(
                 "0xabc123",
                 1000000,
-                "0x1234567890123456789012345678901234567890",
+                walletAddress,
                 bridge.getContractAddress(),
                 proposalId,
                 "1000000000000000",

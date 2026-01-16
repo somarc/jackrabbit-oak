@@ -39,6 +39,8 @@
           <excludes>
             <exclude>Dockerfile.global-store</exclude>
             <exclude>dependency-reduced-pom.xml</exclude>
+            <exclude>**/*.md</exclude>
+            <exclude>**/validator-dashboard-template.html</exclude>
           </excludes>
         </configuration>
       </plugin>
@@ -176,6 +178,36 @@
           <groupId>ch.qos.logback</groupId>
         </exclusion>
       </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <version>1.19.3</version>
+      <scope>test</scope>
+      <exclusions>
+        <exclusion>
+          <artifactId>commons-compress</artifactId>
+          <groupId>org.apache.commons</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>duct-tape</artifactId>
+          <groupId>org.rnorth.duct-tape</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>docker-java-api</artifactId>
+          <groupId>com.github.docker-java</groupId>
+        </exclusion>
+        <exclusion>
+          <artifactId>docker-java-transport-zerodep</artifactId>
+          <groupId>com.github.docker-java</groupId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>1.19.3</version>
+      <scope>test</scope>
     </dependency>
   </dependencies>
 </project>

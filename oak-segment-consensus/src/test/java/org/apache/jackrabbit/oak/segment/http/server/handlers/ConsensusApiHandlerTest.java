@@ -55,9 +55,6 @@ public class ConsensusApiHandlerTest {
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
     @Mock
-    private ServerContext mockContext;
-
-    @Mock
     private FileStore mockFileStore;
 
     @Mock
@@ -69,6 +66,7 @@ public class ConsensusApiHandlerTest {
     @Mock
     private HttpServletResponse mockResponse;
 
+    private ServerContext context;
     private StringWriter responseWriter;
     private ConsensusApiHandler handler;
 
@@ -79,10 +77,16 @@ public class ConsensusApiHandlerTest {
         responseWriter = new StringWriter();
         when(mockResponse.getWriter()).thenReturn(new PrintWriter(responseWriter));
         
-        when(mockContext.fileStore).thenReturn(mockFileStore);
-        when(mockContext.nodeStore).thenReturn(mockNodeStore);
+        // Create real ServerContext with mocked dependencies
+        // ServerContext has public fields, so we can't mock it - use real instance
+        context = new ServerContext(
+            mockFileStore,
+            mockNodeStore,
+            tempFolder.getRoot().toPath(),
+            "http://localhost:8090"
+        );
         
-        handler = new ConsensusApiHandler(mockContext);
+        handler = new ConsensusApiHandler(context);
     }
 
     // ═══════════════════════════════════════════════════════════════
