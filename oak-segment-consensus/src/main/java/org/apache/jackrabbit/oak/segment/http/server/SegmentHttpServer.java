@@ -59,6 +59,7 @@ public class SegmentHttpServer {
     private final Server server;
     private final ServerContext context;
     private final RequestRouter router;
+    private final TlsConfiguration tlsConfig;
     
     // Keep references for backward compatibility and methods that need direct access
     private final FileStore fileStore;
@@ -74,18 +75,54 @@ public class SegmentHttpServer {
      * @param nodeStore The Oak NodeStore instance
      */
     public SegmentHttpServer(File storeDirectory, int port, FileStore fileStore, NodeStore nodeStore) {
+        this(storeDirectory, port, fileStore, nodeStore, new TlsConfiguration());
+    }
+    
+    /**
+     * Create a new HTTP server with TLS configuration.
+     * 
+     * @param storeDirectory The segment store directory path
+     * @param port The HTTP port to listen on
+     * @param fileStore The Oak FileStore instance
+     * @param nodeStore The Oak NodeStore instance
+     * @param tlsConfig TLS configuration (use TlsConfiguration.builder() to create)
+     */
+    public SegmentHttpServer(File storeDirectory, int port, FileStore fileStore, NodeStore nodeStore, 
+                            TlsConfiguration tlsConfig) {
         this.storeDirectory = storeDirectory.toPath();
         this.fileStore = fileStore;  // Use existing FileStore!
         this.nodeStore = nodeStore;  // Use existing NodeStore!
+        this.tlsConfig = tlsConfig;
         
         // Create ServerContext with initial values
-        this.context = new ServerContext(fileStore, nodeStore, this.storeDirectory, "http://localhost:8090");
+        String scheme = tlsConfig.isEnabled() ? "https" : "http";
+        this.context = new ServerContext(fileStore, nodeStore, this.storeDirectory, scheme + "://localhost:" + port);
         
         // Create RequestRouter (will be updated when consensus engines are set)
         this.router = new RequestRouter(context);
         
-        this.server = new Server(port);
+        // Create server - TLS will be configured in start() if enabled
+        this.server = new Server();
         this.server.setHandler(new SegmentStoreHandler());
+        
+        // Configure connectors based on TLS settings
+        try {
+            if (tlsConfig.isEnabled()) {
+                // TLS enabled - configure HTTPS
+                int httpsPort = port;
+                int httpPort = Integer.getInteger("http.port", 0); // Optional HTTP port for health checks
+                tlsConfig.configureServer(server, httpPort, httpsPort);
+                log.info("🔒 TLS enabled - HTTPS on port {}", httpsPort);
+            } else {
+                // No TLS - configure HTTP only
+                org.eclipse.jetty.server.ServerConnector connector = 
+                    new org.eclipse.jetty.server.ServerConnector(server);
+                connector.setPort(port);
+                server.addConnector(connector);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to configure TLS", e);
+        }
         
         // Initialize Prometheus metrics (JVM metrics: memory, GC, threads, etc.)
         DefaultExports.initialize();
@@ -93,6 +130,7 @@ public class SegmentHttpServer {
         log.info("Initialized SegmentHttpServer");
         log.info("   - Port: {}", port);
         log.info("   - Store: {}", this.storeDirectory);
+        log.info("   - TLS: {}", tlsConfig.isEnabled() ? "enabled" : "disabled");
         log.info("   - Prometheus metrics enabled at /metrics");
     }
     

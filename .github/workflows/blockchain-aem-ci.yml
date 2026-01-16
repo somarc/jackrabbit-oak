@@ -1,0 +1,328 @@
+# Blockchain AEM CI/CD Pipeline
+# 
+# Triggers:
+#   - Push to main/develop branches
+#   - Pull requests to main
+#   - Manual dispatch
+#
+# Jobs:
+#   1. Build and test Oak modules
+#   2. Build Docker images
+#   3. Run integration tests
+#   4. Deploy to staging (on main branch)
+
+name: Blockchain AEM CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'oak-segment-consensus/**'
+      - 'oak-segment-http/**'
+      - 'oak-blob-cloud-ipfs/**'
+      - 'oak-auth-web3/**'
+      - '.github/workflows/blockchain-aem-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'oak-segment-consensus/**'
+      - 'oak-segment-http/**'
+      - 'oak-blob-cloud-ipfs/**'
+      - 'oak-auth-web3/**'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests'
+        required: false
+        default: 'false'
+      deploy_staging:
+        description: 'Deploy to staging'
+        required: false
+        default: 'false'
+
+env:
+  JAVA_VERSION: '17'
+  MAVEN_OPTS: '-Xmx2g -XX:MaxMetaspaceSize=512m'
+  DOCKER_REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/oak-global-store
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # BUILD AND TEST
+  # ═══════════════════════════════════════════════════════════════
+  
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Build Oak modules
+        run: |
+          mvn clean install -DskipTests -Dbaseline.skip=true -Drat.skip=true \
+            -pl oak-segment-consensus,oak-segment-http,oak-blob-cloud-ipfs,oak-auth-web3 -am
+
+      - name: Run unit tests
+        if: ${{ github.event.inputs.skip_tests != 'true' }}
+        run: |
+          mvn test -Dbaseline.skip=true -Drat.skip=true \
+            -pl oak-segment-consensus,oak-segment-http,oak-blob-cloud-ipfs,oak-auth-web3
+
+      - name: Generate test coverage report
+        if: ${{ github.event.inputs.skip_tests != 'true' }}
+        run: |
+          mvn jacoco:report -pl oak-segment-consensus,oak-segment-http,oak-blob-cloud-ipfs,oak-auth-web3
+
+      - name: Upload coverage to Codecov
+        if: ${{ github.event.inputs.skip_tests != 'true' }}
+        uses: codecov/codecov-action@v4
+        with:
+          files: '**/target/site/jacoco/jacoco.xml'
+          flags: unittests
+          fail_ci_if_error: false
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oak-jars
+          path: |
+            oak-segment-consensus/target/*.jar
+            oak-segment-http/target/*.jar
+            oak-blob-cloud-ipfs/target/*.jar
+            oak-auth-web3/target/*.jar
+          retention-days: 7
+
+  # ═══════════════════════════════════════════════════════════════
+  # BUILD DOCKER IMAGE
+  # ═══════════════════════════════════════════════════════════════
+  
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: build
+    
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: oak-jars
+          path: artifacts
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Copy JAR to Docker context
+        run: |
+          mkdir -p ../blockchain-aem-infra/docker/validator
+          cp artifacts/oak-segment-consensus/target/oak-segment-consensus-*.jar \
+            ../blockchain-aem-infra/docker/validator/oak-segment-consensus.jar 2>/dev/null || \
+          cp artifacts/oak-segment-consensus-*.jar \
+            ../blockchain-aem-infra/docker/validator/oak-segment-consensus.jar
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ../blockchain-aem-infra/docker/validator
+          file: ../blockchain-aem-infra/docker/validator/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ═══════════════════════════════════════════════════════════════
+  # INTEGRATION TESTS
+  # ═══════════════════════════════════════════════════════════════
+  
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: docker
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    
+    services:
+      docker:
+        image: docker:dind
+        options: --privileged
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull Docker image
+        run: |
+          docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker tag ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} oak-global-store:latest
+
+      - name: Run integration tests
+        run: |
+          mvn verify -Dbaseline.skip=true -Drat.skip=true \
+            -pl oak-segment-consensus \
+            -Dit.test=*IT \
+            -Dfailsafe.rerunFailingTestsCount=2
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: '**/target/failsafe-reports/*.xml'
+          retention-days: 7
+
+  # ═══════════════════════════════════════════════════════════════
+  # SECURITY SCAN
+  # ═══════════════════════════════════════════════════════════════
+  
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: docker
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # ═══════════════════════════════════════════════════════════════
+  # DEPLOY TO STAGING
+  # ═══════════════════════════════════════════════════════════════
+  
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [integration-tests, security-scan]
+    if: ${{ github.ref == 'refs/heads/main' || github.event.inputs.deploy_staging == 'true' }}
+    environment: staging
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+
+      - name: Update image tag
+        run: |
+          cd ../blockchain-aem-infra/kubernetes
+          
+          # Update image tag in StatefulSet
+          sed -i "s|image: .*oak-global-store:.*|image: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g" \
+            global-store/statefulset.yaml
+
+      - name: Deploy to staging
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl apply -f ../blockchain-aem-infra/kubernetes/global-store/ -n blockchain-aem-staging
+          kubectl rollout status statefulset/validator -n blockchain-aem-staging --timeout=5m
+
+      - name: Verify deployment
+        run: |
+          export KUBECONFIG=kubeconfig
+          kubectl get pods -n blockchain-aem-staging
+          
+          # Wait for health check
+          for i in {1..30}; do
+            if kubectl exec -n blockchain-aem-staging validator-0 -- curl -s http://localhost:8090/health | grep -q "ok"; then
+              echo "✅ Deployment healthy"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "❌ Deployment health check failed"
+          exit 1
+
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "✅ Deployed to staging: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Staging deployment failed"
+          # Add Slack/PagerDuty notification here

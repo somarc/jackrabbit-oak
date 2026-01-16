@@ -53,12 +53,14 @@ public class RequestRouter {
     private final EventBroadcaster eventBroadcaster;
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
+    private final RateLimiter rateLimiter;
     
     private final ServerContext context;
 
     public RequestRouter(ServerContext context) {
         this.context = context;
         this.authValidator = new AuthTokenValidator();
+        this.rateLimiter = new RateLimiter();
         
         // Initialize all handlers
         this.healthHandler = new HealthHandler(
@@ -192,6 +194,7 @@ public class RequestRouter {
         
         try {
             // Health checks (always public - needed for monitoring/load balancers)
+            // Skip rate limiting for health checks
             if ("/health".equals(path) && "GET".equals(method)) {
                 healthHandler.handleHealth(response);
                 baseRequest.setHandled(true);
@@ -200,6 +203,13 @@ public class RequestRouter {
             
             if ("/health/deep".equals(path) && "GET".equals(method)) {
                 healthHandler.handleDeepHealth(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
+            // Rate limiting check (skip for health endpoints above)
+            if (!rateLimiter.allowRequest(request, response)) {
+                rateLimiter.sendRateLimitResponse(response);
                 baseRequest.setHandled(true);
                 return;
             }
