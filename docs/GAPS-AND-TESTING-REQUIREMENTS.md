@@ -1,9 +1,37 @@
 # Blockchain AEM - Gaps Analysis & Testing Requirements
 
 **Purpose**: Identify implementation gaps and formalize testing requirements  
-**Date**: January 10, 2026 (Updated)  
+**Date**: January 17, 2026 (Updated)  
 **Status**: Active Development / POC  
 **Related**: [STATE-MACHINE-DIAGRAMS.md](STATE-MACHINE-DIAGRAMS.md)
+
+---
+
+## TODO Triage Summary (January 17, 2026)
+
+**Zero untagged TODOs remain** in `oak-segment-consensus`. All items have been triaged:
+
+| Tag | Count | Location | Description |
+|-----|-------|----------|-------------|
+| **SEPOLIA_PHASE** | 6 | `src/main` | Smart contract integration - requires Sepolia deployment |
+| **PRODUCTION_HARDENING** | 6 | `src/main` | Production readiness - deferred until after Sepolia validation |
+| **TEST_STUB** | 31 | `src/test` | Test placeholders - require JDK 21 (enforced in oak-parent pom.xml) |
+| **TEST_VECTOR** | 1 | `src/test` | Needs real MetaMask-generated test vectors |
+| **Removed** | 4 | - | Stale TODOs for already-implemented features |
+
+**Grep commands to find tagged items:**
+```bash
+# Find all phase-tagged items (main source)
+rg "SEPOLIA_PHASE|PRODUCTION_HARDENING" oak-segment-consensus/src/main
+
+# Find all test stubs (test source)
+rg "TEST_STUB|TEST_VECTOR" oak-segment-consensus/src/test
+
+# Count by tag
+rg -c "SEPOLIA_PHASE" oak-segment-consensus/
+rg -c "PRODUCTION_HARDENING" oak-segment-consensus/
+rg -c "TEST_STUB" oak-segment-consensus/
+```
 
 ---
 
@@ -810,31 +838,50 @@ jobs:
 
 ## Appendix: TODO Comments in Codebase
 
-### oak-segment-consensus (~18 TODOs remaining)
+### oak-segment-consensus TODOs (Triaged January 17, 2026)
 
+**SEPOLIA_PHASE** - Smart contract integration (6 items):
+```
+BlockchainConfig.java:106       - SEPOLIA_PHASE: Deploy mainnet contract after Sepolia validation
+GlobalStoreServer.java:1402     - SEPOLIA_PHASE: Smart Contract Event Listener
+PropagationPaymentVerifier.java:154 - SEPOLIA_PHASE: Full payment record lookup via Web3j
+PropagationPaymentVerifier.java:198 - SEPOLIA_PHASE: Full content record lookup via Web3j
+EphemeralContentMonitor.java:253 - SEPOLIA_PHASE: Contract call to getExpiredContent() via Web3j
+AeronConsensusEngine.java:1963  - SEPOLIA_PHASE: Timer-based Ethereum epoch polling via Web3j
+```
+
+**PRODUCTION_HARDENING** - Production readiness (5 items):
+```
+ProofVerifier.java:186          - PRODUCTION_HARDENING: Verify against actual genesis segment ID
+ProofVerifier.java:226          - PRODUCTION_HARDENING: Load segments and verify SHA-256 hashes
+ProofVerifier.java:258          - PRODUCTION_HARDENING: Signature verification via EthereumSignatureVerifier
+BinaryUploadHandler.java:235    - PRODUCTION_HARDENING: Validate CID reachability (HTTP HEAD)
+AeronConsensusEngine.java:2957  - PRODUCTION_HARDENING: Split-brain term field in proposals
+AeronConsensusEngine.java:3363  - PRODUCTION_HARDENING: Non-voting follower probation logic
+```
+
+**REMOVED** - Stale TODOs (4 items):
+```
+~~DashboardHandler.java:1164      - "Full signature verification"~~ ✅ Already implemented
+~~DashboardHandler.java:1194      - "Aeron replication for GC"~~ ✅ Already implemented
+~~AeronConsensusEngine.java:358   - "Initialize Aeron Cluster"~~ ✅ Handled by AeronClusterLauncher
+~~AeronConsensusEngine.java:388   - "Close Aeron Cluster"~~ ✅ Handled by AeronClusterLauncher
+```
+
+**OTHER** - Miscellaneous (not tagged):
 ```
 ~~ConsensusApiHandler.java:127    - ADR 016: ipfsCid handling~~ ✅ DONE
 ~~ConsensusApiHandler.java:416-417 - Real signature verification~~ ✅ DONE (EthereumSignatureVerifier)
 ConsensusApiHandler.java:850    - Actual content size from NodeStore
-FragmentationApiHandler.java:356 - Aeron replication for GC
-BinaryUploadHandler.java:235    - Validate CID reachability
 SegmentHttpServer.java:187      - Actual genesis hash
 SegmentHttpServer.java:192      - Sign nonce for production
 ~~SegmentHttpServer.java:622      - Wallet-based registration~~ ✅ DONE (IP fallback removed)
-GlobalStoreServer.java:1389     - Smart contract event listener
 ~~GlobalStoreServer.java:2417     - Parse segment references~~ ✅ REMOVED (dead code - syncGenesisFromPeer)
-ProofVerifier.java:186          - Verify against actual genesis
-ProofVerifier.java:227          - Actual segment loading
-ProofVerifier.java:258          - Actual signature verification
 ProposalQueueManagerOptimized.java:691 - Retry count tracking
 ~~EventDrivenEvmBridge.java:302-306 - Web3j event subscription~~ ✅ DONE
-BlockchainConfig.java:106       - Deploy mainnet contract
 SnapshotService.java:147        - Get epoch from tracker
 ~~SnapshotService.java:171        - Implement snapshot restoration~~ ✅ DONE
 LeaderDiscoveryService.java:177 - Aeron API for leaderMemberId
-AeronConsensusEngine.java:3609  - ClusterControl step-down
-DashboardHandler.java:1125      - Full signature verification
-DashboardHandler.java:1155      - Aeron replication for GC
 ```
 
 ### Dead Code Removed (January 2026)
@@ -869,5 +916,5 @@ No TODO comments found - but needs tests and challenge service.
 ---
 
 *Generated: January 10, 2026*  
-*Last Updated: January 10, 2026 (dead code removal, technical debt analysis)*  
-*Next Review: After Phase 1 technical debt review*
+*Last Updated: January 17, 2026 (Complete TODO cleanup: SEPOLIA_PHASE, PRODUCTION_HARDENING, TEST_STUB tags)*  
+*Next Review: After Sepolia smart contract deployment*

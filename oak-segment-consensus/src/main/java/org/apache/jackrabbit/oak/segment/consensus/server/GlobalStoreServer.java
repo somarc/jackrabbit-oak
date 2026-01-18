@@ -1400,7 +1400,7 @@ public class GlobalStoreServer {
             }
         }
         
-        // TODO: Smart Contract Event Listener (future implementation)
+        // SEPOLIA_PHASE: Smart Contract Event Listener
         // This is where we'll listen to OakNetwork.sol contract events:
         //   - WriteProposed(address indexed wallet, bytes32 indexed writeId, uint256 payment)
         //   - WriteFinalized(bytes32 indexed writeId, bool approved)

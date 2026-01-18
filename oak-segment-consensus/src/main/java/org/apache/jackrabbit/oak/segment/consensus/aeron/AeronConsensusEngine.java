@@ -356,13 +356,8 @@ public class AeronConsensusEngine implements ClusteredService {
         try {
             log.info("🔧 Initializing Aeron Cluster...");
             
-            // TODO: Initialize Aeron Cluster
-            // This is Phase 2 - basic structure
-            // Full implementation will configure:
-            // - Cluster nodes (validators)
-            // - Raft consensus parameters
-            // - Message handlers
-            // - State machine
+            // Aeron Cluster initialization is handled by AeronClusterLauncher
+            // which configures: cluster nodes, Raft parameters, message handlers, state machine
             
             // Start background timer for checking pending HEAD broadcasts
             // This ensures broadcasts happen even when no new writes arrive
@@ -385,13 +380,8 @@ public class AeronConsensusEngine implements ClusteredService {
         // Stop background timer
         stopHeadBroadcastTimer();
         
-        // TODO: Close Aeron Cluster components once initialized
-        // if (container != null) {
-        //     try {
-        //         container.close();
-        //     } catch (Exception e) {
-        //         log.warn("Error closing Aeron container", e);
-        //     }
+        // Aeron Cluster components are closed by AeronClusterLauncher.close()
+        // which handles: MediaDriver, Archive, ConsensusModule, ClusteredService
         // }
         // 
         // if (cluster != null) {
@@ -1970,7 +1960,7 @@ public class AeronConsensusEngine implements ClusteredService {
     @Override
     public void onTimerEvent(long correlationId, long timestamp) {
         // Handle timer events
-        // TODO: Implement timer-based operations (e.g., Ethereum epoch polling)
+        // SEPOLIA_PHASE: Implement timer-based Ethereum epoch polling via Web3j
         log.debug("⏰ Timer event: {}", correlationId);
     }
     
@@ -2195,14 +2185,17 @@ public class AeronConsensusEngine implements ClusteredService {
             return false;
         }
         
-        // Check 2: Internal client exists and is not closed
-        if (internalClusterClient == null || internalClusterClient.isClosed()) {
+        // Check 2: Leader is elected (CANDIDATE means election in progress)
+        // This is the primary health indicator - if we have a leader, cluster is operational
+        Cluster.Role role = cluster.role();
+        if (role == Cluster.Role.CANDIDATE) {
             return false;
         }
         
-        // Check 3: Leader is elected (CANDIDATE means election in progress)
-        Cluster.Role role = cluster.role();
-        if (role == Cluster.Role.CANDIDATE) {
+        // Check 3: If internal client exists, verify it's not closed
+        // Note: Client is lazily created on first write, so null is OK for health
+        // The client will be created when the first proposal is submitted
+        if (internalClusterClient != null && internalClusterClient.isClosed()) {
             return false;
         }
         
@@ -2220,14 +2213,12 @@ public class AeronConsensusEngine implements ClusteredService {
         if (cluster == null) {
             return "cluster_not_initialized";
         }
-        if (internalClusterClient == null) {
-            return "no_client_session";
-        }
-        if (internalClusterClient.isClosed()) {
-            return "session_closed_timeout";
-        }
         if (cluster.role() == Cluster.Role.CANDIDATE) {
             return "leader_election_in_progress";
+        }
+        // Client is lazily created on first write - only report closed as unhealthy
+        if (internalClusterClient != null && internalClusterClient.isClosed()) {
+            return "session_closed_timeout";
         }
         return null; // Healthy
     }
@@ -2964,7 +2955,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * We track term locally by incrementing on leader elections (via {@code onRoleChange()}).
      * Term monotonically increases with each leader election, providing split-brain protection foundation.
      * 
-     * <p>TODO: For full split-brain protection, add term field to write/delete proposal messages
+     * <p>PRODUCTION_HARDENING: For full split-brain protection, add term field to write/delete proposal messages
      * and reject proposals with {@code term < currentTerm} (requires protocol version bump).
      * 
      * @return Current Raft term
@@ -3370,7 +3361,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * Get non-voting followers (validators on probation).
      */
     public List<String> getNonVotingFollowers() {
-        // TODO: Implement probation logic if needed
+        // PRODUCTION_HARDENING: Implement probation logic for newly joined validators
         return new java.util.ArrayList<>();
     }
     
@@ -3448,6 +3439,22 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * Apply genesis creation on all nodes (called when GENESIS message is received via Aeron).
      * This method is deterministic - all nodes create identical genesis structure.
+     * 
+     * <p><strong>GENESIS AS THE HELPER NODE</strong></p>
+     * <p>The genesis node is not sacred scripture - it's the self-documenting root that teaches
+     * anyone who reads it how to use this network. It's the de facto how-to guide embedded
+     * in the content itself.</p>
+     * 
+     * <p>Structure:
+     * <ul>
+     *   <li><code>/genesis</code> - Root with network identity and ethos</li>
+     *   <li><code>/genesis/getting-started</code> - Step-by-step quickstart guide</li>
+     *   <li><code>/genesis/api</code> - Complete HTTP API reference</li>
+     *   <li><code>/genesis/examples</code> - Working curl commands and code samples</li>
+     *   <li><code>/genesis/architecture</code> - How the system works</li>
+     *   <li><code>/genesis/economics</code> - Pricing tiers and payment flow</li>
+     *   <li><code>/genesis/troubleshooting</code> - Common issues and solutions</li>
+     * </ul>
      */
     private void applyGenesisCreation() {
         log.info("🎬 Creating genesis (triggered via Aeron consensus)");
@@ -3456,6 +3463,8 @@ public class AeronConsensusEngine implements ClusteredService {
             // Use zero address for genesis (Ethereum convention)
             String GENESIS_ADDRESS = "0x0000000000000000000000000000000000000000";
             String genesisPath = "/oak-chain/00/00/00/" + GENESIS_ADDRESS + "/content/genesis";
+            long timestamp = System.currentTimeMillis();
+            String genesisDate = new java.util.Date(timestamp).toString();
             
             log.info("Creating genesis - Path: {}, Wallet: {}", genesisPath, GENESIS_ADDRESS);
             
@@ -3464,7 +3473,6 @@ public class AeronConsensusEngine implements ClusteredService {
             org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = root.builder();
             
             // Navigate/create path: oak-chain/00/00/00/0x0000.../content/genesis
-            // Deep tree structure tied to wallet identity - critical for segment isolation
             org.apache.jackrabbit.oak.spi.state.NodeBuilder oakChain = rootBuilder.child("oak-chain");
             oakChain.setProperty("jcr:primaryType", "nt:unstructured");
             
@@ -3481,205 +3489,295 @@ public class AeronConsensusEngine implements ClusteredService {
             genesisWallet.setProperty("jcr:primaryType", "nt:unstructured");
             genesisWallet.setProperty("wallet", GENESIS_ADDRESS);
             genesisWallet.setProperty("role", "genesis");
-            genesisWallet.setProperty("walletCreated", System.currentTimeMillis());
+            genesisWallet.setProperty("walletCreated", timestamp);
             genesisWallet.setProperty("nodeType", "wallet-root");
-            genesisWallet.setProperty("description", "Genesis wallet - Network bootstrap identity");
-            genesisWallet.setProperty("contentCount", 1L);  // Genesis content
+            genesisWallet.setProperty("description", "Genesis wallet - Network documentation and bootstrap identity");
+            genesisWallet.setProperty("contentCount", 1L);
             genesisWallet.setProperty("totalWrites", 1L);
-            genesisWallet.setProperty("lastWrite", System.currentTimeMillis());
+            genesisWallet.setProperty("lastWrite", timestamp);
             genesisWallet.setProperty("owner", "OakChain Network");
             genesisWallet.setProperty("verified", true);
             
             org.apache.jackrabbit.oak.spi.state.NodeBuilder content = genesisWallet.child("content");
             content.setProperty("jcr:primaryType", "nt:unstructured");
             
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // GENESIS ROOT - Network Identity & Ethos
+            // ═══════════════════════════════════════════════════════════════════════════════
             org.apache.jackrabbit.oak.spi.state.NodeBuilder genesis = content.child("genesis");
             genesis.setProperty("jcr:primaryType", "nt:unstructured");
-            genesis.setProperty("jcr:created", System.currentTimeMillis());
-            genesis.setProperty("jcr:title", "OakChain Genesis Block");
-            genesis.setProperty("tagline", "Persistence is Futile - The Borg Collective");
+            genesis.setProperty("jcr:created", timestamp);
+            genesis.setProperty("jcr:title", "OakChain Network - Self-Documenting Genesis");
+            genesis.setProperty("jcr:description", "This node is the living documentation for the OakChain network. " +
+                "Read the child nodes to learn how to use this system.");
+            genesis.setProperty("tagline", "Billions of enterprise content rides these rails. We're making it decentralized.");
+            genesis.setProperty("version", "1.0.0");
+            genesis.setProperty("chainId", "oak-blockchain-aem");
+            genesis.setProperty("genesisTimestamp", timestamp);
+            genesis.setProperty("genesisDate", genesisDate);
+            genesis.setProperty("genesisValidator", selfUrl);
             
-            // ═══════════════════════════════════════════════════════════════════
-            // PROTOCOL
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder protocol = genesis.child("protocol");
-            protocol.setProperty("jcr:primaryType", "nt:unstructured");
-            protocol.setProperty("message", "DO IT LIVE!");
-            protocol.setProperty("version", "1.0.0");
-            protocol.setProperty("chainId", "oak-blockchain-aem-poc");
-            protocol.setProperty("genesisTimestamp", System.currentTimeMillis());
-            protocol.setProperty("genesisDate", new java.util.Date().toString());
-            protocol.setProperty("philosophy", "Bitcoin-tight reliability meets AEM content management");
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 1. GETTING STARTED - The quickstart guide
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder gettingStarted = genesis.child("getting-started");
+            gettingStarted.setProperty("jcr:primaryType", "nt:unstructured");
+            gettingStarted.setProperty("jcr:title", "Getting Started with OakChain");
+            gettingStarted.setProperty("jcr:description", "Everything you need to write your first content to the blockchain");
             
-            // ═══════════════════════════════════════════════════════════════════
-            // CONSENSUS
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder consensus = genesis.child("consensus");
-            consensus.setProperty("jcr:primaryType", "nt:unstructured");
-            consensus.setProperty("model", "aeron-raft");
-            consensus.setProperty("quorumType", "majority");
-            consensus.setProperty("implementation", "io.aeron.cluster (battle-tested Raft)");
-            consensus.setProperty("features", "election-safety,log-matching,leader-completeness,partition-tolerance");
+            // Prerequisites
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder prereqs = gettingStarted.child("1-prerequisites");
+            prereqs.setProperty("jcr:primaryType", "nt:unstructured");
+            prereqs.setProperty("title", "Prerequisites");
+            prereqs.setProperty("item-1", "An Ethereum wallet (MetaMask recommended)");
+            prereqs.setProperty("item-2", "Some ETH for transaction fees (Sepolia testnet for testing)");
+            prereqs.setProperty("item-3", "curl or any HTTP client");
+            prereqs.setProperty("note", "No SDK required - it's just HTTP + signatures");
             
-            // ═══════════════════════════════════════════════════════════════════
-            // ETHEREUM INTEGRATION
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder ethereum = genesis.child("ethereum");
-            ethereum.setProperty("jcr:primaryType", "nt:unstructured");
-            ethereum.setProperty("network", "Ethereum Mainnet Beacon Chain");
-            ethereum.setProperty("epochDuration", "6.4 minutes (384 seconds)");
-            ethereum.setProperty("finalityDelay", "2 epochs (~12.8 minutes)");
-            ethereum.setProperty("integration", "Epoch-based finality for transaction batching");
-            ethereum.setProperty("pollingInterval", "3 minutes");
-            ethereum.setProperty("purpose", "External time oracle + cryptographic payment verification");
+            // Connect
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder connect = gettingStarted.child("2-connect");
+            connect.setProperty("jcr:primaryType", "nt:unstructured");
+            connect.setProperty("title", "Connect to a Validator");
+            connect.setProperty("description", "Find a validator endpoint and check its health");
+            connect.setProperty("curl-health", "curl http://VALIDATOR:8090/health");
+            connect.setProperty("curl-status", "curl http://VALIDATOR:8090/v1/status");
+            connect.setProperty("response-healthy", "{\"status\":\"healthy\",\"role\":\"LEADER\"|\"FOLLOWER\"}");
             
-            // ═══════════════════════════════════════════════════════════════════
-            // ARCHITECTURE
-            // ═══════════════════════════════════════════════════════════════════
+            // Write Content
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder writeContent = gettingStarted.child("3-write-content");
+            writeContent.setProperty("jcr:primaryType", "nt:unstructured");
+            writeContent.setProperty("title", "Write Your First Content");
+            writeContent.setProperty("step-1", "Sign a message with your wallet: 'OakChain Write: {path} at {timestamp}'");
+            writeContent.setProperty("step-2", "POST to /v1/propose-write with your wallet, signature, path, and content");
+            writeContent.setProperty("step-3", "Wait for finality (check /v1/proposal-status/{id})");
+            writeContent.setProperty("step-4", "Your content is now on the blockchain!");
+            writeContent.setProperty("curl-example", "curl -X POST http://VALIDATOR:8090/v1/propose-write " +
+                "-d 'walletAddress=0xYOUR_WALLET' " +
+                "-d 'signature=0xYOUR_SIG' " +
+                "-d 'path=/my-content' " +
+                "-d 'content={\"title\":\"Hello OakChain\"}'");
+            
+            // Read Content
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder readContent = gettingStarted.child("4-read-content");
+            readContent.setProperty("jcr:primaryType", "nt:unstructured");
+            readContent.setProperty("title", "Read Content");
+            readContent.setProperty("description", "Reading is free and doesn't require a wallet");
+            readContent.setProperty("curl-read", "curl http://VALIDATOR:8090/v1/content/0xWALLET/path/to/content");
+            readContent.setProperty("curl-list", "curl http://VALIDATOR:8090/v1/content/0xWALLET");
+            readContent.setProperty("note", "Content is available from any validator - they all have the same state");
+            
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 2. API REFERENCE - Complete HTTP endpoint documentation
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder api = genesis.child("api");
+            api.setProperty("jcr:primaryType", "nt:unstructured");
+            api.setProperty("jcr:title", "API Reference");
+            api.setProperty("jcr:description", "Complete HTTP API for interacting with OakChain validators");
+            api.setProperty("baseUrl", "http://VALIDATOR:8090");
+            api.setProperty("contentType", "application/x-www-form-urlencoded or application/json");
+            
+            // Health & Status
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder apiHealth = api.child("health-status");
+            apiHealth.setProperty("jcr:primaryType", "nt:unstructured");
+            apiHealth.setProperty("GET /health", "Health check - returns {status, role, epoch}");
+            apiHealth.setProperty("GET /v1/status", "Detailed status - cluster info, HEAD, validators");
+            apiHealth.setProperty("GET /v1/cluster-info", "Cluster membership and leader info");
+            apiHealth.setProperty("GET /", "Dashboard UI (HTML)");
+            
+            // Content Operations
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder apiContent = api.child("content-operations");
+            apiContent.setProperty("jcr:primaryType", "nt:unstructured");
+            apiContent.setProperty("POST /v1/propose-write", "Propose a write - requires wallet, signature, path, content");
+            apiContent.setProperty("POST /v1/propose-delete", "Propose a delete - requires wallet, signature, path");
+            apiContent.setProperty("GET /v1/content/{wallet}/{path}", "Read content at path");
+            apiContent.setProperty("GET /v1/content/{wallet}", "List content for wallet");
+            apiContent.setProperty("GET /v1/proposal-status/{id}", "Check proposal status");
+            
+            // Binary Operations (IPFS)
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder apiBinary = api.child("binary-operations");
+            apiBinary.setProperty("jcr:primaryType", "nt:unstructured");
+            apiBinary.setProperty("POST /v1/binary/declare-intent", "Declare intent to upload binary - returns intentToken");
+            apiBinary.setProperty("GET /v1/binary/check-intent/{token}", "Check upload status");
+            apiBinary.setProperty("POST /v1/binary/complete-upload", "Complete upload with IPFS CID");
+            apiBinary.setProperty("note", "Binaries are stored on IPFS, only CIDs are stored on-chain");
+            
+            // Segment Transfer (for validators/Sling)
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder apiSegments = api.child("segment-transfer");
+            apiSegments.setProperty("jcr:primaryType", "nt:unstructured");
+            apiSegments.setProperty("GET /journal.log", "Journal file for segment sync");
+            apiSegments.setProperty("GET /manifest", "Segment manifest");
+            apiSegments.setProperty("GET /segments/{id}", "Fetch specific segment by ID");
+            apiSegments.setProperty("note", "Used by Sling authors for read-only replication");
+            
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 3. EXAMPLES - Working code samples
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder examples = genesis.child("examples");
+            examples.setProperty("jcr:primaryType", "nt:unstructured");
+            examples.setProperty("jcr:title", "Working Examples");
+            examples.setProperty("jcr:description", "Copy-paste examples for common operations");
+            
+            // JavaScript/Browser Example
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder jsExample = examples.child("javascript-browser");
+            jsExample.setProperty("jcr:primaryType", "nt:unstructured");
+            jsExample.setProperty("title", "JavaScript (Browser with MetaMask)");
+            jsExample.setProperty("code", 
+                "// 1. Connect wallet\\n" +
+                "const accounts = await ethereum.request({ method: 'eth_requestAccounts' });\\n" +
+                "const wallet = accounts[0];\\n\\n" +
+                "// 2. Sign message\\n" +
+                "const path = '/my-page';\\n" +
+                "const timestamp = Date.now();\\n" +
+                "const message = `OakChain Write: ${path} at ${timestamp}`;\\n" +
+                "const signature = await ethereum.request({\\n" +
+                "  method: 'personal_sign',\\n" +
+                "  params: [message, wallet]\\n" +
+                "});\\n\\n" +
+                "// 3. Submit write\\n" +
+                "const response = await fetch('http://validator:8090/v1/propose-write', {\\n" +
+                "  method: 'POST',\\n" +
+                "  headers: { 'Content-Type': 'application/json' },\\n" +
+                "  body: JSON.stringify({\\n" +
+                "    walletAddress: wallet,\\n" +
+                "    signature: signature,\\n" +
+                "    path: path,\\n" +
+                "    content: { title: 'Hello OakChain', body: 'My first content' }\\n" +
+                "  })\\n" +
+                "});");
+            
+            // curl Example
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder curlExample = examples.child("curl");
+            curlExample.setProperty("jcr:primaryType", "nt:unstructured");
+            curlExample.setProperty("title", "curl Commands");
+            curlExample.setProperty("check-health", "curl http://localhost:8090/health");
+            curlExample.setProperty("get-status", "curl http://localhost:8090/v1/status | jq .");
+            curlExample.setProperty("read-genesis", "curl http://localhost:8090/v1/content/0x0000000000000000000000000000000000000000/genesis");
+            curlExample.setProperty("list-content", "curl http://localhost:8090/v1/content/0xYOUR_WALLET");
+            
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 4. ARCHITECTURE - How the system works
+            // ═══════════════════════════════════════════════════════════════════════════════
             org.apache.jackrabbit.oak.spi.state.NodeBuilder architecture = genesis.child("architecture");
             architecture.setProperty("jcr:primaryType", "nt:unstructured");
+            architecture.setProperty("jcr:title", "System Architecture");
+            architecture.setProperty("jcr:description", "How OakChain works under the hood");
+            
+            // Core Components
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder components = architecture.child("components");
+            components.setProperty("jcr:primaryType", "nt:unstructured");
+            components.setProperty("oak-segment-store", "Apache Oak TarMK - proven content storage from Adobe AEM");
+            components.setProperty("aeron-cluster", "High-performance Raft consensus (io.aeron.cluster)");
+            components.setProperty("ethereum", "External time oracle + payment verification");
+            components.setProperty("ipfs", "Content-addressed binary storage");
+            components.setProperty("http-api", "RESTful interface for all operations");
             
             // Wallet-Scoped Paths
             org.apache.jackrabbit.oak.spi.state.NodeBuilder paths = architecture.child("wallet-scoped-paths");
             paths.setProperty("jcr:primaryType", "nt:unstructured");
-            paths.setProperty("structure", "/oak-chain/{shard}/content/{contentId}");
-            paths.setProperty("shardFormat", "First 3 bytes of wallet address (XX-YY-ZZ)");
-            paths.setProperty("example", "/oak-chain/74-2d-35/content/page-12345");
-            paths.setProperty("benefit-isolation", "Each wallet gets isolated TarMK segment tree");
-            paths.setProperty("benefit-gc", "Garbage collection per wallet namespace");
-            paths.setProperty("benefit-scalability", "Natural sharding boundaries at each level");
-            paths.setProperty("benefit-performance", "Oak optimized for deep trees, not wide flat structures");
+            paths.setProperty("pattern", "/oak-chain/{shard-level-1}/{shard-level-2}/{shard-level-3}/{wallet}/content/{path}");
+            paths.setProperty("example", "/oak-chain/74/2d/35/0x742d35Cc6634C0532925a3b844Bc9e7595f1b3E8/content/my-page");
+            paths.setProperty("sharding", "First 3 bytes of wallet address create 3-level directory structure");
+            paths.setProperty("benefit", "Segment isolation - each wallet's content is naturally partitioned");
             
-            // Deep Tree Sharding
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder sharding = architecture.child("deep-tree-sharding");
-            sharding.setProperty("jcr:primaryType", "nt:unstructured");
-            sharding.setProperty("purpose", "Mitigate TarMK segment-not-found issues at architectural level");
-            sharding.setProperty("implementation", "3-level hierarchy from wallet address");
-            sharding.setProperty("rationale", "Deep trees provide segment isolation critical for distributed consensus");
+            // Consensus Model
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder consensus = architecture.child("consensus");
+            consensus.setProperty("jcr:primaryType", "nt:unstructured");
+            consensus.setProperty("algorithm", "Raft (via Aeron Cluster)");
+            consensus.setProperty("quorum", "Majority of validators must agree");
+            consensus.setProperty("leader-election", "Automatic - leader handles all writes");
+            consensus.setProperty("replication", "All writes replicated to all validators synchronously");
+            consensus.setProperty("finality", "Immediate local finality, Ethereum epoch for external finality");
             
-            // HTTP Segment Transfer
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder httpTransfer = architecture.child("http-segment-transfer");
-            httpTransfer.setProperty("jcr:primaryType", "nt:unstructured");
-            httpTransfer.setProperty("protocol", "HTTP/1.1 REST API");
-            httpTransfer.setProperty("endpoints", "GET /journal.log, GET /segments/{id}, GET /manifest");
-            httpTransfer.setProperty("purpose", "Global read-only replication across Sling authors");
-            httpTransfer.setProperty("pattern", "Cold Standby inspired");
-            httpTransfer.setProperty("benefit", "Content available globally without full validator deployment");
-            
-            // ═══════════════════════════════════════════════════════════════════
-            // ECONOMICS
-            // ═══════════════════════════════════════════════════════════════════
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 5. ECONOMICS - Pricing and payment
+            // ═══════════════════════════════════════════════════════════════════════════════
             org.apache.jackrabbit.oak.spi.state.NodeBuilder economics = genesis.child("economics");
             economics.setProperty("jcr:primaryType", "nt:unstructured");
-            economics.setProperty("model", "3-Tier Transaction Pricing");
-            economics.setProperty("philosophy", "Fragmentation costs more - incentivize batching");
+            economics.setProperty("jcr:title", "Transaction Pricing");
+            economics.setProperty("jcr:description", "How much operations cost and why");
+            economics.setProperty("philosophy", "Fragmentation costs more - incentivize batching for efficiency");
             
-            // Priority Tier
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder priority = economics.child("priority-tier");
-            priority.setProperty("jcr:primaryType", "nt:unstructured");
-            priority.setProperty("price", "0.01 ETH");
-            priority.setProperty("finality", "Immediate (~30 seconds)");
-            priority.setProperty("delay", "0 epochs");
-            priority.setProperty("use-case", "Breaking news, live events, critical updates");
-            priority.setProperty("fragmentation-cost", "High - no batching optimization");
+            // Pricing Tiers
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder pricing = economics.child("pricing-tiers");
+            pricing.setProperty("jcr:primaryType", "nt:unstructured");
+            pricing.setProperty("priority-price", "0.01 ETH");
+            pricing.setProperty("priority-finality", "Immediate (~30 seconds)");
+            pricing.setProperty("priority-use-case", "Breaking news, live events");
+            pricing.setProperty("express-price", "0.002 ETH");
+            pricing.setProperty("express-finality", "~6.4 minutes (1 Ethereum epoch)");
+            pricing.setProperty("express-use-case", "Time-sensitive updates");
+            pricing.setProperty("standard-price", "0.001 ETH");
+            pricing.setProperty("standard-finality", "~12.8 minutes (2 Ethereum epochs)");
+            pricing.setProperty("standard-use-case", "Bulk content, scheduled updates");
             
-            // Express Tier
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder express = economics.child("express-tier");
-            express.setProperty("jcr:primaryType", "nt:unstructured");
-            express.setProperty("price", "0.002 ETH");
-            express.setProperty("finality", "~6.4 minutes");
-            express.setProperty("delay", "1 epoch");
-            express.setProperty("use-case", "Time-sensitive content, same-day updates");
-            express.setProperty("fragmentation-cost", "Medium - some batching opportunity");
+            // Payment Flow
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder paymentFlow = economics.child("payment-flow");
+            paymentFlow.setProperty("jcr:primaryType", "nt:unstructured");
+            paymentFlow.setProperty("step-1", "User signs write proposal with wallet");
+            paymentFlow.setProperty("step-2", "Validator verifies signature and queues proposal");
+            paymentFlow.setProperty("step-3", "At epoch boundary, batch is finalized");
+            paymentFlow.setProperty("step-4", "Payment verified on Ethereum (ValidatorPayment contract)");
+            paymentFlow.setProperty("step-5", "Content becomes permanent");
             
-            // Standard Tier
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder standard = economics.child("standard-tier");
-            standard.setProperty("jcr:primaryType", "nt:unstructured");
-            standard.setProperty("price", "0.001 ETH");
-            standard.setProperty("finality", "~12.8 minutes");
-            standard.setProperty("delay", "2 epochs");
-            standard.setProperty("use-case", "Bulk content, scheduled updates, archival");
-            standard.setProperty("fragmentation-cost", "Low - maximum batching by wallet");
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 6. TROUBLESHOOTING - Common issues
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder troubleshooting = genesis.child("troubleshooting");
+            troubleshooting.setProperty("jcr:primaryType", "nt:unstructured");
+            troubleshooting.setProperty("jcr:title", "Troubleshooting Guide");
+            troubleshooting.setProperty("jcr:description", "Common issues and how to fix them");
             
-            // Intelligent Batching
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder batching = economics.child("intelligent-batching");
-            batching.setProperty("jcr:primaryType", "nt:unstructured");
-            batching.setProperty("strategy", "Group by wallet address + sort by path/timestamp");
-            batching.setProperty("purpose", "Minimize TarMK DAG fragmentation");
-            batching.setProperty("benefit-gc", "Wallet-scoped segments easier to garbage collect");
-            batching.setProperty("benefit-performance", "Sequential writes to same segment tree");
-            batching.setProperty("economic-rationale", "Slower tiers batch more = cheaper storage costs");
+            // Common Issues
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder issues = troubleshooting.child("common-issues");
+            issues.setProperty("jcr:primaryType", "nt:unstructured");
+            issues.setProperty("issue-signature-invalid", "SIGNATURE_INVALID: Ensure you're signing the exact message format 'OakChain Write: {path} at {timestamp}'");
+            issues.setProperty("issue-not-leader", "NOT_LEADER: You hit a follower - retry or use the leader URL from /v1/cluster-info");
+            issues.setProperty("issue-path-forbidden", "PATH_FORBIDDEN: You can only write to paths under your wallet address");
+            issues.setProperty("issue-epoch-stale", "EPOCH_STALE: Your timestamp is too old - use current time");
+            issues.setProperty("issue-payment-required", "PAYMENT_REQUIRED: Transaction needs payment - check ValidatorPayment contract");
             
-            // Fragmentation Tax
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder fragTax = economics.child("fragmentation-tax");
-            fragTax.setProperty("jcr:primaryType", "nt:unstructured");
-            fragTax.setProperty("concept", "DELETE operations cost more for fragmented content");
-            fragTax.setProperty("measurement", "Track segments touched per wallet");
-            fragTax.setProperty("pricing", "DELETE cost = base + (fragmentation_score * multiplier)");
-            fragTax.setProperty("incentive", "Users who batch efficiently pay less for cleanup");
-            fragTax.setProperty("status", "Designed - implementation in progress");
+            // Health Checks
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder healthChecks = troubleshooting.child("health-checks");
+            healthChecks.setProperty("jcr:primaryType", "nt:unstructured");
+            healthChecks.setProperty("check-1", "curl /health - should return {status: healthy}");
+            healthChecks.setProperty("check-2", "curl /v1/status - check role is LEADER or FOLLOWER (not CANDIDATE)");
+            healthChecks.setProperty("check-3", "curl /v1/cluster-info - verify all validators are connected");
+            healthChecks.setProperty("check-4", "Check logs for '❌' emoji - indicates errors");
             
-            // ═══════════════════════════════════════════════════════════════════
-            // BITCOIN-TIGHT PRINCIPLES
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder bitcoinTight = genesis.child("bitcoin-tight-principles");
-            bitcoinTight.setProperty("jcr:primaryType", "nt:unstructured");
-            bitcoinTight.setProperty("philosophy", "Fail Loud, Fail Fast, Never Silently Corrupt");
-            bitcoinTight.setProperty("principle-1", "Singletons: One BeaconChainClient, one truth");
-            bitcoinTight.setProperty("principle-2", "Fail Loud: System.exit(1) on unrecoverable errors");
-            bitcoinTight.setProperty("principle-3", "Immutability: final fields, immutable state");
-            bitcoinTight.setProperty("principle-4", "Defensive Validation: Epochs never go backwards");
-            bitcoinTight.setProperty("principle-5", "Health Monitoring: /health endpoint + metrics");
-            bitcoinTight.setProperty("principle-6", "No Silent Failures: UncaughtExceptionHandler crashes JVM");
-            bitcoinTight.setProperty("inspiration", "Bitcoin Core, Apache Kafka, Ethereum Geth");
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 7. ABOUT - Project information
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder about = genesis.child("about");
+            about.setProperty("jcr:primaryType", "nt:unstructured");
+            about.setProperty("jcr:title", "About OakChain");
+            about.setProperty("mission", "Decentralizing enterprise content management");
+            about.setProperty("foundation", "Built on Apache Oak - the proven content repository behind Adobe AEM");
+            about.setProperty("value-proposition", "Billions of dollars of enterprise content already runs on Oak. " +
+                "We're adding decentralization, cryptographic ownership, and blockchain finality.");
+            about.setProperty("philosophy", "Bitcoin-tight reliability meets enterprise content management");
+            about.setProperty("principles", "Fail Loud, Fail Fast, Never Silently Corrupt");
+            about.setProperty("team", "somarc + AI collaborators - distributed intelligence building distributed systems");
+            about.setProperty("license", "Apache 2.0");
             
-            // ═══════════════════════════════════════════════════════════════════
-            // NETWORK
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder network = genesis.child("network");
-            network.setProperty("jcr:primaryType", "nt:unstructured");
-            network.setProperty("genesisValidator", selfUrl);
-            network.setProperty("transport", "Aeron UDP multicast + unicast");
-            network.setProperty("clusterFormation", "Automatic via Raft election");
-            network.setProperty("partition-tolerance", "Majority quorum required for writes");
-            
-            // ═══════════════════════════════════════════════════════════════════
-            // INNOVATION SUMMARY
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder innovations = genesis.child("innovations");
-            innovations.setProperty("jcr:primaryType", "nt:unstructured");
-            innovations.setProperty("innovation-1", "First blockchain-backed AEM content repository");
-            innovations.setProperty("innovation-2", "Ethereum epochs as external time oracle for finality");
-            innovations.setProperty("innovation-3", "Wallet-scoped path architecture for segment isolation");
-            innovations.setProperty("innovation-4", "Economic model that incentivizes storage efficiency");
-            innovations.setProperty("innovation-5", "Bitcoin-tight reliability in Java enterprise stack");
-            innovations.setProperty("innovation-6", "Global read-only content via HTTP segment transfer");
-            innovations.setProperty("innovation-7", "Multi-tier transaction pricing with cryptographic payment");
-            innovations.setProperty("demo-date", "Garage Week - December 15, 2025");
-            innovations.setProperty("team", "somarc + Cursor (Auto mode + Composer-1) + Grok 4.1 as outside counsel — distributed intelligence building distributed systems");
-            
-            // ═══════════════════════════════════════════════════════════════════
-            // IPFS: Decentralized Binary Storage (ADR 015) - "DO IT LIVE!" Image
-            // ═══════════════════════════════════════════════════════════════════
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 8. IPFS & GENESIS IMAGE
+            // ═══════════════════════════════════════════════════════════════════════════════
             String ipfsCid = null;
             
-            // Create nt:file node for the "do-it-live.jpeg" image
             org.apache.jackrabbit.oak.spi.state.NodeBuilder genesisImage = genesis.child("do-it-live.jpeg");
             genesisImage.setProperty("jcr:primaryType", "nt:file");
-            genesisImage.setProperty("jcr:created", System.currentTimeMillis());
+            genesisImage.setProperty("jcr:created", timestamp);
             
             org.apache.jackrabbit.oak.spi.state.NodeBuilder imageContent = genesisImage.child("jcr:content");
             imageContent.setProperty("jcr:primaryType", "nt:resource");
             imageContent.setProperty("jcr:mimeType", "image/jpeg");
-            imageContent.setProperty("jcr:lastModified", System.currentTimeMillis());
+            imageContent.setProperty("jcr:lastModified", timestamp);
             
-            // Try to load and upload the genesis image
             try {
                 java.io.InputStream imageStream = getClass().getClassLoader()
                     .getResourceAsStream("genesis-assets/do-it-live.jpeg");
                 
                 if (imageStream != null && blobStore != null) {
-                    // Read image bytes
                     java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
                     byte[] buffer = new byte[8192];
                     int read;
@@ -3690,26 +3788,20 @@ public class AeronConsensusEngine implements ClusteredService {
                     long imageSize = imageBytes.length;
                     imageStream.close();
                     
-                    // Store via BlobStore (IPFS backend will pin it)
                     String blobId = blobStore.writeBlob(new java.io.ByteArrayInputStream(imageBytes));
-                    
-                    // Create proper Binary from blobId
                     org.apache.jackrabbit.oak.api.Blob blob = 
                         ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore)
                             .createBlob(new java.io.ByteArrayInputStream(imageBytes));
                     
-                    // Attach to jcr:content
                     imageContent.setProperty("jcr:data", blob);
                     imageContent.setProperty("jcr:blobId", blobId);
                     imageContent.setProperty("size", imageSize);
                     
-                    // Extract IPFS CID from blobId if it's an IPFS hash
-                    if (blobId != null && blobId.startsWith("Qm") || (blobId != null && blobId.startsWith("baf"))) {
-                        // It's a CID! (IPFS uses Qm... for CIDv0 or baf... for CIDv1)
-                        ipfsCid = blobId.split("#")[0]; // Strip size suffix if present
+                    if (blobId != null && (blobId.startsWith("Qm") || blobId.startsWith("baf"))) {
+                        ipfsCid = blobId.split("#")[0];
                     }
                     
-                    log.info("✅ Genesis image uploaded: {} bytes, blobId={}, ipfsCid={}", imageSize, blobId, ipfsCid);
+                    log.info("✅ Genesis image uploaded: {} bytes, blobId={}", imageSize, blobId);
                 } else if (blobStore == null) {
                     log.warn("⚠️  BlobStore not configured - genesis image will not be uploaded");
                 } else {
@@ -3719,18 +3811,16 @@ public class AeronConsensusEngine implements ClusteredService {
                 log.error("Failed to upload genesis image", e);
             }
             
-            // IPFS metadata node
             org.apache.jackrabbit.oak.spi.state.NodeBuilder ipfsInfo = genesis.child("ipfs");
             ipfsInfo.setProperty("jcr:primaryType", "nt:unstructured");
             ipfsInfo.setProperty("enabled", blobStore != null);
             ipfsInfo.setProperty("genesisImageCid", ipfsCid != null ? ipfsCid : "N/A (BlobStore fallback)");
             ipfsInfo.setProperty("gateway", "https://ipfs.io/ipfs/");
-            ipfsInfo.setProperty("localGateway", "http://localhost:8080/ipfs/");
             ipfsInfo.setProperty("description", "Binaries stored via IPFS - content-addressed, decentralized, immutable");
             
-            // ═══════════════════════════════════════════════════════════════════
-            // COMMIT: Merge rich genesis structure locally first
-            // ═══════════════════════════════════════════════════════════════════
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // COMMIT
+            // ═══════════════════════════════════════════════════════════════════════════════
             log.info("📝 Committing genesis structure to local FileStore...");
             ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore).merge(
                 rootBuilder, 
@@ -3740,18 +3830,14 @@ public class AeronConsensusEngine implements ClusteredService {
             String newHead = fileStore.getHead().getRecordId().toString10();
             log.info("✅ Genesis committed locally - HEAD: {}", newHead);
             
-            // ✅ DETERMINISTIC GENESIS: All nodes executed identical code via Aeron
-            // Aeron Raft guarantees same message order on all nodes
-            // Therefore: same processing = same segments = same HEAD (guaranteed!)
             log.info("✅ Genesis created deterministically via Aeron consensus");
             
-            // Log genesis summary
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("🎊 GENESIS NODE CREATED");
+            log.info("🎊 GENESIS NODE CREATED - The Self-Documenting Root");
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             log.info("   Path: /oak-chain/00/00/00/0x0000.../content/genesis");
-            log.info("   Message: DO IT LIVE!");
-            log.info("   IPFS Image: {}", ipfsCid != null ? ipfsCid : "stored in BlobStore");
+            log.info("   Child nodes: getting-started, api, examples, architecture, economics, troubleshooting, about");
+            log.info("   Read it: curl http://localhost:8090/v1/content/0x0000000000000000000000000000000000000000/genesis");
             log.info("   HEAD: {}", newHead);
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             

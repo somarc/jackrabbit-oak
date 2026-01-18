@@ -103,7 +103,7 @@ public class BlockchainConfig {
     
     // Default contract addresses
     private static final String SEPOLIA_CONTRACT = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0";
-    private static final String MAINNET_CONTRACT = "0x0000000000000000000000000000000000000000"; // TODO: Deploy mainnet contract
+    private static final String MAINNET_CONTRACT = "0x0000000000000000000000000000000000000000"; // SEPOLIA_PHASE: Deploy mainnet contract after Sepolia validation
     
     // Singleton instance
     private static volatile BlockchainConfig instance;

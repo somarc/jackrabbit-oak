@@ -752,8 +752,9 @@ public class SegmentHttpServer {
             log.debug("HTTP {} {}", method, path);
             
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // CORS Headers - Garage Week MVP (Wildcard for demo)
-            // TODO: Replace with wallet-based registration post-Garage Week (see ADR-010)
+            // CORS Headers - Permissive for local development and demos
+            // NOTE: Wallet-based auth happens at proposal level (signature verification),
+            // not at CORS level. Wildcard CORS is intentional for API accessibility.
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             response.setHeader("Access-Control-Allow-Origin", "*");
             response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");

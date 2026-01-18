@@ -446,6 +446,31 @@
           </execution>
         </executions>
       </plugin>
+      <!-- Override Apache parent's enforce-java-version to add upper bound for AEM compatibility -->
+      <plugin>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>enforce-java-version</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <requireJavaVersion>
+                  <!-- AEM requires JDK 11-21; JDK 22+ breaks Mockito/ByteBuddy -->
+                  <version>[11,21.9999]</version>
+                  <message>
+AEM requires JDK 11-21.
+JDK 22+ breaks Mockito/ByteBuddy agent attachment and is not supported by AEM.
+Please use JDK 21 or earlier. Current JDK: ${java.version}
+                  </message>
+                </requireJavaVersion>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 

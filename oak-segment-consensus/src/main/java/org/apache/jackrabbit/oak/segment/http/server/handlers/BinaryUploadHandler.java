@@ -232,7 +232,7 @@ public class BinaryUploadHandler {
                 return;
             }
             
-            // TODO: Validate CID is reachable (HTTP HEAD to author's IPFS)
+            // PRODUCTION_HARDENING: Validate CID is reachable (HTTP HEAD to author's IPFS gateway)
             // For now, just accept the CID
             
             // Complete upload

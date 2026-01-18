@@ -251,7 +251,7 @@ public class EphemeralContentMonitor implements Closeable {
      * Fetch expired content IDs from contract.
      */
     private List<byte[]> fetchExpiredContent() {
-        // TODO: Implement actual contract call to getExpiredContent()
+        // SEPOLIA_PHASE: Implement actual contract call to getExpiredContent() via Web3j
         // For now, return empty list as placeholder
         // In production:
         // return paymentClient.getExpiredContent(maxExpiredToFetch);

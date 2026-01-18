@@ -1161,7 +1161,7 @@ public class DashboardHandler {
         html.append("<div class='category'>\n");
         html.append("<h2>🔄 Consensus APIs</h2>\n");
         addApiEndpoint(html, "GET", "/v1/consensus/status", "Get consensus state (Aeron-aware)", "consensus_status");
-        addApiEndpoint(html, "POST", "/v1/propose-write", "Propose signed write transaction (⚠️ TODO: Full signature verification)", "propose_write");
+        addApiEndpoint(html, "POST", "/v1/propose-write", "Propose signed write transaction (signature verified via EthereumSignatureVerifier)", "propose_write");
         addApiEndpoint(html, "POST", "/v1/propose-delete", "Propose signed delete transaction", "propose_delete");
         addApiEndpoint(html, "GET", "/v1/head", "Get latest HEAD ⚠️ DEPRECATED - use /v1/consensus/status instead (ADR-012)", "head");
         html.append("</div>\n");
@@ -1191,7 +1191,7 @@ public class DashboardHandler {
         html.append("<h2>🗑️ Garbage Collection & Compaction</h2>\n");
         addApiEndpoint(html, "GET", "/v1/gc/estimate", "Estimate GC cost and reclaimable space (JSON)", "gc_estimate");
         addApiEndpoint(html, "GET", "/v1/gc/status", "Get GC proposal status and history (JSON)", "gc_status");
-        addApiEndpoint(html, "POST", "/v1/propose-gc", "Propose a GC operation (⚠️ TODO: Aeron replication)", "propose_gc");
+        addApiEndpoint(html, "POST", "/v1/propose-gc", "Propose a GC operation (replicated via Aeron Raft)", "propose_gc");
         addApiEndpoint(html, "POST", "/v1/gc/trigger", "Trigger automated GC check (testing/manual override)", "gc_trigger");
         addApiEndpoint(html, "POST", "/v1/gc/execute", "Manually execute an approved GC proposal (auto-executes on approval)", "gc_execute");
         addApiEndpoint(html, "GET", "/v1/compaction/proposals", "Get pending compaction proposals (JSON)", "compaction_proposals");

@@ -844,10 +844,11 @@ message = "0xdd870fa1b7c4700f2bd7f44238821c26f7392148:delete-uuid-123:/oak-chain
 signature = "0x1a2b3c4d..." (65 bytes: r + s + v)
 ```
 
-**Verification** (currently not enforced in MVP):
+**Verification** (implemented via EthereumSignatureVerifier):
 ```java
-// TODO: Implement signature verification
-// EthereumWallet.verifySignature(walletAddress, message, signature)
+// Signature verification is now implemented in:
+// - EthereumSignatureVerifier.verifySignature(walletAddress, message, signature)
+// - ConsensusApiHandler validates signatures on all write/delete proposals
 ```
 
 ---

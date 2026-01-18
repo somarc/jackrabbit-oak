@@ -152,9 +152,9 @@ public class EthereumSignatureVerifierTest {
         assumeTrue("Requires Bouncy Castle", 
             EthereumSignatureVerifier.isFullVerificationAvailable());
         
-        // TODO: Replace with actual MetaMask-generated test vectors
+        // TEST_VECTOR: Replace with actual MetaMask-generated test vectors
         // These are placeholder values that will fail verification
-        // In a real test suite, you would have pre-generated valid signatures
+        // Generate real vectors by signing with MetaMask and capturing the output
         
         String message = "Hello, Blockchain AEM!";
         String address = "0x742d35Cc6634C0532925a3b844Bc9e7595f1b3E8";

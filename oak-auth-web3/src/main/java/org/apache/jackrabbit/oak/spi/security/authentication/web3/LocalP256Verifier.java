@@ -250,15 +250,30 @@ public final class LocalP256Verifier {
      * <p>Handles:
      * <ul>
      *   <li>Already raw (65 bytes starting with 0x04)</li>
+     *   <li>Compressed format (33 bytes starting with 0x02 or 0x03)</li>
      *   <li>COSE_Key format (71+ bytes, CBOR encoded with x/y coordinates)</li>
      *   <li>Other wrapped formats (searches for 0x04 marker)</li>
      * </ul>
      */
     @NotNull
     private byte[] extractRawPublicKey(@NotNull byte[] publicKeyBytes) {
-        // Already in raw format
+        // Already in raw uncompressed format
         if (publicKeyBytes.length == 65 && publicKeyBytes[0] == 0x04) {
             return publicKeyBytes;
+        }
+        
+        // Compressed format (33 bytes: 0x02/0x03 + x coordinate)
+        // Need to decompress by computing Y from X using curve equation
+        if (publicKeyBytes.length == 33 && 
+            (publicKeyBytes[0] == 0x02 || publicKeyBytes[0] == 0x03)) {
+            log.info("🔑 Decompressing compressed P-256 public key");
+            byte[] decompressed = decompressPublicKey(publicKeyBytes);
+            if (decompressed != null) {
+                log.info("✅ Decompressed P-256 public key successfully");
+                return decompressed;
+            } else {
+                log.warn("⚠️ Failed to decompress P-256 public key");
+            }
         }
         
         // Try COSE_Key format (common from WebAuthn)
@@ -293,6 +308,110 @@ public final class LocalP256Verifier {
         // Couldn't find raw key, return original (will fail validation with helpful error)
         log.warn("Could not extract raw P-256 key from {} bytes, returning as-is", publicKeyBytes.length);
         return publicKeyBytes;
+    }
+    
+    /**
+     * Decompresses a compressed P-256 public key.
+     * 
+     * <p>Compressed format: 33 bytes = prefix (0x02 or 0x03) + 32-byte X coordinate
+     * <ul>
+     *   <li>0x02: Y is even</li>
+     *   <li>0x03: Y is odd</li>
+     * </ul>
+     * 
+     * <p>Uses the P-256 curve equation: y² = x³ - 3x + b (mod p)
+     * where p and b are the P-256 curve parameters.
+     * 
+     * @param compressed 33-byte compressed public key
+     * @return 65-byte uncompressed public key (0x04 + x + y), or null if decompression fails
+     */
+    @Nullable
+    private byte[] decompressPublicKey(@NotNull byte[] compressed) {
+        if (compressed.length != 33) {
+            return null;
+        }
+        
+        byte prefix = compressed[0];
+        if (prefix != 0x02 && prefix != 0x03) {
+            return null;
+        }
+        
+        boolean yIsOdd = (prefix == 0x03);
+        
+        // Extract X coordinate
+        byte[] xBytes = new byte[32];
+        System.arraycopy(compressed, 1, xBytes, 0, 32);
+        BigInteger x = new BigInteger(1, xBytes);
+        
+        // P-256 curve parameters
+        // p = 2^256 - 2^224 + 2^192 + 2^96 - 1
+        BigInteger p = new BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16);
+        // b = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
+        BigInteger b = new BigInteger("5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B", 16);
+        // a = -3 (mod p) = p - 3
+        BigInteger a = p.subtract(BigInteger.valueOf(3));
+        
+        try {
+            // Compute y² = x³ + ax + b (mod p)
+            // For P-256, a = -3, so: y² = x³ - 3x + b (mod p)
+            BigInteger x3 = x.modPow(BigInteger.valueOf(3), p);
+            BigInteger ax = a.multiply(x).mod(p);
+            BigInteger y2 = x3.add(ax).add(b).mod(p);
+            
+            // Compute y = sqrt(y²) mod p using Tonelli-Shanks
+            // For P-256, p ≡ 3 (mod 4), so we can use: y = y²^((p+1)/4) mod p
+            BigInteger exp = p.add(BigInteger.ONE).divide(BigInteger.valueOf(4));
+            BigInteger y = y2.modPow(exp, p);
+            
+            // Verify the square root
+            if (!y.modPow(BigInteger.valueOf(2), p).equals(y2)) {
+                log.warn("Point decompression failed: invalid X coordinate");
+                return null;
+            }
+            
+            // Choose correct Y based on parity
+            boolean computedYIsOdd = y.testBit(0);
+            if (computedYIsOdd != yIsOdd) {
+                y = p.subtract(y);
+            }
+            
+            // Construct uncompressed key
+            byte[] yBytes = toBytes32(y);
+            byte[] uncompressed = new byte[65];
+            uncompressed[0] = 0x04;
+            System.arraycopy(xBytes, 0, uncompressed, 1, 32);
+            System.arraycopy(yBytes, 0, uncompressed, 33, 32);
+            
+            return uncompressed;
+            
+        } catch (Exception e) {
+            log.warn("Point decompression failed: {}", e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Converts a BigInteger to a 32-byte array (left-padded with zeros if needed).
+     */
+    @NotNull
+    private byte[] toBytes32(@NotNull BigInteger value) {
+        byte[] bytes = value.toByteArray();
+        
+        if (bytes.length == 32) {
+            return bytes;
+        } else if (bytes.length == 33 && bytes[0] == 0) {
+            // Remove leading zero (sign byte)
+            byte[] trimmed = new byte[32];
+            System.arraycopy(bytes, 1, trimmed, 0, 32);
+            return trimmed;
+        } else if (bytes.length < 32) {
+            // Pad with leading zeros
+            byte[] padded = new byte[32];
+            System.arraycopy(bytes, 0, padded, 32 - bytes.length, bytes.length);
+            return padded;
+        } else {
+            throw new IllegalArgumentException("Value too large for 32 bytes: " + bytes.length);
+        }
     }
     
     /**

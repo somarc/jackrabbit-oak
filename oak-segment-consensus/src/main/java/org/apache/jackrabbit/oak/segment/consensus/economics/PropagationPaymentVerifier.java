@@ -151,7 +151,7 @@ public class PropagationPaymentVerifier {
             LOG.debug("Propagation payment verification for proposal {}: required={} wei for {} bytes",
                 proposalId, requiredCost, contentSizeBytes);
             
-            // TODO: Implement full payment record lookup
+            // SEPOLIA_PHASE: Implement full payment record lookup via Web3j
             // For now, return success if enforcement is enabled but we can't verify
             // This allows gradual rollout
             return VerificationResult.success(requiredCost, PropagationPaymentClient.STORAGE_MODE_ARCHIVAL);
@@ -195,7 +195,7 @@ public class PropagationPaymentVerifier {
             LOG.debug("Ephemeral payment verification for content {}: required={} wei for {} bytes, {} days TTL",
                 contentId, requiredCost, contentSizeBytes, ttlDays);
             
-            // TODO: Implement full content record lookup
+            // SEPOLIA_PHASE: Implement full content record lookup via Web3j
             return VerificationResult.success(requiredCost, PropagationPaymentClient.STORAGE_MODE_EPHEMERAL_PREPAID);
             
         } catch (Exception e) {

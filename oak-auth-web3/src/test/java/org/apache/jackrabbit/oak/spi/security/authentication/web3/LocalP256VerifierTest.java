@@ -244,6 +244,86 @@ public class LocalP256VerifierTest {
     }
     
     // ========================================================================
+    // COSE_Key Format Tests (WebAuthn attestationObject format)
+    // ========================================================================
+    
+    @Test
+    public void testVerifyWithCOSEKeyFormat() throws Exception {
+        byte[] message = "Test message".getBytes();
+        byte[] signature = sign(message, (ECPrivateKey) testKeyPair.getPrivate());
+        
+        // Encode public key in COSE_Key format (as WebAuthn returns in attestationObject)
+        byte[] coseKey = encodeCOSEKey((ECPublicKey) testKeyPair.getPublic());
+        
+        assertTrue("Verification with COSE_Key format should work", 
+                   verifier.verify(message, signature, coseKey));
+    }
+    
+    @Test
+    public void testVerifyWithCOSEKeyFormatMultipleKeys() throws Exception {
+        // Test with multiple different key pairs to ensure COSE parsing is robust
+        for (int i = 0; i < 5; i++) {
+            KeyPair kp = generateP256KeyPair();
+            byte[] message = ("Message " + i).getBytes();
+            byte[] signature = sign(message, (ECPrivateKey) kp.getPrivate());
+            byte[] coseKey = encodeCOSEKey((ECPublicKey) kp.getPublic());
+            
+            assertTrue("COSE_Key verification " + i + " should work", 
+                       verifier.verify(message, signature, coseKey));
+        }
+    }
+    
+    // ========================================================================
+    // Compressed Key Format Tests (33 bytes: 0x02/0x03 + x)
+    // ========================================================================
+    
+    @Test
+    public void testVerifyWithCompressedKeyFormat() throws Exception {
+        byte[] message = "Test message".getBytes();
+        byte[] signature = sign(message, (ECPrivateKey) testKeyPair.getPrivate());
+        
+        // Encode public key in compressed format (33 bytes)
+        byte[] compressedKey = encodeCompressedPublicKey((ECPublicKey) testKeyPair.getPublic());
+        
+        assertTrue("Verification with compressed key format should work", 
+                   verifier.verify(message, signature, compressedKey));
+    }
+    
+    @Test
+    public void testVerifyWithCompressedKeyEvenY() throws Exception {
+        // Find a key with even Y coordinate
+        KeyPair kp;
+        do {
+            kp = generateP256KeyPair();
+        } while (((ECPublicKey) kp.getPublic()).getW().getAffineY().testBit(0));
+        
+        byte[] message = "Test message".getBytes();
+        byte[] signature = sign(message, (ECPrivateKey) kp.getPrivate());
+        byte[] compressedKey = encodeCompressedPublicKey((ECPublicKey) kp.getPublic());
+        
+        assertEquals("Even Y should have 0x02 prefix", 0x02, compressedKey[0]);
+        assertTrue("Verification with even Y compressed key should work", 
+                   verifier.verify(message, signature, compressedKey));
+    }
+    
+    @Test
+    public void testVerifyWithCompressedKeyOddY() throws Exception {
+        // Find a key with odd Y coordinate
+        KeyPair kp;
+        do {
+            kp = generateP256KeyPair();
+        } while (!((ECPublicKey) kp.getPublic()).getW().getAffineY().testBit(0));
+        
+        byte[] message = "Test message".getBytes();
+        byte[] signature = sign(message, (ECPrivateKey) kp.getPrivate());
+        byte[] compressedKey = encodeCompressedPublicKey((ECPublicKey) kp.getPublic());
+        
+        assertEquals("Odd Y should have 0x03 prefix", 0x03, compressedKey[0]);
+        assertTrue("Verification with odd Y compressed key should work", 
+                   verifier.verify(message, signature, compressedKey));
+    }
+    
+    // ========================================================================
     // Determinism Tests
     // ========================================================================
     
@@ -351,5 +431,84 @@ public class LocalP256VerifierTest {
         } else {
             throw new IllegalArgumentException("Value too large for 32 bytes: " + bytes.length);
         }
+    }
+    
+    /**
+     * Encodes an EC public key in COSE_Key format (as WebAuthn returns).
+     * 
+     * <p>COSE_Key structure for EC2 (P-256):
+     * <pre>
+     * {
+     *   1: 2,       // kty: EC2
+     *   3: -7,      // alg: ES256
+     *   -1: 1,      // crv: P-256
+     *   -2: bytes,  // x coordinate (32 bytes)
+     *   -3: bytes   // y coordinate (32 bytes)
+     * }
+     * </pre>
+     */
+    private byte[] encodeCOSEKey(ECPublicKey publicKey) {
+        byte[] x = toBytes32(publicKey.getW().getAffineX());
+        byte[] y = toBytes32(publicKey.getW().getAffineY());
+        
+        // Build COSE_Key CBOR structure manually
+        // Map with 5 entries: a5
+        // Key 1 (kty): 01, Value 2 (EC2): 02
+        // Key 3 (alg): 03, Value -7 (ES256): 26 (CBOR negative = -1 - 6 = -7)
+        // Key -1 (crv): 20, Value 1 (P-256): 01
+        // Key -2 (x): 21, Value bstr(32): 58 20 [32 bytes]
+        // Key -3 (y): 22, Value bstr(32): 58 20 [32 bytes]
+        
+        byte[] cose = new byte[1 + 2 + 2 + 2 + 3 + 32 + 3 + 32]; // 77 bytes
+        int i = 0;
+        
+        // Map with 5 entries
+        cose[i++] = (byte) 0xa5;
+        
+        // 1: 2 (kty: EC2)
+        cose[i++] = 0x01;
+        cose[i++] = 0x02;
+        
+        // 3: -7 (alg: ES256)
+        cose[i++] = 0x03;
+        cose[i++] = 0x26; // -7 in CBOR
+        
+        // -1: 1 (crv: P-256)
+        cose[i++] = 0x20; // -1 in CBOR
+        cose[i++] = 0x01;
+        
+        // -2: x (32-byte bstr)
+        cose[i++] = 0x21; // -2 in CBOR
+        cose[i++] = 0x58; // bstr with 1-byte length
+        cose[i++] = 0x20; // 32 bytes
+        System.arraycopy(x, 0, cose, i, 32);
+        i += 32;
+        
+        // -3: y (32-byte bstr)
+        cose[i++] = 0x22; // -3 in CBOR
+        cose[i++] = 0x58; // bstr with 1-byte length
+        cose[i++] = 0x20; // 32 bytes
+        System.arraycopy(y, 0, cose, i, 32);
+        
+        return cose;
+    }
+    
+    /**
+     * Encodes an EC public key in compressed format (33 bytes: 0x02/0x03 + x).
+     * 
+     * <p>The prefix byte indicates the parity of the Y coordinate:
+     * <ul>
+     *   <li>0x02: Y is even</li>
+     *   <li>0x03: Y is odd</li>
+     * </ul>
+     */
+    private byte[] encodeCompressedPublicKey(ECPublicKey publicKey) {
+        byte[] x = toBytes32(publicKey.getW().getAffineX());
+        boolean yIsOdd = publicKey.getW().getAffineY().testBit(0);
+        
+        byte[] compressed = new byte[33];
+        compressed[0] = (byte) (yIsOdd ? 0x03 : 0x02);
+        System.arraycopy(x, 0, compressed, 1, 32);
+        return compressed;
     }
 }
