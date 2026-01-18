@@ -65,15 +65,36 @@ public class HealthHandler {
     /**
      * Handle simple health check endpoint.
      * 
-     * <p>🔄 FINALITY-AWARE: Includes committedHead vs latestHead for clients to know what is safe.
+     * <p>🔄 FINALITY-AWARE: Includes committedHead vs latestHead for clients to know what is safe.</p>
+     * 
+     * <p>ADR 028: Returns 503 if cluster is unhealthy (no leader, session timeout, etc.)</p>
      */
     public void handleHealth(HttpServletResponse response) throws IOException {
-        response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType("application/json");
+        
+        // ADR 028: Check cluster health for status code
+        boolean isClusterHealthy = true;
+        String unhealthyReason = null;
+        
+        if (context != null && context.aeronConsensusEngine != null) {
+            isClusterHealthy = context.aeronConsensusEngine.isClusterHealthy();
+            if (!isClusterHealthy) {
+                unhealthyReason = context.aeronConsensusEngine.getUnhealthyReason();
+            }
+        }
+        
+        // Return 503 if cluster unhealthy, 200 otherwise
+        response.setStatus(isClusterHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
         
         StringBuilder json = new StringBuilder();
         json.append("{\n");
-        json.append("  \"status\": \"UP\",\n");
+        json.append("  \"status\": \"").append(isClusterHealthy ? "UP" : "UNHEALTHY").append("\",\n");
+        
+        // ADR 028: Include unhealthy reason if applicable
+        if (!isClusterHealthy && unhealthyReason != null) {
+            json.append("  \"unhealthyReason\": \"").append(unhealthyReason).append("\",\n");
+        }
+        
         json.append("  \"store\": \"").append(storeDirectory).append("\"");
         
         // Add BlobStore type for dashboard status checks
@@ -84,6 +105,9 @@ public class HealthHandler {
         
         // Add committedHead vs latestHead if Aeron engine is available
         if (context != null && context.aeronConsensusEngine != null) {
+            // ADR 028: Add cluster health status
+            json.append(",\n  \"clusterHealthy\": ").append(isClusterHealthy);
+            
             String committedHead = context.aeronConsensusEngine.getCommittedHead();
             String latestHead = context.aeronConsensusEngine.getLatestHead();
             int latestEpochSeen = context.aeronConsensusEngine.getLatestEpochSeen();

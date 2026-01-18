@@ -24,6 +24,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 
@@ -40,11 +41,11 @@ import static org.mockito.Mockito.*;
  * 
  * <p>Tests cover:
  * <ul>
- *   <li>Write proposal validation</li>
- *   <li>Delete proposal validation</li>
- *   <li>Signature verification</li>
- *   <li>Path authorization</li>
- *   <li>Error handling</li>
+ *   <li>ADR 028: Pre-flight health check (503 when unhealthy)</li>
+ *   <li>Wallet address validation</li>
+ *   <li>Write proposal handling</li>
+ *   <li>Delete proposal handling</li>
+ *   <li>Error responses</li>
  * </ul>
  * 
  * @see ConsensusApiHandler
@@ -59,6 +60,9 @@ public class ConsensusApiHandlerTest {
 
     @Mock
     private NodeStore mockNodeStore;
+
+    @Mock
+    private AeronConsensusEngine mockAeronEngine;
 
     @Mock
     private HttpServletRequest mockRequest;
@@ -78,7 +82,6 @@ public class ConsensusApiHandlerTest {
         when(mockResponse.getWriter()).thenReturn(new PrintWriter(responseWriter));
         
         // Create real ServerContext with mocked dependencies
-        // ServerContext has public fields, so we can't mock it - use real instance
         context = new ServerContext(
             mockFileStore,
             mockNodeStore,
@@ -90,207 +93,357 @@ public class ConsensusApiHandlerTest {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // WRITE PROPOSAL TESTS
+    // ADR 028: PRE-FLIGHT HEALTH CHECK TESTS
     // ═══════════════════════════════════════════════════════════════
 
     @Test
-    public void testWriteProposalMissingPath() throws Exception {
-        // Given: Request without path parameter
-        when(mockRequest.getParameter("path")).thenReturn(null);
-        when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef");
+    public void testProposeWriteReturns503WhenNoConsensusEngine() throws Exception {
+        // Given: No Aeron consensus engine configured
+        context.aeronConsensusEngine = null;
         
         // When: Write proposal handled
-        // Then: Should return 400 Bad Request
+        handler.handleProposeWrite(mockRequest, mockResponse);
         
-        // TODO: Implement when handler method is accessible
-        assertTrue("Test placeholder - implement with handler access", true);
+        // Then: Should return 503 Service Unavailable
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
+            contains("Aeron consensus engine not configured")
+        );
     }
 
     @Test
-    public void testWriteProposalMissingWallet() throws Exception {
-        // Given: Request without wallet parameter
-        when(mockRequest.getParameter("path")).thenReturn("/oak-chain/test");
+    public void testProposeWriteReturns503WhenClusterUnhealthy() throws Exception {
+        // Given: Aeron engine configured but cluster unhealthy
+        context.aeronConsensusEngine = mockAeronEngine;
+        when(mockAeronEngine.isClusterHealthy()).thenReturn(false);
+        when(mockAeronEngine.getUnhealthyReason()).thenReturn("session_closed_timeout");
+        
+        // When: Write proposal handled
+        handler.handleProposeWrite(mockRequest, mockResponse);
+        
+        // Then: Should return 503 Service Unavailable with reason
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
+            contains("session_closed_timeout")
+        );
+    }
+
+    @Test
+    public void testDeleteProposalReturns503WhenClusterUnhealthy() throws Exception {
+        // Given: Aeron engine configured but cluster unhealthy
+        context.aeronConsensusEngine = mockAeronEngine;
+        when(mockAeronEngine.isClusterHealthy()).thenReturn(false);
+        when(mockAeronEngine.getUnhealthyReason()).thenReturn("no_leader_elected");
+        
+        // When: Delete proposal handled
+        handler.handleDeleteProposal(mockRequest, mockResponse);
+        
+        // Then: Should return 503 Service Unavailable with reason
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
+            contains("no_leader_elected")
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // WALLET VALIDATION TESTS
+    // ═══════════════════════════════════════════════════════════════
+
+    @Test
+    public void testProposeWriteRejectsMissingWallet() throws Exception {
+        // Given: Healthy cluster but no wallet parameter
+        context.aeronConsensusEngine = mockAeronEngine;
+        when(mockAeronEngine.isClusterHealthy()).thenReturn(true);
+        when(mockRequest.getContentType()).thenReturn("application/x-www-form-urlencoded");
+        when(mockRequest.getParameter("walletAddress")).thenReturn(null);
         when(mockRequest.getParameter("wallet")).thenReturn(null);
         
         // When: Write proposal handled
-        // Then: Should return 400 Bad Request
+        handler.handleProposeWrite(mockRequest, mockResponse);
         
-        // TODO: Implement when handler method is accessible
-        assertTrue("Test placeholder - implement with handler access", true);
+        // Then: Should return 400 Bad Request
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_BAD_REQUEST),
+            contains("wallet")
+        );
     }
 
     @Test
-    public void testWriteProposalInvalidPath() throws Exception {
-        // Given: Request with path outside /oak-chain
-        when(mockRequest.getParameter("path")).thenReturn("/content/test");
-        when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef");
+    public void testProposeWriteRejectsInvalidWalletFormat() throws Exception {
+        // Given: Healthy cluster but invalid wallet format
+        context.aeronConsensusEngine = mockAeronEngine;
+        when(mockAeronEngine.isClusterHealthy()).thenReturn(true);
+        when(mockRequest.getContentType()).thenReturn("application/x-www-form-urlencoded");
+        when(mockRequest.getParameter("walletAddress")).thenReturn("not-a-wallet");
         
         // When: Write proposal handled
-        // Then: Should return 403 Forbidden
+        handler.handleProposeWrite(mockRequest, mockResponse);
         
-        // TODO: Implement when handler method is accessible
-        assertTrue("Test placeholder - implement with handler access", true);
+        // Then: Should return 400 Bad Request
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_BAD_REQUEST),
+            anyString()
+        );
     }
 
     @Test
-    public void testWriteProposalValidRequest() throws Exception {
-        // Given: Valid write proposal request
-        when(mockRequest.getParameter("path")).thenReturn("/oak-chain/0x1234/content");
-        when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef");
-        when(mockRequest.getParameter("signature")).thenReturn("0xvalidSignature");
-        when(mockRequest.getParameter("content")).thenReturn("{\"title\":\"Test\"}");
+    public void testProposeWriteRejectsShortWallet() throws Exception {
+        // Given: Healthy cluster but wallet too short
+        context.aeronConsensusEngine = mockAeronEngine;
+        when(mockAeronEngine.isClusterHealthy()).thenReturn(true);
+        when(mockRequest.getContentType()).thenReturn("application/x-www-form-urlencoded");
+        when(mockRequest.getParameter("walletAddress")).thenReturn("0x123");
         
         // When: Write proposal handled
-        // Then: Should accept and queue proposal
+        handler.handleProposeWrite(mockRequest, mockResponse);
         
-        // TODO: Implement when handler method is accessible
-        assertTrue("Test placeholder - implement with handler access", true);
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // DELETE PROPOSAL TESTS
-    // ═══════════════════════════════════════════════════════════════
-
-    @Test
-    public void testDeleteProposalOwnershipVerification() throws Exception {
-        // Given: Delete request for content owned by different wallet
-        when(mockRequest.getParameter("path")).thenReturn("/oak-chain/0xOTHER/content");
-        when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef");
-        
-        // When: Delete proposal handled
-        // Then: Should return 403 Forbidden
-        
-        // TODO: Implement when handler method is accessible
-        assertTrue("Test placeholder - implement with handler access", true);
-    }
-
-    @Test
-    public void testDeleteProposalValidOwner() throws Exception {
-        // Given: Delete request for content owned by requesting wallet
-        when(mockRequest.getParameter("path")).thenReturn("/oak-chain/0x1234/content");
-        when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef");
-        when(mockRequest.getParameter("signature")).thenReturn("0xvalidSignature");
-        
-        // When: Delete proposal handled
-        // Then: Should accept and queue proposal
-        
-        // TODO: Implement when handler method is accessible
-        assertTrue("Test placeholder - implement with handler access", true);
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // SIGNATURE VERIFICATION TESTS
-    // ═══════════════════════════════════════════════════════════════
-
-    @Test
-    public void testSignatureVerificationValid() throws Exception {
-        // Given: Request with valid ECDSA signature
-        // When: Signature verified
-        // Then: Should pass verification
-        
-        // TODO: Implement with real signature test vectors
-        assertTrue("Test placeholder - implement with test vectors", true);
-    }
-
-    @Test
-    public void testSignatureVerificationInvalid() throws Exception {
-        // Given: Request with invalid signature
-        // When: Signature verified
-        // Then: Should fail verification
-        
-        // TODO: Implement with invalid signature
-        assertTrue("Test placeholder - implement with invalid sig", true);
-    }
-
-    @Test
-    public void testSignatureVerificationMalformed() throws Exception {
-        // Given: Request with malformed signature
-        // When: Signature verified
         // Then: Should return 400 Bad Request
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_BAD_REQUEST),
+            anyString()
+        );
+    }
+
+    @Test
+    public void testProposeWriteAcceptsValidWallet() throws Exception {
+        // Given: Healthy cluster with valid wallet (but no signature - will fail later)
+        context.aeronConsensusEngine = mockAeronEngine;
+        when(mockAeronEngine.isClusterHealthy()).thenReturn(true);
+        when(mockRequest.getContentType()).thenReturn("application/x-www-form-urlencoded");
+        when(mockRequest.getParameter("walletAddress")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
+        when(mockRequest.getParameter("signature")).thenReturn(null); // Missing signature
+        when(mockRequest.getParameter("message")).thenReturn("test");
         
-        // TODO: Implement with malformed signature
-        assertTrue("Test placeholder - implement with malformed sig", true);
+        // When: Write proposal handled
+        handler.handleProposeWrite(mockRequest, mockResponse);
+        
+        // Then: Should NOT fail on wallet validation (may fail on signature)
+        // Verify we got past wallet validation - error should be about signature, not wallet
+        verify(mockResponse, never()).sendError(
+            eq(HttpServletResponse.SC_BAD_REQUEST),
+            contains("wallet")
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // PATH AUTHORIZATION TESTS
+    // DELETE PROPOSAL VALIDATION TESTS
     // ═══════════════════════════════════════════════════════════════
 
     @Test
-    public void testPathAuthorizationWalletMatch() throws Exception {
-        // Given: Path matches wallet address
-        // When: Authorization checked
-        // Then: Should allow write
+    public void testDeleteProposalRejectsMissingSignature() throws Exception {
+        // Given: Healthy cluster with valid wallet but no signature
+        context.aeronConsensusEngine = mockAeronEngine;
+        when(mockAeronEngine.isClusterHealthy()).thenReturn(true);
+        when(mockRequest.getParameter("walletAddress")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
+        when(mockRequest.getParameter("signature")).thenReturn(null);
+        when(mockRequest.getParameter("contentPath")).thenReturn("/oak-chain/test");
         
-        // TODO: Implement path authorization test
-        assertTrue("Test placeholder - implement path auth", true);
+        // When: Delete proposal handled
+        handler.handleDeleteProposal(mockRequest, mockResponse);
+        
+        // Then: Should return 400 Bad Request for missing signature
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_BAD_REQUEST),
+            contains("signature")
+        );
     }
 
     @Test
-    public void testPathAuthorizationWalletMismatch() throws Exception {
-        // Given: Path does not match wallet address
-        // When: Authorization checked
-        // Then: Should deny write
+    public void testDeleteProposalRejectsMissingContentPath() throws Exception {
+        // Given: Healthy cluster with valid wallet but no content path
+        context.aeronConsensusEngine = mockAeronEngine;
+        when(mockAeronEngine.isClusterHealthy()).thenReturn(true);
+        when(mockRequest.getParameter("walletAddress")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
+        when(mockRequest.getParameter("signature")).thenReturn("0xvalidsig");
+        when(mockRequest.getParameter("contentPath")).thenReturn(null);
         
-        // TODO: Implement path authorization test
-        assertTrue("Test placeholder - implement path auth", true);
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // APPLY REPLICATED WRITE TESTS
-    // ═══════════════════════════════════════════════════════════════
-
-    @Test
-    public void testApplyReplicatedWriteSuccess() throws Exception {
-        // Given: Valid replicated write data
-        // When: Applied to NodeStore
-        // Then: Content should be created
+        // When: Delete proposal handled
+        handler.handleDeleteProposal(mockRequest, mockResponse);
         
-        // TODO: Implement with mock NodeStore
-        assertTrue("Test placeholder - implement with mock NodeStore", true);
-    }
-
-    @Test
-    public void testApplyReplicatedWriteWithBinary() throws Exception {
-        // Given: Replicated write with IPFS CID
-        // When: Applied to NodeStore
-        // Then: Content should include ipfs:cid property
-        
-        // TODO: Implement with mock NodeStore
-        assertTrue("Test placeholder - implement with mock NodeStore", true);
-    }
-
-    @Test
-    public void testApplyReplicatedDeleteSuccess() throws Exception {
-        // Given: Valid replicated delete data
-        // When: Applied to NodeStore
-        // Then: Content should be removed
-        
-        // TODO: Implement with mock NodeStore
-        assertTrue("Test placeholder - implement with mock NodeStore", true);
+        // Then: Should return 400 Bad Request for missing path
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_BAD_REQUEST),
+            contains("contentPath")
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // ERROR HANDLING TESTS
+    // CONSENSUS STATUS ENDPOINT TESTS
     // ═══════════════════════════════════════════════════════════════
 
     @Test
-    public void testErrorResponseFormat() throws Exception {
-        // Given: An error condition
-        // When: Error response sent
-        // Then: Should be valid JSON with error field
+    public void testGetConsensusStatusReturnsJson() throws Exception {
+        // Given: Handler with context
         
-        // TODO: Implement error response test
-        assertTrue("Test placeholder - implement error test", true);
+        // When: Consensus status requested
+        handler.handleGetConsensusStatus(mockResponse);
+        
+        // Then: Should return JSON content type
+        verify(mockResponse).setContentType("application/json");
+        verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
+        
+        // And: Response should contain JSON
+        String response = responseWriter.toString();
+        assertTrue("Response should start with {", response.trim().startsWith("{"));
+        assertTrue("Response should end with }", response.trim().endsWith("}"));
     }
 
     @Test
-    public void testRateLimitExceeded() throws Exception {
-        // Given: Rate limit exceeded for wallet
-        // When: Request processed
-        // Then: Should return 429 Too Many Requests
+    public void testGetConsensusStatusIncludesConsensusType() throws Exception {
+        // Given: Handler with context (no Aeron engine)
+        context.aeronConsensusEngine = null;
         
-        // TODO: Implement rate limit test
-        assertTrue("Test placeholder - implement rate limit test", true);
+        // When: Consensus status requested
+        handler.handleGetConsensusStatus(mockResponse);
+        
+        // Then: Response should include consensusType field
+        String response = responseWriter.toString();
+        assertTrue("Response should include consensusType", response.contains("\"consensusType\""));
+        assertTrue("Response should show 'none' when no engine", response.contains("\"none\""));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PENDING COUNT ENDPOINT TESTS
+    // ═══════════════════════════════════════════════════════════════
+
+    @Test
+    public void testGetPendingCountReturns503WhenQueueNotAvailable() throws Exception {
+        // Given: Handler with no proposal queue manager
+        context.proposalQueueManager = null;
+        
+        // When: Pending count requested
+        handler.handleGetPendingCount(mockResponse);
+        
+        // Then: Should return 503 Service Unavailable
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
+            contains("queue")
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PROPOSAL STATUS ENDPOINT TESTS
+    // ═══════════════════════════════════════════════════════════════
+
+    @Test
+    public void testGetProposalStatusRejectsMissingId() throws Exception {
+        // Given: Request without proposal ID (null path)
+        when(mockRequest.getPathInfo()).thenReturn(null);
+        
+        // When: Proposal status requested
+        handler.handleGetProposalStatus(mockRequest, mockResponse);
+        
+        // Then: Should return error (500 for null path)
+        verify(mockResponse).sendError(eq(HttpServletResponse.SC_INTERNAL_SERVER_ERROR), anyString());
+    }
+
+    @Test
+    public void testGetProposalStatusReturns503WhenQueueNotAvailable() throws Exception {
+        // Given: Request with valid proposal ID but no queue manager
+        when(mockRequest.getRequestURI()).thenReturn("/v1/proposals/test-proposal-123/status");
+        context.proposalQueueManager = null;
+        
+        // When: Proposal status requested
+        handler.handleGetProposalStatus(mockRequest, mockResponse);
+        
+        // Then: Should return 503 Service Unavailable
+        verify(mockResponse).sendError(
+            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
+            anyString()
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // WALLET STATS ENDPOINT TESTS
+    // ═══════════════════════════════════════════════════════════════
+
+    @Test
+    public void testWalletStatsReturnsJson() throws Exception {
+        // Given: Request for all wallet stats
+        when(mockRequest.getParameter("wallet")).thenReturn(null);
+        
+        // When: Wallet stats requested
+        handler.handleWalletStats(mockRequest, mockResponse);
+        
+        // Then: Should return JSON content type
+        verify(mockResponse).setContentType("application/json");
+    }
+
+    @Test
+    public void testWalletStatsWithSpecificWallet() throws Exception {
+        // Given: Request for specific wallet stats
+        when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
+        
+        // When: Wallet stats requested
+        handler.handleWalletStats(mockRequest, mockResponse);
+        
+        // Then: Should return JSON content type
+        verify(mockResponse).setContentType("application/json");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // WALLET CONTENT ENDPOINT TESTS
+    // ═══════════════════════════════════════════════════════════════
+
+    @Test
+    public void testWalletContentRejectsMissingWallet() throws Exception {
+        // Given: Request without wallet parameter
+        when(mockRequest.getParameter("wallet")).thenReturn(null);
+        
+        // When: Wallet content requested
+        handler.handleWalletContent(mockRequest, mockResponse);
+        
+        // Then: Should return 400 Bad Request (uses setStatus, not sendError)
+        verify(mockResponse).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+    }
+
+    @Test
+    public void testWalletContentSetsJsonContentType() throws Exception {
+        // Given: Request with a wallet parameter (will fail on query but that's ok)
+        when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
+        
+        // When: Wallet content requested
+        handler.handleWalletContent(mockRequest, mockResponse);
+        
+        // Then: Should set JSON content type
+        verify(mockResponse).setContentType("application/json");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // GC COST ESTIMATE ENDPOINT TESTS
+    // ═══════════════════════════════════════════════════════════════
+
+    @Test
+    public void testGCCostEstimateReturns503WhenNotAvailable() throws Exception {
+        // Given: GC cost estimator not configured
+        context.gcCostEstimator = null;
+        
+        // When: GC cost estimate requested
+        handler.handleGCCostEstimate(mockRequest, mockResponse);
+        
+        // Then: Should return 503 Service Unavailable (uses setStatus, not sendError)
+        verify(mockResponse).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // API METRICS TRACKING TESTS
+    // ═══════════════════════════════════════════════════════════════
+
+    @Test
+    public void testRejectedRequestsCounterIncremented() throws Exception {
+        // Given: Initial rejected count
+        long initialCount = context.apiRejectedRequests.get();
+        
+        // And: Unhealthy cluster
+        context.aeronConsensusEngine = mockAeronEngine;
+        when(mockAeronEngine.isClusterHealthy()).thenReturn(false);
+        when(mockAeronEngine.getUnhealthyReason()).thenReturn("test_reason");
+        
+        // When: Write proposal handled
+        handler.handleProposeWrite(mockRequest, mockResponse);
+        
+        // Then: Rejected counter should be incremented
+        assertEquals("Rejected counter should increment", 
+            initialCount + 1, context.apiRejectedRequests.get());
     }
 }

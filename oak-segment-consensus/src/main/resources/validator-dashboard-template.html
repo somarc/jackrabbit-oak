@@ -279,6 +279,15 @@
         .stat-value.role-leader { color: var(--success); }
         .stat-value.role-follower { color: var(--accent-primary); }
         
+        /* ADR 028: Health indicator colors */
+        .stat-value.health-green { color: var(--success); }
+        .stat-value.health-yellow { color: var(--warning); }
+        .stat-value.health-red { color: var(--error); }
+        
+        .stat-item.health-item {
+            cursor: help;
+        }
+        
         /* Wallet address in stats bar */
         .stat-item.wallet-item {
             flex: 1;

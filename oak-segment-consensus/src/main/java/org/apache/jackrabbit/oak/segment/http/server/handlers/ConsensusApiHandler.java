@@ -151,6 +151,19 @@ public class ConsensusApiHandler {
             return;
         }
         
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // ADR 028: PRE-FLIGHT HEALTH CHECK
+        // Prevent silent proposal loss by rejecting requests when cluster unhealthy
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        if (!context.aeronConsensusEngine.isClusterHealthy()) {
+            String reason = context.aeronConsensusEngine.getUnhealthyReason();
+            log.warn("❌ Cluster unhealthy, rejecting proposal: {}", reason);
+            context.apiRejectedRequests.incrementAndGet();
+            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+                "Cluster unhealthy: " + reason + ". Please retry in a few seconds.");
+            return;
+        }
+        
         // ✈️ AERON MODE: All nodes (leader and followers) send writes through Aeron ingress
         // Aeron Cluster handles routing to leader and replication to all nodes via Raft
         // No proxy needed - Aeron handles it natively
@@ -793,6 +806,21 @@ public class ConsensusApiHandler {
      */
     public void handleDeleteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
+        
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // ADR 028: PRE-FLIGHT HEALTH CHECK
+        // Prevent silent proposal loss by rejecting requests when cluster unhealthy
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        if (context.aeronConsensusEngine == null || !context.aeronConsensusEngine.isClusterHealthy()) {
+            String reason = context.aeronConsensusEngine != null 
+                ? context.aeronConsensusEngine.getUnhealthyReason() 
+                : "consensus_engine_not_configured";
+            log.warn("❌ Cluster unhealthy, rejecting delete proposal: {}", reason);
+            context.apiRejectedRequests.incrementAndGet();
+            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+                "Cluster unhealthy: " + reason + ". Please retry in a few seconds.");
+            return;
+        }
         
         try {
             // Read parameters

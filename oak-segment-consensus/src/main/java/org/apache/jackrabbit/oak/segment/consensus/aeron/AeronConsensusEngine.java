@@ -2174,6 +2174,64 @@ public class AeronConsensusEngine implements ClusteredService {
         return currentRole == ValidatorRole.LEADER;
     }
     
+    /**
+     * Check if the cluster is healthy and can accept proposals.
+     * 
+     * <p>ADR 028: Pre-flight health check to prevent silent proposal loss.
+     * Returns true only if all critical components are operational.</p>
+     * 
+     * <p>Health criteria:</p>
+     * <ul>
+     *   <li>Cluster object initialized</li>
+     *   <li>Internal client session exists and is not closed</li>
+     *   <li>Leader is elected (role != CANDIDATE)</li>
+     * </ul>
+     * 
+     * @return true if cluster can accept proposals, false otherwise
+     */
+    public boolean isClusterHealthy() {
+        // Check 1: Cluster object exists
+        if (cluster == null) {
+            return false;
+        }
+        
+        // Check 2: Internal client exists and is not closed
+        if (internalClusterClient == null || internalClusterClient.isClosed()) {
+            return false;
+        }
+        
+        // Check 3: Leader is elected (CANDIDATE means election in progress)
+        Cluster.Role role = cluster.role();
+        if (role == Cluster.Role.CANDIDATE) {
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Get the reason why the cluster is unhealthy.
+     * 
+     * <p>ADR 028: Provides diagnostic information for 503 responses.</p>
+     * 
+     * @return Human-readable reason, or null if healthy
+     */
+    public String getUnhealthyReason() {
+        if (cluster == null) {
+            return "cluster_not_initialized";
+        }
+        if (internalClusterClient == null) {
+            return "no_client_session";
+        }
+        if (internalClusterClient.isClosed()) {
+            return "session_closed_timeout";
+        }
+        if (cluster.role() == Cluster.Role.CANDIDATE) {
+            return "leader_election_in_progress";
+        }
+        return null; // Healthy
+    }
+    
     // 🔄 ROLLING 2-EPOCH FINALITY WINDOW: Optimize HEAD updates with finality-aware batching
     // 
     // 🎯 ETHEREUM FINALITY MODEL:

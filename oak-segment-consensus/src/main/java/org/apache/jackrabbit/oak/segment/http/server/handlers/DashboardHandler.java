@@ -100,6 +100,45 @@ public class DashboardHandler {
         // Build compact stats bar HTML
         StringBuilder statsItems = new StringBuilder();
         
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // ADR 028: CLUSTER HEALTH INDICATOR (P1)
+        // Shows 🟢 Healthy, 🟡 Degraded, or 🔴 Unhealthy based on cluster state
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        String healthIcon = "🟢";
+        String healthLabel = "Healthy";
+        String healthClass = "health-green";
+        String healthTooltip = "Cluster is healthy and accepting proposals";
+        
+        if (context.aeronConsensusEngine != null) {
+            boolean isHealthy = context.aeronConsensusEngine.isClusterHealthy();
+            if (!isHealthy) {
+                String reason = context.aeronConsensusEngine.getUnhealthyReason();
+                if ("leader_election_in_progress".equals(reason)) {
+                    healthIcon = "🟡";
+                    healthLabel = "Election";
+                    healthClass = "health-yellow";
+                    healthTooltip = "Leader election in progress - proposals may be delayed";
+                } else {
+                    healthIcon = "🔴";
+                    healthLabel = "Unhealthy";
+                    healthClass = "health-red";
+                    healthTooltip = "Cluster unhealthy: " + reason + " - proposals will be rejected";
+                }
+            }
+        } else {
+            healthIcon = "🔴";
+            healthLabel = "No Engine";
+            healthClass = "health-red";
+            healthTooltip = "Consensus engine not initialized";
+        }
+        
+        statsItems.append("<div class='stat-item health-item' title='").append(healthTooltip).append("'>");
+        statsItems.append("<span class='stat-icon'>").append(healthIcon).append("</span>");
+        statsItems.append("<div class='stat-content'>");
+        statsItems.append("<span class='stat-label'>Health</span>");
+        statsItems.append("<span class='stat-value ").append(healthClass).append("'>").append(healthLabel).append("</span>");
+        statsItems.append("</div></div>");
+        
         if (clusterState != null) {
             // Role
             String role = clusterState.get("role").toString();
