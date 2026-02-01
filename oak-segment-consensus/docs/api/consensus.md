@@ -1,0 +1,201 @@
+# Consensus & Proposals API
+
+**Endpoints for write/delete proposals and consensus status**
+
+---
+
+## POST /v1/propose-write
+
+Propose a write transaction. Requires wallet signature and Ethereum payment verification.
+
+### Request
+
+**Content-Type**: `application/x-www-form-urlencoded` or `multipart/form-data`
+
+**Parameters**:
+- `walletAddress` (required) - Ethereum wallet address (0x...)
+- `signature` (required) - Signed message (walletAddress:timestamp:contentType:message)
+- `message` (required) - Content to write (JSON string or text)
+- `contentType` (optional) - Content type (default: "page")
+- `contentPath` (required) - Path where content will be stored
+- `ethereumTxHash` (required) - Ethereum transaction hash for payment
+- `paymentTier` (optional) - Payment tier: `STANDARD`, `EXPRESS`, `PRIORITY` (default: STANDARD)
+- `organization` (optional) - Organization name (ADR 037)
+- `ipfsCid` (optional) - IPFS CID for binary content (ADR 016)
+
+**Multipart Form Data** (for binary uploads):
+- `file` - Binary file (will be stored in IPFS)
+- Other parameters as form fields
+
+### Response
+
+**202 Accepted** (proposal queued)
+```json
+{
+  "proposalId": "uuid-123",
+  "type": "WRITE",
+  "state": "PENDING",
+  "contentPath": "/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page1",
+  "timestamp": 1733421234000,
+  "estimatedConfirmationTime": "6.4 minutes"
+}
+```
+
+**400 Bad Request** (validation error)
+```json
+{
+  "error": "Invalid wallet address format",
+  "code": "VALIDATION_ERROR"
+}
+```
+
+**503 Service Unavailable** (cluster unhealthy)
+```json
+{
+  "error": "Cluster unhealthy: No leader elected. Please retry in a few seconds.",
+  "code": "CLUSTER_UNHEALTHY"
+}
+```
+
+### Example
+
+```bash
+curl -X POST http://localhost:8090/v1/propose-write \
+  -d "walletAddress=0xdd870fa1b7c4700f2bd7f44238821c26f7392148" \
+  -d "signature=0x1a2b3c..." \
+  -d "message={\"title\":\"Hello World\"}" \
+  -d "contentPath=/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page1" \
+  -d "ethereumTxHash=0xabcd..." \
+  -d "paymentTier=EXPRESS"
+```
+
+---
+
+## POST /v1/propose-delete
+
+Propose a delete transaction. Requires wallet signature and path ownership verification.
+
+### Request
+
+**Parameters**:
+- `walletAddress` (required) - Ethereum wallet address
+- `signature` (required) - Signed message
+- `contentPath` (required) - Path to delete (must belong to wallet)
+- `ethereumTxHash` (required) - Ethereum transaction hash
+
+### Response
+
+**202 Accepted**
+```json
+{
+  "proposalId": "uuid-456",
+  "type": "DELETE",
+  "state": "PENDING",
+  "gcDebtIncurred": "0.10",
+  "totalDebt": "5.40",
+  "pendingDebt": "0.10",
+  "writesBlocked": false
+}
+```
+
+**403 Forbidden** (path ownership violation)
+```json
+{
+  "error": "Path ownership violation: Content at /oak-chain/... does not belong to wallet 0x...",
+  "code": "PATH_OWNERSHIP_VIOLATION"
+}
+```
+
+### Example
+
+```bash
+curl -X POST http://localhost:8090/v1/propose-delete \
+  -d "walletAddress=0xdd870fa1b7c4700f2bd7f44238821c26f7392148" \
+  -d "signature=0x1a2b3c..." \
+  -d "contentPath=/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page1" \
+  -d "ethereumTxHash=0xabcd..."
+```
+
+---
+
+## GET /v1/consensus/status
+
+Get current consensus status and cluster state.
+
+### Response
+
+```json
+{
+  "consensusMode": "aeron",
+  "role": "LEADER",
+  "clusterHealthy": true,
+  "leaderUrl": "http://localhost:8090",
+  "clusterSize": 3,
+  "connectedPeers": 2,
+  "currentTerm": 5,
+  "head": "abc123...",
+  "lastHeartbeat": 1733421234000
+}
+```
+
+### Example
+
+```bash
+curl http://localhost:8090/v1/consensus/status
+```
+
+---
+
+## GET /v1/proposals/{id}/status
+
+Get status of a specific proposal.
+
+### Response
+
+```json
+{
+  "proposalId": "uuid-123",
+  "type": "WRITE",
+  "state": "CONFIRMED",
+  "walletAddress": "0xdd870fa1b7c4700f2bd7f44238821c26f7392148",
+  "contentPath": "/oak-chain/.../content/page1",
+  "createdAt": 1733421234000,
+  "confirmedAt": 1733421298000,
+  "raftLogIndex": 12345
+}
+```
+
+**States**: `PENDING` → `VERIFIED` → `CONFIRMED` → `PROCESSED`
+
+### Example
+
+```bash
+curl http://localhost:8090/v1/proposals/uuid-123/status
+```
+
+---
+
+## GET /v1/proposals/pending/count
+
+Get count of pending proposals.
+
+### Response
+
+```json
+{
+  "pendingCount": 5,
+  "byType": {
+    "WRITE": 3,
+    "DELETE": 2
+  },
+  "byTier": {
+    "PRIORITY": 1,
+    "EXPRESS": 2,
+    "STANDARD": 2
+  }
+}
+```
+
+---
+
+*See [DELETE-QUICK-REFERENCE.md](../../DELETE-QUICK-REFERENCE.md) for detailed delete proposal flow.*

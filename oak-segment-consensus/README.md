@@ -1,28 +1,36 @@
 # Oak Segment Consensus
 
-**Status**: 🧪 POC / Active Development  
+**Status**: ✅ **POC Complete (Mock Mode)** / 🚧 **Sepolia Phase Pending**  
 **Purpose**: Distributed consensus layer for Oak Segment Store - Blockchain AEM proof of concept  
-**Garage Week Deadline**: December 15, 2025
+**Garage Week Deadline**: December 15, 2025 (✅ Completed)
+
+**Current Phase**: POC-complete in mock mode. Sepolia testnet deployment and production hardening pending.
 
 ## 📖 Quick Links
 
+### Module Documentation (This Repository)
 - **[CONFIGURATION.md](CONFIGURATION.md)** - Complete environment variables & system properties reference
+- **[QUICK-START.md](QUICK-START.md)** - Quick start guide for developers
 - **[IPFS-DATASTORE.md](IPFS-DATASTORE.md)** - IPFS binary storage guide (ADR 015)
-- **[DELETE-PROPOSAL-AND-GC-DEEP-DIVE.md](DELETE-PROPOSAL-AND-GC-DEEP-DIVE.md)** - Delete proposal flow & GC mechanisms (technical deep dive)
 - **[DELETE-QUICK-REFERENCE.md](DELETE-QUICK-REFERENCE.md)** - Quick reference for delete/GC development
-- **[docs/delete-flow-diagram.md](docs/delete-flow-diagram.md)** - Visual flow diagrams for delete proposals
-- **[docs/GAP-ANALYSIS-VS-OAK-REPOSITORY-SERVICE.md](docs/GAP-ANALYSIS-VS-OAK-REPOSITORY-SERVICE.md)** - Feature gaps vs Adobe's production OakRS
-- **[docs/IPFS-DATASTORE-ROBUSTNESS-ANALYSIS.md](docs/IPFS-DATASTORE-ROBUSTNESS-ANALYSIS.md)** - IPFS implementation vs Azure Blob Storage comparison
+
+### Comprehensive Documentation
+
+For architecture deep dives, gap analysis, and detailed implementation docs, see the **Blockchain-AEM** documentation repository:
+- Architecture & implementation details
+- Gap analysis vs Oak Repository Service
+- Package structure maps
+- Technical deep dives
 
 ## Overview
 
 `oak-segment-consensus` implements a **distributed consensus layer** for Apache Jackrabbit Oak Segment Store, enabling blockchain-backed AEM content repositories with:
 
 - ✅ **Deterministic state machine** (guaranteed consistency via Aeron Cluster)
-- ✅ **Aeron Cluster-based Raft consensus** (proven, production-grade)
-- ✅ **Ethereum wallet-based access control** (path ownership enforcement)
-- ✅ **HTTP segment transfer** (multi-peer read-only mounts)
-- ✅ **Distributed validator network** (all nodes commit identically)
+- ✅ **Aeron Cluster-based Raft consensus** (Aeron is production-grade; our integration is POC-complete)
+- ✅ **Ethereum wallet-based access control** (path ownership enforcement - mock mode: simulated, Sepolia/Mainnet: cryptographic)
+- ✅ **HTTP segment transfer** (read-only mounts - write storage is local TAR files only)
+- ✅ **Distributed validator network** (all nodes commit writes identically via Aeron Raft - transient differences during genesis/bootstrap)
 - ✅ **Dynamic backpressure** (flow control for write throughput)
 - ✅ **Embedded HTTP server** (dashboard, APIs, segment serving)
 - ✅ **LLM Chat Interface** (optional AI assistant via `oak-segment-agentic`)
@@ -33,15 +41,18 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
 
 ### Consensus & State Machine
 - **Deterministic State Machine**: All nodes commit writes identically via Aeron's guaranteed message ordering
-- **Aeron Cluster Raft**: Battle-tested consensus algorithm with election safety guarantees
+  - ⚠️ **Genesis Bootstrap**: Followers may have transient extra journal entries until first snapshot (harmless, cleaned up automatically)
+- **Aeron Cluster Raft**: Battle-tested consensus algorithm (Aeron is production-grade; our integration is POC-complete)
 - **Automatic Leader Election**: Aeron Cluster handles leader election and failover
-- **Guaranteed Consistency**: Same message order = same processing = same SegmentStore state
+- **Guaranteed Consistency**: Same message order = same processing = same SegmentStore state (after genesis bootstrap)
 - **Quorum Requirements**: Majority-based consensus (2 of 3, 3 of 5, etc.)
-- **No Manual Sync**: HEAD consistency is automatic, not manually broadcast
+- **No Manual Sync**: HEAD consistency for writes is automatic via Aeron Raft (HTTP segment transfer uses polling for read-only mounts)
 - **Backpressure Management**: Dynamic flow control prevents cluster overload
 
 ### Ethereum Integration
 - **Wallet-Based Writes**: All writes require Ethereum wallet signature
+  - ⚠️ **Mock Mode**: Payment verification is simulated (no blockchain)
+  - ✅ **Sepolia/Mainnet Mode**: Cryptographic verification via smart contract
 - **Path Sharding**: Content stored at `/oak-chain/content/{L1}/{L2}/{L3}/0x{wallet}/`
 - **Client Registration**: Writes only allowed from registered clients with matching wallet
 - **Epoch Tracking**: Ethereum Beacon Chain epoch integration (via `EpochListener`)
@@ -69,7 +80,9 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
   - Reverse proxy authentication
 
 ### Segment Replication
-- **HTTP Segment Transfer**: Segments replicated via HTTP GET requests
+- **HTTP Segment Transfer**: Segments replicated via HTTP GET requests (read-only mounts)
+  - ⚠️ **Write Storage**: Local TAR files only (cloud storage backend pending)
+  - ✅ **Read Transfer**: HTTP segment transfer works for read-only mounts
 - **CAS Updates**: Conditional requests with HEAD checks for efficiency
 - **Multi-Peer Mounts**: Multiple Sling authors can mount read-only global store
 
@@ -95,11 +108,11 @@ Write Flow (Deterministic):
 ```
 
 **Benefits**:
-- ✅ Guaranteed consistency (no eventual consistency window)
-- ✅ No manual HEAD broadcasting needed
-- ✅ Simpler architecture (Aeron handles everything)
-- ✅ Better performance (no HTTP sync overhead)
-- ✅ Production-ready pattern
+- ✅ Guaranteed consistency (no eventual consistency window after genesis bootstrap)
+- ✅ No manual HEAD broadcasting needed (Aeron Raft handles replication)
+- ✅ Simpler architecture (Aeron handles consensus, we focus on Ethereum integration)
+- ✅ Better performance (no HTTP sync overhead for writes)
+- ✅ Production-ready pattern (Aeron Cluster is production-grade; our integration is POC-complete)
 
 ### Distributed Validator Network
 
@@ -277,39 +290,57 @@ oak-segment-consensus/
 
 ## Documentation
 
-For comprehensive documentation, see the **Blockchain-AEM** documentation repository:
+### Developer Documentation
 
-- **[Architecture Docs](../Blockchain-AEM/02-architecture/)** - Core architecture and design
-- **[Current Spec](../Blockchain-AEM/01-current-spec/)** - Implementation status and features
-- **[Development Guides](../Blockchain-AEM/03-development/)** - Build process, setup, contributing
+**Essential Guides**:
+- **[CONFIGURATION.md](CONFIGURATION.md)** - Environment variables and system properties
+- **[QUICK-START.md](QUICK-START.md)** - Quick start guide
+- **[IPFS-DATASTORE.md](IPFS-DATASTORE.md)** - IPFS binary storage setup
+- **[DELETE-QUICK-REFERENCE.md](DELETE-QUICK-REFERENCE.md)** - Delete/GC quick reference
 
-Key documents:
-- `FEATURES-AND-GAPS.md` - Current implementation status
-- `AERON-CLUSTER-STRATEGY.md` - Consensus architecture
-- `LLM-CHAT-DESIGN.md` - Chat interface design
+**Comprehensive Developer Docs** (`docs/`):
+- **[API Reference](docs/api/README.md)** - Complete HTTP API documentation
+- **[Architecture Overview](docs/architecture/README.md)** - How the system works
+- **[Development Guide](docs/development/README.md)** - How to extend the module
+- **[Testing Guide](docs/testing/README.md)** - How to test
+- **[Troubleshooting](docs/troubleshooting/README.md)** - Common issues and solutions
+- **[Integration Guide](docs/integration/README.md)** - Sling, Docker, Kubernetes integration
+
+### Project Documentation
+
+For architecture deep dives, gap analysis, package maps, and technical specifications, see the **Blockchain-AEM** documentation repository.
 
 ## Status
 
-### ✅ Implemented
-- Deterministic state machine (guaranteed consistency)
-- Aeron Cluster Raft consensus
+### ✅ Implemented (POC-Complete)
+- Deterministic state machine (guaranteed consistency after genesis bootstrap)
+- Aeron Cluster Raft consensus (mock mode)
 - Dynamic backpressure management
-- HTTP segment transfer
+- HTTP segment transfer (read-only mounts)
 - Dashboard UI
-- Wallet-based write enforcement
+- Wallet-based write enforcement (mock mode: simulated, Sepolia: real)
 - Client registration
 - Health monitoring
 - Prometheus metrics
 
-### 🚧 In Progress
-- Comprehensive test suite
+### 🚧 In Progress / Pending
+- **Sepolia Phase**: Smart contract integration, real payment verification (6 TODOs)
+- **Production Hardening**: Monitoring, resilience, security (6 TODOs)
+- Comprehensive test suite (current: ~50% unit, ~10% integration)
 - Production deployment automation
+
+### ⚠️ Known Limitations
+- **Transaction Model**: Direct Oak commits via Aeron (no explicit START/COMMIT/ABORT boundaries)
+- **Cloud Storage**: Segments stored in local TAR files (no Azure/S3/GCS backend)
+- **Multi-Cluster**: Architecture designed for multi-cluster sharding, but implementation is single-cluster only
+- **Genesis Bootstrap**: Transient extra journal entries on followers (cleaned up by first snapshot)
 
 ### 🔮 Future Enhancements
 - Dynamic validator membership
 - Revision cleanup governance
-- Ethereum smart contract integration
-- Multi-region deployment
+- Ethereum smart contract integration (Sepolia → Mainnet)
+- Multi-cluster deployment (sharding implementation)
+- Cloud-native segment storage (Azure/S3/GCS)
 
 ## License
 

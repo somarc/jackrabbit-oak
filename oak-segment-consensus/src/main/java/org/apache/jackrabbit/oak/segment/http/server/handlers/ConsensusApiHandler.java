@@ -607,7 +607,8 @@ public class ConsensusApiHandler {
             }
             
             // Build wallet-scoped content path (with optional organization - ADR 037)
-            String shardId = WalletPathUtil.getShardId(normalizedWallet);
+            String[] shardLevels = WalletPathUtil.getShardLevels(normalizedWallet);
+            String shardId = String.join("-", shardLevels);
             String contentRoot = WalletPathUtil.getContentPath(normalizedWallet, organization);
             log.debug("🪣 Using wallet shard: {} (org: {}, contentRoot: {})", shardId, 
                 organization != null ? organization : "none", contentRoot);
@@ -1207,157 +1208,12 @@ public class ConsensusApiHandler {
         deleteApplicationService.applyDelete(walletAddress, path, signature);
     }
     
-    /**
-     * ✈️ AERON CLUSTER SOURCE OF TRUTH: Discover leader by querying peers' /v1/aeron/cluster-state.
-     * 
-     * This method queries peers' Aeron Cluster state API directly, which reflects Aeron's
-     * internal Raft consensus state. This is the authoritative source for leader information.
-     * 
-     * @return Leader URL if found, null otherwise
-     */
-    private String discoverLeaderFromPeerClusterState() {
-        if (context.aeronConsensusEngine == null) {
-            return null;
-        }
-        
-        // Get all peer URLs (including self)
-        java.util.List<String> allUrls = new java.util.ArrayList<>();
-        allUrls.add(context.selfUrl);
-        allUrls.addAll(context.aeronConsensusEngine.getAllFollowers());
-        
-        log.info("🔍 Querying {} peers' Aeron Cluster state to find leader", allUrls.size());
-        
-        for (String url : allUrls) {
-            try {
-                // Resolve hostname to IP for reliable networking
-                String queryUrl = resolveUrlToIP(url);
-                log.debug("   Querying: {}", queryUrl + "/v1/aeron/cluster-state");
-                java.net.URL apiUrl = new java.net.URL(queryUrl + "/v1/aeron/cluster-state");
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
-                conn.setRequestMethod("GET");
-                conn.setConnectTimeout(2000);
-                conn.setReadTimeout(3000);
-                
-                int responseCode = conn.getResponseCode();
-                log.debug("   Response code from {}: {}", url, responseCode);
-                if (responseCode == 200) {
-                    java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(conn.getInputStream())
-                    );
-                    String response = reader.lines().collect(java.util.stream.Collectors.joining());
-                    reader.close();
-                    
-                    // ✈️ AERON CLUSTER SOURCE OF TRUTH: Parse Aeron Cluster state JSON
-                    // Priority 1: Check top-level "isLeader":true (this node is the leader)
-                    if (response.contains("\"isLeader\":true")) {
-                        log.info("✅ Found leader (top-level isLeader:true): {}", url);
-                        return url;
-                    }
-                    
-                    // Priority 2: Check top-level "role":"LEADER"
-                    if (response.contains("\"role\":\"LEADER\"")) {
-                        log.info("✅ Found leader (top-level role:LEADER): {}", url);
-                        return url;
-                    }
-                    
-                    // Priority 3: Parse members array to find leader
-                    // Look for member with "role":"LEADER"
-                    int leaderRoleIndex = response.indexOf("\"role\":\"LEADER\"");
-                    if (leaderRoleIndex != -1) {
-                        // Find the URL field in the same member object (search backwards from role)
-                        int urlStart = response.lastIndexOf("\"url\":\"", leaderRoleIndex);
-                        if (urlStart != -1) {
-                            urlStart += 6; // Skip past "url":"
-                            int urlEnd = response.indexOf("\"", urlStart);
-                            if (urlEnd != -1) {
-                                String leaderUrl = response.substring(urlStart, urlEnd);
-                                log.info("✅ Found leader in members array: {}", leaderUrl);
-                                return leaderUrl;
-                            }
-                        }
-                    }
-                } else {
-                    log.debug("   Non-200 response from {}: {}", url, responseCode);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to query {} for cluster state: {}", url, e.getMessage());
-            }
-        }
-        
-        log.warn("⚠️  Could not discover leader from any peer");
-        
-        return null;
-    }
-    
-    /**
-     * Resolve URL hostname to IP address for reliable networking.
-     */
-    private String resolveUrlToIP(String url) {
-        try {
-            java.net.URL urlObj = new java.net.URL(url);
-            String host = urlObj.getHost();
-            int port = urlObj.getPort() != -1 ? urlObj.getPort() : urlObj.getDefaultPort();
-            String protocol = urlObj.getProtocol();
-            
-            // Try to resolve hostname to IP
-            java.net.InetAddress addr = java.net.InetAddress.getByName(host);
-            String ip = addr.getHostAddress();
-            
-            return protocol + "://" + ip + ":" + port + urlObj.getPath();
-        } catch (Exception e) {
-            log.debug("Failed to resolve {} to IP, using original: {}", url, e.getMessage());
-            return url;
-        }
-    }
-    
-    /**
-     * Get the next validator in the rotation order for failover.
-     * This is used when the current leader appears unreachable.
-     * 
-     * @return URL of the next validator that might be leader
-     */
-    private String getNextValidatorInRotation() {
-        if (context.aeronConsensusEngine == null) {
-            return context.selfUrl; // Fallback
-        }
-        
-        // Get all validators from Aeron cluster state
-        java.util.Map<String, Object> clusterState = context.aeronConsensusEngine.getNativeClusterState();
-        if (clusterState == null) {
-            return context.selfUrl; // Fallback
-        }
-        
-        @SuppressWarnings("unchecked")
-        java.util.List<java.util.Map<String, Object>> members = 
-            (java.util.List<java.util.Map<String, Object>>) clusterState.get("members");
-        
-        if (members == null || members.isEmpty()) {
-            return context.selfUrl; // Fallback
-        }
-        
-        // Get all validator URLs in deterministic order
-        java.util.List<String> allValidators = new java.util.ArrayList<>();
-        for (java.util.Map<String, Object> member : members) {
-            String url = (String) member.get("url");
-            if (url != null) {
-                allValidators.add(url);
-            }
-        }
-        java.util.Collections.sort(allValidators);
-        
-        // Find current leader in the list
-        String currentLeader = context.aeronConsensusEngine.getCurrentLeader();
-        int leaderIndex = allValidators.indexOf(currentLeader);
-        
-        if (leaderIndex == -1 || allValidators.isEmpty()) {
-            // Leader not found or no validators, return first validator
-            return allValidators.isEmpty() ? context.selfUrl : allValidators.get(0);
-        }
-        
-        // Return next validator in rotation (wrap around if needed)
-        int nextIndex = (leaderIndex + 1) % allValidators.size();
-        return allValidators.get(nextIndex);
-    }
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // DEAD CODE REMOVED - January 2026 (tech debt cleanup)
+    // - discoverLeaderFromPeerClusterState() - Use LeaderDiscoveryService instead
+    // - resolveUrlToIP() - Only used by discoverLeaderFromPeerClusterState
+    // - getNextValidatorInRotation() - Never called
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
     /**
      * Handle GET /v1/gc/estimate - GC cost estimation endpoint
@@ -1702,111 +1558,8 @@ public class ConsensusApiHandler {
         return json.toString();
     }
     
-    /**
-     * Build the elaborate genesis structure with all metadata, economics, innovations, etc.
-     * This is called on ALL nodes when they receive the genesis write through Aeron,
-     * ensuring perfect consistency.
-     * 
-     * @param genesisNode The genesis node to populate with child nodes
-     * @param message The genesis message (contains genesisValidator URL)
-     */
-    private void buildGenesisStructure(org.apache.jackrabbit.oak.spi.state.NodeBuilder genesisNode, String message) {
-        try {
-            // Extract selfUrl from message if available
-            String selfUrl = "http://localhost:8090"; // Default
-            if (message != null && message.contains("genesisValidator")) {
-                try {
-                    // Simple JSON parsing to extract genesisValidator
-                    int start = message.indexOf("genesisValidator\":\"") + 19;
-                    int end = message.indexOf("\"", start);
-                    if (start > 18 && end > start) {
-                        selfUrl = message.substring(start, end);
-                    }
-                } catch (Exception e) {
-                    log.debug("Could not parse genesisValidator from message, using default");
-                }
-            }
-            
-            // ═══════════════════════════════════════════════════════════════════
-            // ECONOMIC MODEL
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder economics = genesisNode.child("economics");
-            economics.setProperty("jcr:primaryType", "nt:unstructured");
-            economics.setProperty("description", "Multi-tier transaction pricing model");
-            
-            // Priority Tier
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder priority = economics.child("priority-tier");
-            priority.setProperty("jcr:primaryType", "nt:unstructured");
-            priority.setProperty("price", "0.01 ETH");
-            priority.setProperty("finality", "~30 seconds");
-            priority.setProperty("delay", "0 epochs");
-            priority.setProperty("use-case", "Emergency updates, time-sensitive content");
-            priority.setProperty("fragmentation-cost", "High - individual commits");
-            
-            // Express Tier
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder express = economics.child("express-tier");
-            express.setProperty("jcr:primaryType", "nt:unstructured");
-            express.setProperty("price", "0.002 ETH");
-            express.setProperty("finality", "~6.4 minutes");
-            express.setProperty("delay", "1 epoch");
-            express.setProperty("use-case", "Regular updates, user-facing content");
-            express.setProperty("fragmentation-cost", "Medium - small batching window");
-            
-            // Standard Tier
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder standard = economics.child("standard-tier");
-            standard.setProperty("jcr:primaryType", "nt:unstructured");
-            standard.setProperty("price", "0.001 ETH");
-            standard.setProperty("finality", "~12.8 minutes");
-            standard.setProperty("delay", "2 epochs");
-            standard.setProperty("use-case", "Bulk content, scheduled updates, archival");
-            standard.setProperty("fragmentation-cost", "Low - maximum batching by wallet");
-            
-            // ═══════════════════════════════════════════════════════════════════
-            // BITCOIN-TIGHT PRINCIPLES
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder bitcoinTight = genesisNode.child("bitcoin-tight-principles");
-            bitcoinTight.setProperty("jcr:primaryType", "nt:unstructured");
-            bitcoinTight.setProperty("philosophy", "Fail Loud, Fail Fast, Never Silently Corrupt");
-            bitcoinTight.setProperty("principle-1", "Singletons: One BeaconChainClient, one truth");
-            bitcoinTight.setProperty("principle-2", "Fail Loud: System.exit(1) on unrecoverable errors");
-            bitcoinTight.setProperty("principle-3", "Immutability: final fields, immutable state");
-            bitcoinTight.setProperty("principle-4", "Defensive Validation: Epochs never go backwards");
-            bitcoinTight.setProperty("principle-5", "Health Monitoring: /health endpoint + metrics");
-            bitcoinTight.setProperty("principle-6", "No Silent Failures: UncaughtExceptionHandler crashes JVM");
-            bitcoinTight.setProperty("inspiration", "Bitcoin Core, Apache Kafka, Ethereum Geth");
-            
-            // ═══════════════════════════════════════════════════════════════════
-            // NETWORK
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder network = genesisNode.child("network");
-            network.setProperty("jcr:primaryType", "nt:unstructured");
-            network.setProperty("genesisValidator", selfUrl);
-            network.setProperty("transport", "Aeron UDP multicast + unicast");
-            network.setProperty("clusterFormation", "Automatic via Raft election");
-            network.setProperty("partition-tolerance", "Majority quorum required for writes");
-            
-            // ═══════════════════════════════════════════════════════════════════
-            // INNOVATION SUMMARY
-            // ═══════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder innovations = genesisNode.child("innovations");
-            innovations.setProperty("jcr:primaryType", "nt:unstructured");
-            innovations.setProperty("innovation-1", "First blockchain-backed AEM content repository");
-            innovations.setProperty("innovation-2", "Ethereum epochs as external time oracle for finality");
-            innovations.setProperty("innovation-3", "Wallet-scoped path architecture for segment isolation");
-            innovations.setProperty("innovation-4", "Economic model that incentivizes storage efficiency");
-            innovations.setProperty("innovation-5", "Bitcoin-tight reliability in Java enterprise stack");
-            innovations.setProperty("innovation-6", "Global read-only content via HTTP segment transfer");
-            innovations.setProperty("innovation-7", "Multi-tier transaction pricing with cryptographic payment");
-            innovations.setProperty("demo-date", "Garage Week - December 15, 2025");
-            innovations.setProperty("team", "somarc + Cursor (Auto mode + Composer-1) + Grok 4.1 as outside counsel — distributed intelligence building distributed systems");
-            
-            log.info("✅ Genesis structure built successfully with {} child nodes", 4);
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to build genesis structure", e);
-            // Don't throw - genesis properties are still valid, just missing elaborate structure
-        }
-    }
+    // buildGenesisStructure() removed - January 2026 (tech debt cleanup)
+    // Genesis structure is now built in GlobalStoreServer.initializeGenesisContent()
     
     /**
      * Estimate content size in megabytes for a given path.

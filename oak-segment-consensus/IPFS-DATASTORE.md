@@ -1,7 +1,7 @@
 # IPFS DataStore Configuration for Oak Segment Consensus
 
 **Status**: POC / Garage Week Demo  
-**ADR**: See [ADR 015 - IPFS DataStore for Binary Storage](../../Blockchain-AEM/adr/015-ipfs-datastore-binary-storage.md)
+**ADR**: See [ADR 015 - IPFS DataStore for Binary Storage](../Blockchain-AEM/adr/015-ipfs-datastore-binary-storage.md)
 
 ## Overview
 

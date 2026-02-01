@@ -304,11 +304,11 @@ public void executeWalletGC(String walletAddress) {
 
 ## 📚 Related Documentation
 
-- [DELETE-PROPOSAL-AND-GC-DEEP-DIVE.md](DELETE-PROPOSAL-AND-GC-DEEP-DIVE.md) - Complete technical deep dive
-- [docs/delete-flow-diagram.md](docs/delete-flow-diagram.md) - Visual flow diagrams
-- [ADR 017 - GC Account Tax Model](../../Blockchain-AEM/adr/017-gc-account-tax-model.md)
-- [ADR 018 - GC Proposal Complexity Analysis](../../Blockchain-AEM/adr/018-gc-proposal-formal-complexity.md)
-- [AERON-CLUSTER-STRATEGY.md](../../Blockchain-AEM/02-architecture/AERON-CLUSTER-STRATEGY.md)
+### Comprehensive Documentation (Blockchain-AEM Repository)
+- Delete Proposal & GC Deep Dive - Complete technical deep dive
+- Delete Flow Diagrams - Visual flow diagrams
+- [ADR 017 - GC Account Tax Model](../Blockchain-AEM/adr/017-gc-account-tax-model.md)
+- [ADR 018 - GC Proposal Complexity Analysis](../Blockchain-AEM/adr/018-gc-proposal-formal-complexity.md)
 
 ## 🛠️ Development Workflow
 

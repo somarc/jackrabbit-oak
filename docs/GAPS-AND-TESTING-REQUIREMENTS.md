@@ -53,10 +53,12 @@ rg -c "TEST_STUB" oak-segment-consensus/
 
 | Module | Implementation | Unit Tests | Integration Tests | Production Ready |
 |--------|---------------|------------|-------------------|------------------|
-| **oak-segment-consensus** | 🟢 90% | 🟡 ~50% | 🔴 ~10% | ❌ No |
+| **oak-segment-consensus** | 🟢 POC-Complete (Mock Mode) | 🟡 ~50% | 🔴 ~10% | ❌ No |
 | **oak-segment-http** | 🟢 95% | 🟡 ~40% | 🟡 ~20% | ❌ No |
 | **oak-blob-cloud-ipfs** | 🟢 85% | 🟡 ~30% | 🔴 0% | ❌ No |
 | **oak-auth-web3** | 🟢 95% | 🟢 ~60% | 🔴 0% | ❌ No |
+
+**Note**: "POC-Complete" means core functionality works in mock mode. Sepolia phase (6 TODOs) and production hardening (6 TODOs) are pending.
 
 ### Implementation Gaps (Remaining)
 
