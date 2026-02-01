@@ -264,7 +264,7 @@ public WriteResult proposeWrite(String contentType, String message) {
 - **Full-text index**: Expects searchable content in consistent fields
 
 **Problem**: If content is "wild west slop" with inconsistent structure:
-- ❌ Queries fail or are slow (no index hits)
+- ❌ **Queries WILL fail** - Oak query engine aborts with read limits (no index hits = full traversal = limit exceeded)
 - ❌ Full-text search doesn't work (no consistent fields)
 - ❌ Aggregations break (missing properties)
 - ❌ Cross-wallet queries impossible (different structures)
@@ -274,12 +274,16 @@ public WriteResult proposeWrite(String contentType, String message) {
 -- This works if all content has 'contentType' property
 SELECT * FROM [nt:unstructured] WHERE [contentType] = 'page'
 
--- This fails if some content uses 'type', others use 'contentType', others have neither
+-- This FAILS if some content uses 'type', others use 'contentType', others have neither
 SELECT * FROM [nt:unstructured] WHERE [contentType] = 'page'
--- Result: Only finds content with consistent structure, misses everything else
+-- Result: Oak query engine aborts with read limit exceeded (no index hits = full traversal = limit exceeded)
 ```
 
+**Critical**: Oak Lucene indexing is a niche topic. Without consistent property names, indexes can't be built effectively, and queries abort rather than returning partial results.
+
 **The constraint**: Indexes need **some** consistency. Not consensus-wide (different brands need different structures), but **namespace-wide** (each wallet/brand maintains consistency within their namespace).
+
+**Important note**: Indexing is an **upstream concern** (not handled at consensus layer). An Oak index layer may be added in time per need, but for now, namespace-level style guides ensure queries work. Oak queries **WILL fail** (abort with read limits) if indexes can't be used due to inconsistent structure.
 
 **Current indexes** (`oak-chain-indexes-repoinit.txt`):
 - Wallet index: `wallet`, `contentType`, `timestamp` properties
@@ -443,6 +447,7 @@ if (!validator.validate(content, contentType)) {
 - **Add namespace-level style guides** (enforced by brand maintainers)
 - **Client-side validation** (SDK/connector validates against style guide)
 - **Optional validator-side validation** (for stronger enforcement)
+- **Indexing is upstream** - An Oak index layer may be added in time per need, but style guides ensure queries work now
 
 ---
 
@@ -454,5 +459,8 @@ if (!validator.validate(content, contentType)) {
 4. ⚠️ **Implement client-side validation** (SDK validates before sending)
 5. ⚠️ **Optional: Validator-side validation** (configurable per wallet)
 6. ⚠️ **Document indexing requirements** (what properties indexes expect)
+7. ⚠️ **Consider Oak index layer** (upstream concern, may be added in time per need)
 
-**Status**: Analysis updated. Namespace-level style guides required for indexing.
+**Status**: Analysis updated. Namespace-level style guides required for indexing. Indexing is upstream - Oak index layer may be added in time per need, but style guides ensure queries work now.
+
+**Note**: Access to Oak core maintainers available for accurate indexing guidance as needed.
