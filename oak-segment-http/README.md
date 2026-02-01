@@ -1,18 +1,29 @@
 # Oak Segment HTTP
 
 **Status**: Production-Ready (POC)
-**Purpose**: HTTP-based remote segment persistence for Blockchain AEM clients
+**Purpose**: HTTP-based remote segment persistence for validator cross-cluster operations
 **Part of**: Blockchain AEM POC
+**Package**: `org.apache.jackrabbit.oak.segment.http`
 
 ## Overview
 
-`oak-segment-http` provides an HTTP-based implementation of Oak's `SegmentNodeStorePersistence` SPI, enabling Sling authors to mount a read-only view of the blockchain validator's global content store via HTTP segment transfer.
+`oak-segment-http` provides an HTTP-based implementation of Oak's `SegmentNodeStorePersistence` SPI, enabling **validators** to mount read-only views of other clusters' content stores via HTTP segment transfer for cross-cluster reads and shard routing.
 
 **Key Characteristics:**
 - Uses **only public Oak SPIs** (no internal package dependencies)
-- Designed for **read-only composite mounts** in Sling authors
-- Includes **wallet-based write proposal services** for authenticated writes
-- Supports **lazy mounting** for resilient startup when validators are unavailable
+- Designed for **cross-cluster reads** in validator infrastructure
+- Used by `oak-segment-consensus` for **shard routing** and multi-cluster operations
+- Supports **lazy mounting** for resilient startup when remote clusters are unavailable
+
+## Important: AEM Customers Use `oak-chain-connector`
+
+**⚠️ For AEM Integration**: AEM customers should use **[`oak-chain-connector`](../../oak-chain-connector/README.md)** instead of this module.
+
+**Why Two Modules?**
+- **`oak-segment-http`** (this module): Used by validators for cross-cluster operations (Apache package namespace)
+- **`oak-chain-connector`**: AEM-compatible add-on with renamed packages (`com.oakchain.connector.*`)
+
+The connector is a migration of this module's code with AEM-compatible package names. This module remains in the fork because validators need it for internal shard routing operations.
 
 ## Architecture
 
@@ -204,10 +215,36 @@ This module depends only on **public Oak SPIs**:
 
 | Module | Relationship |
 |--------|--------------|
-| oak-segment-consensus | Server that this module connects to |
+| oak-segment-consensus | **Uses this module** for cross-cluster reads and shard routing (`LazyHttpNodeStore`) |
+| oak-chain-connector | **AEM-compatible version** - migrated code with renamed packages for AEM customers |
 | oak-segment-tar | Provides SegmentNodeStoreFactory that uses this persistence |
 | oak-store-composite | Provides CompositeNodeStore that mounts this |
 | oak-auth-web3 | Provides wallet authentication for Sling |
+
+## Usage in Validator Infrastructure
+
+This module is used by `oak-segment-consensus` for:
+
+1. **Cross-Cluster Reads**: Validators mount other clusters as read-only HTTP stores
+2. **Shard Routing**: `LazyHttpNodeStore` uses `HttpPersistence` to connect to remote shards
+3. **Multi-Cluster Architecture**: Each cluster reads from other clusters via HTTP segment transfer
+
+**Example** (`LazyHttpNodeStore.java`):
+```java
+import org.apache.jackrabbit.oak.segment.http.HttpPersistence;
+
+// Creates HTTP persistence for cross-cluster reads
+HttpPersistence persistence = new HttpPersistence(endpoint);
+```
+
+**Dependency** (`oak-segment-consensus/pom.xml`):
+```xml
+<dependency>
+    <groupId>org.apache.jackrabbit</groupId>
+    <artifactId>oak-segment-http</artifactId>
+    <version>${project.version}</version>
+</dependency>
+```
 
 ## Documentation
 

@@ -258,9 +258,10 @@ http://localhost:8091/
 ## Integration
 
 ### With `oak-segment-http`
-- `oak-segment-http` provides HTTP persistence layer for clients
-- Used by Sling authors to mount read-only global store
-- Handles segment fetching and journal polling
+- `oak-segment-http` provides HTTP persistence layer for **cross-cluster reads**
+- Used by validators via `LazyHttpNodeStore` to mount other clusters as read-only stores
+- Enables **shard routing** - validators read segments from other shards/clusters via HTTP
+- **Note**: AEM customers should use `oak-chain-connector` (AEM-compatible version with renamed packages)
 
 ### With `oak-segment-agentic`
 - Optional LLM chat module
