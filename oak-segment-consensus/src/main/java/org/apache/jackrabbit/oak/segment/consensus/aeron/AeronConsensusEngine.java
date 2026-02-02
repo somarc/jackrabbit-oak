@@ -115,6 +115,11 @@ public class AeronConsensusEngine implements ClusteredService {
     
     private static final Logger log = LoggerFactory.getLogger(AeronConsensusEngine.class);
     
+    private enum PeerProbeMode {
+        NONE,
+        HTTP
+    }
+    
     private final FileStore fileStore;
     private final NodeStore nodeStore;
     private final String selfUrl;
@@ -125,6 +130,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager backpressureManager;
     private final org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     private final DurabilityAckTracker durabilityAckTracker = new DurabilityAckTracker();
+    private final PeerProbeMode peerProbeMode;
     
     // ✅ PRODUCTION REFACTOR: Service layer components (extracted from monolithic class)
     private final MessageDispatcher messageDispatcher;
@@ -264,6 +270,7 @@ public class AeronConsensusEngine implements ClusteredService {
         this.blobStore = blobStore;
         this.replicator = new SegmentReplicator(fileStore);
         this.backpressureManager = new org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager();
+        this.peerProbeMode = parsePeerProbeMode();
         
         // Build node ID to URL mapping (will be populated when cluster starts)
         // This allows us to map Aeron Cluster leaderMemberId to validator URL
@@ -3882,6 +3889,9 @@ public class AeronConsensusEngine implements ClusteredService {
      * quorum accurately even when Aeron roles look stable.
      */
     public int getReachableValidatorCount() {
+        if (peerProbeMode == PeerProbeMode.NONE) {
+            return getTotalMemberCount();
+        }
         long now = System.currentTimeMillis();
         if ((now - lastReachabilityCheckMs) < REACHABILITY_CACHE_MS) {
             return lastReachableCount;
@@ -4017,6 +4027,24 @@ public class AeronConsensusEngine implements ClusteredService {
     
     private boolean isHeartbeatStale() {
         return getHeartbeatAgeMs() > HEARTBEAT_MAX_AGE_MS;
+    }
+
+    private static PeerProbeMode parsePeerProbeMode() {
+        String raw = System.getProperty("oak.health.peerProbeMode");
+        if (raw == null || raw.isEmpty()) {
+            raw = System.getenv("OAK_HEALTH_PEER_PROBE_MODE");
+        }
+        if (raw == null || raw.isEmpty()) {
+            return PeerProbeMode.NONE;
+        }
+        String normalized = raw.trim().toUpperCase();
+        if ("HTTP".equals(normalized)) {
+            return PeerProbeMode.HTTP;
+        }
+        if (!"NONE".equals(normalized)) {
+            log.warn("Unknown health peer probe mode '{}', defaulting to NONE", raw);
+        }
+        return PeerProbeMode.NONE;
     }
     
     private boolean isPeerReachable(String peerUrl) {
