@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.server.lifecycle;
 
 import org.apache.jackrabbit.oak.segment.consensus.server.GlobalStoreServer;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService;
+import org.apache.jackrabbit.oak.segment.consensus.server.GlobalStoreServerComponentFactory;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
@@ -44,6 +45,8 @@ public class ValidatorLifecycleManager {
     private GlobalStoreServer server;
     @Reference(cardinality = ReferenceCardinality.OPTIONAL, policyOption = ReferencePolicyOption.GREEDY)
     private volatile AeronClusterService aeronClusterService;
+    @Reference(cardinality = ReferenceCardinality.OPTIONAL, policyOption = ReferencePolicyOption.GREEDY)
+    private volatile GlobalStoreServerComponentFactory componentFactory;
 
     @Activate
     protected void activate(ValidatorConfig config) {
@@ -53,6 +56,10 @@ public class ValidatorLifecycleManager {
         if (aeronClusterService != null) {
             server.setAeronClusterService(aeronClusterService);
             LOG.info("AeronClusterService injected into GlobalStoreServer");
+        }
+        if (componentFactory != null) {
+            server.setComponentFactory(componentFactory);
+            LOG.info("GlobalStoreServerComponentFactory injected");
         }
         registry.register("GlobalStoreServer", server);
         shutdownHookHandler.register(server);

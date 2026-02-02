@@ -101,6 +101,7 @@ public class GlobalStoreServer {
     private ValidatorBootstrap bootstrap;
     private org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService aeronClusterService;
+    private GlobalStoreServerComponentFactory componentFactory;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     
@@ -123,11 +124,19 @@ public class GlobalStoreServer {
         this.aeronClusterService = service;
     }
 
+    public void setComponentFactory(GlobalStoreServerComponentFactory componentFactory) {
+        this.componentFactory = componentFactory;
+    }
+
     private void ensureAeronClusterService() {
         if (aeronClusterService == null) {
             System.out.println("⚠️  AeronClusterService not configured (OSGi) - using standalone instance");
-            aeronClusterService = new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService();
+            aeronClusterService = components().createAeronClusterService();
         }
+    }
+
+    private GlobalStoreServerComponentFactory components() {
+        return componentFactory != null ? componentFactory : DefaultGlobalStoreServerComponentFactory.INSTANCE;
     }
     
     /**
@@ -151,7 +160,7 @@ public class GlobalStoreServer {
         String nodeKeystorePath = System.getProperty("wallet.keystore.path", 
             storeDirectory + "/validator-keystore.properties");
         try {
-            this.wallet = new org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet(nodeKeystorePath);
+            this.wallet = components().createEthereumWallet(nodeKeystorePath);
             System.out.println("🔑 Node wallet: " + this.wallet.getWalletAddress());
         } catch (Exception e) {
             System.err.println("❌ FATAL: Failed to load/generate node wallet");
@@ -393,15 +402,8 @@ public class GlobalStoreServer {
                 String ipfsEndpoint = System.getProperty("ipfs.api.endpoint",
                     System.getenv().getOrDefault("IPFS_API_ENDPOINT", "/ip4/127.0.0.1/tcp/5001"));
                 
-                // Create IPFS DataStore
-                org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfsDataStore = 
-                    new org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore();
-                ipfsDataStore.setIpfsApiEndpoint(ipfsEndpoint);
-                ipfsDataStore.setMinRecordLength(16 * 1024); // 16KB threshold
-                ipfsDataStore.init(storeDir.getAbsolutePath()); // HomeDir for local cache
-                
-                // Wrap DataStore in DataStoreBlobStore (Oak pattern for DataStore -> BlobStore conversion)
-                blobStore = new org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore(ipfsDataStore);
+                // Create IPFS DataStore BlobStore
+                blobStore = components().createIpfsBlobStore(ipfsEndpoint, storeDir);
                 this.blobStore = blobStore; // Store reference for genesis image upload
                 
                 System.out.println("✅ IPFS BlobStore initialized");
@@ -472,8 +474,8 @@ public class GlobalStoreServer {
                 // Can be configured via system property: gc.usdc.per.mb
                 String usdcRateStr = System.getProperty("gc.usdc.per.mb", "0.10");
                 java.math.BigDecimal usdcPerMB = new java.math.BigDecimal(usdcRateStr);
-                org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator = 
-                    new org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator(fileStore, tarFiles, usdcPerMB);
+                org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator =
+                    components().createGCCostEstimator(fileStore, tarFiles, usdcPerMB);
                 
                 System.out.println("✅ GC Cost Estimator initialized");
                 System.out.println("   - USDC rate: $" + usdcPerMB + " per MB");
@@ -489,7 +491,7 @@ public class GlobalStoreServer {
             // ===========================================================================
             // Initialize HTTP server FIRST (needed for startConsensusPrimary callback)
             System.out.println("Initializing HTTP server on port " + port + "...");
-            httpServer = new SegmentHttpServer(storeDir, port, fileStore, nodeStore);
+            httpServer = components().createHttpServer(storeDir, port, fileStore, nodeStore);
             // Get self URL from system property, or resolve localhost to IP
             String selfUrlConfig = System.getProperty("consensus.self.url");
             String selfUrl;
@@ -518,8 +520,8 @@ public class GlobalStoreServer {
             if ("ipfs".equalsIgnoreCase(activeBlobStoreType)) {
                 System.out.println("Initializing CID Mapping Service...");
                 try {
-                    org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService cidMappingService = 
-                        new org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService(storeDir.toPath());
+                    org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService cidMappingService =
+                        components().createCidMappingService(storeDir.toPath());
                     httpServer.getContext().cidMappingService = cidMappingService;
                     System.out.println("✅ CID Mapping Service initialized");
                     System.out.println("   - Maps Oak blob IDs ↔ IPFS CIDs");
@@ -535,7 +537,7 @@ public class GlobalStoreServer {
             System.out.println("Initializing Fragmentation Tracker...");
             org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker fragmentationTracker = null;
             try {
-                fragmentationTracker = new org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker();
+                fragmentationTracker = components().createFragmentationTracker();
                 
                 httpServer.getContext().setFragmentationTracker(fragmentationTracker);
                 
@@ -553,7 +555,7 @@ public class GlobalStoreServer {
             System.out.println("Initializing Wallet Storage Metrics...");
             org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics = null;
             try {
-                walletStorageMetrics = new org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics(fileStore);
+                walletStorageMetrics = components().createWalletStorageMetrics(fileStore);
                 
                 httpServer.getContext().setWalletStorageMetrics(walletStorageMetrics);
                 
@@ -609,8 +611,8 @@ public class GlobalStoreServer {
                 // Get EvmBridge from ServerContext (set earlier during ProposalQueueManager initialization)
                 org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge gcEvmBridge = httpServer.getContext().evmBridge;
                 
-                org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager gcProposalManager = 
-                    new org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager(
+                org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager gcProposalManager =
+                    components().createGCProposalManager(
                         fileStore,
                         gcCostEstimator,
                         fragmentationTracker,
@@ -628,8 +630,8 @@ public class GlobalStoreServer {
                 System.out.println("   - Tracks GC proposals, voting, and execution");
                 
                 // Initialize GC Account Manager (Account Tax Model)
-                org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager gcAccountManager = 
-                    new org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager();
+                org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager gcAccountManager =
+                    components().createGCAccountManager();
                 
                 httpServer.getContext().gcAccountManager = gcAccountManager;
                 
@@ -639,8 +641,8 @@ public class GlobalStoreServer {
                 System.out.println("   - Enforces write blocking when debt exceeds limit");
                 
                 // Initialize Periodic GC Job (Account Tax Model)
-                org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob periodicGCJob = 
-                    new org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob(gcAccountManager);
+                org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob periodicGCJob =
+                    components().createPeriodicGCJob(gcAccountManager);
                 
                 periodicGCJob.start();
                 httpServer.getContext().periodicGCJob = periodicGCJob;
@@ -701,7 +703,7 @@ public class GlobalStoreServer {
                     this.aeronPeerUrls = aeronPeers;
                     
                     // Use ValidatorBootstrap to sync Oak FileStore
-                    bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
+                    bootstrap = components().createValidatorBootstrap(fileStore, standbyPort);
                     
                     // Use verified bootstrap primary (from before FileStore build)
                     String primaryHost = verifiedBootstrapPrimaryHost;
@@ -736,7 +738,7 @@ public class GlobalStoreServer {
                         System.err.println("❌ ERROR: Bootstrap needed but no primary host available");
                         System.err.println("   Falling back to GENESIS mode (this node will create genesis state)");
                         detectedMode = BootstrapMode.GENESIS;
-                        bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
+                        bootstrap = components().createValidatorBootstrap(fileStore, standbyPort);
                     } else {
                         // Store verified primary info for bootstrap
                         this.bootstrapPrimaryHost = primaryHost;
@@ -753,7 +755,7 @@ public class GlobalStoreServer {
                     System.out.println("   All validators will replicate genesis → identical HEADs");
                     detectedMode = BootstrapMode.PRIMARY; // Start Aeron directly, let consensus handle genesis
                     // Initialize bootstrap for StandbyServerSync (so late-joining validators can sync)
-                    bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
+                    bootstrap = components().createValidatorBootstrap(fileStore, standbyPort);
                 } else {
                     // ✈️ AERON MODE: Store has data → Start Aeron directly
                     // Aeron will handle Raft log bootstrap/replay
@@ -761,7 +763,7 @@ public class GlobalStoreServer {
                     System.out.println("   Starting Aeron Cluster (will replay Raft log if needed)");
                     detectedMode = BootstrapMode.PRIMARY;
                     // Initialize bootstrap for StandbyServerSync (so late-joining validators can sync)
-                    bootstrap = new ValidatorBootstrap(fileStore, standbyPort);
+                    bootstrap = components().createValidatorBootstrap(fileStore, standbyPort);
                 }
             }
             
@@ -878,7 +880,7 @@ public class GlobalStoreServer {
                     if (genesisExists) {
                         // Genesis already exists - verify it
                         System.out.println("   ℹ️  Genesis exists - verifying integrity...");
-                        new GenesisInitializer(nodeStore, fileStore, blobStore).initializeGenesisContent();
+                        components().createGenesisInitializer(nodeStore, fileStore, blobStore).initializeGenesisContent();
                     } else {
                         // No genesis - skip initialization (will be created by elected leader via consensus)
                         System.out.println("   ⏭️  Genesis does not exist - will be created by elected leader via consensus");
@@ -891,7 +893,7 @@ public class GlobalStoreServer {
                         // Use a more meaningful threshold (empty stores have ~256KB of metadata)
                         if (storeSize > 1024 * 1024) { // > 1 MB means likely has content
                             System.out.println("   ℹ️  Store has data (" + (storeSize / (1024 * 1024)) + " MB) - verifying genesis...");
-                            new GenesisInitializer(nodeStore, fileStore, blobStore).initializeGenesisContent();
+                            components().createGenesisInitializer(nodeStore, fileStore, blobStore).initializeGenesisContent();
                         } else {
                             System.out.println("   ⏭️  Store is empty or minimal - skipping genesis (will be created by consensus)");
                         }
@@ -1013,7 +1015,7 @@ public class GlobalStoreServer {
                 System.out.println("   - Current leader: " + aeronEngine.getCurrentLeader());
                 System.out.println("   - Ethereum epoch: " + aeronEngine.getCurrentEthereumEpoch());
 
-                new ConsensusServicesInitializer().initialize(
+                components().createConsensusServicesInitializer().initialize(
                     aeronEngine,
                     httpServer,
                     wallet,
