@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -206,9 +207,8 @@ public class RateLimiter {
      * Send rate limit exceeded response.
      */
     public void sendRateLimitResponse(HttpServletResponse response) throws IOException {
-        response.setStatus(429); // Too Many Requests
-        response.setContentType("application/json");
-        response.getWriter().write("{\"error\":\"rate_limit_exceeded\",\"message\":\"Too many requests. Please retry later.\"}");
+        ApiErrorUtil.sendJsonError(response, 429, "rate_limit_exceeded",
+            "Too many requests. Please retry later.");
     }
     
     /**

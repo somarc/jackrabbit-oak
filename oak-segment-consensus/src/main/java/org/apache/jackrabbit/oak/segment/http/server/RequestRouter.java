@@ -715,7 +715,8 @@ public class RequestRouter {
                 } else {
                     response.setStatus(HttpServletResponse.SC_NOT_FOUND);
                     response.setContentType("application/json");
-                    response.getWriter().write("{\"error\":\"Chat endpoint not available. Install oak-segment-agentic module.\"}");
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                        "Chat endpoint not available. Install oak-segment-agentic module.");
                     baseRequest.setHandled(true);
                     return;
                 }
@@ -798,9 +799,8 @@ public class RequestRouter {
             org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
         
         if (config.getMode() != org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.Mode.MOCK) {
-            response.setStatus(400);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"Mock epoch control only available in MOCK mode. Current mode: " + config.getMode() + "\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                "Mock epoch control only available in MOCK mode. Current mode: " + config.getMode());
             return;
         }
         
@@ -810,9 +810,8 @@ public class RequestRouter {
             try {
                 epochs = Integer.parseInt(epochsParam);
             } catch (NumberFormatException e) {
-                response.setStatus(400);
-                response.setContentType("application/json");
-                response.getWriter().write("{\"error\":\"Invalid epochs parameter: " + epochsParam + "\"}");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "Invalid epochs parameter: " + epochsParam);
                 return;
             }
         }
@@ -833,9 +832,8 @@ public class RequestRouter {
             }
         }
         
-        response.setStatus(500);
-        response.setContentType("application/json");
-        response.getWriter().write("{\"error\":\"Failed to advance epoch - BeaconChainClient not available\"}");
+        ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+            "Failed to advance epoch - BeaconChainClient not available");
     }
     
     /**
@@ -847,17 +845,15 @@ public class RequestRouter {
             org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
         
         if (config.getMode() != org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.Mode.MOCK) {
-            response.setStatus(400);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"Mock epoch control only available in MOCK mode. Current mode: " + config.getMode() + "\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                "Mock epoch control only available in MOCK mode. Current mode: " + config.getMode());
             return;
         }
         
         String offsetParam = request.getParameter("offset");
         if (offsetParam == null) {
-            response.setStatus(400);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"Missing required parameter: offset\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                "Missing required parameter: offset");
             return;
         }
         
@@ -865,9 +861,8 @@ public class RequestRouter {
         try {
             offset = Long.parseLong(offsetParam);
         } catch (NumberFormatException e) {
-            response.setStatus(400);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"Invalid offset parameter: " + offsetParam + "\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                "Invalid offset parameter: " + offsetParam);
             return;
         }
         
@@ -887,9 +882,8 @@ public class RequestRouter {
             }
         }
         
-        response.setStatus(500);
-        response.setContentType("application/json");
-        response.getWriter().write("{\"error\":\"Failed to set epoch offset - BeaconChainClient not available\"}");
+        ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+            "Failed to set epoch offset - BeaconChainClient not available");
     }
     
     /**

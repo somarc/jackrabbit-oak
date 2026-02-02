@@ -471,8 +471,11 @@ public class ConsensusApiHandler {
                     response.setStatus(402); // 402 Payment Required
                     
                     String errorJson = String.format(
-                        "{\"error\":\"WRITE_BLOCKED_GC_DEBT\"," +
-                        "\"message\":\"Writes blocked due to unpaid GC debt. Please pay debt to resume.\"," +
+                        "{\"success\":false," +
+                        "\"error\":\"Writes blocked due to unpaid GC debt. Please pay debt to resume.\"," +
+                        "\"code\":\"write_blocked_gc_debt\"," +
+                        "\"status\":402," +
+                        "\"timestamp\":%d," +
                         "\"wallet\":\"%s\"," +
                         "\"totalDebt\":\"%s\"," +
                         "\"executedDebt\":\"%s\"," +
@@ -481,6 +484,7 @@ public class ConsensusApiHandler {
                         "\"amountOverLimit\":\"%s\"," +
                         "\"paymentUrl\":\"/v1/gc/account/%s/pay\"," +
                         "\"statusUrl\":\"/v1/gc/account/%s\"}",
+                        System.currentTimeMillis(),
                         normalizedWallet,
                         account.totalDebt.toString(),
                         account.executedDebt.toString(),
@@ -1318,9 +1322,8 @@ public class ConsensusApiHandler {
     public void handleGCCostEstimate(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (context.gcCostEstimator == null) {
             log.warn("GC Cost Estimator not available - endpoint disabled");
-            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"GC Cost Estimator not available\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                "GC Cost Estimator not available");
             return;
         }
         
@@ -1366,18 +1369,14 @@ public class ConsensusApiHandler {
         } catch (IllegalArgumentException e) {
             // Invalid revision format
             log.warn("Invalid revision format: {}", request.getParameter("revision"), e);
-            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"Invalid revision format: " + 
-                FormatUtils.escapeJson(e.getMessage()) + "\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                "Invalid revision format: " + FormatUtils.escapeJson(e.getMessage()));
             
         } catch (IOException e) {
             // Graph traversal failed
             log.error("GC cost estimation failed", e);
-            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"GC cost estimation failed: " + 
-                FormatUtils.escapeJson(e.getMessage()) + "\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                "GC cost estimation failed: " + FormatUtils.escapeJson(e.getMessage()));
         }
     }
     
@@ -1447,8 +1446,8 @@ public class ConsensusApiHandler {
             
         } catch (Exception e) {
             log.error("Failed to query wallet stats", e);
-            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            response.getWriter().write("{\"error\":\"" + FormatUtils.escapeJson(e.getMessage()) + "\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                FormatUtils.escapeJson(e.getMessage()));
         }
     }
     
@@ -1460,8 +1459,7 @@ public class ConsensusApiHandler {
         String wallet = request.getParameter("wallet");
         
         if (wallet == null || wallet.isEmpty()) {
-            response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            response.getWriter().write("{\"error\":\"Missing wallet parameter\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing wallet parameter");
             return;
         }
         
@@ -1472,8 +1470,8 @@ public class ConsensusApiHandler {
             
         } catch (Exception e) {
             log.error("Failed to query wallet content", e);
-            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            response.getWriter().write("{\"error\":\"" + FormatUtils.escapeJson(e.getMessage()) + "\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                FormatUtils.escapeJson(e.getMessage()));
         }
     }
     

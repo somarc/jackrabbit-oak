@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -417,9 +418,7 @@ public class ValidatorRegistrationHandler {
     }
     
     private void sendJsonError(HttpServletResponse response, int status, String message) throws IOException {
-        response.setStatus(status);
-        response.setContentType("application/json");
-        response.getWriter().write(String.format("{\"success\":false,\"error\":\"%s\"}", message));
+        ApiErrorUtil.sendJsonError(response, status, message);
     }
     
     private String extractJsonString(String json, String key) {

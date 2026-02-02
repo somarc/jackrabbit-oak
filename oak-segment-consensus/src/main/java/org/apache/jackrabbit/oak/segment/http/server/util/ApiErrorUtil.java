@@ -42,9 +42,11 @@ public final class ApiErrorUtil {
 
         StringBuilder json = new StringBuilder();
         json.append("{");
+        json.append("\"success\":false,");
         json.append("\"error\":\"").append(safeMessage).append("\",");
         json.append("\"code\":\"").append(safeCode).append("\",");
-        json.append("\"status\":").append(statusCode);
+        json.append("\"status\":").append(statusCode).append(",");
+        json.append("\"timestamp\":").append(System.currentTimeMillis());
         json.append("}");
 
         try (PrintWriter writer = response.getWriter()) {

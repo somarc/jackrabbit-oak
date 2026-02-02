@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -412,9 +413,7 @@ public class ValidatorAuthHandler {
      * Send 403 Forbidden response.
      */
     private void sendForbidden(HttpServletResponse response, String message) throws IOException {
-        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-        response.setContentType("application/json");
-        response.getWriter().write("{\"error\":\"forbidden\",\"message\":\"" + message + "\"}");
+        ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, "forbidden", message);
     }
     
     /**

@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import java.io.IOException;
 
 /**
@@ -134,10 +135,6 @@ public class AuthTokenValidator {
      * Send 401 Unauthorized response.
      */
     private void sendUnauthorized(HttpServletResponse response, String message) throws IOException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        response.setContentType("application/json");
-        response.setCharacterEncoding("UTF-8");
-        response.getWriter().write("{\"error\":\"" + message + "\"}");
+        ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, message);
     }
 }
-

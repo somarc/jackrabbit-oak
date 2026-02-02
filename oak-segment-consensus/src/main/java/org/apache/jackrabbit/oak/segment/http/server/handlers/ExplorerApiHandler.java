@@ -156,8 +156,8 @@ public class ExplorerApiHandler {
             
         } catch (Exception e) {
             log.error("Error exploring node: " + path, e);
-            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            response.getWriter().write("{\"error\":\"" + FormatUtils.escapeJson(e.getMessage()) + "\"}");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                FormatUtils.escapeJson(e.getMessage()));
         }
     }
     
