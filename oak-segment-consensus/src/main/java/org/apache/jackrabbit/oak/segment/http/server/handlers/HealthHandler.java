@@ -88,7 +88,9 @@ public class HealthHandler {
         
         StringBuilder json = new StringBuilder();
         json.append("{\n");
+        json.append("  \"success\": ").append(isClusterHealthy).append(",\n");
         json.append("  \"status\": \"").append(isClusterHealthy ? "UP" : "UNHEALTHY").append("\",\n");
+        json.append("  \"timestamp\": ").append(System.currentTimeMillis()).append(",\n");
         
         // ADR 028: Include unhealthy reason if applicable
         if (!isClusterHealthy && unhealthyReason != null) {
@@ -141,10 +143,10 @@ public class HealthHandler {
     public void handleDeepHealth(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
         
+        boolean allHealthy = true;
         StringBuilder json = new StringBuilder();
         json.append("{\n");
-        
-        boolean allHealthy = true;
+        json.append("  \"success\": ").append(allHealthy).append(",\n");
         
         // 1. Check FileStore health
         json.append("  \"fileStore\": {\n");
@@ -409,7 +411,8 @@ public class HealthHandler {
         json.append("  \"overall\": {\n");
         json.append("    \"status\": \"").append(allHealthy ? "UP" : "DEGRADED").append("\",\n");
         json.append("    \"timestamp\": \"").append(new java.util.Date()).append("\"\n");
-        json.append("  }\n");
+        json.append("  },\n");
+        json.append("  \"timestamp\": ").append(System.currentTimeMillis()).append("\n");
         
         json.append("}\n");
         
@@ -428,7 +431,8 @@ public class HealthHandler {
         
         if (context == null || context.aeronConsensusEngine == null) {
             response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-            response.getWriter().write("{\"status\":\"UNAVAILABLE\",\"reason\":\"cluster_not_initialized\"}");
+            response.getWriter().write("{\"success\":false,\"status\":\"UNAVAILABLE\",\"reason\":\"cluster_not_initialized\",\"timestamp\":" +
+                System.currentTimeMillis() + "}");
             return;
         }
         
@@ -439,7 +443,9 @@ public class HealthHandler {
         
         StringBuilder json = new StringBuilder();
         json.append("{\n");
+        json.append("  \"success\": ").append(healthy).append(",\n");
         json.append("  \"status\": \"").append(healthy ? "UP" : "UNHEALTHY").append("\",\n");
+        json.append("  \"timestamp\": ").append(System.currentTimeMillis()).append(",\n");
         if (!healthy && reason != null) {
             json.append("  \"unhealthyReason\": \"").append(reason).append("\",\n");
         }

@@ -69,6 +69,9 @@ public class MetricsHandler {
         
         StringBuilder json = new StringBuilder();
         json.append("{\n");
+        json.append("  \"success\": true,\n");
+        json.append("  \"status\": \"UP\",\n");
+        json.append("  \"timestamp\": ").append(System.currentTimeMillis()).append(",\n");
         json.append("  \"consensus\": ");
         if (aeronConsensusEngine != null) {
             String role = aeronConsensusEngine.getCurrentRole().name();
