@@ -72,6 +72,7 @@ public class MockValidatorServer {
     // Request tracking
     private final Map<String, AtomicInteger> requestCounts = new ConcurrentHashMap<>();
     private final Map<String, HttpServletRequest> lastRequests = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, String[]>> lastRequestParams = new ConcurrentHashMap<>();
     
     public MockValidatorServer() {
         this(0); // Random port
@@ -95,7 +96,7 @@ public class MockValidatorServer {
         
         // Register servlets
         context.addServlet(new ServletHolder(new ProposeWriteServlet()), "/v1/propose-write");
-        context.addServlet(new ServletHolder(new ProposalStatusServlet()), "/v1/proposals/*/status");
+        context.addServlet(new ServletHolder(new ProposalStatusServlet()), "/v1/proposals/*");
         context.addServlet(new ServletHolder(new PendingCountServlet()), "/v1/proposals/pending/count");
         
         server.start();
@@ -158,6 +159,25 @@ public class MockValidatorServer {
     public HttpServletRequest getLastRequest(String endpoint) {
         return lastRequests.get(endpoint);
     }
+
+    /**
+     * Get last request parameters for an endpoint.
+     */
+    public Map<String, String[]> getLastRequestParams(String endpoint) {
+        return lastRequestParams.get(endpoint);
+    }
+
+    /**
+     * Get last request parameter value for an endpoint.
+     */
+    public String getLastRequestParam(String endpoint, String name) {
+        Map<String, String[]> params = lastRequestParams.get(endpoint);
+        if (params == null) {
+            return null;
+        }
+        String[] values = params.get(name);
+        return (values == null || values.length == 0) ? null : values[0];
+    }
     
     /**
      * Reset request tracking.
@@ -195,6 +215,7 @@ public class MockValidatorServer {
                 throws ServletException, IOException {
             requestCounts.computeIfAbsent("/v1/propose-write", k -> new AtomicInteger(0)).incrementAndGet();
             lastRequests.put("/v1/propose-write", request);
+            lastRequestParams.put("/v1/propose-write", new java.util.HashMap<>(request.getParameterMap()));
             
             MockResponse mockResponse;
             if (proposeWriteHandler != null) {
@@ -224,9 +245,12 @@ public class MockValidatorServer {
                 throws ServletException, IOException {
             requestCounts.computeIfAbsent("/v1/proposals/*/status", k -> new AtomicInteger(0)).incrementAndGet();
             lastRequests.put("/v1/proposals/*/status", request);
+            lastRequestParams.put("/v1/proposals/*/status", new java.util.HashMap<>(request.getParameterMap()));
             
             MockResponse mockResponse;
-            if (proposalStatusHandler != null) {
+            if (!request.getRequestURI().endsWith("/status")) {
+                mockResponse = new MockResponse(404, "{\"error\":\"Not found\"}");
+            } else if (proposalStatusHandler != null) {
                 mockResponse = proposalStatusHandler.apply(request);
             } else {
                 // Default: Not found
@@ -249,6 +273,7 @@ public class MockValidatorServer {
                 throws ServletException, IOException {
             requestCounts.computeIfAbsent("/v1/proposals/pending/count", k -> new AtomicInteger(0)).incrementAndGet();
             lastRequests.put("/v1/proposals/pending/count", request);
+            lastRequestParams.put("/v1/proposals/pending/count", new java.util.HashMap<>(request.getParameterMap()));
             
             MockResponse mockResponse;
             if (pendingCountHandler != null) {
@@ -265,4 +290,3 @@ public class MockValidatorServer {
         }
     }
 }
-

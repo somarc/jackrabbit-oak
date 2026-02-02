@@ -189,6 +189,11 @@ public final class Web3BiometricLoginModule extends AbstractLoginModule {
         if (value == null) {
             return defaultValue;
         }
+        if (defaultValue != null && !defaultValue.getClass().isInstance(value)) {
+            log.warn("Invalid type for factory option {}: expected {}, got {}",
+                    key, defaultValue.getClass().getSimpleName(), value.getClass().getSimpleName());
+            return defaultValue;
+        }
         try {
             return (T) value;
         } catch (ClassCastException e) {
@@ -533,4 +538,3 @@ public final class Web3BiometricLoginModule extends AbstractLoginModule {
         }
     }
 }
-

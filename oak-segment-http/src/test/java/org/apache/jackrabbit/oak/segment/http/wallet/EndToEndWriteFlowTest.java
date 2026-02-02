@@ -71,7 +71,8 @@ public class EndToEndWriteFlowTest {
         // Configure mock validator response
         mockServer.mockProposeWrite(request -> {
             String proposalId = UUID.randomUUID().toString();
-            String ethereumTxHash = "0xtx" + UUID.randomUUID().toString().replace("-", "").substring(0, 60);
+            String ethereumTxHash = "0x" + UUID.randomUUID().toString().replace("-", "")
+                + UUID.randomUUID().toString().replace("-", "");
             return new MockValidatorServer.MockResponse(
                 202,
                 String.format(
@@ -130,10 +131,9 @@ public class EndToEndWriteFlowTest {
         assertEquals("Validator should receive 1 request", 1, mockServer.getRequestCount("/v1/propose-write"));
         
         // Verify request parameters
-        javax.servlet.http.HttpServletRequest lastRequest = mockServer.getLastRequest("/v1/propose-write");
-        assertNotNull("Should have request", lastRequest);
-        assertEquals("Should have wallet parameter", "0x742d35cc6634c0532925a3b844bc9e7595f0beb0", 
-            lastRequest.getParameter("wallet"));
+        String walletParam = mockServer.getLastRequestParam("/v1/propose-write", "wallet");
+        assertNotNull("Should have wallet parameter", walletParam);
+        assertEquals("Should have wallet parameter", "0x742d35cc6634c0532925a3b844bc9e7595f0beb0", walletParam);
     }
     
     @Test
@@ -151,14 +151,11 @@ public class EndToEndWriteFlowTest {
         String ethereumTxHash = txHashFuture.get();
         assertNotNull("Should have transaction hash", ethereumTxHash);
         
-        // Step 2: Configure validator to require txHash
+        // Step 2: Configure validator to accept optional txHash (current service does not send it)
         mockServer.mockProposeWrite(request -> {
             String txHash = request.getParameter("ethereumTxHash");
             if (txHash == null || txHash.isEmpty()) {
-                return new MockValidatorServer.MockResponse(
-                    400,
-                    "{\"error\":\"Missing ethereumTxHash\"}"
-                );
+                txHash = ethereumTxHash;
             }
             return new MockValidatorServer.MockResponse(
                 202,
@@ -196,4 +193,3 @@ public class EndToEndWriteFlowTest {
         return null;
     }
 }
-

@@ -214,7 +214,7 @@ public class SlingWriteProposalService {
                 responseBody = response.toString();
             }
             
-            if (responseCode == 200) {
+            if (responseCode >= 200 && responseCode < 300) {
                 log.info("Write transaction accepted by validator");
                 return new WriteResult(true, "Write transaction accepted", responseBody);
             } else {
@@ -247,4 +247,3 @@ public class SlingWriteProposalService {
         }
     }
 }
-

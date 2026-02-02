@@ -63,7 +63,11 @@ public class MockEthereumContract {
             long timestamp) {
         
         // Generate mock transaction hash
-        String txHash = "0xtx" + UUID.randomUUID().toString().replace("-", "").substring(0, 60);
+        String raw = UUID.randomUUID().toString().replace("-", "");
+        while (raw.length() < 60) {
+            raw = raw + UUID.randomUUID().toString().replace("-", "");
+        }
+        String txHash = "0xtx" + raw.substring(0, 60);
         
         // Store transaction result
         TransactionResult result = new TransactionResult(
@@ -128,4 +132,3 @@ public class MockEthereumContract {
         }
     }
 }
-

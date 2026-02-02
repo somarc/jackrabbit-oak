@@ -105,10 +105,7 @@ public class ConsensusApiHandlerTest {
         handler.handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 503 Service Unavailable
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
-            contains("Aeron consensus engine not configured")
-        );
+        assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Aeron consensus engine not configured");
     }
 
     @Test
@@ -122,10 +119,7 @@ public class ConsensusApiHandlerTest {
         handler.handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 503 Service Unavailable with reason
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
-            contains("session_closed_timeout")
-        );
+        assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "session_closed_timeout");
     }
 
     @Test
@@ -139,10 +133,7 @@ public class ConsensusApiHandlerTest {
         handler.handleDeleteProposal(mockRequest, mockResponse);
         
         // Then: Should return 503 Service Unavailable with reason
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
-            contains("no_leader_elected")
-        );
+        assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "no_leader_elected");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -162,10 +153,7 @@ public class ConsensusApiHandlerTest {
         handler.handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_BAD_REQUEST),
-            contains("wallet")
-        );
+        assertJsonErrorContains(HttpServletResponse.SC_BAD_REQUEST, "wallet");
     }
 
     @Test
@@ -180,10 +168,7 @@ public class ConsensusApiHandlerTest {
         handler.handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_BAD_REQUEST),
-            anyString()
-        );
+        assertJsonErrorStatus(HttpServletResponse.SC_BAD_REQUEST);
     }
 
     @Test
@@ -198,10 +183,7 @@ public class ConsensusApiHandlerTest {
         handler.handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_BAD_REQUEST),
-            anyString()
-        );
+        assertJsonErrorStatus(HttpServletResponse.SC_BAD_REQUEST);
     }
 
     @Test
@@ -242,10 +224,7 @@ public class ConsensusApiHandlerTest {
         handler.handleDeleteProposal(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request for missing signature
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_BAD_REQUEST),
-            contains("signature")
-        );
+        assertJsonErrorContains(HttpServletResponse.SC_BAD_REQUEST, "signature");
     }
 
     @Test
@@ -261,10 +240,7 @@ public class ConsensusApiHandlerTest {
         handler.handleDeleteProposal(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request for missing path
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_BAD_REQUEST),
-            contains("contentPath")
-        );
+        assertJsonErrorContains(HttpServletResponse.SC_BAD_REQUEST, "contentPath");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -315,10 +291,7 @@ public class ConsensusApiHandlerTest {
         handler.handleGetPendingCount(mockResponse);
         
         // Then: Should return 503 Service Unavailable
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
-            contains("queue")
-        );
+        assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "queue");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -334,7 +307,7 @@ public class ConsensusApiHandlerTest {
         handler.handleGetProposalStatus(mockRequest, mockResponse);
         
         // Then: Should return error (500 for null path)
-        verify(mockResponse).sendError(eq(HttpServletResponse.SC_INTERNAL_SERVER_ERROR), anyString());
+        assertJsonErrorContains(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error");
     }
 
     @Test
@@ -347,10 +320,7 @@ public class ConsensusApiHandlerTest {
         handler.handleGetProposalStatus(mockRequest, mockResponse);
         
         // Then: Should return 503 Service Unavailable
-        verify(mockResponse).sendError(
-            eq(HttpServletResponse.SC_SERVICE_UNAVAILABLE),
-            anyString()
-        );
+        assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -445,5 +415,17 @@ public class ConsensusApiHandlerTest {
         // Then: Rejected counter should be incremented
         assertEquals("Rejected counter should increment", 
             initialCount + 1, context.apiRejectedRequests.get());
+    }
+
+    private void assertJsonErrorStatus(int status) {
+        verify(mockResponse).setStatus(status);
+        String response = responseWriter.toString();
+        assertTrue("Response should include error JSON", response.contains("\"success\":false"));
+    }
+
+    private void assertJsonErrorContains(int status, String expectedFragment) {
+        assertJsonErrorStatus(status);
+        String response = responseWriter.toString();
+        assertTrue("Response should contain error detail", response.contains(expectedFragment));
     }
 }

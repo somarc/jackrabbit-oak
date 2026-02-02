@@ -30,6 +30,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
+import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.tar.TarFiles;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;

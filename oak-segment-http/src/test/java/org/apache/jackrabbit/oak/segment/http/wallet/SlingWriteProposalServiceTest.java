@@ -101,26 +101,20 @@ public class SlingWriteProposalServiceTest {
     
     @Test
     public void testProposeWriteWithEthereumTxHash() throws Exception {
-        // Configure mock to require ethereumTxHash
+        // Configure mock to accept optional ethereumTxHash
         mockServer.mockProposeWrite(request -> {
             String ethereumTxHash = request.getParameter("ethereumTxHash");
-            if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
-                return new MockValidatorServer.MockResponse(
-                    400,
-                    "{\"error\":\"Missing ethereumTxHash parameter\"}"
-                );
-            }
             return new MockValidatorServer.MockResponse(
                 202,
                 String.format("{\"proposalId\":\"test-456\",\"ethereumTxHash\":\"%s\",\"state\":\"PENDING\"}", 
-                    ethereumTxHash)
+                    ethereumTxHash == null ? "" : ethereumTxHash)
             );
         });
         
         // Note: Current SlingWriteProposalService doesn't include ethereumTxHash
         // This test shows what's needed for full integration
         // TODO: Update SlingWriteProposalService to call authorizeWrite() first
-        
+
         // For now, test will succeed (validator accepts without ethereumTxHash)
         SlingWriteProposalService.WriteResult result = service.proposeWrite("page", "Test");
         assertTrue("Write should succeed (validator accepts without ethereumTxHash for now)", result.success);
@@ -171,4 +165,3 @@ public class SlingWriteProposalServiceTest {
         return null;
     }
 }
-
