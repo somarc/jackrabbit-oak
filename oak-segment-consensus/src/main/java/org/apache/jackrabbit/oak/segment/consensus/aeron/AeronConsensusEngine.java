@@ -2441,7 +2441,12 @@ public class AeronConsensusEngine implements ClusteredService {
             return false;
         }
         
-        // Check 3: If internal client exists, verify it's not closed
+        // Check 3: Quorum must be present
+        if (!hasQuorum()) {
+            return false;
+        }
+
+        // Check 4: If internal client exists, verify it's not closed
         // Note: Client is lazily created on first write, so null is OK for health
         // The client will be created when the first proposal is submitted
         if (internalClusterClient != null && internalClusterClient.isClosed()) {
@@ -2464,6 +2469,9 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         if (cluster.role() == Cluster.Role.CANDIDATE) {
             return "leader_election_in_progress";
+        }
+        if (!hasQuorum()) {
+            return "no_quorum";
         }
         // Client is lazily created on first write - only report closed as unhealthy
         if (internalClusterClient != null && internalClusterClient.isClosed()) {
@@ -3870,12 +3878,10 @@ public class AeronConsensusEngine implements ClusteredService {
      * Get reachable validator count (for metrics).
      * 
      * ✈️ AERON CLUSTER SOURCE OF TRUTH:
-     * Returns count of configured peers. Aeron Cluster manages actual reachability internally.
+     * Uses lightweight HTTP probes with caching so health endpoints reflect
+     * quorum accurately even when Aeron roles look stable.
      */
     public int getReachableValidatorCount() {
-        if (cluster != null && cluster.role() != Cluster.Role.CANDIDATE) {
-            return getTotalMemberCount();
-        }
         long now = System.currentTimeMillis();
         if ((now - lastReachabilityCheckMs) < REACHABILITY_CACHE_MS) {
             return lastReachableCount;
