@@ -136,6 +136,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final MessageDispatcher messageDispatcher;
     private final SnapshotService snapshotService;
     private final LeaderDiscoveryService leaderDiscoveryService;
+    private final HeadStateService headStateService;
     
     // Aeron Cluster components
     private Cluster cluster;
@@ -278,6 +279,7 @@ public class AeronConsensusEngine implements ClusteredService {
         // ✅ PRODUCTION REFACTOR: Initialize service layer components
         this.snapshotService = new SnapshotService(fileStore, storeDirectory);
         this.leaderDiscoveryService = new LeaderDiscoveryService(nodeIdToUrl, peerUrls);
+        this.leaderDiscoveryService.setSelfUrl(selfUrl);
         this.messageDispatcher = new MessageDispatcher(
             new MessageDispatcher.WriteCallback() {
                 @Override
@@ -365,10 +367,12 @@ public class AeronConsensusEngine implements ClusteredService {
                 durabilityAckTracker.complete(proposalId);
             }
         });
+
+        this.headStateService = new HeadStateService(fileStore);
         
         log.info("Aeron Consensus Engine initializing - Consensus: Aeron Cluster (Raft), Self: {}, Peers: {}, Wallet: {}", 
             selfUrl, peerUrls.size(), wallet.getWalletAddress());
-        log.info("✅ Production service layer initialized: MessageDispatcher, SnapshotService, HeadBroadcastService, LeaderDiscoveryService");
+        log.info("✅ Production service layer initialized: MessageDispatcher, SnapshotService, HeadStateService, LeaderDiscoveryService");
     }
     
     /**
@@ -443,7 +447,7 @@ public class AeronConsensusEngine implements ClusteredService {
             
             // Start background timer for checking pending HEAD broadcasts
             // This ensures broadcasts happen even when no new writes arrive
-            startHeadBroadcastTimer();
+            // No background head broadcast timer in deterministic consensus mode.
             
             log.info("Aeron Consensus Engine started - Status: Ready");
             
@@ -460,7 +464,7 @@ public class AeronConsensusEngine implements ClusteredService {
         log.info("🛑 Stopping Aeron Consensus Engine...");
         
         // Stop background timer
-        stopHeadBroadcastTimer();
+        // No head broadcast timer to stop in deterministic consensus mode.
         stopReconnectScheduler();
         
         // Aeron Cluster components are closed by AeronClusterLauncher.close()
@@ -529,11 +533,14 @@ public class AeronConsensusEngine implements ClusteredService {
             log.info("Loading snapshot from image");
             
             try {
-                SnapshotState snapshotState = loadSnapshotFromImage(snapshotImage);
+                SnapshotService.SnapshotState snapshotState = snapshotService.restoreSnapshot(
+                    snapshotImage,
+                    idleStrategy != null ? idleStrategy : new org.agrona.concurrent.BusySpinIdleStrategy()
+                );
                 
                 if (snapshotState != null) {
                     log.info("Snapshot metadata - HEAD: {}, Epoch: {}, Timestamp: {}", 
-                        snapshotState.head, snapshotState.ethereumEpoch, snapshotState.timestamp);
+                        snapshotState.head, snapshotState.epoch, snapshotState.timestamp);
                     
                     // Verify FileStore HEAD matches snapshot HEAD
                     String fileStoreHead = fileStore.getHead().getRecordId().toString();
@@ -550,7 +557,7 @@ public class AeronConsensusEngine implements ClusteredService {
                     }
                     
                     // Restore state
-                    currentEthereumEpoch = snapshotState.ethereumEpoch;
+                    currentEthereumEpoch = snapshotState.epoch;
                     
                     log.info("Snapshot loaded successfully - HEAD verified: {}", snapshotState.head);
                 } else {
@@ -742,233 +749,6 @@ public class AeronConsensusEngine implements ClusteredService {
         }
     }
     
-    /**
-     * Helper to extract JSON field value (simple parsing).
-     */
-    private String extractJsonField(String json, String field) {
-        // Handle both "field":"value" and "field": "value" (with optional whitespace)
-        String fieldPrefix = "\"" + field + "\"";
-        int fieldStart = json.indexOf(fieldPrefix);
-        if (fieldStart == -1) return null;
-        
-        // Find the colon after the field name
-        int colonIndex = json.indexOf(":", fieldStart + fieldPrefix.length());
-        if (colonIndex == -1) return null;
-        
-        // Skip optional whitespace and find the opening quote
-        int quoteStart = json.indexOf("\"", colonIndex);
-        if (quoteStart == -1) return null;
-        
-        // Find the closing quote
-        int quoteEnd = json.indexOf("\"", quoteStart + 1);
-        if (quoteEnd == -1) return null;
-        
-        return json.substring(quoteStart + 1, quoteEnd);
-    }
-    
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // JSON PARSING HELPERS (used by snapshot loading and HEAD sync)
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Helper to extract JSON field value for numeric fields.
-     */
-    private Long extractJsonFieldLong(String json, String field) {
-        String pattern = "\"" + field + "\":";
-        int start = json.indexOf(pattern);
-        if (start == -1) return null;
-        start += pattern.length();
-        int end = json.indexOf(",", start);
-        if (end == -1) {
-            end = json.indexOf("}", start);
-        }
-        if (end == -1) return null;
-        try {
-            return Long.parseLong(json.substring(start, end).trim());
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-    
-    /**
-     * ✈️ AERON NATIVE: Snapshot state container.
-     */
-    private static class SnapshotState {
-        final String head;
-        final int ethereumEpoch;
-        final long timestamp;
-        
-        SnapshotState(String head, int ethereumEpoch, long timestamp) {
-            this.head = head;
-            this.ethereumEpoch = ethereumEpoch;
-            this.timestamp = timestamp;
-        }
-    }
-    
-    /**
-     * ✈️ AERON NATIVE: Load snapshot state from Aeron snapshot image.
-     * 
-     * This method polls the snapshot image to extract and restore the complete FileStore:
-     * - TAR files (segment data)
-     * - journal.log (HEAD + history)
-     * - Metadata (HEAD pointer, Ethereum epoch)
-     * 
-     * @param snapshotImage The Aeron snapshot image
-     * @return SnapshotState if found, null otherwise
-     */
-    private SnapshotState loadSnapshotFromImage(Image snapshotImage) {
-        log.info("📥 Loading FileStore snapshot from Aeron...");
-        
-        final java.util.concurrent.atomic.AtomicReference<SnapshotState> snapshotStateRef = 
-            new java.util.concurrent.atomic.AtomicReference<>();
-        
-        // Track current file being received
-        final java.util.concurrent.atomic.AtomicReference<FileReceiver> currentFileReceiver = 
-            new java.util.concurrent.atomic.AtomicReference<>();
-        
-        io.aeron.FragmentAssembler fragmentAssembler = new io.aeron.FragmentAssembler(
-            (buffer, offset, length, header) -> {
-                if (length < org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH) {
-                    log.warn("⚠️  Snapshot fragment too short: {} bytes", length);
-                    return;
-                }
-                
-                try {
-                    // Decode SBE header
-                    org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.HeaderInfo headerInfo = 
-                        org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.decode(buffer, offset);
-                    
-                    if (headerInfo.templateId == org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
-                        int payloadOffset = offset + org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH;
-                        int payloadLength = headerInfo.blockLength;
-                        
-                        byte[] payload = new byte[payloadLength];
-                        buffer.getBytes(payloadOffset, payload);
-                        
-                        // Try to parse as JSON to determine message type
-                        String payloadStr = new String(payload, 0, Math.min(200, payloadLength), java.nio.charset.StandardCharsets.UTF_8);
-                        
-                        if (payloadStr.contains("\"type\":\"metadata\"")) {
-                            // Metadata message
-                            String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
-                            String head = extractJsonField(json, "head");
-                            Long ethereumEpochLong = extractJsonFieldLong(json, "ethereumEpoch");
-                            Long timestampLong = extractJsonFieldLong(json, "timestamp");
-                            
-                            if (head != null && ethereumEpochLong != null && timestampLong != null) {
-                                snapshotStateRef.set(new SnapshotState(
-                                    head, 
-                                    ethereumEpochLong.intValue(), 
-                                    timestampLong
-                                ));
-                                log.info("   ✅ Metadata received: HEAD={}, epoch={}", head, ethereumEpochLong.intValue());
-                            }
-                        } else if (payloadStr.contains("\"type\":\"file_header\"")) {
-                            // File header - start new file
-                            String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
-                            String fileType = extractJsonField(json, "fileType");
-                            String fileName = extractJsonField(json, "fileName");
-                            Long fileSize = extractJsonFieldLong(json, "fileSize");
-                            
-                            if (fileName != null && fileSize != null) {
-                                // Close previous file if any
-                                FileReceiver prev = currentFileReceiver.get();
-                                if (prev != null) {
-                                    prev.close();
-                                }
-                                
-                                // Start new file
-                                java.io.File targetFile = new java.io.File(storeDirectory, fileName);
-                                FileReceiver receiver = new FileReceiver(targetFile, fileSize);
-                                currentFileReceiver.set(receiver);
-                                log.info("   📥 Receiving {}: {} ({} bytes)", fileType, fileName, fileSize);
-                            }
-                        } else {
-                            // File chunk data
-                            FileReceiver receiver = currentFileReceiver.get();
-                            if (receiver != null) {
-                                receiver.writeChunk(payload, 0, payloadLength);
-                            } else {
-                                log.debug("Received file chunk but no active receiver (may be non-file payload)");
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    log.error("❌ Failed to process snapshot fragment", e);
-                }
-            }
-        );
-        
-        // Poll snapshot image until end of stream
-        idleStrategy.reset();
-        int fragmentsPolled = 0;
-        while (!snapshotImage.isEndOfStream()) {
-            int fragments = snapshotImage.poll(fragmentAssembler, 20);
-            if (fragments > 0) {
-                fragmentsPolled += fragments;
-            }
-            idleStrategy.idle(fragments);
-        }
-        
-        // Close final file
-        FileReceiver finalReceiver = currentFileReceiver.get();
-        if (finalReceiver != null) {
-            finalReceiver.close();
-        }
-        
-        log.info("📥 Snapshot restore complete: {} fragments processed", fragmentsPolled);
-        
-        SnapshotState state = snapshotStateRef.get();
-        if (state == null) {
-            log.warn("⚠️  No snapshot metadata found");
-        }
-        
-        return state;
-    }
-    
-    /**
-     * Helper class to receive and write file chunks during snapshot restore.
-     */
-    private static class FileReceiver {
-        private final java.io.File targetFile;
-        private final long expectedSize;
-        private long bytesReceived;
-        private java.io.FileOutputStream fos;
-        
-        FileReceiver(java.io.File targetFile, long expectedSize) throws Exception {
-            this.targetFile = targetFile;
-            this.expectedSize = expectedSize;
-            this.bytesReceived = 0;
-            
-            // Ensure parent directory exists
-            targetFile.getParentFile().mkdirs();
-            
-            // Open output stream
-            this.fos = new java.io.FileOutputStream(targetFile);
-        }
-        
-        void writeChunk(byte[] data, int offset, int length) throws Exception {
-            fos.write(data, offset, length);
-            bytesReceived += length;
-        }
-        
-        void close() {
-            try {
-                if (fos != null) {
-                    fos.close();
-                }
-                
-                if (bytesReceived == expectedSize) {
-                    System.out.println("      ✅ File complete: " + targetFile.getName() + " (" + bytesReceived + " bytes)");
-                } else {
-                    System.err.println("      ⚠️  File size mismatch: " + targetFile.getName() + 
-                        " (expected " + expectedSize + ", got " + bytesReceived + ")");
-                }
-            } catch (Exception e) {
-                System.err.println("      ❌ Failed to close file: " + targetFile.getName() + " - " + e.getMessage());
-            }
-        }
-    }
     
     /**
      * ✈️ AERON NATIVE: Send write proposal through Aeron ingress channel for replication.
@@ -2487,281 +2267,62 @@ public class AeronConsensusEngine implements ClusteredService {
         return null; // Healthy
     }
     
-    // 🔄 ROLLING 2-EPOCH FINALITY WINDOW: Optimize HEAD updates with finality-aware batching
-    // 
-    // 🎯 ETHEREUM FINALITY MODEL:
-    // - Transaction data arrives every epoch (from Ethereum mainnet)
-    // - Actual commitment happens after 2 epochs (finality)
-    // - Rolling window: epoch N (arriving), epoch N-1 (pending), epoch N-2 (finalized, ready to commit)
-    // - This allows look-ahead: see incoming writes while waiting for finality
-    //
-    // 📊 STRATEGY:
-    // - During epoch: Batch HEAD updates (every N writes or X seconds)
-    // - At finality boundary (every 2 epochs): Final HEAD broadcast for guaranteed consistency
-    // - Ensures all validators commit the same finality-eligible writes
-    // - Natural sync window between finality boundaries provides safety margin
-    //
-    // 🎯 ADAPTIVE BATCHING: No hardcoded assumptions about write volume
-    // - Write volume varies based on Ethereum mainnet transaction patterns
-    // - Transactions arrive before 2-epoch finality, allowing look-ahead
-    // - Batching adapts to actual transaction patterns dynamically
-    private volatile String pendingHead = null;
-    
-    // 🔄 IDEMPOTENT FINALITY BOUNDARY: Track last committed epoch for exactly-once semantics
-    // This ensures we only commit once per finality boundary, even if polls are missed or delayed
-    private volatile int lastCommittedEpoch = -1;
-    
-    // Track committed HEAD vs latest HEAD for health endpoints
-    // committedHead: HEAD that has reached finality (epoch N-2) - immutable, safe
-    // latestHead: Current HEAD including pending writes (epoch N, N+1) - may change
-    private volatile String committedHead = null;
-    private volatile String latestHead = null;
-    
-    // Configurable batching parameters (can be tuned based on observed patterns)
-    // Default: Broadcast every 100 writes OR every 5 seconds (whichever comes first)
-    // This provides incremental updates while minimizing broadcast overhead
-    private static final int DEFAULT_BATCH_SIZE_WRITES = 100;
-    private static final long DEFAULT_BATCH_INTERVAL_MS = 5000;
-    
-    // Allow runtime configuration (can be adjusted based on Ethereum transaction patterns)
-    private volatile int batchSizeWrites = DEFAULT_BATCH_SIZE_WRITES;
-    private volatile long batchIntervalMs = DEFAULT_BATCH_INTERVAL_MS;
-    
-    // Background timer for checking pending HEAD broadcasts
-    // Ensures broadcasts happen even when no new writes arrive
-    private java.util.concurrent.ScheduledExecutorService headBroadcastTimer = null;
+    // HEAD tracking and finality-aware commits are handled by HeadStateService.
     
     /**
-     * Schedule HEAD broadcast (batched for efficiency during epoch bursts).
-     * 
-     * <p>🔄 ADAPTIVE BATCHING STRATEGY:
-     * - During epoch: Batch HEAD updates (every N writes or X seconds, whichever comes first)
-     * - Adapts dynamically to actual Ethereum transaction patterns
-     * - No hardcoded assumptions about write volume per epoch
-     * - Natural sync window between epochs handles any lag
-     * - Final HEAD broadcast ensures consistency at epoch boundaries
-     * 
-     * <p>🎯 ETHEREUM EPOCH-BASED DESIGN:
-     * - Writes come from Ethereum mainnet transactions (variable volume)
-     * - Transactions arrive before 2-epoch finality (~12.8 minutes)
-     * - Look-ahead capability: Can see incoming writes while waiting for finality
-     * - Epoch duration: ~6.4 minutes (384 seconds)
-     * - Natural sync window between epochs provides safety margin
-     * 
-     * <p>📊 BATCHING BENEFITS:
-     * - Reduces HEAD broadcast overhead significantly (e.g., 1000 writes → ~10 broadcasts)
-     * - Provides incremental updates during epoch (not just at end)
-     * - Configurable batch size and interval based on observed patterns
-     * - Final sync at epoch boundary ensures consistency
-     * 
+     * Legacy API name retained for compatibility with earlier consensus designs.
+     * In deterministic Aeron consensus, this does NOT broadcast; it only updates
+     * the tracked HEAD state for health/status endpoints.
+     *
      * @param newHeadStr The new HEAD RecordId as string
      */
     public void scheduleHeadBroadcast(String newHeadStr) {
-        // 🎯 DETERMINISTIC STATE MACHINE: HEAD broadcasting disabled
-        // All nodes commit identically via Aeron replication
-        // HEAD consistency guaranteed by deterministic processing
-        // NO manual broadcasts needed!
-        
-        log.debug("📡 scheduleHeadBroadcast() called but DISABLED (deterministic consensus)");
-        
-        // Just update latestHead cache for /v1/head API
-        latestHead = newHeadStr;
+        headStateService.updateLatestHead(newHeadStr);
     }
     
     /**
-     * Configure batching parameters dynamically based on observed transaction patterns.
-     * 
-     * <p>This allows runtime tuning based on actual Ethereum transaction volumes:
-     * - High volume epochs: Increase batch size to reduce broadcast frequency
-     * - Low volume epochs: Decrease batch size for more frequent updates
-     * - Can be adjusted based on look-ahead information from EVM bridge
-     * 
-     * @param batchSizeWrites Number of writes before broadcasting (default: 100)
-     * @param batchIntervalMs Time interval in milliseconds before broadcasting (default: 5000)
+     * Legacy no-op retained for compatibility with earlier batching logic.
+     * Deterministic consensus doesn't use broadcast batching.
      */
     public void configureHeadBroadcastBatching(int batchSizeWrites, long batchIntervalMs) {
-        this.batchSizeWrites = batchSizeWrites > 0 ? batchSizeWrites : DEFAULT_BATCH_SIZE_WRITES;
-        this.batchIntervalMs = batchIntervalMs > 0 ? batchIntervalMs : DEFAULT_BATCH_INTERVAL_MS;
-        log.info("📡 HEAD broadcast batching configured: {} writes or {}ms (whichever comes first)", 
-            this.batchSizeWrites, this.batchIntervalMs);
+        log.debug("configureHeadBroadcastBatching() is a no-op (deterministic consensus)");
     }
     
     /**
-     * Start the background timer for checking pending HEAD broadcasts.
-     * The timer runs every 2 seconds to check if broadcasts are needed.
-     */
-    private void startHeadBroadcastTimer() {
-        if (headBroadcastTimer != null) {
-            log.warn("HEAD broadcast timer already running");
-            return;
-        }
-        
-        headBroadcastTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
-            new java.util.concurrent.ThreadFactory() {
-                @Override
-                public Thread newThread(Runnable r) {
-                    Thread t = new Thread(r, "head-broadcast-timer");
-                    t.setDaemon(true);
-                    return t;
-                }
-            }
-        );
-        
-        // Check every 2 seconds (less than the 5-second batch interval)
-        headBroadcastTimer.scheduleAtFixedRate(
-            this::checkPendingHeadBroadcasts,
-            2000, // Initial delay: 2 seconds
-            2000, // Period: 2 seconds
-            java.util.concurrent.TimeUnit.MILLISECONDS
-        );
-        
-        log.info("⏰ HEAD broadcast timer started (checks every 2s)");
-    }
-    
-    /**
-     * Stop the background timer for checking pending HEAD broadcasts.
-     */
-    private void stopHeadBroadcastTimer() {
-        if (headBroadcastTimer != null) {
-            try {
-                headBroadcastTimer.shutdown();
-                if (!headBroadcastTimer.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                    headBroadcastTimer.shutdownNow();
-                }
-                headBroadcastTimer = null;
-                log.info("⏰ HEAD broadcast timer stopped");
-            } catch (InterruptedException e) {
-                headBroadcastTimer.shutdownNow();
-                Thread.currentThread().interrupt();
-                log.warn("HEAD broadcast timer shutdown interrupted", e);
-            }
-        }
-    }
-    
-    /**
-     * Check if there are pending HEAD broadcasts that should be sent due to time threshold.
-     * This is called by the background timer to ensure broadcasts happen even when no new writes arrive.
-     */
-    private void checkPendingHeadBroadcasts() {
-        // 🎯 DETERMINISTIC STATE MACHINE: Timer-based HEAD broadcasting disabled
-        // All nodes commit identically via Aeron replication
-        // HEAD consistency guaranteed by deterministic processing
-        // NO periodic broadcasts needed!
-        
-        log.trace("⏰ checkPendingHeadBroadcasts() called but DISABLED (deterministic consensus)");
-    }
-    
-    /**
-     * Force immediate HEAD broadcast (e.g., at finality boundary for final sync).
-     * 
-     * <p>🔄 FINALITY BOUNDARY SYNC:
-     * Call this at finality boundary (every 2 epochs) to ensure all followers have
-     * the final HEAD before the next finality window begins. This provides guaranteed
-     * consistency at finality boundaries.
-     * 
-     * <p>📊 ROLLING 2-EPOCH WINDOW:
-     * - Epoch N: Transaction data arrives (pending finality)
-     * - Epoch N+1: Still pending finality
-     * - Epoch N+2: Reaches finality, ready to commit
-     * - At finality boundary: Broadcast HEAD to sync all validators
-     * 
+     * Legacy API name retained for compatibility. In deterministic consensus this
+     * does NOT broadcast; it only updates tracked HEAD state.
+     *
      * @param newHeadStr The new HEAD RecordId as string
      */
     public void broadcastHeadToFollowersImmediate(String newHeadStr) {
-        // ✅ ADR 025: HEAD broadcasting removed - obsolete with Aeron Raft
-        // All nodes execute identical replicated log deterministically
-        // HEAD consistency guaranteed by Raft consensus - no manual broadcasts needed
-        
-        // Just update latestHead cache for /v1/head API endpoint
-        latestHead = newHeadStr;
-        log.trace("Updated latestHead cache: {}", newHeadStr.substring(0, Math.min(20, newHeadStr.length())));
+        headStateService.updateLatestHead(newHeadStr);
     }
     
     /**
-     * Check if we've reached a finality boundary and should broadcast HEAD immediately.
-     * 
+     * Check if we've reached a finality boundary and commit the finalized HEAD state.
+     *
      * <p>🔄 IDEMPOTENT FINALITY BOUNDARY DETECTION:
-     * Uses exactly-once semantics: `if (currentFinalizedEpoch >= lastCommittedEpoch + 2)`
+     * Uses exactly-once semantics: {@code if (currentFinalizedEpoch >= lastCommittedEpoch + 2)}.
      * This ensures we only commit once per finality boundary, even if:
      * - Polls are missed or delayed
      * - Node restarts and catches up
      * - Multiple epochs finalize while node was offline
-     * 
+     *
      * <p>📊 ROLLING 2-EPOCH WINDOW:
      * This ensures all validators commit the same finality-eligible writes:
      * - Epoch N: Writes arrive (pending finality)
      * - Epoch N+1: Still pending finality
-     * - Epoch N+2: Reaches finality → Commit and broadcast HEAD
-     * 
-     * <p>This should be called periodically (e.g., when Ethereum epoch updates)
-     * to detect finality boundaries and trigger immediate HEAD broadcasts.
-     * 
+     * - Epoch N+2: Reaches finality → Commit HEAD state
+     *
+     * <p>Deterministic consensus: this does not broadcast; it only updates tracked
+     * HEAD state used by health/status endpoints and finality bookkeeping.
+     *
      * @param currentFinalizedEpoch The current finalized epoch (2 epochs behind current)
      * @param newHeadStr The new HEAD RecordId as string (if available)
-     * @return true if finality boundary was detected and HEAD was broadcast
+     * @return true if finality boundary was detected and HEAD state was committed
      */
     public boolean checkAndBroadcastAtFinalityBoundary(int currentFinalizedEpoch, String newHeadStr) {
-        if (!isLeader()) {
-            return false;
-        }
-        
-        // 🔄 IDEMPOTENT CHECK: Only commit if we've crossed one or more finality boundaries
-        // Handles missed polls, catch-up nodes, multiple epochs finalizing while offline
-        if (currentFinalizedEpoch >= lastCommittedEpoch + 2) {
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("🔄 FINALITY BOUNDARY DETECTED (Idempotent)");
-            log.info("   Current finalized epoch:  {}", currentFinalizedEpoch);
-            log.info("   Last committed epoch:     {}", lastCommittedEpoch);
-            log.info("   Epochs to commit:        {}", (currentFinalizedEpoch - lastCommittedEpoch - 1));
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            
-            // Get safe HEAD (current HEAD is safe up to epoch N-2)
-            // 🔄 CRITICAL FIX: Use tracked latestHead instead of reading from FileStore
-            // Reading from FileStore can get stale value during concurrent writes,
-            // causing followers to revert to old HEAD. latestHead is updated after
-            // every commit+flush, so it's always current.
-            String safeHead = null;
-            if (newHeadStr != null && !newHeadStr.isEmpty()) {
-                safeHead = newHeadStr;
-            } else if (latestHead != null && !latestHead.isEmpty()) {
-                // Use tracked latestHead (updated after every write commit)
-                safeHead = latestHead;
-                log.debug("Using tracked latestHead for finality broadcast: {}", 
-                    safeHead.substring(0, Math.min(20, safeHead.length())));
-            } else if (pendingHead != null && !pendingHead.isEmpty()) {
-                // Fallback to pendingHead (scheduled but not yet broadcast)
-                safeHead = pendingHead;
-                log.debug("Using pendingHead for finality broadcast: {}", 
-                    safeHead.substring(0, Math.min(20, safeHead.length())));
-            } else if (fileStore != null) {
-                // Final fallback: read from FileStore (only if tracked HEADs not set, e.g. startup)
-                safeHead = fileStore.getHead().getRecordId().toString10();
-                log.debug("Using FileStore HEAD for finality broadcast (fallback): {}", 
-                    safeHead.substring(0, Math.min(20, safeHead.length())));
-            }
-            
-            if (safeHead != null && !safeHead.isEmpty()) {
-                // Update committed HEAD (this is the safe, immutable HEAD)
-                // Use toString10() for consistency (same format as /v1/head endpoint)
-                committedHead = safeHead.contains(":") ? safeHead : 
-                    (fileStore != null ? fileStore.getHead().getRecordId().toString10() : safeHead);
-                
-                // Broadcast HEAD immediately at finality boundary
-                broadcastHeadToFollowersImmediate(committedHead);
-                
-                // Update last committed epoch (commit up to epoch N-1, since epoch N-2 is finalized)
-                lastCommittedEpoch = currentFinalizedEpoch - 1;
-                
-                log.info("✅ Committed HEAD broadcast: {} (epoch {})", 
-                    committedHead.substring(0, Math.min(20, committedHead.length())), lastCommittedEpoch);
-                
-                return true;
-            } else {
-                log.warn("⚠️  Finality boundary detected but no HEAD available to broadcast");
-            }
-        }
-        
-        return false;
+        return headStateService.checkAndCommitFinalityBoundary(isLeader(), currentFinalizedEpoch, newHeadStr);
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2810,17 +2371,16 @@ public class AeronConsensusEngine implements ClusteredService {
             if (updated) {
                 log.info("Updated HEAD to match leader (CAS success)");
                 fileStore.flush();
-                latestHead = headStr;
-                log.debug("Updated latestHead cache for API consistency");
+                headStateService.updateLatestHead(headStr);
             } else {
                 log.warn("HEAD CAS failed - current HEAD has changed (may have advanced)");
                 org.apache.jackrabbit.oak.segment.RecordId actualHead = fileStore.getHead().getRecordId();
                 if (actualHead.toString().equals(headStr)) {
                     log.info("HEAD already matches target (no update needed)");
-                    latestHead = headStr;
+                    headStateService.updateLatestHead(headStr);
                 } else {
                     log.debug("Current HEAD: {}...", actualHead.toString().substring(0, Math.min(16, actualHead.toString().length())));
-                    latestHead = actualHead.toString10();
+                    headStateService.updateLatestHead(actualHead.toString10());
                 }
             }
             
@@ -3246,39 +2806,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * - committedHead: HEAD that has reached finality (immutable, safe)
      */
     public void updateLatestHead(String newHead) {
-        // 🔄 CRITICAL: Use the provided newHead directly (it's already from FileStore after flush)
-        // Don't re-read from FileStore here - use the value that was just committed
-        // This ensures we track the exact HEAD that was broadcast to followers
-        if (newHead != null && !newHead.isEmpty()) {
-            // Convert to toString10() format for consistency
-            try {
-                // If newHead is already in toString10() format, use it directly
-                // Otherwise, parse and convert
-                if (newHead.contains(":")) {
-                    // Already in RecordId format, use as-is
-                    latestHead = newHead;
-                } else if (fileStore != null) {
-                    // Try to get from FileStore (should match newHead after flush)
-                    latestHead = fileStore.getHead().getRecordId().toString10();
-                } else {
-                    latestHead = newHead;
-                }
-            } catch (Exception e) {
-                // Fallback to provided value
-                latestHead = newHead;
-            }
-        } else if (fileStore != null) {
-            // Fallback: read from FileStore if newHead not provided
-            try {
-                latestHead = fileStore.getHead().getRecordId().toString10();
-            } catch (Exception e) {
-                log.debug("Could not read HEAD from FileStore: {}", e.getMessage());
-            }
-        }
-        
-        if (latestHead != null) {
-            log.debug("📝 Updated latestHead: {}...", latestHead.substring(0, Math.min(20, latestHead.length())));
-        }
+        headStateService.updateLatestHead(newHead);
     }
     
     /**
@@ -3339,7 +2867,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * This HEAD is guaranteed to be finalized and will never change.
      */
     public String getCommittedHead() {
-        return committedHead;
+        return headStateService.getCommittedHead();
     }
     
     /**
@@ -3347,21 +2875,14 @@ public class AeronConsensusEngine implements ClusteredService {
      * This HEAD includes writes that haven't reached finality yet.
      */
     public String getLatestHead() {
-        // Return tracked latestHead, or fallback to current HEAD if not set
-        if (latestHead != null && !latestHead.isEmpty()) {
-            return latestHead;
-        }
-        if (fileStore != null) {
-            return fileStore.getHead().getRecordId().toString10();
-        }
-        return null;
+        return headStateService.getLatestHead();
     }
     
     /**
      * Get last committed epoch (epoch that has reached finality).
      */
     public int getLastCommittedEpoch() {
-        return lastCommittedEpoch;
+        return headStateService.getLastCommittedEpoch();
     }
     
     /**

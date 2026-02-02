@@ -195,179 +195,235 @@ public class SnapshotService {
      * @return snapshot state metadata, or null if restoration fails
      */
     public SnapshotState restoreSnapshot(Image snapshotImage) {
+        return restoreSnapshot(snapshotImage, new org.agrona.concurrent.BusySpinIdleStrategy());
+    }
+
+    /**
+     * Restore state from snapshot image with explicit idle strategy.
+     *
+     * @param snapshotImage Aeron snapshot image
+     * @param idleStrategy idle strategy for polling the snapshot image
+     * @return snapshot state metadata, or null if restoration fails
+     */
+    public SnapshotState restoreSnapshot(Image snapshotImage, IdleStrategy idleStrategy) {
         log.info("📦 Restoring from Aeron snapshot...");
-        
+
         if (storeDirectory == null) {
             log.error("Cannot restore snapshot: storeDirectory not set");
             return null;
         }
-        
+
         File storeDir = new File(storeDirectory);
         if (!storeDir.exists() && !storeDir.mkdirs()) {
             log.error("Cannot create store directory: {}", storeDirectory);
             return null;
         }
-        
-        // State to track during restoration
-        final String[] head = {null};
-        final int[] epoch = {0};
-        final long[] timestamp = {0};
-        final int[] fileCount = {0};
-        final boolean[] metadataReceived = {false};
-        
-        // Fragment handler to process snapshot frames
-        io.aeron.logbuffer.FragmentHandler fragmentHandler = (buffer, offset, length, header) -> {
-            try {
-                processSnapshotFrame(buffer, offset, length, storeDir, 
-                                    head, epoch, timestamp, fileCount, metadataReceived);
-            } catch (Exception e) {
-                log.error("Error processing snapshot frame", e);
+
+        final java.util.concurrent.atomic.AtomicReference<String> headRef =
+            new java.util.concurrent.atomic.AtomicReference<>();
+        final java.util.concurrent.atomic.AtomicInteger epochRef = new java.util.concurrent.atomic.AtomicInteger(0);
+        final java.util.concurrent.atomic.AtomicLong timestampRef = new java.util.concurrent.atomic.AtomicLong(0);
+        final java.util.concurrent.atomic.AtomicInteger fileCountRef = new java.util.concurrent.atomic.AtomicInteger(0);
+        final java.util.concurrent.atomic.AtomicBoolean metadataReceived =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        final java.util.concurrent.atomic.AtomicReference<FileReceiver> currentFileReceiver =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
+        io.aeron.FragmentAssembler fragmentAssembler = new io.aeron.FragmentAssembler(
+            (buffer, offset, length, header) -> {
+                if (length < SimpleMessageHeader.ENCODED_LENGTH) {
+                    log.warn("⚠️  Snapshot fragment too short: {} bytes", length);
+                    return;
+                }
+
+                try {
+                    SimpleMessageHeader.HeaderInfo headerInfo = SimpleMessageHeader.decode(buffer, offset);
+                    if (headerInfo.templateId != SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
+                        return;
+                    }
+
+                    int payloadOffset = offset + SimpleMessageHeader.ENCODED_LENGTH;
+                    int maxPayloadLength = Math.max(0, length - SimpleMessageHeader.ENCODED_LENGTH);
+                    int payloadLength = Math.min(headerInfo.blockLength, maxPayloadLength);
+                    if (payloadLength == 0) {
+                        return;
+                    }
+
+                    byte[] payload = new byte[payloadLength];
+                    buffer.getBytes(payloadOffset, payload);
+
+                    String payloadStr = new String(payload, 0, Math.min(200, payloadLength),
+                        java.nio.charset.StandardCharsets.UTF_8);
+
+                    if (payloadStr.contains("\"type\":\"metadata\"")) {
+                        String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
+                        String head = extractJsonField(json, "head");
+                        Long epochValue = extractJsonFieldLong(json, "ethereumEpoch");
+                        if (epochValue == null) {
+                            epochValue = extractJsonFieldLong(json, "epoch");
+                        }
+                        Long timestampValue = extractJsonFieldLong(json, "timestamp");
+
+                        if (head != null && epochValue != null && timestampValue != null) {
+                            headRef.set(head);
+                            epochRef.set(epochValue.intValue());
+                            timestampRef.set(timestampValue);
+                            metadataReceived.set(true);
+                            log.info("   ✅ Metadata received: head={}, epoch={}", head, epochRef.get());
+                        }
+                    } else if (payloadStr.contains("\"type\":\"file_header\"")) {
+                        String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
+                        String fileType = extractJsonField(json, "fileType");
+                        String fileName = extractJsonField(json, "fileName");
+                        Long fileSize = extractJsonFieldLong(json, "fileSize");
+
+                        if (fileName != null && fileSize != null) {
+                            FileReceiver prev = currentFileReceiver.get();
+                            if (prev != null) {
+                                prev.close();
+                            }
+
+                            File targetFile = new File(storeDirectory, fileName);
+                            FileReceiver receiver = new FileReceiver(targetFile, fileSize);
+                            currentFileReceiver.set(receiver);
+                            fileCountRef.incrementAndGet();
+                            log.info("   📥 Receiving {}: {} ({} bytes)",
+                                fileType, fileName, fileSize);
+                        }
+                    } else {
+                        FileReceiver receiver = currentFileReceiver.get();
+                        if (receiver != null) {
+                            receiver.writeChunk(payload, 0, payloadLength);
+                        } else {
+                            log.debug("Received snapshot chunk but no active receiver");
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("❌ Failed to process snapshot fragment", e);
+                }
             }
-        };
-        
-        // Poll the snapshot image until end of stream
-        int fragmentsRead;
-        int totalFragments = 0;
-        
+        );
+
+        IdleStrategy strategy = idleStrategy != null
+            ? idleStrategy
+            : new org.agrona.concurrent.BusySpinIdleStrategy();
+
+        strategy.reset();
+        int fragmentsPolled = 0;
         while (!snapshotImage.isEndOfStream()) {
-            fragmentsRead = snapshotImage.poll(fragmentHandler, 10);
-            totalFragments += fragmentsRead;
-            
-            if (fragmentsRead == 0) {
-                // No fragments available, yield briefly
-                Thread.yield();
+            int fragments = snapshotImage.poll(fragmentAssembler, 20);
+            if (fragments > 0) {
+                fragmentsPolled += fragments;
             }
+            strategy.idle(fragments);
         }
-        
-        // Process any remaining fragments
-        do {
-            fragmentsRead = snapshotImage.poll(fragmentHandler, 10);
-            totalFragments += fragmentsRead;
-        } while (fragmentsRead > 0);
-        
-        if (!metadataReceived[0]) {
-            log.warn("Snapshot restoration incomplete: no metadata received");
+
+        FileReceiver finalReceiver = currentFileReceiver.get();
+        if (finalReceiver != null) {
+            finalReceiver.close();
+        }
+
+        if (!metadataReceived.get()) {
+            log.warn("⚠️  Snapshot restoration incomplete: no metadata received");
             return null;
         }
-        
+
         log.info("✅ Snapshot restored: head={}, epoch={}, files={}, fragments={}",
-                head[0], epoch[0], fileCount[0], totalFragments);
-        
-        return new SnapshotState(head[0], epoch[0], timestamp[0], fileCount[0]);
+            headRef.get(), epochRef.get(), fileCountRef.get(), fragmentsPolled);
+
+        return new SnapshotState(headRef.get(), epochRef.get(), timestampRef.get(), fileCountRef.get());
     }
-    
-    /**
-     * Process a single snapshot frame.
-     */
-    private void processSnapshotFrame(org.agrona.DirectBuffer buffer, int offset, int length,
-                                     File storeDir, String[] head, int[] epoch, long[] timestamp,
-                                     int[] fileCount, boolean[] metadataReceived) throws Exception {
-        
-        if (length < 4) {
-            log.warn("Snapshot frame too small: {} bytes", length);
-            return;
-        }
-        
-        int frameOffset = offset;
-        int frameLength = buffer.getInt(frameOffset);
-        frameOffset += 4;
-        
-        // Check if this is a metadata frame (JSON)
-        if (frameLength > 0 && frameLength < length - 4) {
-            byte[] jsonBytes = new byte[frameLength];
-            buffer.getBytes(frameOffset, jsonBytes);
-            String json = new String(jsonBytes, java.nio.charset.StandardCharsets.UTF_8);
-            
-            if (json.startsWith("{\"type\":\"metadata\"")) {
-                // Parse metadata
-                head[0] = extractJsonField(json, "head");
-                String epochStr = extractJsonField(json, "epoch");
-                String timestampStr = extractJsonField(json, "timestamp");
-                
-                if (epochStr != null) {
-                    epoch[0] = Integer.parseInt(epochStr);
-                }
-                if (timestampStr != null) {
-                    timestamp[0] = Long.parseLong(timestampStr);
-                }
-                
-                metadataReceived[0] = true;
-                log.debug("📥 Received snapshot metadata: head={}, epoch={}", head[0], epoch[0]);
-                return;
-            }
-        }
-        
-        // Otherwise, it's a file frame
-        // Frame format: [type:4][filename_len:4][filename:N][data_len:4][data:N]
-        frameOffset = offset;
-        
-        // Skip type hash (4 bytes)
-        frameOffset += 4;
-        
-        int filenameLen = buffer.getInt(frameOffset);
-        frameOffset += 4;
-        
-        if (filenameLen <= 0 || filenameLen > 256) {
-            log.warn("Invalid filename length in snapshot frame: {}", filenameLen);
-            return;
-        }
-        
-        byte[] filenameBytes = new byte[filenameLen];
-        buffer.getBytes(frameOffset, filenameBytes);
-        String filename = new String(filenameBytes, java.nio.charset.StandardCharsets.UTF_8);
-        frameOffset += filenameLen;
-        
-        int dataLen = buffer.getInt(frameOffset);
-        frameOffset += 4;
-        
-        if (dataLen <= 0 || dataLen > length) {
-            log.warn("Invalid data length in snapshot frame: {}", dataLen);
-            return;
-        }
-        
-        byte[] data = new byte[dataLen];
-        buffer.getBytes(frameOffset, data);
-        
-        // Write to file (append mode for chunked files)
-        File targetFile = new File(storeDir, filename);
-        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(targetFile, true)) {
-            fos.write(data);
-        }
-        
-        fileCount[0]++;
-        log.debug("📥 Restored file chunk: {} ({} bytes)", filename, dataLen);
-    }
-    
+
     /**
      * Extract a field from JSON string (simple parser for snapshot metadata).
      */
     private String extractJsonField(String json, String field) {
         String pattern = "\"" + field + "\":";
         int start = json.indexOf(pattern);
-        if (start < 0) return null;
-        
+        if (start < 0) {
+            return null;
+        }
+
         start += pattern.length();
-        
-        // Skip whitespace
         while (start < json.length() && Character.isWhitespace(json.charAt(start))) {
             start++;
         }
-        
-        if (start >= json.length()) return null;
-        
-        // Check if value is quoted
+
+        if (start >= json.length()) {
+            return null;
+        }
+
         if (json.charAt(start) == '"') {
             start++;
             int end = json.indexOf('"', start);
-            if (end < 0) return null;
-            return json.substring(start, end);
-        } else {
-            // Numeric value
-            int end = start;
-            while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) {
-                end++;
+            if (end < 0) {
+                return null;
             }
             return json.substring(start, end);
+        }
+
+        int end = start;
+        while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) {
+            end++;
+        }
+        return json.substring(start, end);
+    }
+
+    private Long extractJsonFieldLong(String json, String field) {
+        String value = extractJsonField(json, field);
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Helper class to receive and write file chunks during snapshot restore.
+     */
+    private static class FileReceiver {
+        private final File targetFile;
+        private final long expectedSize;
+        private long bytesReceived;
+        private java.io.FileOutputStream fos;
+
+        FileReceiver(File targetFile, long expectedSize) throws Exception {
+            this.targetFile = targetFile;
+            this.expectedSize = expectedSize;
+            this.bytesReceived = 0;
+
+            File parent = targetFile.getParentFile();
+            if (parent != null) {
+                parent.mkdirs();
+            }
+
+            this.fos = new java.io.FileOutputStream(targetFile);
+        }
+
+        void writeChunk(byte[] data, int offset, int length) throws Exception {
+            fos.write(data, offset, length);
+            bytesReceived += length;
+        }
+
+        void close() {
+            try {
+                if (fos != null) {
+                    fos.close();
+                }
+
+                if (bytesReceived == expectedSize) {
+                    log.debug("✅ Snapshot file complete: {} ({} bytes)", targetFile.getName(), bytesReceived);
+                } else {
+                    log.warn("⚠️  Snapshot file size mismatch: {} (expected {}, got {})",
+                        targetFile.getName(), expectedSize, bytesReceived);
+                }
+            } catch (Exception e) {
+                log.warn("❌ Failed to close snapshot file: {} - {}", targetFile.getName(), e.getMessage());
+            }
         }
     }
     
@@ -555,4 +611,3 @@ public class SnapshotService {
         }
     }
 }
-

@@ -100,7 +100,7 @@ The class currently handles **12+ distinct responsibilities**:
 - `scheduleHeadBroadcast()`, `broadcastHeadToFollowersImmediate()`, `checkAndBroadcastAtFinalityBoundary()`
 - `startHeadBroadcastTimer()`, `stopHeadBroadcastTimer()`, `checkPendingHeadBroadcasts()`
 - **Lines**: ~200
-- **Recommendation**: Extract to `HeadBroadcastService`
+- **Recommendation**: Extract to `HeadStateService`
 
 ### 10. Genesis Creation
 - `createGenesisViaConsensus()`, `applyGenesisCreation()` (not shown but referenced)
@@ -278,7 +278,7 @@ AeronConsensusEngine (Core - ~800 lines)
     │   ├── syncHeadFromLeader()
     │   ├── pullSegmentsForHead()
     │   └── waitForGenesisAndSync()
-    ├── HeadBroadcastService (new - ~150 lines)
+    ├── HeadStateService (new - ~150 lines)
     │   ├── scheduleHeadBroadcast()
     │   └── broadcastAtFinalityBoundary()
     ├── LeaderDiscoveryService (existing - complete delegation)
@@ -295,7 +295,7 @@ AeronConsensusEngine (Core - ~800 lines)
 | 3 | HeadSyncService | Low | Medium |
 | 4 | Complete SnapshotService | Low | Medium |
 | 5 | GCIngressService | Low | Low |
-| 6 | HeadBroadcastService | Low | Low |
+| 6 | HeadStateService | Low | Low |
 | 7 | GenesisService | Low | Low |
 
 ---
