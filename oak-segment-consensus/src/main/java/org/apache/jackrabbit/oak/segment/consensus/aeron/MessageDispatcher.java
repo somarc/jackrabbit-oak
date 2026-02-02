@@ -60,10 +60,10 @@ public class MessageDispatcher {
      * Callback interface for write operations.
      */
     public interface WriteCallback {
-        void applyWrite(String walletAddress, String path, String contentType, 
-                       String message, String signature, String intentToken, 
-                       String blobId, String mimeType, String ipfsCid);
-        void applyDelete(String walletAddress, String path, String signature);
+        void applyWrite(String walletAddress, String path, String contentType,
+                        String message, String signature, String intentToken,
+                        String blobId, String mimeType, String ipfsCid, String proposalId);
+        void applyDelete(String walletAddress, String path, String signature, String proposalId);
     }
     
     /**
@@ -82,10 +82,21 @@ public class MessageDispatcher {
         void applyGCVote(String proposalId, int validatorId, boolean approve, String reason);
         void applyGCExecute(String proposalId, int executorId);
     }
+
+    /**
+     * Callback interface for durability acknowledgments (ADR 026).
+     */
+    public interface DurabilityCallback {
+        void onQueueSegment(String proposalId, int totalMembers, int requiredAcks);
+        void onSegmentPersisted(String proposalId, int memberId, String durableHead, boolean success, String error);
+        void onAckSegmentPersisted(String proposalId, boolean success, String durableHead, String error,
+                                   int totalMembers, int requiredAcks);
+    }
     
     private WriteCallback writeCallback;
     private HeadBroadcastCallback headBroadcastCallback;
     private GCCallback gcCallback;
+    private DurabilityCallback durabilityCallback;
     
     /**
      * Create a new message dispatcher (default constructor for OSGi).
@@ -94,6 +105,7 @@ public class MessageDispatcher {
         this.writeCallback = null;
         this.headBroadcastCallback = null;
         this.gcCallback = null;
+        this.durabilityCallback = null;
     }
     
     /**
@@ -106,6 +118,7 @@ public class MessageDispatcher {
         this.writeCallback = writeCallback;
         this.headBroadcastCallback = headBroadcastCallback;
         this.gcCallback = null;
+        this.durabilityCallback = null;
     }
     
     /**
@@ -139,6 +152,11 @@ public class MessageDispatcher {
     public void setGCCallback(GCCallback gcCallback) {
         this.gcCallback = gcCallback;
         log.info("✅ MessageDispatcher GC callback set");
+    }
+
+    public void setDurabilityCallback(DurabilityCallback durabilityCallback) {
+        this.durabilityCallback = durabilityCallback;
+        log.info("✅ MessageDispatcher durability callback set");
     }
     
     /**
@@ -203,6 +221,15 @@ public class MessageDispatcher {
                 case SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE:
                     return handleGCExecute(buffer, payloadOffset, header.blockLength);
                     
+                case SimpleMessageHeader.TEMPLATE_ID_QUEUE_SEGMENT:
+                    return handleQueueSegment(buffer, payloadOffset, header.blockLength);
+                    
+                case SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED:
+                    return handleSegmentPersisted(buffer, payloadOffset, header.blockLength);
+                    
+                case SimpleMessageHeader.TEMPLATE_ID_ACK_SEGMENT_PERSISTED:
+                    return handleAckSegmentPersisted(buffer, payloadOffset, header.blockLength);
+                    
                 case SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL:
                     log.info("🎬 GENESIS proposal received - delegating to genesis callback");
                     // Genesis is handled specially by AeronConsensusEngine
@@ -249,6 +276,7 @@ public class MessageDispatcher {
             String blobId = extractJsonField(json, "blobId");
             String mimeType = extractJsonField(json, "mimeType");
             String ipfsCid = extractJsonField(json, "ipfsCid"); // ADR 016
+            String proposalId = extractJsonField(json, "proposalId");
             
             if (walletAddress == null || path == null) {
                 log.warn("Invalid write proposal: missing required fields (wallet={}, path={})", 
@@ -265,7 +293,7 @@ public class MessageDispatcher {
             log.debug("✅ Applying write: wallet={}, path={}, intentToken={}", 
                 walletAddress, path, intentToken != null ? intentToken : "none");
             writeCallback.applyWrite(walletAddress, path, contentType, message, signature, 
-                                    intentToken, blobId, mimeType, ipfsCid);
+                                    intentToken, blobId, mimeType, ipfsCid, proposalId);
             
             return true;
             
@@ -295,6 +323,7 @@ public class MessageDispatcher {
             String walletAddress = extractJsonField(json, "walletAddress");
             String path = extractJsonField(json, "path");
             String signature = extractJsonField(json, "signature");
+            String proposalId = extractJsonField(json, "proposalId");
             
             if (walletAddress == null || path == null) {
                 log.warn("Invalid delete proposal: missing required fields");
@@ -308,7 +337,7 @@ public class MessageDispatcher {
             
             // Delegate to callback
             log.info("🗑️  Applying delete: wallet={}, path={}", walletAddress, path);
-            writeCallback.applyDelete(walletAddress, path, signature);
+            writeCallback.applyDelete(walletAddress, path, signature, proposalId);
             
             return true;
             
@@ -368,6 +397,7 @@ public class MessageDispatcher {
                 String blobId = extractJsonField(proposalJson, "blobId");
                 String mimeType = extractJsonField(proposalJson, "mimeType");
                 String ipfsCid = extractJsonField(proposalJson, "ipfsCid"); // ADR 016
+                String proposalId = extractJsonField(proposalJson, "proposalId");
                 
                 if (walletAddress == null || path == null) {
                     log.warn("Invalid proposal in batch: missing required fields");
@@ -375,7 +405,7 @@ public class MessageDispatcher {
                 }
                 
                 writeCallback.applyWrite(walletAddress, path, contentType, message, 
-                                        signature, intentToken, blobId, mimeType, ipfsCid);
+                                        signature, intentToken, blobId, mimeType, ipfsCid, proposalId);
                 successCount++;
             }
             
@@ -648,5 +678,111 @@ public class MessageDispatcher {
     }
     
     private volatile int lastBatchSize = 0;
-}
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // DURABILITY MESSAGE HANDLERS (ADR 026)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private boolean handleQueueSegment(DirectBuffer buffer, int payloadOffset, int payloadLength) {
+        if (durabilityCallback == null) {
+            log.warn("⚠️  Durability callback not set - cannot process queue segment");
+            return false;
+        }
+
+        try {
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
+
+            String proposalId = extractJsonField(json, "proposalId");
+            Long totalMembers = extractJsonLongField(json, "totalMembers");
+            Long requiredAcks = extractJsonLongField(json, "requiredAcks");
+
+            if (proposalId == null || totalMembers == null || requiredAcks == null) {
+                log.warn("Invalid queue segment: missing required fields (proposalId={}, totalMembers={}, requiredAcks={})",
+                    proposalId, totalMembers, requiredAcks);
+                return false;
+            }
+
+            durabilityCallback.onQueueSegment(proposalId, totalMembers.intValue(), requiredAcks.intValue());
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to handle queue segment", e);
+            return false;
+        }
+    }
+
+    private boolean handleSegmentPersisted(DirectBuffer buffer, int payloadOffset, int payloadLength) {
+        if (durabilityCallback == null) {
+            log.warn("⚠️  Durability callback not set - cannot process segment persisted");
+            return false;
+        }
+
+        try {
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
+
+            String proposalId = extractJsonField(json, "proposalId");
+            Long memberIdLong = extractJsonLongField(json, "memberId");
+            String durableHead = extractJsonField(json, "durableHead");
+            Boolean success = extractJsonBooleanField(json, "success");
+            String error = extractJsonField(json, "error");
+
+            if (proposalId == null || memberIdLong == null || success == null) {
+                log.warn("Invalid segment persisted: missing required fields");
+                return false;
+            }
+
+            durabilityCallback.onSegmentPersisted(
+                proposalId,
+                memberIdLong.intValue(),
+                durableHead,
+                success,
+                error
+            );
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to handle segment persisted", e);
+            return false;
+        }
+    }
+
+    private boolean handleAckSegmentPersisted(DirectBuffer buffer, int payloadOffset, int payloadLength) {
+        if (durabilityCallback == null) {
+            log.warn("⚠️  Durability callback not set - cannot process ack segment persisted");
+            return false;
+        }
+
+        try {
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
+
+            String proposalId = extractJsonField(json, "proposalId");
+            Boolean success = extractJsonBooleanField(json, "success");
+            String durableHead = extractJsonField(json, "durableHead");
+            String error = extractJsonField(json, "error");
+            Long totalMembers = extractJsonLongField(json, "totalMembers");
+            Long requiredAcks = extractJsonLongField(json, "requiredAcks");
+
+            if (proposalId == null || success == null || totalMembers == null || requiredAcks == null) {
+                log.warn("Invalid ack segment persisted: missing required fields");
+                return false;
+            }
+
+            durabilityCallback.onAckSegmentPersisted(
+                proposalId,
+                success,
+                durableHead,
+                error,
+                totalMembers.intValue(),
+                requiredAcks.intValue()
+            );
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to handle ack segment persisted", e);
+            return false;
+        }
+    }
+}

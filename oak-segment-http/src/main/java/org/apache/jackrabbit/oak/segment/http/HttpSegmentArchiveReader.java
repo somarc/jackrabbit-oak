@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.UUID;
 
 /**
@@ -47,14 +48,12 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
     private final Http2ClientPool http2ClientPool;
     private final String baseUrl;
     private final String archiveName;
-    private final long length;
 
     public HttpSegmentArchiveReader(String baseUrl, String archiveName, IOMonitor ioMonitor, Http2ClientPool http2ClientPool) throws IOException {
-        super(ioMonitor); // MUST be first in Java
+        super(ioMonitor, archiveName, Collections.emptyList()); // No index available yet
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.archiveName = archiveName;
         this.http2ClientPool = http2ClientPool;
-        this.length = computeArchiveIndexAndLength();
         log.debug("Initialized HttpSegmentArchiveReader (HTTP/2) for archive: {} at: {}", archiveName, this.baseUrl);
     }
     
@@ -69,21 +68,8 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
     }
 
     @Override
-    public long length() {
-        return length;
-    }
-
-    @Override
     public String getName() {
         return archiveName;
-    }
-
-    @Override
-    protected long computeArchiveIndexAndLength() throws IOException {
-        // Server uses simple /segments/{uuid} API
-        // Segments are discovered on-demand, so archive length is unknown initially
-        log.debug("Archive index not available - segments will be fetched on-demand from: {}/segments/{{uuid}}", baseUrl);
-        return 0; // Unknown length until segments are read
     }
 
     @Override
@@ -156,4 +142,3 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
         log.debug("Closed HttpSegmentArchiveReader. HTTP/2 stats: {}", http2ClientPool.getPoolStats());
     }
 }
-

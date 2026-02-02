@@ -32,6 +32,14 @@ public interface RaftAppendCallback {
      * @param signature Transaction signature
      */
     void appendProposal(String walletAddress, String path, String contentType, String message, String signature);
+
+    /**
+     * Append a verified write proposal with proposalId (ADR 026).
+     */
+    default void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                     String message, String signature) {
+        appendProposal(walletAddress, path, contentType, message, signature);
+    }
     
     /**
      * Append a verified write proposal with binary to Raft log.
@@ -48,6 +56,14 @@ public interface RaftAppendCallback {
                                String signature, String blobId, String mimeType) {
         // Default: call overload with null ipfsCid
         appendProposal(walletAddress, path, contentType, message, signature, blobId, mimeType, null);
+    }
+
+    /**
+     * Append a verified write proposal with proposalId and binary.
+     */
+    default void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                     String message, String signature, String blobId, String mimeType) {
+        appendProposal(walletAddress, path, contentType, message, signature, blobId, mimeType);
     }
     
     /**
@@ -67,6 +83,14 @@ public interface RaftAppendCallback {
         // Default: ignore binary metadata and call base method
         appendProposal(walletAddress, path, contentType, message, signature);
     }
+
+    /**
+     * Append a verified write proposal with proposalId, binary, and IPFS CID.
+     */
+    default void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                     String message, String signature, String blobId, String mimeType, String ipfsCid) {
+        appendProposal(walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid);
+    }
     
     /**
      * Append a verified delete proposal to Raft log.
@@ -80,6 +104,13 @@ public interface RaftAppendCallback {
         // Default implementation: not implemented
         // Implementations should override this to support deletes
         throw new UnsupportedOperationException("Delete proposals not supported by this Raft callback implementation");
+    }
+
+    /**
+     * Append a verified delete proposal with proposalId.
+     */
+    default void appendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
+        appendDeleteProposal(walletAddress, path, signature);
     }
     
     /**
@@ -96,14 +127,16 @@ public interface RaftAppendCallback {
         for (QueuedProposal proposal : proposals) {
             if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
                 // DELETE proposal: send via appendDeleteProposal
-                appendDeleteProposal(
+                appendDeleteProposalWithId(
+                    proposal.getProposalId(),
                     proposal.getWalletAddress(),
                     proposal.getPath(),
                     proposal.getSignature()
                 );
             } else {
                 // WRITE proposal: send via appendProposal
-                appendProposal(
+                appendProposalWithId(
+                    proposal.getProposalId(),
                     proposal.getWalletAddress(),
                     proposal.getPath(),
                     proposal.getContentType(),
@@ -116,4 +149,3 @@ public interface RaftAppendCallback {
         return sent;
     }
 }
-

@@ -107,6 +107,10 @@ public class HealthHandler {
         if (context != null && context.aeronConsensusEngine != null) {
             // ADR 028: Add cluster health status
             json.append(",\n  \"clusterHealthy\": ").append(isClusterHealthy);
+            json.append(",\n  \"reachableCount\": ").append(context.aeronConsensusEngine.getReachableValidatorCount());
+            json.append(",\n  \"totalMembers\": ").append(context.aeronConsensusEngine.getTotalMemberCount());
+            json.append(",\n  \"quorumSize\": ").append(context.aeronConsensusEngine.getQuorumSize());
+            json.append(",\n  \"currentRole\": \"").append(context.aeronConsensusEngine.getCurrentRole().name()).append("\"");
             
             String committedHead = context.aeronConsensusEngine.getCommittedHead();
             String latestHead = context.aeronConsensusEngine.getLatestHead();
@@ -196,6 +200,39 @@ public class HealthHandler {
             } else {
                 json.append("    \"status\": \"DOWN\",\n");
                 json.append("    \"error\": \"FileStore not initialized\"\n");
+                allHealthy = false;
+            }
+        } catch (Exception e) {
+            json.append("    \"status\": \"DOWN\",\n");
+            json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+            allHealthy = false;
+        }
+        json.append("  },\n");
+
+        // 2.5. Check cluster health
+        json.append("  \"cluster\": {\n");
+        try {
+            AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
+            if (aeronEngine != null) {
+                boolean clusterHealthy = aeronEngine.isClusterHealthy();
+                json.append("    \"status\": \"").append(clusterHealthy ? "UP" : "UNHEALTHY").append("\",\n");
+                json.append("    \"reachableCount\": ").append(aeronEngine.getReachableValidatorCount()).append(",\n");
+                json.append("    \"totalMembers\": ").append(aeronEngine.getTotalMemberCount()).append(",\n");
+                json.append("    \"quorumSize\": ").append(aeronEngine.getQuorumSize()).append(",\n");
+                json.append("    \"currentRole\": \"").append(aeronEngine.getCurrentRole().name()).append("\",\n");
+                json.append("    \"heartbeatAgeMs\": ").append(aeronEngine.getHeartbeatAgeMs());
+                String reason = aeronEngine.getUnhealthyReason();
+                if (reason != null) {
+                    json.append(",\n    \"unhealthyReason\": \"").append(reason).append("\"\n");
+                } else {
+                    json.append("\n");
+                }
+                if (!clusterHealthy) {
+                    allHealthy = false;
+                }
+            } else {
+                json.append("    \"status\": \"UNKNOWN\",\n");
+                json.append("    \"error\": \"Aeron consensus engine not initialized\"\n");
                 allHealthy = false;
             }
         } catch (Exception e) {
@@ -380,5 +417,40 @@ public class HealthHandler {
         response.setStatus(allHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
         response.getWriter().write(json.toString());
     }
+    
+    /**
+     * Handle cluster-only health check endpoint.
+     * 
+     * <p>ADR 028: Exposes quorum + heartbeat + leader status for pre-flight checks.</p>
+     */
+    public void handleClusterHealth(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        
+        if (context == null || context.aeronConsensusEngine == null) {
+            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            response.getWriter().write("{\"status\":\"UNAVAILABLE\",\"reason\":\"cluster_not_initialized\"}");
+            return;
+        }
+        
+        boolean healthy = context.aeronConsensusEngine.isClusterHealthy();
+        String reason = healthy ? null : context.aeronConsensusEngine.getUnhealthyReason();
+        
+        response.setStatus(healthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        
+        StringBuilder json = new StringBuilder();
+        json.append("{\n");
+        json.append("  \"status\": \"").append(healthy ? "UP" : "UNHEALTHY").append("\",\n");
+        if (!healthy && reason != null) {
+            json.append("  \"unhealthyReason\": \"").append(reason).append("\",\n");
+        }
+        json.append("  \"reachableCount\": ").append(context.aeronConsensusEngine.getReachableValidatorCount()).append(",\n");
+        json.append("  \"totalMembers\": ").append(context.aeronConsensusEngine.getTotalMemberCount()).append(",\n");
+        json.append("  \"quorumSize\": ").append(context.aeronConsensusEngine.getQuorumSize()).append(",\n");
+        json.append("  \"hasQuorum\": ").append(context.aeronConsensusEngine.hasQuorum()).append(",\n");
+        json.append("  \"lastHeartbeatTime\": ").append(context.aeronConsensusEngine.getLastHeartbeatTime()).append(",\n");
+        json.append("  \"heartbeatAgeMs\": ").append(context.aeronConsensusEngine.getHeartbeatAgeMs()).append(",\n");
+        json.append("  \"leaderUrl\": \"").append(context.aeronConsensusEngine.getCurrentLeader()).append("\"\n");
+        json.append("}");
+        response.getWriter().write(json.toString());
+    }
 }
-

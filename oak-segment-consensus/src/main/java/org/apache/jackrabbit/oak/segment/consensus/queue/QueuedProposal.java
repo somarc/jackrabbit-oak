@@ -19,7 +19,8 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
 /**
  * Queued proposal waiting for Ethereum confirmation.
  */
-public class QueuedProposal {
+public class QueuedProposal implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
     
     /** Proposal type (WRITE or DELETE) */
     public enum ProposalType {
@@ -51,6 +52,12 @@ public class QueuedProposal {
     private volatile String ipfsCid; // IPFS CID from client-side upload (ADR 016)
     private volatile int retryCount = 0; // Number of times this proposal has been retried
     private volatile long lastRetryTimestamp = 0; // Timestamp of last retry attempt
+
+    // Durability tracking (ADR 026)
+    private volatile DurabilityState durabilityState = DurabilityState.PENDING;
+    private volatile long durabilityTimestamp = 0;
+    private volatile String durabilityError;
+    private volatile String durableHead;
     
     public QueuedProposal(
             String proposalId,
@@ -116,6 +123,29 @@ public class QueuedProposal {
     
     public void setSignature(String signature) {
         this.signature = signature;
+    }
+
+    public DurabilityState getDurabilityState() {
+        return durabilityState;
+    }
+
+    public long getDurabilityTimestamp() {
+        return durabilityTimestamp;
+    }
+
+    public String getDurabilityError() {
+        return durabilityError;
+    }
+
+    public String getDurableHead() {
+        return durableHead;
+    }
+
+    public void setDurabilityState(DurabilityState durabilityState, String durableHead, String durabilityError) {
+        this.durabilityState = durabilityState;
+        this.durableHead = durableHead;
+        this.durabilityError = durabilityError;
+        this.durabilityTimestamp = System.currentTimeMillis();
     }
     
     public long getEpoch() {
@@ -240,4 +270,3 @@ public class QueuedProposal {
         return lastRetryTimestamp;
     }
 }
-

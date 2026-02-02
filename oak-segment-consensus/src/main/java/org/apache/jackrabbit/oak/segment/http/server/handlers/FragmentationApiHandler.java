@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTr
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,7 +59,7 @@ public class FragmentationApiHandler {
         try {
             FragmentationTracker tracker = getFragmentationTracker();
             if (tracker == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
                 return;
             }
             
@@ -84,7 +85,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error getting fragmentation metrics", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -97,13 +98,13 @@ public class FragmentationApiHandler {
         try {
             FragmentationTracker tracker = getFragmentationTracker();
             if (tracker == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
                 return;
             }
             
             FragmentationTracker.EntityFragmentationMetrics metrics = tracker.getMetrics(walletAddress);
             if (metrics == null) {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND, "No metrics found for wallet: " + walletAddress);
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "No metrics found for wallet: " + walletAddress);
                 return;
             }
             
@@ -115,7 +116,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error getting entity fragmentation metrics", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -128,7 +129,7 @@ public class FragmentationApiHandler {
         try {
             FragmentationTracker tracker = getFragmentationTracker();
             if (tracker == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
                 return;
             }
             
@@ -164,7 +165,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error getting top fragmented entities", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -177,7 +178,7 @@ public class FragmentationApiHandler {
         try {
             GCProposalManager gcManager = getGCProposalManager();
             if (gcManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
                 return;
             }
             
@@ -203,7 +204,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error getting GC status", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -216,7 +217,7 @@ public class FragmentationApiHandler {
         try {
             GCProposalManager gcManager = getGCProposalManager();
             if (gcManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
                 return;
             }
             
@@ -241,7 +242,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error getting compaction proposals", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -270,7 +271,7 @@ public class FragmentationApiHandler {
         try {
             GCProposalManager gcManager = getGCProposalManager();
             if (gcManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
                 return;
             }
             
@@ -345,7 +346,7 @@ public class FragmentationApiHandler {
             
             // Validate required parameter
             if (proposerWallet == null || proposerWallet.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "walletAddress parameter required. Provide as JSON body: {\"walletAddress\":\"0x...\"} or query parameter: ?walletAddress=0x...");
                 return;
             }
@@ -385,7 +386,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error proposing GC", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -413,7 +414,7 @@ public class FragmentationApiHandler {
         try {
             GCProposalManager gcManager = getGCProposalManager();
             if (gcManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
                 return;
             }
             
@@ -456,7 +457,7 @@ public class FragmentationApiHandler {
             }
             
             if (proposalId == null || proposalId.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "proposalId parameter required. Provide as JSON body: {\"proposalId\":\"uuid\"} or query parameter: ?proposalId=uuid");
                 return;
             }
@@ -491,13 +492,13 @@ public class FragmentationApiHandler {
             
         } catch (IllegalStateException e) {
             // Proposal not approved or already executed
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
         } catch (IllegalArgumentException e) {
             // Proposal not found
-            response.sendError(HttpServletResponse.SC_NOT_FOUND, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, e.getMessage());
         } catch (Exception e) {
             log.error("Error executing GC", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -620,7 +621,7 @@ public class FragmentationApiHandler {
         
         try {
             if (context.gcAccountManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
                 return;
             }
             
@@ -646,7 +647,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error getting GC account", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -662,14 +663,14 @@ public class FragmentationApiHandler {
         
         try {
             if (context.gcAccountManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
                 return;
             }
             
             // Get payment amount
             String amountStr = request.getParameter("amount");
             if (amountStr == null || amountStr.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "amount parameter required");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "amount parameter required");
                 return;
             }
             
@@ -704,7 +705,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error recording payment", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -720,14 +721,14 @@ public class FragmentationApiHandler {
         
         try {
             if (context.gcAccountManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
                 return;
             }
             
             // Get limit
             String limitStr = request.getParameter("limit");
             if (limitStr == null || limitStr.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "limit parameter required");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "limit parameter required");
                 return;
             }
             
@@ -753,7 +754,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error setting debt limit", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -769,7 +770,7 @@ public class FragmentationApiHandler {
         
         try {
             if (context.gcAccountManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
                 return;
             }
             
@@ -803,7 +804,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error executing pending debt", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
     
@@ -818,7 +819,7 @@ public class FragmentationApiHandler {
         
         try {
             if (context.gcAccountManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
                 return;
             }
             
@@ -856,7 +857,7 @@ public class FragmentationApiHandler {
             
         } catch (Exception e) {
             log.error("Error triggering GC", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
 }

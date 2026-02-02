@@ -87,6 +87,8 @@ public class ProposalQueueManagerOptimized {
     private final EpochBasedBatchQueue epochQueue; // NEW: Epoch-based batching for optimal segment packing
     private final ConcurrentLinkedQueue<List<QueuedProposal>> batchQueue = new ConcurrentLinkedQueue<>(); // Batches ready to send
     private final ConcurrentHashMap<String, QueuedProposal> allProposals = new ConcurrentHashMap<>();
+    private final ProposalPersistenceStore persistenceStore;
+    private final Object persistenceLock = new Object();
     
     // Dependencies
     private final EvmBridge evmBridge;
@@ -107,6 +109,9 @@ public class ProposalQueueManagerOptimized {
     private final java.util.concurrent.atomic.AtomicLong totalRejectedCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong totalVerifiedCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong totalFinalizedCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private static final long PROCESSED_RETENTION_MS =
+        Long.getLong("oak.proposal.processed.retention.ms", 10 * 60 * 1000L);
+    private volatile long lastProcessedCleanup = 0L;
     
     /**
      * Create optimized proposal queue manager with Ethereum epoch-based batching.
@@ -121,10 +126,29 @@ public class ProposalQueueManagerOptimized {
             RaftAppendCallback raftAppendCallback,
             BackpressureManager backpressureManager,
             org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient) {
+        this(evmBridge, raftAppendCallback, backpressureManager, beaconClient, null);
+    }
+    
+    /**
+     * Create optimized proposal queue manager with optional persistence directory.
+     * 
+     * @param evmBridge EVM bridge for payment verification
+     * @param raftAppendCallback Callback to append verified proposals to Raft
+     * @param backpressureManager Backpressure manager for flow control
+     * @param beaconClient Beacon Chain client for real-time Ethereum epoch tracking
+     * @param persistenceDir Optional directory for persisting queued proposals
+     */
+    public ProposalQueueManagerOptimized(
+            EvmBridge evmBridge,
+            RaftAppendCallback raftAppendCallback,
+            BackpressureManager backpressureManager,
+            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient,
+            String persistenceDir) {
         this.evmBridge = evmBridge;
         this.raftAppendCallback = raftAppendCallback;
         this.backpressureManager = backpressureManager;
         this.epochQueue = new EpochBasedBatchQueue(beaconClient);
+        this.persistenceStore = createPersistenceStore(persistenceDir);
     }
     
     /**
@@ -137,6 +161,7 @@ public class ProposalQueueManagerOptimized {
         }
         
         running = true;
+        restorePersistedProposals();
         
         // Agent 1: Aeron Sender (FAST path - batch send finalized proposals)
         aeronSenderAgent = new AgentRunner(
@@ -281,6 +306,62 @@ public class ProposalQueueManagerOptimized {
         stats.put("maxRetryLimit", MAX_RETRY_COUNT);
         
         return stats;
+    }
+    
+    private ProposalPersistenceStore createPersistenceStore(String persistenceDir) {
+        String resolved = persistenceDir;
+        if (resolved == null || resolved.isEmpty()) {
+            resolved = System.getProperty("oak.proposal.persistence.dir");
+        }
+        if (resolved == null || resolved.isEmpty()) {
+            resolved = System.getenv("OAK_PROPOSAL_PERSISTENCE_DIR");
+        }
+        if (resolved == null || resolved.isEmpty()) {
+            return null;
+        }
+        return new ProposalPersistenceStore(java.nio.file.Path.of(resolved));
+    }
+    
+    private void restorePersistedProposals() {
+        if (persistenceStore == null) {
+            return;
+        }
+        List<QueuedProposal> proposals = persistenceStore.load();
+        if (proposals.isEmpty()) {
+            return;
+        }
+        int restored = 0;
+        for (QueuedProposal proposal : proposals) {
+            if (proposal == null) {
+                continue;
+            }
+            if (proposal.getState() == ProposalState.PROCESSED || proposal.getState() == ProposalState.REJECTED) {
+                continue;
+            }
+            proposal.setState(ProposalState.PENDING);
+            proposal.setConfirmedBlock(null);
+            proposal.setRejectionReason(null);
+            allProposals.put(proposal.getProposalId(), proposal);
+            unverifiedQueue.offer(proposal);
+            restored++;
+            
+            if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
+                ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
+                    .registerProposalWallet(proposal.getProposalId(), proposal.getWalletAddress());
+            }
+        }
+        if (restored > 0) {
+            log.info("🔁 Restored {} persisted proposals into unverified queue", restored);
+        }
+    }
+    
+    private void persistProposals() {
+        if (persistenceStore == null) {
+            return;
+        }
+        synchronized (persistenceLock) {
+            persistenceStore.save(allProposals.values());
+        }
     }
     
     /**
@@ -442,6 +523,7 @@ public class ProposalQueueManagerOptimized {
         proposal.setEpoch(epoch); // NEW: Track epoch for finality
         proposal.setTier(tier); // Set payment tier for priority handling
         proposal.setIntentToken(intentToken); // Set intent token for lazy binary upload (ADR 020)
+        proposal.setDurabilityState(DurabilityState.PENDING, null, null);
         
         // Add to tracking map and unverified queue
         allProposals.put(proposalId, proposal);
@@ -455,6 +537,7 @@ public class ProposalQueueManagerOptimized {
         
         log.debug("📥 Queued proposal {} for EVM verification in epoch {} (tier: {}, queue size: {})", 
             proposalId, epoch, tier, unverifiedQueue.size());
+        persistProposals();
         
         return proposal;
     }
@@ -518,6 +601,7 @@ public class ProposalQueueManagerOptimized {
         proposal.setSignature(signature);
         proposal.setEpoch(targetEpoch);
         proposal.setTier(tier);
+        proposal.setDurabilityState(DurabilityState.PENDING, null, null);
         
         // Add to tracking map and unverified queue
         allProposals.put(proposalId, proposal);
@@ -531,6 +615,7 @@ public class ProposalQueueManagerOptimized {
         
         log.info("🗑️  Queued DELETE proposal {} for EVM verification in epoch {} (tier: {}, path: {}, queue size: {})", 
             proposalId, targetEpoch, tier, path, unverifiedQueue.size());
+        persistProposals();
         
         return proposal;
     }
@@ -557,8 +642,24 @@ public class ProposalQueueManagerOptimized {
             proposal.getEthereumTxHash(),
             proposal.getTimeoutTimestamp(),
             proposal.getConfirmedBlock(),
-            proposal.getRejectionReason()
+            proposal.getRejectionReason(),
+            proposal.getDurabilityState(),
+            proposal.getDurabilityTimestamp(),
+            proposal.getDurabilityError(),
+            proposal.getDurableHead()
         );
+    }
+
+    /**
+     * Update durability status for a proposal after local disk persistence.
+     */
+    public void updateDurability(String proposalId, DurabilityState state, String durableHead, String error) {
+        QueuedProposal proposal = allProposals.get(proposalId);
+        if (proposal == null) {
+            return;
+        }
+        proposal.setDurabilityState(state, durableHead, error);
+        persistProposals();
     }
     
     /**
@@ -643,7 +744,8 @@ public class ProposalQueueManagerOptimized {
                         // Check proposal type: WRITE or DELETE
                         if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
                             log.info("🗑️  Sending DELETE proposal (templateId 101)");
-                            raftAppendCallback.appendDeleteProposal(
+                            raftAppendCallback.appendDeleteProposalWithId(
+                                proposal.getProposalId(),
                                 proposal.getWalletAddress(),
                                 proposal.getPath(),
                                 proposal.getSignature()
@@ -651,7 +753,8 @@ public class ProposalQueueManagerOptimized {
                         } else {
                             log.info("📝 Sending WRITE proposal (templateId 100) blobId={}, ipfsCid={}", 
                                 proposal.getBlobId(), proposal.getIpfsCid());
-                            raftAppendCallback.appendProposal(
+                            raftAppendCallback.appendProposalWithId(
+                                proposal.getProposalId(),
                                 proposal.getWalletAddress(),
                                 proposal.getPath(),
                                 proposal.getContentType(),
@@ -675,7 +778,6 @@ public class ProposalQueueManagerOptimized {
                         // Mark all proposals in batch as processed
                         for (QueuedProposal queued : batch) {
                             queued.setState(ProposalState.PROCESSED);
-                            allProposals.remove(queued.getProposalId());
                             totalFinalizedCount.incrementAndGet();
                             
                             // Track for backpressure management (one per proposal)
@@ -683,6 +785,7 @@ public class ProposalQueueManagerOptimized {
                             batchedProposalsSent.incrementAndGet();
                             workCount++;
                         }
+                        persistProposals();
                         
                         log.info("✅ Batch sent to Aeron: {} proposals in 1 message (diagnostic mode: {})", 
                             sent, batch.size() == 1 ? "templateId 100" : "templateId 106");
@@ -720,9 +823,9 @@ public class ProposalQueueManagerOptimized {
                             proposal.setState(ProposalState.REJECTED);
                             proposal.setRejectionReason("Exceeded max retry count (" + MAX_RETRY_COUNT + 
                                 ") after Aeron send failures: " + e.getMessage());
-                            allProposals.remove(proposal.getProposalId());
                             totalRejectedCount.incrementAndGet();
                         }
+                        persistProposals();
                     } else {
                         // Re-queue for retry
                         batchQueue.offer(batch);
@@ -733,12 +836,44 @@ public class ProposalQueueManagerOptimized {
                 }
             }
             
+            cleanupProcessedProposals();
             return workCount;
         }
         
         @Override
         public String roleName() {
             return "aeron-sender-agent";
+        }
+    }
+
+    /**
+     * Clean up processed proposals after retention window to avoid unbounded growth.
+     */
+    private void cleanupProcessedProposals() {
+        long now = System.currentTimeMillis();
+        if (now - lastProcessedCleanup < 60_000L) {
+            return;
+        }
+        lastProcessedCleanup = now;
+        final int[] removed = {0};
+        allProposals.entrySet().removeIf(entry -> {
+            QueuedProposal proposal = entry.getValue();
+            if (proposal.getState() != ProposalState.PROCESSED) {
+                return false;
+            }
+            long age = now - proposal.getTimestamp();
+            if (age < PROCESSED_RETENTION_MS) {
+                return false;
+            }
+            DurabilityState durability = proposal.getDurabilityState();
+            boolean shouldRemove = durability == DurabilityState.ACKED || durability == DurabilityState.FAILED;
+            if (shouldRemove) {
+                removed[0]++;
+            }
+            return shouldRemove;
+        });
+        if (removed[0] > 0) {
+            persistProposals();
         }
     }
     
@@ -918,6 +1053,7 @@ public class ProposalQueueManagerOptimized {
                     
                     proposal.setState(ProposalState.VERIFIED);
                     proposal.setConfirmedBlock(proof.getBlockNumber());
+                    persistProposals();
                     
                     // Track verification persistently
                     totalVerifiedCount.incrementAndGet();
@@ -956,6 +1092,7 @@ public class ProposalQueueManagerOptimized {
                             proposal.setState(ProposalState.PROCESSED);
                             allProposals.remove(proposal.getProposalId());
                             totalFinalizedCount.incrementAndGet();
+                            persistProposals();
                             
                             // Track for backpressure
                             backpressureManager.incrementSent();
@@ -1013,6 +1150,7 @@ public class ProposalQueueManagerOptimized {
             
             // Track rejection persistently (survives proposal removal)
             totalRejectedCount.incrementAndGet();
+            persistProposals();
             
             log.warn("❌ REJECTED proposal {}: {} (total rejected: {})", 
                 proposal.getProposalId(), reason, totalRejectedCount.get());
@@ -1276,4 +1414,3 @@ public class ProposalQueueManagerOptimized {
         );
     }
 }
-

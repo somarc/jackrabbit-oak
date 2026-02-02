@@ -163,7 +163,7 @@ public class ValidatorRegistrationHandler {
      */
     public void handleRegistrationPage(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (!enabled) {
-            response.sendError(HttpServletResponse.SC_FORBIDDEN, "Registration is disabled");
+            sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, "Registration is disabled");
             return;
         }
         

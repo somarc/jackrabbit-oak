@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
@@ -68,8 +69,7 @@ public class ExplorerApiHandler {
                     if (!part.isEmpty()) {
                         node = node.getChildNode(part);
                         if (!node.exists()) {
-                            response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-                            response.getWriter().write("{\"error\":\"Node not found\"}");
+                            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
                             return;
                         }
                     }
@@ -272,13 +272,13 @@ public class ExplorerApiHandler {
                                   HttpServletResponse response, 
                                   String blobId) throws IOException {
         if (blobStore == null) {
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "BlobStore not configured");
             return;
         }
         
         if (blobId == null || blobId.isEmpty()) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Blob ID required");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Blob ID required");
             return;
         }
         
@@ -290,7 +290,7 @@ public class ExplorerApiHandler {
             
             if (blobStream == null) {
                 log.warn("Blob not found in BlobStore: {}", blobId);
-                response.sendError(HttpServletResponse.SC_NOT_FOUND, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, 
                     "Blob not found: " + blobId);
                 return;
             }
@@ -327,9 +327,8 @@ public class ExplorerApiHandler {
             
         } catch (Exception e) {
             log.error("Error streaming blob {}: {}", blobId, e.getMessage());
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
                 "Failed to stream blob: " + e.getMessage());
         }
     }
 }
-

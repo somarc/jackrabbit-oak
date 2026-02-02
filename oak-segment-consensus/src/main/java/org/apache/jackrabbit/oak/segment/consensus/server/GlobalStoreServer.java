@@ -1047,16 +1047,18 @@ public class GlobalStoreServer {
                 aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
                     @Override
                     public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message, 
-                                                     String signature, String intentToken, String blobId, String mimeType, String ipfsCid) {
+                                                     String signature, String intentToken, String blobId, String mimeType, String ipfsCid,
+                                                     String proposalId) {
                         httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                            walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid
+                            walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid,
+                            proposalId
                         );
                     }
                     
                     @Override
-                    public void applyReplicatedDelete(String walletAddress, String path, String signature) {
+                    public void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId) {
                         httpServer.getConsensusApiHandler().applyReplicatedDelete(
-                            walletAddress, path, signature
+                            walletAddress, path, signature, proposalId
                         );
                     }
                 });
@@ -1263,6 +1265,20 @@ public class GlobalStoreServer {
                                 System.err.println("❌ sendWriteThroughIngress() returned false!");
                             }
                         }
+
+                        @Override
+                        public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                                         String message, String signature) {
+                            if (aeronEngine == null) {
+                                System.err.println("❌ aeronEngine is NULL in appendProposalWithId!");
+                                return;
+                            }
+                            boolean success = aeronEngine.sendWriteThroughIngressWithId(
+                                walletAddress, path, contentType, message, signature, null, proposalId);
+                            if (!success) {
+                                System.err.println("❌ sendWriteThroughIngress() returned false!");
+                            }
+                        }
                         
                         @Override
                         public void appendProposal(String walletAddress, String path, String contentType, String message, 
@@ -1278,6 +1294,20 @@ public class GlobalStoreServer {
                                 System.err.println("❌ sendWriteThroughIngress() with binary returned false!");
                             }
                         }
+
+                        @Override
+                        public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                                         String message, String signature, String blobId, String mimeType, String ipfsCid) {
+                            if (aeronEngine == null) {
+                                System.err.println("❌ aeronEngine is NULL in appendProposalWithId!");
+                                return;
+                            }
+                            boolean success = aeronEngine.sendWriteThroughIngress(
+                                walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid, proposalId);
+                            if (!success) {
+                                System.err.println("❌ sendWriteThroughIngress() with binary returned false!");
+                            }
+                        }
                         
                         @Override
                         public void appendDeleteProposal(String walletAddress, String path, String signature) {
@@ -1288,6 +1318,18 @@ public class GlobalStoreServer {
                             }
                             System.out.println("🗑️  appendDeleteProposal() called - forwarding to Aeron (role: " + aeronEngine.getCurrentRole() + ")");
                             boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature);
+                            if (!success) {
+                                System.err.println("❌ sendDeleteThroughIngress() returned false!");
+                            }
+                        }
+
+                        @Override
+                        public void appendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
+                            if (aeronEngine == null) {
+                                System.err.println("❌ aeronEngine is NULL in appendDeleteProposalWithId!");
+                                return;
+                            }
+                            boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature, proposalId);
                             if (!success) {
                                 System.err.println("❌ sendDeleteThroughIngress() returned false!");
                             }
@@ -1331,7 +1373,13 @@ public class GlobalStoreServer {
                 
                 // Use optimized epoch-based batching queue manager
                 org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized proposalQueueManager = 
-                    new org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized(evmBridge, raftCallback, backpressureManager, beaconClient);
+                    new org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized(
+                        evmBridge,
+                        raftCallback,
+                        backpressureManager,
+                        beaconClient,
+                        new java.io.File(storeDirectory, "proposal-queue").getAbsolutePath()
+                    );
                 proposalQueueManager.start();
                 httpServer.getContext().setProposalQueueManager(proposalQueueManager);
                 httpServer.getContext().evmBridge = evmBridge; // Store for GC Proposal Manager
@@ -1915,16 +1963,18 @@ public class GlobalStoreServer {
         aeronEngine.setWriteApplicationCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.WriteApplicationCallback() {
             @Override
             public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message, 
-                                             String signature, String intentToken, String blobId, String mimeType, String ipfsCid) {
+                                             String signature, String intentToken, String blobId, String mimeType, String ipfsCid,
+                                             String proposalId) {
                 httpServer.getConsensusApiHandler().applyReplicatedWrite(
-                    walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid
+                    walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid,
+                    proposalId
                 );
             }
             
             @Override
-            public void applyReplicatedDelete(String walletAddress, String path, String signature) {
+            public void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId) {
                 httpServer.getConsensusApiHandler().applyReplicatedDelete(
-                    walletAddress, path, signature
+                    walletAddress, path, signature, proposalId
                 );
             }
         });
@@ -2374,4 +2424,3 @@ public class GlobalStoreServer {
         System.out.println("  java -jar oak-segment-consensus.jar --port 8090 --store /var/oak-chain");
     }
 }
-

@@ -25,6 +25,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.IOException;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
 /**
  * Handler for Aeron Cluster consensus endpoints.
@@ -77,14 +78,14 @@ public class LeaderConsensusHandler {
     public void handleFollowerHeadUpdate(HttpServletRequest request, HttpServletResponse response) throws IOException {
         // AERON MODE ONLY: Require AeronConsensusEngine
         if (context.aeronConsensusEngine == null) {
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "Aeron consensus engine not configured");
             return;
         }
         
         // Only followers can receive HEAD updates (leader broadcasts, doesn't receive)
         if (context.aeronConsensusEngine.isLeader()) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                 "I am the leader, not a follower");
             return;
         }
@@ -106,13 +107,13 @@ public class LeaderConsensusHandler {
             String leaderUrl = JsonParser.extractField(body, "leaderUrl");
             
             if (head == null || head.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Missing required field: head");
                 return;
             }
             
             if (leaderUrl == null || leaderUrl.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Missing required field: leaderUrl");
                 return;
             }
@@ -138,7 +139,7 @@ public class LeaderConsensusHandler {
             if (currentLeader != null && !isSameUrlByPort(leaderUrl, currentLeader)) {
                 log.warn("🚫 HEAD update from non-leader: {} (expected: {})", 
                     leaderUrl, currentLeader);
-                response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, 
                     "Not current leader");
                 return;
             }
@@ -158,7 +159,7 @@ public class LeaderConsensusHandler {
             
         } catch (Exception e) {
             log.error("❌ Failed to process follower HEAD update", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
                 "Failed to process HEAD update: " + e.getMessage());
         }
     }

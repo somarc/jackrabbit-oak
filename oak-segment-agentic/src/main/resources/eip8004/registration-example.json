@@ -1,0 +1,26 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Oak-Chain-Agentic-0x742f...",
+  "description": "Oak-Chain agentic service (validator)",
+  "services": [
+    {
+      "name": "Oak-Chain-Agentic",
+      "endpoint": "https://validator-1.oak-chain.io:8090",
+      "version": "0.1.0",
+      "capabilities": [
+        "llm-chat",
+        "validator-apis",
+        "rag-validator-codebase"
+      ]
+    }
+  ],
+  "supportedTrust": [
+    "reputation",
+    "crypto-economic"
+  ],
+  "metadata": {
+    "agentId": "0x742f...",
+    "agentType": "validator",
+    "chainId": "11155111"
+  }
+}

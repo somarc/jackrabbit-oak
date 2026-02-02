@@ -1163,6 +1163,9 @@ public class DashboardHandler {
         addApiEndpoint(html, "GET", "/v1/consensus/status", "Get consensus state (Aeron-aware)", "consensus_status");
         addApiEndpoint(html, "POST", "/v1/propose-write", "Propose signed write transaction (signature verified via EthereumSignatureVerifier)", "propose_write");
         addApiEndpoint(html, "POST", "/v1/propose-delete", "Propose signed delete transaction", "propose_delete");
+        addApiEndpoint(html, "POST", "/v1/binary/declare-intent", "Declare binary upload intent (returns intentToken)", "binary_declare_intent");
+        addApiEndpoint(html, "GET", "/v1/binary/check-intent/{token}", "Check binary upload intent status (JSON)", "binary_check_intent");
+        addApiEndpoint(html, "POST", "/v1/binary/complete-upload", "Complete binary upload with IPFS CID (JSON)", "binary_complete_upload");
         addApiEndpoint(html, "GET", "/v1/head", "Get latest HEAD ⚠️ DEPRECATED - use /v1/consensus/status instead (ADR-012)", "head");
         html.append("</div>\n");
         
@@ -1722,4 +1725,3 @@ public class DashboardHandler {
     }
     
 }
-

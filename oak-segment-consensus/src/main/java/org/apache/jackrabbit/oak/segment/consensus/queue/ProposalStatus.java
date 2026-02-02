@@ -26,6 +26,10 @@ public class ProposalStatus {
     private final long timeoutTimestamp;
     private final Long confirmedBlock;
     private final String rejectionReason;
+    private final DurabilityState durabilityState;
+    private final long durabilityTimestamp;
+    private final String durabilityError;
+    private final String durableHead;
     
     public ProposalStatus(
             String proposalId,
@@ -33,13 +37,21 @@ public class ProposalStatus {
             String ethereumTxHash,
             long timeoutTimestamp,
             Long confirmedBlock,
-            String rejectionReason) {
+            String rejectionReason,
+            DurabilityState durabilityState,
+            long durabilityTimestamp,
+            String durabilityError,
+            String durableHead) {
         this.proposalId = proposalId;
         this.state = state;
         this.ethereumTxHash = ethereumTxHash;
         this.timeoutTimestamp = timeoutTimestamp;
         this.confirmedBlock = confirmedBlock;
         this.rejectionReason = rejectionReason;
+        this.durabilityState = durabilityState;
+        this.durabilityTimestamp = durabilityTimestamp;
+        this.durabilityError = durabilityError;
+        this.durableHead = durableHead;
     }
     
     public String getProposalId() {
@@ -65,5 +77,20 @@ public class ProposalStatus {
     public String getRejectionReason() {
         return rejectionReason;
     }
-}
 
+    public DurabilityState getDurabilityState() {
+        return durabilityState;
+    }
+
+    public long getDurabilityTimestamp() {
+        return durabilityTimestamp;
+    }
+
+    public String getDurabilityError() {
+        return durabilityError;
+    }
+
+    public String getDurableHead() {
+        return durableHead;
+    }
+}

@@ -32,6 +32,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
 import java.util.UUID;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
 /**
  * Handler for file serving endpoints (journal.log, manifest, segments).
@@ -58,7 +59,7 @@ public class FileHandler {
         Path filePath = storeDirectory.resolve(filename);
         
         if (!Files.exists(filePath)) {
-            response.sendError(HttpServletResponse.SC_NOT_FOUND, "File not found: " + filename);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "File not found: " + filename);
             return;
         }
         
@@ -82,7 +83,7 @@ public class FileHandler {
         
         if (!Files.exists(filePath)) {
             log.warn("File not found: {}", filePath);
-            response.sendError(HttpServletResponse.SC_NOT_FOUND, "File not found: " + filename);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "File not found: " + filename);
             return;
         }
         
@@ -111,7 +112,7 @@ public class FileHandler {
         Path segmentPath = findSegmentInTarFiles(segmentId);
         
         if (segmentPath == null) {
-            response.sendError(HttpServletResponse.SC_NOT_FOUND, "Segment not found: " + segmentId);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Segment not found: " + segmentId);
             return;
         }
         
@@ -142,7 +143,7 @@ public class FileHandler {
         try {
             uuid = UUID.fromString(segmentId);
         } catch (IllegalArgumentException e) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid segment UUID: " + segmentId);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid segment UUID: " + segmentId);
             return;
         }
         
@@ -151,7 +152,7 @@ public class FileHandler {
         
         if (segmentData == null) {
             log.warn("Segment not found in TAR files: {}", segmentId);
-            response.sendError(HttpServletResponse.SC_NOT_FOUND, "Segment not found: " + segmentId);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Segment not found: " + segmentId);
             return;
         }
         

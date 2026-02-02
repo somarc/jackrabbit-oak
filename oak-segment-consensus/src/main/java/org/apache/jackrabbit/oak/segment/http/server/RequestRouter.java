@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.segment.http.server.handlers.*;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
 import org.eclipse.jetty.server.Request;
 import org.slf4j.Logger;
@@ -207,6 +208,12 @@ public class RequestRouter {
                 return;
             }
             
+            if ("/health/cluster".equals(path) && "GET".equals(method)) {
+                healthHandler.handleClusterHealth(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+            
             // Rate limiting check (skip for health endpoints above)
             if (!rateLimiter.allowRequest(request, response)) {
                 rateLimiter.sendRateLimitResponse(response);
@@ -261,7 +268,7 @@ public class RequestRouter {
                 } else if ("GET".equals(method)) {
                     fileHandler.handleFile(request, response, "manifest", "text/plain");
                 } else {
-                    response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Method not allowed");
                 }
                 baseRequest.setHandled(true);
                 return;
@@ -281,7 +288,7 @@ public class RequestRouter {
                 } else if ("GET".equals(method)) {
                     fileHandler.handleSegmentGet(request, response, segmentId);
                 } else {
-                    response.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Method not allowed");
                 }
                 baseRequest.setHandled(true);
                 return;
@@ -700,7 +707,8 @@ public class RequestRouter {
                         return;
                     } catch (Exception e) {
                         log.error("Error invoking chat handler", e);
-                        response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Chat handler error: " + e.getMessage());
+                        ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                            "Chat handler error: " + e.getMessage());
                         baseRequest.setHandled(true);
                         return;
                     }
@@ -728,14 +736,35 @@ public class RequestRouter {
                     method, path, remoteAddr, userAgent != null ? userAgent : "unknown");
             }
             
-            response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            if (isApiPath(path)) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Not found");
+            } else {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            }
             baseRequest.setHandled(true);
             
         } catch (Exception e) {
             log.error("Error routing request: " + path, e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            if (isApiPath(path)) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            } else {
+                response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+            }
             baseRequest.setHandled(true);
         }
+    }
+
+    private boolean isApiPath(String path) {
+        if (path == null) {
+            return false;
+        }
+        return path.startsWith("/v1/")
+            || path.startsWith("/api/")
+            || path.startsWith("/health")
+            || path.startsWith("/metrics")
+            || path.startsWith("/journal.log")
+            || path.startsWith("/manifest")
+            || path.startsWith("/segments/");
     }
     
     /**
@@ -905,4 +934,3 @@ public class RequestRouter {
         response.getWriter().write(json.toString());
     }
 }
-

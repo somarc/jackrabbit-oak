@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Set;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
 /**
  * Handler for peer discovery endpoints (`/v1/peers`).
@@ -237,7 +238,7 @@ public class PeerDiscoveryHandler {
             
         } catch (Exception e) {
             log.error("Failed to serve peer list", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to get peer list: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to get peer list: " + e.getMessage());
         }
     }
     

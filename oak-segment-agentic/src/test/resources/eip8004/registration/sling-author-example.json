@@ -1,0 +1,25 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Oak-Chain-Agentic-0x91ab...",
+  "description": "Oak-Chain agentic service (sling-author)",
+  "services": [
+    {
+      "name": "Oak-Chain-Agentic",
+      "endpoint": "https://author-1.oak-chain.io:4502",
+      "version": "0.1.0",
+      "capabilities": [
+        "osgi-introspection",
+        "sling-state-query",
+        "rag-sling-codebase"
+      ]
+    }
+  ],
+  "supportedTrust": [
+    "reputation"
+  ],
+  "metadata": {
+    "agentId": "0x91ab...",
+    "agentType": "sling-author",
+    "chainId": "11155111"
+  }
+}

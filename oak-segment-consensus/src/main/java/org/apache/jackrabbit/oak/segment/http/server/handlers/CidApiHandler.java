@@ -26,6 +26,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.Optional;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
 /**
  * HTTP API handler for CID (Content Identifier) operations.
@@ -187,13 +188,7 @@ public class CidApiHandler {
      * Send error response.
      */
     private void sendError(HttpServletResponse response, int statusCode, String message) throws IOException {
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"error\":\"").append(escapeJson(message)).append("\",");
-        json.append("\"status\":").append(statusCode);
-        json.append("}");
-
-        sendJson(response, statusCode, json.toString());
+        ApiErrorUtil.sendJsonError(response, statusCode, message);
     }
 
     /**

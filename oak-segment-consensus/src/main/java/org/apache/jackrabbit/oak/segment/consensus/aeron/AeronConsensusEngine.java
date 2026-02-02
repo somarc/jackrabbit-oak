@@ -124,6 +124,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final String storeDirectory;
     private final org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager backpressureManager;
     private final org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
+    private final DurabilityAckTracker durabilityAckTracker = new DurabilityAckTracker();
     
     // ✅ PRODUCTION REFACTOR: Service layer components (extracted from monolithic class)
     private final MessageDispatcher messageDispatcher;
@@ -149,11 +150,21 @@ public class AeronConsensusEngine implements ClusteredService {
     
     // ✈️ AERON NATIVE: Callback interface for applying replicated writes and deletes
     public interface WriteApplicationCallback {
-        void applyReplicatedWrite(String walletAddress, String path, String contentType, String message, 
-                                 String signature, String intentToken, String blobId, String mimeType, String ipfsCid);
-        void applyReplicatedDelete(String walletAddress, String path, String signature);
+        void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
+                                  String signature, String intentToken, String blobId, String mimeType,
+                                  String ipfsCid, String proposalId);
+        void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId);
+    }
+
+    /**
+     * Callback interface for durability status updates (ADR 026).
+     */
+    public interface DurabilityStatusCallback {
+        void onDurable(String proposalId, String durableHead);
+        void onFailure(String proposalId, String error);
     }
     private WriteApplicationCallback writeCallback;
+    private volatile DurabilityStatusCallback durabilityStatusCallback;
     
     // Ethereum integration
     private BeaconChainClient beaconClient;
@@ -166,6 +177,11 @@ public class AeronConsensusEngine implements ClusteredService {
     private volatile int currentTerm = 0;
     private volatile String currentLeader = null;
     private volatile long lastHeartbeatTime = System.currentTimeMillis();
+    private static final long HEARTBEAT_MAX_AGE_MS = Long.getLong("oak.cluster.heartbeat.maxAgeMs", 30000L);
+    private static final long REACHABILITY_CACHE_MS = Long.getLong("oak.cluster.reachability.cacheMs", 5000L);
+    private static final int REACHABILITY_CONNECT_TIMEOUT_MS = Integer.getInteger("oak.cluster.reachability.connectTimeoutMs", 1500);
+    private static final int REACHABILITY_READ_TIMEOUT_MS = Integer.getInteger("oak.cluster.reachability.readTimeoutMs", 1500);
+    private static final int RECONNECT_MAX_ATTEMPTS = Integer.getInteger("oak.cluster.reconnect.maxAttempts", 5);
     
     // ✅ ADR 025: Replication lag monitoring
     private volatile long leaderLogPosition = 0; // Track leader's position for lag calculation
@@ -212,6 +228,15 @@ public class AeronConsensusEngine implements ClusteredService {
     private final java.util.List<LeadershipChange> leadershipHistory = new java.util.concurrent.CopyOnWriteArrayList<>();
     private static final int MAX_HISTORY_ENTRIES = 100; // Keep last 100 role changes
     
+    // Reachability cache
+    private volatile long lastReachabilityCheckMs = 0;
+    private volatile int lastReachableCount = 1;
+    
+    // Session auto-reconnect
+    private final Object reconnectLock = new Object();
+    private volatile java.util.concurrent.ScheduledExecutorService reconnectScheduler;
+    private volatile boolean reconnectInProgress = false;
+    
     /**
      * Create Aeron-based consensus engine.
      * 
@@ -249,14 +274,14 @@ public class AeronConsensusEngine implements ClusteredService {
         this.messageDispatcher = new MessageDispatcher(
             new MessageDispatcher.WriteCallback() {
                 @Override
-                public void applyWrite(String walletAddress, String path, String contentType, 
-                                     String message, String signature, String intentToken, 
-                                     String blobId, String mimeType, String ipfsCid) {
+                public void applyWrite(String walletAddress, String path, String contentType,
+                                     String message, String signature, String intentToken,
+                                     String blobId, String mimeType, String ipfsCid, String proposalId) {
                     // Delegate to existing write application logic
                     if (writeCallback != null) {
                         writeCallback.applyReplicatedWrite(walletAddress, path, contentType, 
                                                           message, signature, intentToken, 
-                                                          blobId, mimeType, ipfsCid);
+                                                          blobId, mimeType, ipfsCid, proposalId);
                         
                         // Track metrics after successful write
                         trackWriteMetrics();
@@ -266,10 +291,10 @@ public class AeronConsensusEngine implements ClusteredService {
                 }
                 
                 @Override
-                public void applyDelete(String walletAddress, String path, String signature) {
+                public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
                     // Delegate to existing delete application logic
                     if (writeCallback != null) {
-                        writeCallback.applyReplicatedDelete(walletAddress, path, signature);
+                        writeCallback.applyReplicatedDelete(walletAddress, path, signature, proposalId);
                         
                         // Track metrics after successful delete
                         trackWriteMetrics();
@@ -288,6 +313,51 @@ public class AeronConsensusEngine implements ClusteredService {
                 }
             }
         );
+
+        this.messageDispatcher.setDurabilityCallback(new MessageDispatcher.DurabilityCallback() {
+            @Override
+            public void onQueueSegment(String proposalId, int totalMembers, int requiredAcks) {
+                if (!isLeader()) {
+                    return;
+                }
+                durabilityAckTracker.track(proposalId, totalMembers, requiredAcks);
+            }
+
+            @Override
+            public void onSegmentPersisted(String proposalId, int memberId, String durableHead, boolean success, String error) {
+                if (!isLeader()) {
+                    return;
+                }
+
+                DurabilityAckTracker.Outcome outcome = durabilityAckTracker.record(
+                    proposalId, memberId, durableHead, success, error, getTotalMemberCount(), getQuorumSize()
+                );
+                if (outcome == null || !outcome.shouldAck) {
+                    return;
+                }
+                sendAckSegmentPersisted(
+                    proposalId,
+                    outcome.success,
+                    outcome.durableHead,
+                    outcome.error,
+                    outcome.totalMembers,
+                    outcome.requiredAcks
+                );
+            }
+
+            @Override
+            public void onAckSegmentPersisted(String proposalId, boolean success, String durableHead, String error,
+                                              int totalMembers, int requiredAcks) {
+                if (durabilityStatusCallback != null) {
+                    if (success) {
+                        durabilityStatusCallback.onDurable(proposalId, durableHead);
+                    } else {
+                        durabilityStatusCallback.onFailure(proposalId, error != null ? error : "durability failed");
+                    }
+                }
+                durabilityAckTracker.complete(proposalId);
+            }
+        });
         
         log.info("Aeron Consensus Engine initializing - Consensus: Aeron Cluster (Raft), Self: {}, Peers: {}, Wallet: {}", 
             selfUrl, peerUrls.size(), wallet.getWalletAddress());
@@ -311,6 +381,11 @@ public class AeronConsensusEngine implements ClusteredService {
     public void setWriteApplicationCallback(WriteApplicationCallback callback) {
         this.writeCallback = callback;
         log.info("✅ Write application callback set: {}", callback != null ? "present" : "null");
+    }
+
+    public void setDurabilityStatusCallback(DurabilityStatusCallback callback) {
+        this.durabilityStatusCallback = callback;
+        log.info("✅ Durability status callback set: {}", callback != null ? "present" : "null");
     }
     
     /**
@@ -379,6 +454,7 @@ public class AeronConsensusEngine implements ClusteredService {
         
         // Stop background timer
         stopHeadBroadcastTimer();
+        stopReconnectScheduler();
         
         // Aeron Cluster components are closed by AeronClusterLauncher.close()
         // which handles: MediaDriver, Archive, ConsensusModule, ClusteredService
@@ -573,11 +649,16 @@ public class AeronConsensusEngine implements ClusteredService {
     @Override
     public void onSessionOpen(ClientSession session, long timestamp) {
         log.info("Client session opened: {} (timestamp: {})", session.id(), timestamp);
+        markHeartbeat();
     }
     
     @Override
     public void onSessionClose(ClientSession session, long timestamp, CloseReason closeReason) {
         log.info("Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
+        markHeartbeat();
+        if (closeReason == CloseReason.TIMEOUT) {
+            scheduleReconnect("session_timeout");
+        }
     }
     
     @Override
@@ -608,6 +689,8 @@ public class AeronConsensusEngine implements ClusteredService {
         // ✈️ AERON NATIVE: Handle replicated write proposals
         // This callback is invoked on ALL nodes after Aeron replicates the message via Raft
         // Deterministic state machine: ALL nodes process messages in same order
+        
+        markHeartbeat();
         
         log.debug("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}", 
             session.id(), length, cluster != null ? cluster.role() : "UNKNOWN", timestamp);
@@ -1110,9 +1193,147 @@ public class AeronConsensusEngine implements ClusteredService {
             log.error("❌ Exception creating internal AeronCluster client", e);
         }
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ADR 026: DURABILITY ACK MESSAGE FLOW
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    public boolean sendQueueSegment(String proposalId) {
+        if (proposalId == null || proposalId.isEmpty()) {
+            return false;
+        }
+        return sendQueueSegment(proposalId, getTotalMemberCount(), getQuorumSize());
+    }
+
+    public boolean sendQueueSegment(String proposalId, int totalMembers, int requiredAcks) {
+        if (proposalId == null || proposalId.isEmpty()) {
+            return false;
+        }
+        String json = "{\"proposalId\":\"" + escapeJson(proposalId) + "\"," +
+            "\"totalMembers\":" + totalMembers + "," +
+            "\"requiredAcks\":" + requiredAcks + "}";
+        return sendDurabilityMessage(SimpleMessageHeader.TEMPLATE_ID_QUEUE_SEGMENT, json, "queue-segment");
+    }
+
+    public boolean sendSegmentPersisted(String proposalId, String durableHead, boolean success, String error) {
+        if (proposalId == null || proposalId.isEmpty()) {
+            return false;
+        }
+        int memberId = cluster != null ? cluster.memberId() : -1;
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
+        json.append("\"memberId\":").append(memberId).append(",");
+        json.append("\"success\":").append(success);
+        if (durableHead != null && !durableHead.isEmpty()) {
+            json.append(",\"durableHead\":\"").append(escapeJson(durableHead)).append("\"");
+        }
+        if (error != null && !error.isEmpty()) {
+            json.append(",\"error\":\"").append(escapeJson(error)).append("\"");
+        }
+        json.append("}");
+        return sendDurabilityMessage(SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED, json.toString(), "segment-persisted");
+    }
+
+    public boolean sendAckSegmentPersisted(String proposalId, boolean success, String durableHead, String error,
+                                           int totalMembers, int requiredAcks) {
+        if (proposalId == null || proposalId.isEmpty()) {
+            return false;
+        }
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
+        json.append("\"success\":").append(success).append(",");
+        json.append("\"totalMembers\":").append(totalMembers).append(",");
+        json.append("\"requiredAcks\":").append(requiredAcks);
+        if (durableHead != null && !durableHead.isEmpty()) {
+            json.append(",\"durableHead\":\"").append(escapeJson(durableHead)).append("\"");
+        }
+        if (error != null && !error.isEmpty()) {
+            json.append(",\"error\":\"").append(escapeJson(error)).append("\"");
+        }
+        json.append("}");
+        return sendDurabilityMessage(SimpleMessageHeader.TEMPLATE_ID_ACK_SEGMENT_PERSISTED, json.toString(), "ack-segment-persisted");
+    }
+
+    private boolean sendDurabilityMessage(int templateId, String json, String label) {
+        if (cluster == null) {
+            log.error("❌ Cluster not initialized - cannot send durability message ({})", label);
+            return false;
+        }
+
+        ensureInternalClusterClient();
+
+        if (internalClusterClient == null) {
+            log.error("❌ Internal AeronCluster client not available - cannot send durability message ({})", label);
+            return false;
+        }
+
+        try {
+            byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            int blockLength = jsonBytes.length;
+            int totalLength = SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
+
+            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
+                new byte[totalLength]
+            );
+
+            SimpleMessageHeader.encode(messageBuffer, 0, blockLength, templateId);
+            messageBuffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+
+            if (internalClusterClient.isClosed()) {
+                log.error("❌ Cannot send durability message - internal cluster client session is CLOSED ({})", label);
+                synchronized (this) {
+                    internalClusterClient = null;
+                    ensureInternalClusterClient();
+                }
+                if (internalClusterClient == null || internalClusterClient.isClosed()) {
+                    log.error("❌ Reconnection failed - cannot send durability message ({})", label);
+                    return false;
+                }
+            }
+
+            idleStrategy.reset();
+            long result;
+            int retries = 0;
+            while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
+                if (result == io.aeron.Publication.BACK_PRESSURED) {
+                    idleStrategy.idle();
+                    retries++;
+                    if (retries > 100) {
+                        log.error("❌ Durability message back-pressured after {} retries ({})", retries, label);
+                        return false;
+                    }
+                } else if (result == io.aeron.Publication.NOT_CONNECTED) {
+                    log.warn("⚠️  Durability ingress not connected - waiting... ({})", label);
+                    idleStrategy.idle();
+                    retries++;
+                    if (retries > 100) {
+                        log.error("❌ Durability ingress not connected after {} retries ({})", retries, label);
+                        return false;
+                    }
+                } else {
+                    log.error("❌ Failed to send durability message through ingress: {} ({})", result, label);
+                    return false;
+                }
+            }
+
+            log.debug("✅ Durability message sent ({})", label);
+            return true;
+        } catch (Exception e) {
+            log.error("❌ Exception sending durability message ({})", label, e);
+            return false;
+        }
+    }
     
     public boolean sendWriteThroughIngress(String walletAddress, String path, 
                                            String contentType, String message, String signature) {
+        return sendWriteThroughIngressWithId(walletAddress, path, contentType, message, signature, null, null);
+    }
+    
+    public boolean sendWriteThroughIngressWithId(String walletAddress, String path, 
+                                                 String contentType, String message, String signature,
+                                                 String ipfsCid, String proposalId) {
         if (cluster == null) {
             log.error("❌ Cluster not initialized - cannot send write through ingress");
             return false;
@@ -1141,6 +1362,12 @@ public class AeronConsensusEngine implements ClusteredService {
             json.append("\"contentType\":\"").append(escapeJson(contentType != null ? contentType : "page")).append("\",");
             json.append("\"message\":\"").append(escapeJson(message != null ? message : "")).append("\",");
             json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
+            if (ipfsCid != null && !ipfsCid.isEmpty()) {
+                json.append(",\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\"");
+            }
+            if (proposalId != null && !proposalId.isEmpty()) {
+                json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
+            }
             json.append("}");
             
             byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -1247,6 +1474,14 @@ public class AeronConsensusEngine implements ClusteredService {
     public boolean sendWriteThroughIngress(String walletAddress, String path, 
                                            String contentType, String message, String signature,
                                            String blobId, String mimeType) {
+        return sendWriteThroughIngress(walletAddress, path, contentType, message, signature,
+            blobId, mimeType, null, null);
+    }
+    
+    public boolean sendWriteThroughIngress(String walletAddress, String path,
+                                           String contentType, String message, String signature,
+                                           String blobId, String mimeType,
+                                           String ipfsCid, String proposalId) {
         if (cluster == null) {
             log.error("❌ Cluster not initialized - cannot send write through ingress");
             return false;
@@ -1280,6 +1515,12 @@ public class AeronConsensusEngine implements ClusteredService {
                 json.append(",\"blobId\":\"").append(escapeJson(blobId)).append("\"");
                 json.append(",\"mimeType\":\"").append(escapeJson(mimeType != null ? mimeType : "application/octet-stream")).append("\"");
                 log.info("📎 Including blobId in Aeron JSON: {}", blobId);
+            }
+            if (ipfsCid != null && !ipfsCid.isEmpty()) {
+                json.append(",\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\"");
+            }
+            if (proposalId != null && !proposalId.isEmpty()) {
+                json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
             }
             
             json.append("}");
@@ -1367,6 +1608,10 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return true if successfully sent
      */
     public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature) {
+        return sendDeleteThroughIngress(walletAddress, path, signature, null);
+    }
+    
+    public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature, String proposalId) {
         if (cluster == null) {
             log.error("❌ Cluster not initialized - cannot send delete through ingress");
             return false;
@@ -1389,6 +1634,9 @@ public class AeronConsensusEngine implements ClusteredService {
             json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
             json.append("\"path\":\"").append(escapeJson(path)).append("\",");
             json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
+            if (proposalId != null && !proposalId.isEmpty()) {
+                json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
+            }
             json.append("}");
             
             byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -1517,6 +1765,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 first = false;
                 
                 json.append("{");
+                json.append("\"proposalId\":\"").append(escapeJson(proposal.getProposalId())).append("\",");
                 json.append("\"walletAddress\":\"").append(escapeJson(proposal.getWalletAddress())).append("\",");
                 json.append("\"path\":\"").append(escapeJson(proposal.getPath())).append("\",");
                 json.append("\"contentType\":\"").append(escapeJson(proposal.getContentType() != null ? proposal.getContentType() : "page")).append("\",");
@@ -1968,6 +2217,7 @@ public class AeronConsensusEngine implements ClusteredService {
     @Override
     public void onRoleChange(Cluster.Role newRole) {
         log.info("Role change: {} -> {}", currentRole, newRole.name());
+        markHeartbeat();
         
         // ✈️ AERON NATIVE: Track leadership rotation history
         // Note: onRoleChange() is called with the NEW role, so we need to track previous role
@@ -2012,6 +2262,7 @@ public class AeronConsensusEngine implements ClusteredService {
         
         if (newRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Now LEADER (term: {})", currentTerm);
+            leaderDiscoveryService.notifyBecameLeader(memberId);
             
             // NEW GENESIS ARCHITECTURE: Create genesis as first consensus write
             // Check if genesis exists - if not, create it as first consensus write
@@ -2051,6 +2302,7 @@ public class AeronConsensusEngine implements ClusteredService {
             }
         } else if (previousRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Stepped down from LEADER (term: {})", currentTerm);
+            leaderDiscoveryService.notifyLostLeadership();
         }
         
         updateRoleFromCluster(newRole);
@@ -3621,9 +3873,33 @@ public class AeronConsensusEngine implements ClusteredService {
      * Returns count of configured peers. Aeron Cluster manages actual reachability internally.
      */
     public int getReachableValidatorCount() {
-        // ✈️ AERON CLUSTER: Return configured peer count
-        // Aeron Cluster manages actual reachability and membership internally via Raft
-        return peerUrls != null ? peerUrls.size() : 0;
+        if (cluster != null && cluster.role() != Cluster.Role.CANDIDATE) {
+            return getTotalMemberCount();
+        }
+        long now = System.currentTimeMillis();
+        if ((now - lastReachabilityCheckMs) < REACHABILITY_CACHE_MS) {
+            return lastReachableCount;
+        }
+        
+        int reachable = 0;
+        if (selfUrl != null && !selfUrl.isEmpty()) {
+            reachable++;
+        }
+        
+        if (peerUrls != null) {
+            for (String peerUrl : peerUrls) {
+                if (selfUrl != null && isSameUrlByPort(peerUrl, selfUrl)) {
+                    continue;
+                }
+                if (isPeerReachable(peerUrl)) {
+                    reachable++;
+                }
+            }
+        }
+        
+        lastReachableCount = reachable;
+        lastReachabilityCheckMs = now;
+        return reachable;
     }
     
     /**
@@ -3652,6 +3928,24 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public long getLastHeartbeatTime() {
         return lastHeartbeatTime;
+    }
+    
+    public long getHeartbeatAgeMs() {
+        return System.currentTimeMillis() - lastHeartbeatTime;
+    }
+    
+    public int getTotalMemberCount() {
+        int peers = peerUrls != null ? peerUrls.size() : 0;
+        return peers + 1;
+    }
+    
+    public int getQuorumSize() {
+        int total = getTotalMemberCount();
+        return (total / 2) + 1;
+    }
+    
+    public boolean hasQuorum() {
+        return getReachableValidatorCount() >= getQuorumSize();
     }
     
     /**
@@ -3704,8 +3998,191 @@ public class AeronConsensusEngine implements ClusteredService {
         status.put("replicationLag", lag);
         status.put("lagThreshold", 1000L); // Alert if lag > 1000 messages
         status.put("healthy", lag >= 0 && lag < 1000);
+        if (lag < 0) {
+            status.put("reason", "leader_log_position_unknown");
+        }
         
         return status;
     }
-}
+    
+    private void markHeartbeat() {
+        lastHeartbeatTime = System.currentTimeMillis();
+    }
+    
+    private boolean isHeartbeatStale() {
+        return getHeartbeatAgeMs() > HEARTBEAT_MAX_AGE_MS;
+    }
+    
+    private boolean isPeerReachable(String peerUrl) {
+        try {
+            java.net.URL url = new java.net.URL(peerUrl + "/health");
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(REACHABILITY_CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(REACHABILITY_READ_TIMEOUT_MS);
+            int responseCode = conn.getResponseCode();
+            return responseCode > 0;
+        } catch (Exception e) {
+            log.debug("Peer not reachable: {} - {}", peerUrl, e.getMessage());
+            return false;
+        }
+    }
+    
+    private void scheduleReconnect(String reason) {
+        synchronized (reconnectLock) {
+            if (reconnectScheduler == null) {
+                reconnectScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "aeron-reconnect");
+                    t.setDaemon(true);
+                    return t;
+                });
+            }
+            if (reconnectInProgress) {
+                return;
+            }
+            reconnectInProgress = true;
+            reconnectScheduler.execute(() -> attemptReconnect(reason));
+        }
+    }
+    
+    private void attemptReconnect(String reason) {
+        try {
+            log.warn("🔄 Attempting Aeron cluster reconnect (reason: {})", reason);
+            for (int attempt = 1; attempt <= RECONNECT_MAX_ATTEMPTS; attempt++) {
+                if (internalClusterClient != null && !internalClusterClient.isClosed()) {
+                    log.info("✅ Internal cluster client healthy, reconnect not needed");
+                    return;
+                }
+                
+                ensureInternalClusterClient();
+                
+                if (internalClusterClient != null && !internalClusterClient.isClosed()) {
+                    log.info("✅ Reconnected to cluster on attempt {}", attempt);
+                    return;
+                }
+                
+                long backoffMs = Math.min(1000L * (1L << attempt), 30000L);
+                log.warn("⚠️  Reconnect attempt {} failed - retrying in {}ms", attempt, backoffMs);
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            log.error("❌ Failed to reconnect after {} attempts", RECONNECT_MAX_ATTEMPTS);
+        } finally {
+            reconnectInProgress = false;
+        }
+    }
+    
+    private void stopReconnectScheduler() {
+        synchronized (reconnectLock) {
+            if (reconnectScheduler != null) {
+                reconnectScheduler.shutdownNow();
+                reconnectScheduler = null;
+                reconnectInProgress = false;
+            }
+        }
+    }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ADR 026: DURABILITY ACK TRACKING
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private static final class DurabilityAckTracker {
+        private final java.util.concurrent.ConcurrentHashMap<String, PendingDurability> pending =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+        private void track(String proposalId, int totalMembers, int requiredAcks) {
+            pending.compute(proposalId, (id, existing) -> {
+                if (existing == null) {
+                    return new PendingDurability(totalMembers, requiredAcks);
+                }
+                existing.totalMembers = totalMembers;
+                existing.requiredAcks = requiredAcks;
+                return existing;
+            });
+        }
+
+        private Outcome record(String proposalId, int memberId, String durableHead, boolean success, String error,
+                               int defaultTotalMembers, int defaultRequiredAcks) {
+            if (memberId < 0) {
+                return null;
+            }
+            PendingDurability current = pending.compute(proposalId, (id, existing) -> {
+                PendingDurability state = existing != null ? existing : new PendingDurability(defaultTotalMembers, defaultRequiredAcks);
+                if (state.completed) {
+                    return state;
+                }
+                if (success) {
+                    state.ackedMembers.add(memberId);
+                    if (durableHead != null && !durableHead.isEmpty() && state.durableHead == null) {
+                        state.durableHead = durableHead;
+                    }
+                } else {
+                    state.failedMembers.add(memberId);
+                    if (error != null && !error.isEmpty() && state.lastError == null) {
+                        state.lastError = error;
+                    }
+                }
+                return state;
+            });
+
+            if (current == null || current.completed) {
+                return null;
+            }
+
+            if (current.ackedMembers.size() >= current.requiredAcks) {
+                current.completed = true;
+                return new Outcome(true, true, current.durableHead, null, current.totalMembers, current.requiredAcks);
+            }
+
+            int maxPossibleSuccess = current.totalMembers - current.failedMembers.size();
+            if (maxPossibleSuccess < current.requiredAcks) {
+                current.completed = true;
+                return new Outcome(true, false, current.durableHead, current.lastError, current.totalMembers, current.requiredAcks);
+            }
+
+            return new Outcome(false, false, current.durableHead, current.lastError, current.totalMembers, current.requiredAcks);
+        }
+
+        private void complete(String proposalId) {
+            pending.remove(proposalId);
+        }
+
+        private static final class PendingDurability {
+            private volatile int totalMembers;
+            private volatile int requiredAcks;
+            private final java.util.Set<Integer> ackedMembers = java.util.concurrent.ConcurrentHashMap.newKeySet();
+            private final java.util.Set<Integer> failedMembers = java.util.concurrent.ConcurrentHashMap.newKeySet();
+            private volatile String durableHead;
+            private volatile String lastError;
+            private volatile boolean completed;
+
+            private PendingDurability(int totalMembers, int requiredAcks) {
+                this.totalMembers = totalMembers;
+                this.requiredAcks = requiredAcks;
+            }
+        }
+
+        private static final class Outcome {
+            private final boolean shouldAck;
+            private final boolean success;
+            private final String durableHead;
+            private final String error;
+            private final int totalMembers;
+            private final int requiredAcks;
+
+            private Outcome(boolean shouldAck, boolean success, String durableHead, String error,
+                            int totalMembers, int requiredAcks) {
+                this.shouldAck = shouldAck;
+                this.success = success;
+                this.durableHead = durableHead;
+                this.error = error;
+                this.totalMembers = totalMembers;
+                this.requiredAcks = requiredAcks;
+            }
+        }
+    }
+}

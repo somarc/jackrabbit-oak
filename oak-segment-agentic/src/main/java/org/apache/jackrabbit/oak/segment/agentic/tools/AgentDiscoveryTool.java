@@ -17,6 +17,12 @@
 package org.apache.jackrabbit.oak.segment.agentic.tools;
 
 import com.google.gson.Gson;
+import org.apache.jackrabbit.oak.segment.agentic.eip8004.Eip8004AgentQuery;
+import org.apache.jackrabbit.oak.segment.agentic.eip8004.Eip8004Config;
+import org.apache.jackrabbit.oak.segment.agentic.eip8004.Eip8004RegistrationService;
+import org.apache.jackrabbit.oak.segment.agentic.eip8004.IdentityRegistryClient;
+import org.apache.jackrabbit.oak.segment.agentic.eip8004.IdentityRegistryClientFactory;
+import org.apache.jackrabbit.oak.segment.agentic.eip8004.IdentityRegistryEntry;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
@@ -50,6 +56,9 @@ public class AgentDiscoveryTool implements AgenticTool {
     private final CloseableHttpClient httpClient;
     private final String agentId;
     private final String agentType;
+    private final Eip8004Config eip8004Config;
+    private final IdentityRegistryClient identityRegistryClient;
+    private final Eip8004RegistrationService registrationService;
     
     public AgentDiscoveryTool() {
         this.agentType = detectAgentType();
@@ -61,6 +70,9 @@ public class AgentDiscoveryTool implements AgenticTool {
         this.httpClient = HttpClients.custom()
             .setDefaultRequestConfig(requestConfig)
             .build();
+        this.eip8004Config = Eip8004Config.load();
+        this.identityRegistryClient = IdentityRegistryClientFactory.create(eip8004Config);
+        this.registrationService = new Eip8004RegistrationService(eip8004Config, identityRegistryClient);
     }
     
     /**
@@ -195,11 +207,14 @@ public class AgentDiscoveryTool implements AgenticTool {
     private ToolResult discoverValidators() {
         List<String> discoveredAgents = new ArrayList<>();
         List<String> validatorUrls = getValidatorUrls();
+        Eip8004RegistrationService.RegistrationResult registrationResult =
+            registrationService.ensureRegistered(agentId, agentType, getCapabilities());
         
         StringBuilder result = new StringBuilder();
         result.append("🔍 Agent Discovery Results:\n\n");
         result.append("Agent ID: ").append(agentId).append("\n");
         result.append("Agent Type: ").append(agentType).append("\n\n");
+        appendEip8004Status(result, registrationResult);
         
         if (validatorUrls.isEmpty()) {
             result.append("⚠️  No validators configured. Check OAK_GLOBAL_STORE_URL environment variable.\n");
@@ -233,6 +248,8 @@ public class AgentDiscoveryTool implements AgenticTool {
             result.append("\n💡 Tip: Use 'negotiate with agent at ").append(discoveredAgents.get(0))
                   .append("' to establish communication protocol.\n");
         }
+
+        appendEip8004Discovery(result);
         
         return ToolResult.success(result.toString(), "agent-discovery");
     }
@@ -398,5 +415,55 @@ public class AgentDiscoveryTool implements AgenticTool {
         
         return capabilities;
     }
-}
 
+    private void appendEip8004Status(StringBuilder result, Eip8004RegistrationService.RegistrationResult registrationResult) {
+        if (!eip8004Config.isEnabled()) {
+            return;
+        }
+        result.append("EIP-8004 Registration:\n");
+        result.append("─".repeat(50)).append("\n");
+        switch (registrationResult.getStatus()) {
+            case DISABLED:
+                result.append("ℹ️  EIP-8004 disabled\n");
+                break;
+            case PENDING:
+                result.append("⚠️  Registration URI not configured; generated registration JSON (")
+                      .append(registrationResult.getRegistrationJson().length())
+                      .append(" chars).\n");
+                result.append("   Set ").append(Eip8004Config.PROP_REGISTRATION_URI)
+                      .append(" to enable on-chain registration.\n");
+                break;
+            case REGISTERED:
+                result.append("✅ Registered with agent id ").append(registrationResult.getMessage()).append("\n");
+                break;
+            case ALREADY_REGISTERED:
+                result.append("✅ Already registered\n");
+                break;
+            case FAILED:
+                result.append("❌ Registration failed: ").append(registrationResult.getMessage()).append("\n");
+                break;
+            default:
+                result.append("ℹ️  Registration status unknown\n");
+        }
+        result.append("\n");
+    }
+
+    private void appendEip8004Discovery(StringBuilder result) {
+        if (!eip8004Config.isEnabled()) {
+            return;
+        }
+        List<IdentityRegistryEntry> entries = identityRegistryClient.discoverAgents(
+            new Eip8004AgentQuery(eip8004Config.getChainId(), getCapabilities()));
+        result.append("\nEIP-8004 Discovery:\n");
+        result.append("─".repeat(50)).append("\n");
+        if (entries.isEmpty()) {
+            result.append("No agents discovered via Identity Registry (stub client).\n");
+            return;
+        }
+        for (IdentityRegistryEntry entry : entries) {
+            result.append("✅ ").append(entry.getAgentId()).append("\n");
+            result.append("   Registration: ").append(entry.getRegistrationUri()).append("\n");
+            result.append("   Capabilities: ").append(entry.getCapabilities()).append("\n");
+        }
+    }
+}

@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -607,18 +608,6 @@ public class AeronApiHandler {
      * Send standardized error response.
      */
     private void sendError(HttpServletResponse response, int statusCode, String message) throws IOException {
-        response.setContentType("application/json");
-        response.setStatus(statusCode);
-        
-        Map<String, Object> error = new HashMap<>();
-        error.put("success", false);
-        Map<String, Object> errorDetails = new HashMap<>();
-        errorDetails.put("code", "AERON_NOT_CONFIGURED");
-        errorDetails.put("message", message);
-        error.put("error", errorDetails);
-        error.put("timestamp", System.currentTimeMillis());
-        
-        writeJsonResponse(response, error);
+        ApiErrorUtil.sendJsonError(response, statusCode, message);
     }
 }
-

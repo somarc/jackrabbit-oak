@@ -225,6 +225,8 @@ public class ProofVerifierTest {
     @Test
     public void testInsufficientSamplesRejected() {
         JoinProof proof = createValidProof();
+        proof.getSampleSegmentIds().clear();
+        proof.getSampleSegmentHashes().clear();
         // Add only 2 samples (less than required 5)
         for (int i = 0; i < 2; i++) {
             proof.getSampleSegmentIds().add(VALID_SEGMENT_ID);

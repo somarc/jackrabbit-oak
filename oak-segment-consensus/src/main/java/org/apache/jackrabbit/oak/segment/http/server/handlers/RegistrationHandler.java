@@ -27,6 +27,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.IOException;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
 /**
  * Handler for registration endpoints (`/v1/register/client`, `/v1/register/validator`, `/v1/heartbeat`).
@@ -89,7 +90,7 @@ public class RegistrationHandler {
             // Note: IP-based fallback has been removed - wallet address is required
             if (walletAddress == null || walletAddress.isEmpty()) {
                 log.warn("🚫 Registration rejected: Missing walletAddress");
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Registration requires an Ethereum wallet address (0x...). Please provide walletAddress parameter.");
                 return;
             }
@@ -98,7 +99,7 @@ public class RegistrationHandler {
             walletAddress = walletAddress.trim().toLowerCase();
             if (!walletAddress.matches("^0x[0-9a-f]{40}$")) {
                 log.warn("🚫 Registration rejected: Invalid Ethereum address format: {}", walletAddress);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid Ethereum address format. Must be 0x followed by 40 hex characters (e.g., 0x1234...abcd).");
                 return;
             }
@@ -133,7 +134,7 @@ public class RegistrationHandler {
                 if (registration.walletAddress != null && !registration.walletAddress.equalsIgnoreCase(walletAddress)) {
                     log.warn("⚠️  Client {} already registered with different wallet: {} (attempted: {})", 
                         clientId, registration.walletAddress, walletAddress);
-                    response.sendError(HttpServletResponse.SC_CONFLICT, 
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_CONFLICT, 
                         String.format("Client %s already registered with wallet %s", clientId, registration.walletAddress));
                     return;
                 }
@@ -150,7 +151,7 @@ public class RegistrationHandler {
             
         } catch (Exception e) {
             log.error("Failed to register client", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Registration failed: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Registration failed: " + e.getMessage());
         }
     }
     
@@ -191,7 +192,7 @@ public class RegistrationHandler {
             
             // Validate required fields
             if (validatorId == null || validatorId.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Missing validatorId");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing validatorId");
                 return;
             }
             if (validatorUrl == null || validatorUrl.isEmpty()) {
@@ -233,7 +234,7 @@ public class RegistrationHandler {
             
         } catch (Exception e) {
             log.error("Failed to register validator", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Registration failed: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Registration failed: " + e.getMessage());
         }
     }
     

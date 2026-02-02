@@ -69,9 +69,62 @@ public class MetricsHandler {
         
         StringBuilder json = new StringBuilder();
         json.append("{\n");
-        json.append("  \"consensus\": null,\n");
-        json.append("  \"replication\": null,\n");
-        json.append("  \"validator\": null\n");
+        json.append("  \"consensus\": ");
+        if (aeronConsensusEngine != null) {
+            String role = aeronConsensusEngine.getCurrentRole().name();
+            int reachable = aeronConsensusEngine.getReachableValidatorCount();
+            int total = aeronConsensusEngine.getTotalMemberCount();
+            int quorum = aeronConsensusEngine.getQuorumSize();
+            long heartbeatAgeMs = aeronConsensusEngine.getHeartbeatAgeMs();
+            String unhealthyReason = aeronConsensusEngine.getUnhealthyReason();
+            json.append("{\n");
+            json.append("    \"role\": \"").append(role).append("\",\n");
+            json.append("    \"isLeader\": ").append(aeronConsensusEngine.isLeader()).append(",\n");
+            json.append("    \"currentEpoch\": ").append(aeronConsensusEngine.getCurrentEpoch()).append(",\n");
+            json.append("    \"currentTerm\": ").append(aeronConsensusEngine.getCurrentTerm()).append(",\n");
+            json.append("    \"reachableValidators\": ").append(reachable).append(",\n");
+            json.append("    \"totalMembers\": ").append(total).append(",\n");
+            json.append("    \"quorumSize\": ").append(quorum).append(",\n");
+            json.append("    \"heartbeatAgeMs\": ").append(heartbeatAgeMs).append(",\n");
+            json.append("    \"healthy\": ").append(aeronConsensusEngine.isClusterHealthy());
+            if (unhealthyReason != null) {
+                json.append(",\n    \"unhealthyReason\": \"").append(unhealthyReason).append("\"\n");
+            } else {
+                json.append("\n");
+            }
+            json.append("  }");
+        } else {
+            json.append("null");
+        }
+        json.append(",\n  \"replication\": ");
+        if (aeronConsensusEngine != null) {
+            java.util.Map<String, Object> status = aeronConsensusEngine.getReplicationLagStatus();
+            if (status == null) {
+                json.append("null");
+            } else {
+                json.append("{\n");
+                json.append("    \"role\": \"").append(status.get("role")).append("\",\n");
+                json.append("    \"myLogPosition\": ").append(status.get("myLogPosition")).append(",\n");
+                json.append("    \"leaderLogPosition\": ").append(status.get("leaderLogPosition")).append(",\n");
+                json.append("    \"replicationLag\": ").append(status.get("replicationLag")).append(",\n");
+                json.append("    \"lagThreshold\": ").append(status.get("lagThreshold")).append(",\n");
+                json.append("    \"healthy\": ").append(status.get("healthy"));
+                Object reason = status.get("reason");
+                if (reason != null) {
+                    json.append(",\n    \"reason\": \"").append(reason).append("\"\n");
+                } else {
+                    json.append("\n");
+                }
+                json.append("  }");
+            }
+        } else {
+            json.append("null");
+        }
+        json.append(",\n  \"validator\": {\n");
+        json.append("    \"registeredClients\": ").append(registeredClients.size()).append(",\n");
+        json.append("    \"registeredValidators\": ").append(registeredValidators.size()).append(",\n");
+        json.append("    \"storePath\": \"").append(storeDirectory != null ? storeDirectory.toString() : "").append("\"\n");
+        json.append("  }\n");
         json.append("}\n");
         
         response.getWriter().write(json.toString());
@@ -181,4 +234,3 @@ public class MetricsHandler {
         }
     }
 }
-

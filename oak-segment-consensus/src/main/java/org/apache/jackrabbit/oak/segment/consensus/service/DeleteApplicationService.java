@@ -56,6 +56,7 @@ public class DeleteApplicationService {
     // Optional callbacks for integration
     private HeadUpdateCallback headUpdateCallback;
     private SSEEventCallback sseEventCallback;
+    private DurabilityCallback durabilityCallback;
     
     /**
      * Create a new DeleteApplicationService.
@@ -81,6 +82,10 @@ public class DeleteApplicationService {
     public void setSseEventCallback(SSEEventCallback callback) {
         this.sseEventCallback = callback;
     }
+
+    public void setDurabilityCallback(DurabilityCallback callback) {
+        this.durabilityCallback = callback;
+    }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // Main Delete Application
@@ -100,6 +105,7 @@ public class DeleteApplicationService {
      * @param walletAddress Ethereum wallet address (normalized)
      * @param path Full Oak path to delete
      * @param signature Cryptographic signature
+     * @param proposalId Proposal ID for durability tracking (ADR 026)
      * @return The new HEAD after the delete, or null if path didn't exist
      * @throws RuntimeException if delete fails
      */
@@ -107,7 +113,8 @@ public class DeleteApplicationService {
     public String applyDelete(
             @NotNull String walletAddress,
             @NotNull String path,
-            @Nullable String signature) {
+            @Nullable String signature,
+            @Nullable String proposalId) {
         
         try {
             log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
@@ -143,6 +150,10 @@ public class DeleteApplicationService {
             if (!pathExists) {
                 log.warn("⚠️  Delete skipped - path doesn't exist: {}", path);
                 // Not an error - idempotent delete (already gone)
+                if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
+                    String head = fileStore.getHead().getRecordId().toString10();
+                    durabilityCallback.onDurable(proposalId, head);
+                }
                 return null;
             }
             
@@ -154,6 +165,10 @@ public class DeleteApplicationService {
             } else {
                 log.warn("⚠️  Target node doesn't exist: {} (idempotent delete)", targetNodeName);
                 // Not an error - already deleted
+                if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
+                    String head = fileStore.getHead().getRecordId().toString10();
+                    durabilityCallback.onDurable(proposalId, head);
+                }
                 return null;
             }
             
@@ -174,6 +189,10 @@ public class DeleteApplicationService {
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
             log.info("✅ DELETE applied, HEAD: {}...", truncate(newHead, 20));
+
+            if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
+                durabilityCallback.onDurable(proposalId, newHead);
+            }
             
             // Update HEAD cache
             if (headUpdateCallback != null) {
@@ -190,6 +209,9 @@ public class DeleteApplicationService {
             return newHead;
             
         } catch (Exception e) {
+            if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
+                durabilityCallback.onFailure(proposalId, e.getMessage());
+            }
             log.error("❌ Failed to apply replicated delete", e);
             throw new RuntimeException("Failed to apply replicated delete", e);
         }
@@ -253,5 +275,13 @@ public class DeleteApplicationService {
     @FunctionalInterface
     public interface SSEEventCallback {
         void emitContentDelete(String path, String wallet, String org, String signature);
+    }
+
+    /**
+     * Callback for durability confirmation (ADR 026).
+     */
+    public interface DurabilityCallback {
+        void onDurable(String proposalId, String durableHead);
+        void onFailure(String proposalId, String error);
     }
 }

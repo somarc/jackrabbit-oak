@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.Server;
@@ -775,11 +776,10 @@ public class SegmentHttpServer {
             } catch (Exception e) {
                 log.error("Error handling request {} {}", method, path, e);
                 if (!response.isCommitted()) {
-                    response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                         "Internal server error: " + e.getMessage());
                 }
             }
         }
     }
 }
-

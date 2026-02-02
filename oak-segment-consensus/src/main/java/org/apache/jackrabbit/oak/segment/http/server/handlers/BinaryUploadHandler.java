@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSession;
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager;
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadStatus;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -286,13 +287,7 @@ public class BinaryUploadHandler {
      * Send error response.
      */
     private void sendError(HttpServletResponse response, int statusCode, String message) throws IOException {
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"error\":\"").append(escapeJson(message)).append("\",");
-        json.append("\"status\":").append(statusCode);
-        json.append("}");
-        
-        sendJson(response, statusCode, json.toString());
+        ApiErrorUtil.sendJsonError(response, statusCode, message);
     }
     
     /**

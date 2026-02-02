@@ -72,6 +72,7 @@ public class WriteApplicationService {
     private SSEEventCallback sseEventCallback;
     private FragmentationCallback fragmentationCallback;
     private CidMappingCallback cidMappingCallback;
+    private DurabilityCallback durabilityCallback;
     
     /**
      * Create a new WriteApplicationService.
@@ -108,6 +109,10 @@ public class WriteApplicationService {
     public void setCidMappingCallback(CidMappingCallback callback) {
         this.cidMappingCallback = callback;
     }
+
+    public void setDurabilityCallback(DurabilityCallback callback) {
+        this.durabilityCallback = callback;
+    }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // Main Write Application
@@ -131,6 +136,7 @@ public class WriteApplicationService {
      * @param blobId Blob ID for binary content
      * @param mimeType MIME type for binary content
      * @param ipfsCid IPFS CID from client-side upload (ADR 016)
+     * @param proposalId Proposal ID for durability tracking (ADR 026)
      * @return The new HEAD after the write
      * @throws IllegalStateException if signature is null (security violation)
      * @throws RuntimeException if write fails
@@ -145,7 +151,8 @@ public class WriteApplicationService {
             @Nullable String intentToken,
             @Nullable String blobId,
             @Nullable String mimeType,
-            @Nullable String ipfsCid) {
+            @Nullable String ipfsCid,
+            @Nullable String proposalId) {
         
         try {
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
@@ -242,6 +249,10 @@ public class WriteApplicationService {
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
             log.debug("✅ Write applied, HEAD: {}...", truncate(newHead, 20));
+
+            if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
+                durabilityCallback.onDurable(proposalId, newHead);
+            }
             
             // Update HEAD cache
             if (headUpdateCallback != null) {
@@ -263,6 +274,9 @@ public class WriteApplicationService {
             return newHead;
             
         } catch (Exception e) {
+            if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
+                durabilityCallback.onFailure(proposalId, e.getMessage());
+            }
             log.error("❌ Failed to apply replicated write", e);
             throw new RuntimeException("Failed to apply replicated write", e);
         }
@@ -546,5 +560,13 @@ public class WriteApplicationService {
     @FunctionalInterface
     public interface CidMappingCallback {
         @Nullable String getCid(String blobId);
+    }
+
+    /**
+     * Callback for durability confirmation (ADR 026).
+     */
+    public interface DurabilityCallback {
+        void onDurable(String proposalId, String durableHead);
+        void onFailure(String proposalId, String error);
     }
 }

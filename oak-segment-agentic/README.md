@@ -74,6 +74,37 @@ mvn clean package -DskipTests
 java -jar oak-segment-consensus.jar --port 8090 --store /var/oak-chain/segmentstore
 ```
 
+### EIP-8004 (Draft) Registration Stub
+
+This module includes a minimal EIP-8004 registration flow stub. It generates a registration JSON payload and can later be wired to on-chain Identity Registry clients.
+
+Configuration (system properties or env vars):
+
+- `oak.eip8004.enabled` / `OAK_EIP8004_ENABLED`
+- `oak.eip8004.chainId` / `OAK_EIP8004_CHAIN_ID`
+- `oak.eip8004.identityRegistry` / `OAK_EIP8004_IDENTITY_REGISTRY`
+- `oak.eip8004.registration.uri` / `OAK_EIP8004_REGISTRATION_URI`
+- `oak.eip8004.service.endpoint` / `OAK_EIP8004_SERVICE_ENDPOINT`
+- `oak.eip8004.service.name` / `OAK_EIP8004_SERVICE_NAME`
+- `oak.eip8004.service.version` / `OAK_EIP8004_SERVICE_VERSION`
+- `oak.eip8004.capabilities` / `OAK_EIP8004_CAPABILITIES`
+- `oak.eip8004.supportedTrust` / `OAK_EIP8004_SUPPORTED_TRUST`
+
+Schema and examples:
+
+- `oak-segment-agentic/src/main/resources/eip8004/registration.schema.json`
+- `oak-segment-agentic/src/main/resources/eip8004/registration-example.json`
+- `oak-segment-agentic/src/test/resources/eip8004/registration/sling-author-example.json`
+
+Helper to generate a registration file locally:
+
+```bash
+java -cp oak-segment-agentic/target/oak-segment-agentic-*.jar \\
+  org.apache.jackrabbit.oak.segment.agentic.eip8004.Eip8004RegistrationCli \\
+  --wallet 0x742f... --out /tmp/oak-agent-registration.json --agentType validator \\
+  --capabilities llm-chat,validator-apis,rag-validator-codebase
+```
+
 ### Chat via HTTP API
 
 ```bash

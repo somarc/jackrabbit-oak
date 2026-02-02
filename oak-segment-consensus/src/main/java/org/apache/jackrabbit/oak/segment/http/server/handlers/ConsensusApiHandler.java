@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
+import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.service.DeleteApplicationService;
@@ -27,6 +28,7 @@ import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -128,6 +130,72 @@ public class ConsensusApiHandler {
                 }
             });
         }
+
+        // Durability callback (ADR 026)
+        if (context.proposalQueueManager != null) {
+            writeApplicationService.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
+                @Override
+                public void onDurable(String proposalId, String durableHead) {
+                    if (context.aeronConsensusEngine != null) {
+                        context.aeronConsensusEngine.sendSegmentPersisted(
+                            proposalId, durableHead, true, null);
+                    } else {
+                        context.proposalQueueManager.updateDurability(
+                            proposalId, DurabilityState.ACKED, durableHead, null);
+                    }
+                }
+
+                @Override
+                public void onFailure(String proposalId, String error) {
+                    if (context.aeronConsensusEngine != null) {
+                        context.aeronConsensusEngine.sendSegmentPersisted(
+                            proposalId, null, false, error);
+                    } else {
+                        context.proposalQueueManager.updateDurability(
+                            proposalId, DurabilityState.FAILED, null, error);
+                    }
+                }
+            });
+            deleteApplicationService.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+                @Override
+                public void onDurable(String proposalId, String durableHead) {
+                    if (context.aeronConsensusEngine != null) {
+                        context.aeronConsensusEngine.sendSegmentPersisted(
+                            proposalId, durableHead, true, null);
+                    } else {
+                        context.proposalQueueManager.updateDurability(
+                            proposalId, DurabilityState.ACKED, durableHead, null);
+                    }
+                }
+
+                @Override
+                public void onFailure(String proposalId, String error) {
+                    if (context.aeronConsensusEngine != null) {
+                        context.aeronConsensusEngine.sendSegmentPersisted(
+                            proposalId, null, false, error);
+                    } else {
+                        context.proposalQueueManager.updateDurability(
+                            proposalId, DurabilityState.FAILED, null, error);
+                    }
+                }
+            });
+        }
+
+        if (context.aeronConsensusEngine != null && context.proposalQueueManager != null) {
+            context.aeronConsensusEngine.setDurabilityStatusCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.DurabilityStatusCallback() {
+                @Override
+                public void onDurable(String proposalId, String durableHead) {
+                    context.proposalQueueManager.updateDurability(
+                        proposalId, DurabilityState.ACKED, durableHead, null);
+                }
+
+                @Override
+                public void onFailure(String proposalId, String error) {
+                    context.proposalQueueManager.updateDurability(
+                        proposalId, DurabilityState.FAILED, null, error);
+                }
+            });
+        }
     }
 
     /**
@@ -147,7 +215,7 @@ public class ConsensusApiHandler {
     public void handleProposeWrite(HttpServletRequest request, HttpServletResponse response) throws IOException {
         // Check if Aeron consensus engine is configured (ONLY mode supported)
         if (context.aeronConsensusEngine == null) {
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Aeron consensus engine not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Aeron consensus engine not configured");
             return;
         }
         
@@ -159,7 +227,7 @@ public class ConsensusApiHandler {
             String reason = context.aeronConsensusEngine.getUnhealthyReason();
             log.warn("❌ Cluster unhealthy, rejecting proposal: {}", reason);
             context.apiRejectedRequests.incrementAndGet();
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "Cluster unhealthy: " + reason + ". Please retry in a few seconds.");
             return;
         }
@@ -260,7 +328,7 @@ public class ConsensusApiHandler {
             if (!walletValidation.isValid()) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: {}", walletValidation.getError());
-                response.sendError(walletValidation.getHttpStatus(), walletValidation.getError());
+                ApiErrorUtil.sendJsonError(response, walletValidation.getHttpStatus(), walletValidation.getError());
                 return;
             }
             String normalizedWallet = walletValidation.getNormalizedValue();
@@ -273,7 +341,7 @@ public class ConsensusApiHandler {
             if (orgValidationError != null) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Invalid organization '{}': {}", organization, orgValidationError);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, orgValidationError);
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, orgValidationError);
                 return;
             }
             if (organization != null && !organization.isEmpty()) {
@@ -353,7 +421,7 @@ public class ConsensusApiHandler {
                     clientId = validatorId;
                 } else {
                     log.warn("🚫 Write rejected: Wallet {} not registered and not a valid Ethereum address", normalizedWallet);
-                    response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, 
                         String.format("Wallet %s not registered. Please register via /v1/register-client with walletAddress=%s before writing.", 
                             normalizedWallet, normalizedWallet));
                     return;
@@ -369,7 +437,7 @@ public class ConsensusApiHandler {
                     log.warn("   Registered wallet: {}", registeredWallet);
                     String registeredShard = WalletPathUtil.getShardRoot(registeredWallet);
                     String attemptedShard = WalletPathUtil.getShardRoot(normalizedWallet);
-                    response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, 
                         String.format("Path enforcement violation: Client %s can only write to shard %s, " +
                                      "but attempted to write to shard %s", 
                                      clientId, registeredShard, attemptedShard));
@@ -450,7 +518,7 @@ public class ConsensusApiHandler {
             if (signature == null || signature.isEmpty()) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Missing signature");
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Missing signature. All writes require a signature (even in mock mode for testing).");
                 return;
             }
@@ -460,7 +528,7 @@ public class ConsensusApiHandler {
             if (!signature.startsWith("0x")) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Signature must start with '0x': {}", signature);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid signature format: must start with '0x'");
                 return;
             }
@@ -470,7 +538,7 @@ public class ConsensusApiHandler {
             if (sigHex.isEmpty()) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Signature too short: {}", signature);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid signature: too short (need hex data after 0x)");
                 return;
             }
@@ -478,7 +546,7 @@ public class ConsensusApiHandler {
             if (!sigHex.matches("[a-fA-F0-9]+")) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Signature contains non-hex characters: {}", signature);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid signature format: must be valid hexadecimal after '0x'");
                 return;
             }
@@ -508,7 +576,7 @@ public class ConsensusApiHandler {
                 if (!signatureValid) {
                     context.apiRejectedRequests.incrementAndGet();
                     log.warn("❌ API REJECTED: Signature verification failed for wallet {}", wallet);
-                    response.sendError(HttpServletResponse.SC_UNAUTHORIZED, 
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_UNAUTHORIZED, 
                         "Signature verification failed. The signature does not match the claimed wallet address.");
                     return;
                 }
@@ -522,7 +590,7 @@ public class ConsensusApiHandler {
             if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Missing ethereumTxHash");
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Missing ethereumTxHash parameter. Must provide Ethereum transaction hash from authorizeWrite() call.");
                 return;
             }
@@ -532,7 +600,7 @@ public class ConsensusApiHandler {
             if (!ethereumTxHash.startsWith("0x")) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Transaction hash must start with '0x': {}", ethereumTxHash);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid ethereumTxHash format: must start with '0x'");
                 return;
             }
@@ -541,7 +609,7 @@ public class ConsensusApiHandler {
             if (txHex.length() < 8) {  // Minimum reasonable tx hash length
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Transaction hash too short: {}", ethereumTxHash);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid ethereumTxHash: too short (expected at least 8 hex characters)");
                 return;
             }
@@ -549,7 +617,7 @@ public class ConsensusApiHandler {
             if (!txHex.matches("[a-fA-F0-9]+")) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Transaction hash contains non-hex characters: {}", ethereumTxHash);
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid ethereumTxHash format: must be valid hexadecimal");
                 return;
             }
@@ -625,7 +693,7 @@ public class ConsensusApiHandler {
                 log.warn("⚠️  ProposalQueueManager not available - falling back to immediate append");
                 // Fallback: immediate append (for backward compatibility)
                 if (context.aeronConsensusEngine == null) {
-                    response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
                         "AeronConsensusEngine not initialized");
                     return;
                 }
@@ -637,11 +705,13 @@ public class ConsensusApiHandler {
                     message != null ? message : "",
                     signature,
                     blobId,      // Include binary reference for Aeron replication
-                    mimeType     // Include mimeType for binary handling
+                    mimeType,    // Include mimeType for binary handling
+                    ipfsCid,
+                    proposalId
                 );
                 
                 if (!success) {
-                    response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                         "Failed to send write through Aeron ingress channel");
                     return;
                 }
@@ -674,7 +744,7 @@ public class ConsensusApiHandler {
                 if (!normalizedTier.equals("standard") && !normalizedTier.equals("express") && !normalizedTier.equals("priority")) {
                     context.apiRejectedRequests.incrementAndGet();
                     log.warn("❌ API REJECTED: Invalid payment tier: {}", paymentTier);
-                    response.sendError(HttpServletResponse.SC_BAD_REQUEST, 
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                         "Invalid paymentTier: '" + paymentTier + "'. Must be 'standard', 'express', or 'priority'.");
                     return;
                 }
@@ -781,7 +851,7 @@ public class ConsensusApiHandler {
             
         } catch (Exception e) {
             log.error("❌ Test write failed", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Test write failed: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Test write failed: " + e.getMessage());
         }
     }
     
@@ -818,7 +888,7 @@ public class ConsensusApiHandler {
                 : "consensus_engine_not_configured";
             log.warn("❌ Cluster unhealthy, rejecting delete proposal: {}", reason);
             context.apiRejectedRequests.incrementAndGet();
-            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "Cluster unhealthy: " + reason + ". Please retry in a few seconds.");
             return;
         }
@@ -835,18 +905,18 @@ public class ConsensusApiHandler {
             
             // Validate required parameters
             if (signature == null || signature.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Missing signature parameter");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing signature parameter");
                 return;
             }
             if (contentPath == null || contentPath.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Missing contentPath parameter");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing contentPath parameter");
                 return;
             }
             
             // ✅ REFACTORED: Validate Ethereum address using WalletValidator
             ValidationResult<String> walletValidation = WalletValidator.validate(wallet);
             if (!walletValidation.isValid()) {
-                response.sendError(walletValidation.getHttpStatus(), walletValidation.getError());
+                ApiErrorUtil.sendJsonError(response, walletValidation.getHttpStatus(), walletValidation.getError());
                 return;
             }
             String normalizedWallet = walletValidation.getNormalizedValue();
@@ -891,7 +961,7 @@ public class ConsensusApiHandler {
                     }
                 }
                 log.warn("   Available registered wallets: {}", registeredWallets);
-                response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, 
                     String.format("Wallet %s not registered. Please register via /v1/register-client with walletAddress=%s before proposing deletes.", 
                         normalizedWallet, normalizedWallet));
                 return;
@@ -909,7 +979,7 @@ public class ConsensusApiHandler {
                     log.warn("🚫 Delete proposal rejected: Wallet mismatch for client {}", clientId);
                     log.warn("   Requested wallet: {}", normalizedWallet);
                     log.warn("   Registered wallet: {}", registeredWallet);
-                    response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, 
                         String.format("Wallet mismatch: Client %s registered with wallet %s, but proposal uses %s",
                                      clientId, registeredWallet, normalizedWallet));
                     return;
@@ -922,7 +992,7 @@ public class ConsensusApiHandler {
                 log.warn("🚫 Delete proposal rejected: Path ownership violation");
                 log.warn("   Content path: {}", contentPath);
                 log.warn("   Expected shard root: {}", shardRoot);
-                response.sendError(HttpServletResponse.SC_FORBIDDEN, 
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, 
                     String.format("Path ownership violation: Content at %s does not belong to wallet %s. " +
                                  "Only content under %s/ can be deleted.",
                                  contentPath, wallet, shardRoot));
@@ -936,7 +1006,7 @@ public class ConsensusApiHandler {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             String ethereumTxHash = request.getParameter("ethereumTxHash");
             if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST,
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
                     "Missing ethereumTxHash parameter. Deletes require Ethereum payment (like writes). " +
                     "Tiers: STANDARD (+2 epochs), EXPRESS (+1 epoch), PRIORITY (direct).");
                 return;
@@ -1020,7 +1090,7 @@ public class ConsensusApiHandler {
             
         } catch (Exception e) {
             log.error("❌ Delete proposal failed", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Delete proposal failed: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Delete proposal failed: " + e.getMessage());
         }
     }
     
@@ -1121,19 +1191,19 @@ public class ConsensusApiHandler {
             // Extract proposalId from path: /v1/proposals/{proposalId}/status
             String[] parts = path.split("/");
             if (parts.length < 4) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID");
                 return;
             }
             String proposalId = parts[3];
             
             if (context.proposalQueueManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
                 return;
             }
             
             ProposalStatus status = context.proposalQueueManager.getProposalStatus(proposalId);
             if (status == null) {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND, "Proposal not found");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Proposal not found");
                 return;
             }
             
@@ -1144,12 +1214,16 @@ public class ConsensusApiHandler {
                 "\"ethereumTxHash\":\"" + status.getEthereumTxHash() + "\"," +
                 "\"timeoutTimestamp\":" + status.getTimeoutTimestamp() + "," +
                 "\"confirmedBlock\":" + (status.getConfirmedBlock() != null ? status.getConfirmedBlock() : -1) + "," +
-                "\"rejectionReason\":" + (status.getRejectionReason() != null ? "\"" + status.getRejectionReason() + "\"" : "null") +
+                "\"rejectionReason\":" + (status.getRejectionReason() != null ? "\"" + status.getRejectionReason() + "\"" : "null") + "," +
+                "\"durabilityState\":\"" + (status.getDurabilityState() != null ? status.getDurabilityState().name() : "UNKNOWN") + "\"," +
+                "\"durabilityTimestamp\":" + status.getDurabilityTimestamp() + "," +
+                "\"durabilityError\":" + (status.getDurabilityError() != null ? "\"" + status.getDurabilityError() + "\"" : "null") + "," +
+                "\"durableHead\":" + (status.getDurableHead() != null ? "\"" + status.getDurableHead() + "\"" : "null") +
                 "}";
             response.getWriter().write(json);
         } catch (Exception e) {
             log.error("Error getting proposal status", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
         }
     }
     
@@ -1162,7 +1236,7 @@ public class ConsensusApiHandler {
         
         try {
             if (context.proposalQueueManager == null) {
-                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
                 return;
             }
             
@@ -1172,7 +1246,7 @@ public class ConsensusApiHandler {
             response.getWriter().write(json);
         } catch (Exception e) {
             log.error("Error getting pending count", e);
-            response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
         }
     }
     
@@ -1184,13 +1258,17 @@ public class ConsensusApiHandler {
      * 
      * @param ipfsCid IPFS CID from client-side upload (ADR 016), may be null
      */
-    public void applyReplicatedWrite(String walletAddress, String path, String contentType, 
-                                     String message, String signature, String intentToken, 
-                                     String blobId, String mimeType, String ipfsCid) {
+    public void applyReplicatedWrite(String walletAddress, String path, String contentType,
+                                     String message, String signature, String intentToken,
+                                     String blobId, String mimeType, String ipfsCid,
+                                     String proposalId) {
+        if (proposalId != null && context.aeronConsensusEngine != null && context.aeronConsensusEngine.isLeader()) {
+            context.aeronConsensusEngine.sendQueueSegment(proposalId);
+        }
         // Delegate to WriteApplicationService
         writeApplicationService.applyWrite(
             walletAddress, path, contentType, message, signature,
-            intentToken, blobId, mimeType, ipfsCid
+            intentToken, blobId, mimeType, ipfsCid, proposalId
         );
     }
     
@@ -1203,9 +1281,12 @@ public class ConsensusApiHandler {
      * Delete in Oak = Remove node from tree (writes new segment saying "path no longer exists")
      * Old segments remain until GC/compaction runs
      */
-    public void applyReplicatedDelete(String walletAddress, String path, String signature) {
+    public void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId) {
+        if (proposalId != null && context.aeronConsensusEngine != null && context.aeronConsensusEngine.isLeader()) {
+            context.aeronConsensusEngine.sendQueueSegment(proposalId);
+        }
         // Delegate to DeleteApplicationService
-        deleteApplicationService.applyDelete(walletAddress, path, signature);
+        deleteApplicationService.applyDelete(walletAddress, path, signature, proposalId);
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1690,4 +1771,3 @@ public class ConsensusApiHandler {
         }
     }
 }
-
