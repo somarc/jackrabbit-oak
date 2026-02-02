@@ -37,7 +37,7 @@ import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 
-final class AeronClusterBootstrapper {
+public final class AeronClusterBootstrapper {
 
     private final FileStore fileStore;
     private final NodeStore nodeStore;
@@ -46,12 +46,12 @@ final class AeronClusterBootstrapper {
     private final String storeDirectory;
     private final BlobStore blobStore;
 
-    AeronClusterBootstrapper(FileStore fileStore,
-                             NodeStore nodeStore,
-                             SegmentHttpServer httpServer,
-                             EthereumWallet wallet,
-                             String storeDirectory,
-                             BlobStore blobStore) {
+    public AeronClusterBootstrapper(FileStore fileStore,
+                                    NodeStore nodeStore,
+                                    SegmentHttpServer httpServer,
+                                    EthereumWallet wallet,
+                                    String storeDirectory,
+                                    BlobStore blobStore) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.httpServer = httpServer;
@@ -60,10 +60,10 @@ final class AeronClusterBootstrapper {
         this.blobStore = blobStore;
     }
 
-    AeronClusterStartupResult startCluster(String selfUrl,
-                                           List<String> peerUrls,
-                                           boolean observeElections,
-                                           boolean logClusterStateDetails) throws IOException {
+    public AeronClusterStartupResult startCluster(String selfUrl,
+                                                  List<String> peerUrls,
+                                                  boolean observeElections,
+                                                  boolean logClusterStateDetails) throws IOException {
         // Get node ID from system property (default: 0)
         int nodeId = Integer.parseInt(System.getProperty("aeron.cluster.nodeId", "0"));
 

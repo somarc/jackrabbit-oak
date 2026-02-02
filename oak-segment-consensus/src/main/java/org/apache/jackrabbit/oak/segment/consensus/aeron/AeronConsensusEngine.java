@@ -183,8 +183,7 @@ public class AeronConsensusEngine implements ClusteredService {
     // This is updated on role changes and used as fallback when Aeron term not available
     private volatile int currentTerm = 0;
     private volatile String currentLeader = null;
-    private volatile long lastHeartbeatTime = System.currentTimeMillis();
-    private static final long HEARTBEAT_MAX_AGE_MS = Long.getLong("oak.cluster.heartbeat.maxAgeMs", 30000L);
+    // Heartbeat tracking handled by AeronHealthService
     private static final long REACHABILITY_CACHE_MS = Long.getLong("oak.cluster.reachability.cacheMs", 5000L);
     private static final int REACHABILITY_CONNECT_TIMEOUT_MS = Integer.getInteger("oak.cluster.reachability.connectTimeoutMs", 1500);
     private static final int REACHABILITY_READ_TIMEOUT_MS = Integer.getInteger("oak.cluster.reachability.readTimeoutMs", 1500);
@@ -212,28 +211,12 @@ public class AeronConsensusEngine implements ClusteredService {
     // Since Raft processes messages in order, we can use a simple FIFO queue
     private final java.util.concurrent.ConcurrentLinkedQueue<Long> ingressTimestamps = new java.util.concurrent.ConcurrentLinkedQueue<>();
     
-    // ✈️ AERON NATIVE: Track leadership rotation history from onRoleChange() callbacks
-    public static class LeadershipChange {
-        public final long timestamp;
-        public final Cluster.Role newRole;
-        public final Cluster.Role previousRole;
-        public final int term;
-        public final int memberId;
-        public final String memberUrl;
-        
-        public LeadershipChange(long timestamp, Cluster.Role newRole, Cluster.Role previousRole, 
-                               int term, int memberId, String memberUrl) {
-            this.timestamp = timestamp;
-            this.newRole = newRole;
-            this.previousRole = previousRole;
-            this.term = term;
-            this.memberId = memberId;
-            this.memberUrl = memberUrl;
-        }
-    }
-    
-    private final java.util.List<LeadershipChange> leadershipHistory = new java.util.concurrent.CopyOnWriteArrayList<>();
-    private static final int MAX_HISTORY_ENTRIES = 100; // Keep last 100 role changes
+    private final AeronMessageCodec messageCodec = AeronEngineComponentFactory.createMessageCodec();
+    private final AeronEgressHandler egressHandler = AeronEngineComponentFactory.createEgressHandler();
+    private AeronIngressHandler ingressHandler;
+    private AeronSessionManager sessionManager;
+    private AeronHealthService healthService = AeronEngineComponentFactory.createHealthService();
+    private AeronLeaderTracker leaderTracker;
     
     // Reachability cache
     private volatile long lastReachabilityCheckMs = 0;
@@ -269,18 +252,17 @@ public class AeronConsensusEngine implements ClusteredService {
         this.wallet = wallet;
         this.storeDirectory = storeDirectory;
         this.blobStore = blobStore;
-        this.replicator = new SegmentReplicator(fileStore);
-        this.backpressureManager = new org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager();
+        this.replicator = AeronEngineComponentFactory.createSegmentReplicator(fileStore);
+        this.backpressureManager = AeronEngineComponentFactory.createBackpressureManager();
         this.peerProbeMode = parsePeerProbeMode();
         
         // Build node ID to URL mapping (will be populated when cluster starts)
         // This allows us to map Aeron Cluster leaderMemberId to validator URL
         
         // ✅ PRODUCTION REFACTOR: Initialize service layer components
-        this.snapshotService = new SnapshotService(fileStore, storeDirectory);
-        this.leaderDiscoveryService = new LeaderDiscoveryService(nodeIdToUrl, peerUrls);
-        this.leaderDiscoveryService.setSelfUrl(selfUrl);
-        this.messageDispatcher = new MessageDispatcher(
+        this.snapshotService = AeronEngineComponentFactory.createSnapshotService(fileStore, storeDirectory);
+        this.leaderDiscoveryService = AeronEngineComponentFactory.createLeaderDiscoveryService(nodeIdToUrl, peerUrls, selfUrl);
+        this.messageDispatcher = AeronEngineComponentFactory.createMessageDispatcher(
             new MessageDispatcher.WriteCallback() {
                 @Override
                 public void applyWrite(String walletAddress, String path, String contentType,
@@ -368,7 +350,12 @@ public class AeronConsensusEngine implements ClusteredService {
             }
         });
 
-        this.headStateService = new HeadStateService(fileStore);
+        this.headStateService = AeronEngineComponentFactory.createHeadStateService(fileStore);
+        this.ingressHandler = AeronEngineComponentFactory.createIngressHandler(
+            messageCodec, messageDispatcher, this::markHeartbeat, this::applyGenesisCreation
+        );
+        this.sessionManager = AeronEngineComponentFactory.createSessionManager(this::markHeartbeat, this::scheduleReconnect);
+        this.leaderTracker = AeronEngineComponentFactory.createLeaderTracker(leaderDiscoveryService);
         
         log.info("Aeron Consensus Engine initializing - Consensus: Aeron Cluster (Raft), Self: {}, Peers: {}, Wallet: {}", 
             selfUrl, peerUrls.size(), wallet.getWalletAddress());
@@ -662,16 +649,24 @@ public class AeronConsensusEngine implements ClusteredService {
     
     @Override
     public void onSessionOpen(ClientSession session, long timestamp) {
-        log.info("Client session opened: {} (timestamp: {})", session.id(), timestamp);
-        markHeartbeat();
+        if (sessionManager != null) {
+            sessionManager.onSessionOpen(session, timestamp);
+        } else {
+            log.info("Client session opened: {} (timestamp: {})", session.id(), timestamp);
+            markHeartbeat();
+        }
     }
     
     @Override
     public void onSessionClose(ClientSession session, long timestamp, CloseReason closeReason) {
-        log.info("Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
-        markHeartbeat();
-        if (closeReason == CloseReason.TIMEOUT) {
-            scheduleReconnect("session_timeout");
+        if (sessionManager != null) {
+            sessionManager.onSessionClose(session, timestamp, closeReason);
+        } else {
+            log.info("Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
+            markHeartbeat();
+            if (closeReason == CloseReason.TIMEOUT) {
+                scheduleReconnect("session_timeout");
+            }
         }
     }
     
@@ -703,49 +698,37 @@ public class AeronConsensusEngine implements ClusteredService {
         // ✈️ AERON NATIVE: Handle replicated write proposals
         // This callback is invoked on ALL nodes after Aeron replicates the message via Raft
         // Deterministic state machine: ALL nodes process messages in same order
-        
-        markHeartbeat();
-        
-        log.debug("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}", 
-            session.id(), length, cluster != null ? cluster.role() : "UNKNOWN", timestamp);
-        
-        // ✈️ AERON MESSAGE VALIDATION: Check SBE message header length first
-        if (length < SimpleMessageHeader.ENCODED_LENGTH) {
-            log.warn("⚠️  Message too short: {} (minimum {} bytes for SBE header)", 
-                length, SimpleMessageHeader.ENCODED_LENGTH);
-            return;
-        }
-        
-        try {
-            // Peek at template ID to handle special cases (genesis, snapshot)
-            SimpleMessageHeader.HeaderInfo headerInfo = SimpleMessageHeader.decode(buffer, offset);
-            
-            // Handle genesis proposal specially (not delegated to MessageDispatcher)
-            if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
-                log.info("🎬 GENESIS proposal received via Aeron - creating genesis on this node");
-                applyGenesisCreation();
-                log.info("✅ Genesis creation complete on this node");
+        if (ingressHandler != null) {
+            ingressHandler.handleMessage(session, timestamp, buffer, offset, length, header, cluster);
+        } else {
+            markHeartbeat();
+            log.debug("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}",
+                session.id(), length, cluster != null ? cluster.role() : "UNKNOWN", timestamp);
+            if (length < SimpleMessageHeader.ENCODED_LENGTH) {
+                log.warn("⚠️  Message too short: {} (minimum {} bytes for SBE header)",
+                    length, SimpleMessageHeader.ENCODED_LENGTH);
                 return;
             }
-            
-            // Handle snapshot messages specially
-            if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
-                log.debug("📸 Snapshot message received in onSessionMessage (handled separately)");
-                return;
+            try {
+                SimpleMessageHeader.HeaderInfo headerInfo = SimpleMessageHeader.decode(buffer, offset);
+                if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
+                    log.info("🎬 GENESIS proposal received via Aeron - creating genesis on this node");
+                    applyGenesisCreation();
+                    log.info("✅ Genesis creation complete on this node");
+                    return;
+                }
+                if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
+                    log.debug("📸 Snapshot message received in onSessionMessage (handled separately)");
+                    return;
+                }
+                boolean success = messageDispatcher.dispatch(timestamp, buffer, offset, length);
+                if (!success) {
+                    log.warn("⚠️  MessageDispatcher failed to process message (templateId: {})",
+                        headerInfo.templateId);
+                }
+            } catch (Exception e) {
+                log.error("❌ Failed to process replicated message", e);
             }
-            
-            // ✅ REFACTORED: Delegate all other message processing to MessageDispatcher
-            // MessageDispatcher handles: WRITE_PROPOSAL, DELETE_PROPOSAL, WRITE_BATCH, GC_*
-            // Metrics tracking is done in the callbacks (trackWriteMetrics)
-            boolean success = messageDispatcher.dispatch(timestamp, buffer, offset, length);
-            
-            if (!success) {
-                log.warn("⚠️  MessageDispatcher failed to process message (templateId: {})", 
-                    headerInfo.templateId);
-            }
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to process replicated message", e);
         }
     }
     
@@ -1080,33 +1063,20 @@ public class AeronConsensusEngine implements ClusteredService {
                 }
             }
 
-            idleStrategy.reset();
-            long result;
-            int retries = 0;
-            while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
-                if (result == io.aeron.Publication.BACK_PRESSURED) {
-                    idleStrategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ Durability message back-pressured after {} retries ({})", retries, label);
-                        return false;
-                    }
-                } else if (result == io.aeron.Publication.NOT_CONNECTED) {
-                    log.warn("⚠️  Durability ingress not connected - waiting... ({})", label);
-                    idleStrategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ Durability ingress not connected after {} retries ({})", retries, label);
-                        return false;
-                    }
-                } else {
-                    log.error("❌ Failed to send durability message through ingress: {} ({})", result, label);
-                    return false;
-                }
+            boolean sent = egressHandler.offerWithRetry(
+                internalClusterClient,
+                idleStrategy,
+                messageBuffer,
+                totalLength,
+                "durability " + label,
+                100,
+                null,
+                false
+            );
+            if (sent) {
+                log.debug("✅ Durability message sent ({})", label);
             }
-
-            log.debug("✅ Durability message sent ({})", label);
-            return true;
+            return sent;
         } catch (Exception e) {
             log.error("❌ Exception sending durability message ({})", label, e);
             return false;
@@ -1204,45 +1174,29 @@ public class AeronConsensusEngine implements ClusteredService {
                     log.info("✅ Reconnection successful - retrying write send");
                 }
                 
-                // Send message through AeronCluster client ingress
-                // Aeron will replicate to all nodes via Raft consensus
-                idleStrategy.reset();
-                long result;
-                int retries = 0;
-                while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
-                    if (result == io.aeron.Publication.BACK_PRESSURED) {
-                        idleStrategy.idle();
-                        retries++;
-                        if (retries > 100) {
-                            log.error("❌ Ingress back-pressured after {} retries", retries);
-                            return false;
-                        }
-                    } else if (result == io.aeron.Publication.NOT_CONNECTED) {
-                        log.warn("⚠️  Ingress not connected - waiting...");
-                        idleStrategy.idle();
-                        retries++;
-                        if (retries > 100) {
-                            log.error("❌ Ingress not connected after {} retries", retries);
-                            return false;
-                        }
-                    } else {
-                        log.error("❌ Failed to send write through ingress: {}", result);
-                        return false;
-                    }
+                boolean sent = egressHandler.offerWithRetry(
+                    internalClusterClient,
+                    idleStrategy,
+                    messageBuffer,
+                    totalLength,
+                    "write ingress",
+                    100,
+                    () -> {
+                        // 📊 Track ingress timestamp for Raft latency calculation
+                        // Store in FIFO queue - will be matched with replication in onSessionMessage()
+                        ingressTimestamps.offer(System.nanoTime());
+                        performanceMetrics.recordMessageIngressed();
+                        // 🚦 BACKPRESSURE: Increment sent counter for backpressure tracking
+                        // This MUST be called after successful offer to Aeron
+                        // Will be matched with incrementAcknowledged() in onSessionMessage()
+                        backpressureManager.incrementSent();
+                    },
+                    false
+                );
+                if (sent) {
+                    log.debug("✅ Write sent through AeronCluster.offer() - will replicate to all nodes via Raft");
                 }
-                
-                // 📊 Track ingress timestamp for Raft latency calculation
-                // Store in FIFO queue - will be matched with replication in onSessionMessage()
-                ingressTimestamps.offer(System.nanoTime());
-                performanceMetrics.recordMessageIngressed();
-                
-                // 🚦 BACKPRESSURE: Increment sent counter for backpressure tracking
-                // This MUST be called after successful offer to Aeron
-                // Will be matched with incrementAcknowledged() in onSessionMessage()
-                backpressureManager.incrementSent();
-                
-                log.debug("✅ Write sent through AeronCluster.offer() - will replicate to all nodes via Raft");
-                return true;
+                return sent;
             } catch (Exception e) {
                 log.error("❌ Exception sending write through AeronCluster client", e);
                 return false;
@@ -1343,37 +1297,24 @@ public class AeronConsensusEngine implements ClusteredService {
                     log.info("✅ Reconnection successful - retrying write send");
                 }
                 
-                idleStrategy.reset();
-                long result;
-                int retries = 0;
-                while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
-                    if (result == io.aeron.Publication.BACK_PRESSURED) {
-                        idleStrategy.idle();
-                        retries++;
-                        if (retries > 100) {
-                            log.error("❌ Ingress back-pressured after {} retries", retries);
-                            return false;
-                        }
-                    } else if (result == io.aeron.Publication.NOT_CONNECTED) {
-                        log.warn("⚠️  Ingress not connected - waiting...");
-                        idleStrategy.idle();
-                        retries++;
-                        if (retries > 100) {
-                            log.error("❌ Ingress not connected after {} retries", retries);
-                            return false;
-                        }
-                    } else {
-                        log.error("❌ Failed to send write through ingress: {}", result);
-                        return false;
-                    }
+                boolean sent = egressHandler.offerWithRetry(
+                    internalClusterClient,
+                    idleStrategy,
+                    messageBuffer,
+                    totalLength,
+                    "write (binary) ingress",
+                    100,
+                    () -> {
+                        ingressTimestamps.offer(System.nanoTime());
+                        performanceMetrics.recordMessageIngressed();
+                        backpressureManager.incrementSent();
+                    },
+                    false
+                );
+                if (sent) {
+                    log.info("✅ Write with binary sent through AeronCluster.offer() - blobId={}", blobId);
                 }
-                
-                ingressTimestamps.offer(System.nanoTime());
-                performanceMetrics.recordMessageIngressed();
-                backpressureManager.incrementSent();
-                
-                log.info("✅ Write with binary sent through AeronCluster.offer() - blobId={}", blobId);
-                return true;
+                return sent;
             } catch (Exception e) {
                 log.error("❌ Exception sending write through AeronCluster client", e);
                 return false;
@@ -1458,39 +1399,24 @@ public class AeronConsensusEngine implements ClusteredService {
                 log.info("✅ Reconnection successful - retrying delete send");
             }
             
-            // Send through Aeron with back-pressure handling
-            idleStrategy.reset();
-            long result;
-            int retries = 0;
-            while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
-                if (result == io.aeron.Publication.BACK_PRESSURED) {
-                    idleStrategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ Delete ingress back-pressured after {} retries", retries);
-                        return false;
-                    }
-                } else if (result == io.aeron.Publication.NOT_CONNECTED) {
-                    log.warn("⚠️  Delete ingress not connected - waiting...");
-                    idleStrategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ Delete ingress not connected after {} retries", retries);
-                        return false;
-                    }
-                } else {
-                    log.error("❌ Failed to send delete through ingress: {}", result);
-                    return false;
-                }
+            boolean sent = egressHandler.offerWithRetry(
+                internalClusterClient,
+                idleStrategy,
+                messageBuffer,
+                totalLength,
+                "delete ingress",
+                100,
+                () -> {
+                    ingressTimestamps.offer(System.nanoTime());
+                    performanceMetrics.recordMessageIngressed();
+                    backpressureManager.incrementSent();
+                },
+                false
+            );
+            if (sent) {
+                log.info("✅ DELETE sent through AeronCluster.offer() - will replicate to all nodes via Raft");
             }
-            
-            // Track metrics (same as writes)
-            ingressTimestamps.offer(System.nanoTime());
-            performanceMetrics.recordMessageIngressed();
-            backpressureManager.incrementSent();
-            
-            log.info("✅ DELETE sent through AeronCluster.offer() - will replicate to all nodes via Raft");
-            return true;
+            return sent;
         } catch (Exception e) {
             log.error("❌ Exception sending delete through ingress", e);
             return false;
@@ -1635,48 +1561,29 @@ public class AeronConsensusEngine implements ClusteredService {
                     log.info("✅ Reconnection successful - retrying batch send (batch size: {})", proposals.size());
                 }
                 
-                // Send message through AeronCluster client ingress
-                idleStrategy.reset();
-                long result;
-                int retries = 0;
-                log.debug("🔍DEBUG_BATCH [8]: Entering offer loop...");
-                
-                while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
-                    log.debug("🔍DEBUG_BATCH [9]: offer() returned: {}, retry: {}", result, retries);
-                    if (result == io.aeron.Publication.BACK_PRESSURED) {
-                        idleStrategy.idle();
-                        retries++;
-                        if (retries > 100) {
-                            log.error("❌ Ingress back-pressured after {} retries (batch size: {})", retries, proposals.size());
-                            return 0;
-                        }
-                    } else if (result == io.aeron.Publication.NOT_CONNECTED) {
-                        log.warn("⚠️  Ingress not connected - waiting... (batch size: {})", proposals.size());
-                        idleStrategy.idle();
-                        retries++;
-                        if (retries > 100) {
-                            log.error("❌ Ingress not connected after {} retries (batch size: {})", retries, proposals.size());
-                            return 0;
-                        }
-                    } else {
-                        log.error("❌ Failed to send batch write through ingress: {} (batch size: {})", result, proposals.size());
-                        return 0;
-                    }
+                boolean sent = egressHandler.offerWithRetry(
+                    internalClusterClient,
+                    idleStrategy,
+                    messageBuffer,
+                    totalLength,
+                    "batch ingress",
+                    100,
+                    () -> {
+                        log.debug("🔍DEBUG_BATCH [8]: offer() SUCCESS");
+                        // 📊 Track ingress timestamp for Raft latency calculation
+                        ingressTimestamps.offer(System.nanoTime());
+                        performanceMetrics.recordMessageIngressed();
+                        log.debug("🔍DEBUG_BATCH [11]: Tracked ingress timestamp and metrics");
+                        // 🚦 BACKPRESSURE: Do NOT increment here - ProposalQueueManagerOptimized
+                        // already calls incrementSent() for each proposal before calling this method
+                        // (see ProposalQueueManagerOptimized line 507)
+                        // Double-counting would cause false backpressure!
+                    },
+                    false
+                );
+                if (!sent) {
+                    return 0;
                 }
-                
-                log.debug("🔍DEBUG_BATCH [10]: offer() SUCCESS - result: {}", result);
-                
-                // 📊 Track ingress timestamp for Raft latency calculation
-                ingressTimestamps.offer(System.nanoTime());
-                performanceMetrics.recordMessageIngressed();
-                
-                log.debug("🔍DEBUG_BATCH [11]: Tracked ingress timestamp and metrics");
-                
-                // 🚦 BACKPRESSURE: Do NOT increment here - ProposalQueueManagerOptimized
-                // already calls incrementSent() for each proposal before calling this method
-                // (see ProposalQueueManagerOptimized line 507)
-                // Double-counting would cause false backpressure!
-                
                 log.debug("🔍DEBUG_BATCH [12]: ✅ COMPLETE - Batch sent to Aeron ingress, {} proposals will replicate via Raft", proposals.size());
                 log.debug("✅ Batch write sent through AeronCluster.offer() - {} proposals will replicate via Raft", proposals.size());
                 return proposals.size();
@@ -1938,39 +1845,24 @@ public class AeronConsensusEngine implements ClusteredService {
                 }
             }
             
-            // Send with back-pressure handling
-            idleStrategy.reset();
-            long result;
-            int retries = 0;
-            while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
-                if (result == io.aeron.Publication.BACK_PRESSURED) {
-                    idleStrategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ {} ingress back-pressured after {} retries", messageType, retries);
-                        return false;
-                    }
-                } else if (result == io.aeron.Publication.NOT_CONNECTED) {
-                    log.warn("⚠️  {} ingress not connected - waiting...", messageType);
-                    idleStrategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ {} ingress not connected after {} retries", messageType, retries);
-                        return false;
-                    }
-                } else {
-                    log.error("❌ Failed to send {} through ingress: {}", messageType, result);
-                    return false;
-                }
+            boolean sent = egressHandler.offerWithRetry(
+                internalClusterClient,
+                idleStrategy,
+                messageBuffer,
+                totalLength,
+                messageType + " ingress",
+                100,
+                () -> {
+                    ingressTimestamps.offer(System.nanoTime());
+                    performanceMetrics.recordMessageIngressed();
+                    backpressureManager.incrementSent();
+                },
+                false
+            );
+            if (sent) {
+                log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", messageType);
             }
-            
-            // Track metrics
-            ingressTimestamps.offer(System.nanoTime());
-            performanceMetrics.recordMessageIngressed();
-            backpressureManager.incrementSent();
-            
-            log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", messageType);
-            return true;
+            return sent;
             
         } catch (Exception e) {
             log.error("❌ Exception sending {} through AeronCluster client", messageType, e);
@@ -2028,28 +1920,31 @@ public class AeronConsensusEngine implements ClusteredService {
             memberId,
             selfUrl
         );
-        
-        leadershipHistory.add(change);
-        
-        // Keep only last N entries
-        if (leadershipHistory.size() > MAX_HISTORY_ENTRIES) {
-            leadershipHistory.remove(0);
-        }
-        
+
         // ✅ ADR 025: Track term on role change (Aeron doesn't expose leadershipTermId on Cluster interface)
         if (newRole == Cluster.Role.LEADER && previousRole != Cluster.Role.LEADER) {
             currentTerm++;
             log.info("Term incremented to: {}", currentTerm);
         }
         
-        log.debug("Leadership history: {} total changes", leadershipHistory.size());
-        
-        // Invalidate leader cache on any role change
-        leaderDiscoveryService.invalidateCache();
+        if (leaderTracker != null) {
+            leaderTracker.recordChange(
+                change.newRole,
+                change.previousRole,
+                change.term,
+                change.memberId,
+                change.memberUrl,
+                change.timestamp
+            );
+            leaderTracker.invalidateCache();
+            log.debug("Leadership history: {} total changes", leaderTracker.getLeadershipHistory(0).size());
+        }
         
         if (newRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Now LEADER (term: {})", currentTerm);
-            leaderDiscoveryService.notifyBecameLeader(memberId);
+            if (leaderTracker != null) {
+                leaderTracker.notifyBecameLeader(memberId);
+            }
             
             // NEW GENESIS ARCHITECTURE: Create genesis as first consensus write
             // Check if genesis exists - if not, create it as first consensus write
@@ -2089,7 +1984,9 @@ public class AeronConsensusEngine implements ClusteredService {
             }
         } else if (previousRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Stepped down from LEADER (term: {})", currentTerm);
-            leaderDiscoveryService.notifyLostLeadership();
+            if (leaderTracker != null) {
+                leaderTracker.notifyLostLeadership();
+            }
         }
         
         updateRoleFromCluster(newRole);
@@ -2104,14 +2001,10 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return List of leadership changes, most recent first
      */
     public java.util.List<LeadershipChange> getLeadershipHistory(int limit) {
-        java.util.List<LeadershipChange> result = new java.util.ArrayList<>(leadershipHistory);
-        java.util.Collections.reverse(result); // Most recent first
-        
-        if (limit > 0 && result.size() > limit) {
-            return result.subList(0, limit);
+        if (leaderTracker == null) {
+            return java.util.Collections.emptyList();
         }
-        
-        return result;
+        return leaderTracker.getLeadershipHistory(limit);
     }
     
     @Override
@@ -2216,31 +2109,11 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return true if cluster can accept proposals, false otherwise
      */
     public boolean isClusterHealthy() {
-        // Check 1: Cluster object exists
-        if (cluster == null) {
-            return false;
-        }
-        
-        // Check 2: Leader is elected (CANDIDATE means election in progress)
-        // This is the primary health indicator - if we have a leader, cluster is operational
-        Cluster.Role role = cluster.role();
-        if (role == Cluster.Role.CANDIDATE) {
-            return false;
-        }
-        
-        // Check 3: Quorum must be present
-        if (!hasQuorum()) {
-            return false;
-        }
-
-        // Check 4: If internal client exists, verify it's not closed
-        // Note: Client is lazily created on first write, so null is OK for health
-        // The client will be created when the first proposal is submitted
-        if (internalClusterClient != null && internalClusterClient.isClosed()) {
-            return false;
-        }
-        
-        return true;
+        return healthService.isClusterHealthy(
+            cluster,
+            this::hasQuorum,
+            () -> internalClusterClient
+        );
     }
     
     /**
@@ -2251,20 +2124,11 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return Human-readable reason, or null if healthy
      */
     public String getUnhealthyReason() {
-        if (cluster == null) {
-            return "cluster_not_initialized";
-        }
-        if (cluster.role() == Cluster.Role.CANDIDATE) {
-            return "leader_election_in_progress";
-        }
-        if (!hasQuorum()) {
-            return "no_quorum";
-        }
-        // Client is lazily created on first write - only report closed as unhealthy
-        if (internalClusterClient != null && internalClusterClient.isClosed()) {
-            return "session_closed_timeout";
-        }
-        return null; // Healthy
+        return healthService.getUnhealthyReason(
+            cluster,
+            this::hasQuorum,
+            () -> internalClusterClient
+        );
     }
     
     // HEAD tracking and finality-aware commits are handled by HeadStateService.
@@ -2689,13 +2553,8 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     private void recordLeadershipChange(Cluster.Role newRole, Cluster.Role previousRole, 
                                         int term, int memberId, String memberUrl) {
-        LeadershipChange change = new LeadershipChange(
-            System.currentTimeMillis(), newRole, previousRole, term, memberId, memberUrl);
-        leadershipHistory.add(change);
-        
-        // Keep history bounded
-        while (leadershipHistory.size() > MAX_HISTORY_ENTRIES) {
-            leadershipHistory.remove(0);
+        if (leaderTracker != null) {
+            leaderTracker.recordChange(newRole, previousRole, term, memberId, memberUrl, System.currentTimeMillis());
         }
     }
     
@@ -2952,33 +2811,19 @@ public class AeronConsensusEngine implements ClusteredService {
             // Write JSON payload
             messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
             
-            // Send through Aeron ingress (will be replicated to ALL nodes including this one)
-            idleStrategy.reset();
-            long result;
-            int retries = 0;
-            while ((result = internalClusterClient.offer(messageBuffer, 0, totalLength)) < 0) {
-                if (result == io.aeron.Publication.BACK_PRESSURED) {
-                    idleStrategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ Genesis ingress back-pressured after {} retries", retries);
-                        return;
-                    }
-                } else if (result == io.aeron.Publication.NOT_CONNECTED) {
-                    log.warn("⚠️  Genesis ingress not connected - waiting...");
-                    idleStrategy.idle();
-                    retries++;
-                    if (retries > 100) {
-                        log.error("❌ Genesis ingress not connected after {} retries", retries);
-                        return;
-                    }
-                } else {
-                    log.error("❌ Genesis ingress offer failed: {}", result);
-                    return;
-                }
+            boolean sent = egressHandler.offerWithRetry(
+                internalClusterClient,
+                idleStrategy,
+                messageBuffer,
+                totalLength,
+                "genesis ingress",
+                100,
+                null,
+                false
+            );
+            if (sent) {
+                log.info("✅ GENESIS proposal sent through Aeron - all nodes will create genesis identically");
             }
-            
-            log.info("✅ GENESIS proposal sent through Aeron - all nodes will create genesis identically");
             
         } catch (Exception e) {
             log.error("❌ Failed to send genesis proposal", e);
@@ -3464,11 +3309,11 @@ public class AeronConsensusEngine implements ClusteredService {
      * Get last heartbeat time (for metrics).
      */
     public long getLastHeartbeatTime() {
-        return lastHeartbeatTime;
+        return healthService.getLastHeartbeatTime();
     }
     
     public long getHeartbeatAgeMs() {
-        return System.currentTimeMillis() - lastHeartbeatTime;
+        return healthService.getHeartbeatAgeMs();
     }
     
     public int getTotalMemberCount() {
@@ -3543,11 +3388,11 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     private void markHeartbeat() {
-        lastHeartbeatTime = System.currentTimeMillis();
+        healthService.markHeartbeat();
     }
     
     private boolean isHeartbeatStale() {
-        return getHeartbeatAgeMs() > HEARTBEAT_MAX_AGE_MS;
+        return healthService.isHeartbeatStale();
     }
 
     private static PeerProbeMode parsePeerProbeMode() {

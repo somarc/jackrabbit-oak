@@ -86,7 +86,7 @@ public class DashboardDataService {
      * @param limit maximum number of history entries to return
      * @return list of leadership changes, most recent first
      */
-    public List<org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.LeadershipChange> getLeadershipHistory(int limit) {
+    public List<org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange> getLeadershipHistory(int limit) {
         if (context.aeronConsensusEngine == null) {
             return java.util.Collections.emptyList();
         }
@@ -378,4 +378,3 @@ public class DashboardDataService {
         public String error = null;
     }
 }
-

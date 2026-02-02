@@ -22,18 +22,18 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient;
 
-final class AeronClusterStartupResult {
+public final class AeronClusterStartupResult {
     private final AeronConsensusEngine aeronEngine;
     private final AeronClusterLauncher launcher;
     private final AeronWriteClient writeClient;
     private final List<String> hostnames;
     private final int nodeId;
 
-    AeronClusterStartupResult(AeronConsensusEngine aeronEngine,
-                              AeronClusterLauncher launcher,
-                              AeronWriteClient writeClient,
-                              List<String> hostnames,
-                              int nodeId) {
+    public AeronClusterStartupResult(AeronConsensusEngine aeronEngine,
+                                     AeronClusterLauncher launcher,
+                                     AeronWriteClient writeClient,
+                                     List<String> hostnames,
+                                     int nodeId) {
         this.aeronEngine = aeronEngine;
         this.launcher = launcher;
         this.writeClient = writeClient;
@@ -41,23 +41,23 @@ final class AeronClusterStartupResult {
         this.nodeId = nodeId;
     }
 
-    AeronConsensusEngine getAeronEngine() {
+    public AeronConsensusEngine getAeronEngine() {
         return aeronEngine;
     }
 
-    AeronClusterLauncher getLauncher() {
+    public AeronClusterLauncher getLauncher() {
         return launcher;
     }
 
-    AeronWriteClient getWriteClient() {
+    public AeronWriteClient getWriteClient() {
         return writeClient;
     }
 
-    List<String> getHostnames() {
+    public List<String> getHostnames() {
         return hostnames;
     }
 
-    int getNodeId() {
+    public int getNodeId() {
         return nodeId;
     }
 }

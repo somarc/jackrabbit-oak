@@ -445,13 +445,13 @@ public class AeronApiHandler {
         }
         
         // ✈️ AERON NATIVE: Get leadership history from onRoleChange() callbacks
-        java.util.List<org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.LeadershipChange> changes = 
+        java.util.List<org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange> changes =
             context.aeronConsensusEngine.getLeadershipHistory(limit);
         
         Map<String, Object> history = new HashMap<>();
         List<Map<String, Object>> entries = new ArrayList<>();
         
-        for (org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.LeadershipChange change : changes) {
+        for (org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange change : changes) {
             Map<String, Object> entry = new HashMap<>();
             entry.put("timestamp", change.timestamp);
             entry.put("clusterTime", change.timestamp); // Aeron cluster time

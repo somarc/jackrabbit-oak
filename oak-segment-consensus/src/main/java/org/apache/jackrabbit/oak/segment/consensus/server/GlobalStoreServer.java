@@ -100,6 +100,7 @@ public class GlobalStoreServer {
     private EpochListener epochListener;
     private ValidatorBootstrap bootstrap;
     private org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
+    private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService aeronClusterService;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     
@@ -116,6 +117,17 @@ public class GlobalStoreServer {
     public GlobalStoreServer(int port, String storeDirectory) {
         this.port = port;
         this.storeDirectory = storeDirectory;
+    }
+
+    public void setAeronClusterService(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService service) {
+        this.aeronClusterService = service;
+    }
+
+    private void ensureAeronClusterService() {
+        if (aeronClusterService == null) {
+            System.out.println("⚠️  AeronClusterService not configured (OSGi) - using standalone instance");
+            aeronClusterService = new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService();
+        }
     }
     
     /**
@@ -916,7 +928,11 @@ public class GlobalStoreServer {
         String consensusEnabled = System.getProperty("consensus.enabled", "false");
         // Reuse consensusMode and isAeronMode variables declared earlier (before FileStore build)
         // Get self URL from system property, or resolve localhost to IP
-        String selfUrlConfig = System.getProperty("consensus.self.url");
+        org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig aeronConfig =
+            aeronClusterService != null ? aeronClusterService.getConfig() : null;
+        String selfUrlConfig = (aeronConfig != null && aeronConfig.selfUrl() != null && !aeronConfig.selfUrl().isEmpty())
+            ? aeronConfig.selfUrl()
+            : System.getProperty("consensus.self.url");
         String selfUrl;
         if (selfUrlConfig != null && !selfUrlConfig.isEmpty()) {
             selfUrl = selfUrlConfig; // Use configured URL (can be ngrok/Ethos URL, IP, or hostname)
@@ -924,10 +940,21 @@ public class GlobalStoreServer {
             selfUrl = ServerNetworkUtil.resolveUrlToIP("http://localhost:" + port); // Default: resolve to IP
         }
         String peersConfig = System.getProperty("consensus.peers", "");
+        List<String> peerUrlsFromConfig = new ArrayList<>();
+        if (aeronConfig != null && aeronConfig.peerUrls() != null && aeronConfig.peerUrls().length > 0) {
+            for (String peerUrl : aeronConfig.peerUrls()) {
+                if (peerUrl != null && !peerUrl.trim().isEmpty()) {
+                    peerUrlsFromConfig.add(peerUrl.trim());
+                }
+            }
+        }
         
         // ✈️ AERON-ONLY: Allow consensus even with no peers (single validator can start cluster as genesis node)
-        boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled) && 
+        boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled) &&
                                  (isAeronMode || !peersConfig.isEmpty());
+        if (aeronConfig != null && !aeronConfig.enabled()) {
+            enableConsensus = false;
+        }
         
         // CRITICAL: Don't initialize consensus here if we're in STANDBY mode
         // The bootstrap promotion callback (startAeronClusterAfterBootstrap) will initialize it
@@ -937,7 +964,9 @@ public class GlobalStoreServer {
         // Note: For STANDBY mode, these are already stored in the STANDBY block above
         // This block handles other modes (PRIMARY/GENESIS) that also need Aeron config stored
         if (isAeronMode && !isStandbyMode) {
-            List<String> peerUrlsForStorage = ServerNetworkUtil.parsePeerUrls(peersConfig);
+            List<String> peerUrlsForStorage = peerUrlsFromConfig.isEmpty()
+                ? ServerNetworkUtil.parsePeerUrls(peersConfig)
+                : new ArrayList<>(peerUrlsFromConfig);
             this.aeronSelfUrl = selfUrl;
             this.aeronPeerUrls = peerUrlsForStorage;
         }
@@ -947,7 +976,9 @@ public class GlobalStoreServer {
             System.out.println("Initializing Consensus Engine...");
             System.out.println("   Mode: AERON (Aeron Cluster Raft)");
 
-            List<String> peerUrls = ServerNetworkUtil.parsePeerUrls(peersConfig);
+            List<String> peerUrls = peerUrlsFromConfig.isEmpty()
+                ? ServerNetworkUtil.parsePeerUrls(peersConfig)
+                : new ArrayList<>(peerUrlsFromConfig);
 
             if (isAeronMode) {
                 System.out.println("   ✈️  Using Aeron Cluster Consensus (Raft)");
@@ -956,12 +987,17 @@ public class GlobalStoreServer {
                 System.out.println("      - Majority quorum requirements");
                 System.out.println("      - High performance, low latency");
 
-                String beaconApiUrl = System.getProperty("ethereum.beacon.api.url", "https://beaconcha.in/api");
+                String beaconApiUrl = (aeronConfig != null && aeronConfig.beaconApiUrl() != null && !aeronConfig.beaconApiUrl().isEmpty())
+                    ? aeronConfig.beaconApiUrl()
+                    : System.getProperty("ethereum.beacon.api.url", "https://beaconcha.in/api");
 
-                AeronClusterBootstrapper bootstrapper = new AeronClusterBootstrapper(
-                    fileStore, nodeStore, httpServer, wallet, storeDirectory, this.blobStore
+                ensureAeronClusterService();
+                boolean observeElections = aeronConfig != null && aeronConfig.observeElections();
+                boolean logClusterStateDetails = aeronConfig != null && aeronConfig.logClusterStateDetails();
+                AeronClusterStartupResult startupResult = aeronClusterService.startCluster(
+                    fileStore, nodeStore, httpServer, wallet, storeDirectory, this.blobStore,
+                    selfUrl, peerUrls, observeElections, logClusterStateDetails
                 );
-                AeronClusterStartupResult startupResult = bootstrapper.startCluster(selfUrl, peerUrls, false, true);
 
                 this.aeronClusterLauncher = startupResult.getLauncher();
 
@@ -1068,10 +1104,15 @@ public class GlobalStoreServer {
             throw new IOException("Aeron Cluster bootstrap: selfUrl not stored");
         }
 
-        AeronClusterBootstrapper bootstrapper = new AeronClusterBootstrapper(
-            fileStore, nodeStore, httpServer, wallet, storeDirectory, this.blobStore
+        ensureAeronClusterService();
+        org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig aeronConfig =
+            aeronClusterService != null ? aeronClusterService.getConfig() : null;
+        boolean observeElections = aeronConfig != null && aeronConfig.observeElections();
+        boolean logClusterStateDetails = aeronConfig != null && aeronConfig.logClusterStateDetails();
+        AeronClusterStartupResult startupResult = aeronClusterService.startCluster(
+            fileStore, nodeStore, httpServer, wallet, storeDirectory, this.blobStore,
+            selfUrl, peerUrls, observeElections, logClusterStateDetails
         );
-        AeronClusterStartupResult startupResult = bootstrapper.startCluster(selfUrl, peerUrls, true, false);
         this.aeronClusterLauncher = startupResult.getLauncher();
 
         System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -1100,7 +1141,14 @@ public class GlobalStoreServer {
         }
         
         // Stop Aeron Cluster launcher
-        if (aeronClusterLauncher != null) {
+        if (aeronClusterService != null) {
+            try {
+                aeronClusterService.shutdown();
+                System.out.println("✅ Aeron Cluster stopped");
+            } catch (Exception e) {
+                System.err.println("Error stopping Aeron Cluster: " + e.getMessage());
+            }
+        } else if (aeronClusterLauncher != null) {
             try {
                 aeronClusterLauncher.shutdown();
                 System.out.println("✅ Aeron Cluster stopped");
