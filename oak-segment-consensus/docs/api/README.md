@@ -51,6 +51,8 @@ Journal, manifest, segment fetching (for Sling authors).
 ### [Registration & Discovery](registration.md)
 Client registration, peer discovery, validator info.
 
+**Binary upload note**: Client-side IPFS (`ipfsCid`) is the default. Validator-hosted binary uploads (multipart/base64) require `paymentTier=PRIORITY`.
+
 ---
 
 ## Interactive API Browser

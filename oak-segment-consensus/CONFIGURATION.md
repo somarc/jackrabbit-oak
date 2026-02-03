@@ -152,6 +152,8 @@ java -Dblobstore.type=ipfs -jar oak-segment-consensus.jar
 - Binaries ≥ 16 KB → Stored in IPFS
 - Content-addressed (CID = hash of content)
 - P2P replication between validators
+- Client-side IPFS (`ipfsCid`) is the default upload path
+- Validator-hosted binary uploads require `paymentTier=PRIORITY`
 
 **See Also:** [IPFS-DATASTORE.md](IPFS-DATASTORE.md) for complete documentation
 
@@ -727,4 +729,3 @@ java -jar oak-segment-consensus.jar
 ```
 
 **Ready for demo!** 🎉
-

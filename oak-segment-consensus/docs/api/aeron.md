@@ -102,6 +102,25 @@ Get recent leadership changes.
 
 ---
 
+## GET /v1/aeron/replication-lag
+
+Get follower replication lag vs leader.
+
+### Response
+
+```json
+{
+  "role": "FOLLOWER",
+  "myLogPosition": 12340,
+  "leaderLogPosition": 12345,
+  "replicationLag": 5,
+  "lagThreshold": 1000,
+  "healthy": true
+}
+```
+
+---
+
 ## GET /v1/aeron/node-status
 
 Get status of specific node.

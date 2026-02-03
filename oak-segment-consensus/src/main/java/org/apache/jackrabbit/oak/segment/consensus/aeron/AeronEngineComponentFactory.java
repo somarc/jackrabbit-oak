@@ -59,9 +59,8 @@ final class AeronEngineComponentFactory {
         return service;
     }
 
-    static MessageDispatcher createMessageDispatcher(MessageDispatcher.WriteCallback writeCallback,
-                                                     MessageDispatcher.HeadBroadcastCallback headCallback) {
-        return new MessageDispatcher(writeCallback, headCallback);
+    static MessageDispatcher createMessageDispatcher(MessageDispatcher.WriteCallback writeCallback) {
+        return new MessageDispatcher(writeCallback);
     }
 
     static HeadStateService createHeadStateService(org.apache.jackrabbit.oak.segment.file.FileStore fileStore) {

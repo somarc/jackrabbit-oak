@@ -238,6 +238,10 @@ http://localhost:8091/
 - `GET /v1/consensus/status` - Consensus status (Aeron-aware)
 - `GET /v1/peers` - List all peers in cluster
 - `GET /v1/aeron/leadership-history` - Leadership change history
+- `GET /v1/aeron/raft-metrics` - Raft metrics
+- `GET /v1/aeron/replication-lag` - Replication lag for followers
+- `GET /v1/aeron/node-status` - Node status snapshot
+- `GET /v1/blockchain/config` - Capabilities and current mode (mock/sepolia)
 
 ### Health & Metrics
 - `GET /health` - Basic health check
@@ -253,7 +257,24 @@ http://localhost:8091/
 
 ### Write Operations
 - `POST /v1/propose-write` - Propose write transaction (requires wallet signature)
+- `POST /v1/propose-delete` - Propose delete transaction
+- `GET /v1/proposals/{id}/status` - Proposal status
+- `GET /v1/proposals/pending/count` - Pending proposal count
 - `POST /v1/register-client` - Register Sling author client with validator
+
+### Binary / IPFS
+- `POST /v1/binary/declare-intent` - Declare binary upload intent
+- `GET /v1/binary/check-intent/{intentToken}` - Check intent status
+- `POST /v1/binary/complete-upload` - Complete upload with CID
+- `GET /api/cid/{blobId}` - CID lookup for blob
+- `GET /api/cid/reverse/{cid}` - Reverse CID lookup
+- `GET /api/cid/gateway/{blobId}` - Gateway URL for blob
+- `GET /api/cid/stats` - CID mapping stats
+
+### Events
+- `GET /v1/events/stream` - SSE stream
+- `GET /v1/events/recent` - Recent events
+- `GET /v1/events/stats` - Event stats
 
 ## Integration
 
@@ -358,4 +379,3 @@ Apache License 2.0 - See [LICENSE](../../LICENSE) for details
 **Part of**: [Blockchain AEM POC](https://github.com/mhess_adobe/blockchain-aem)  
 **Repository**: [jackrabbit-oak](https://github.com/somarc/jackrabbit-oak/tree/feature/blockchain-aem-poc)  
 **Branch**: `feature/blockchain-aem-poc`
-

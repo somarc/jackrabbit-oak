@@ -25,6 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
+import java.util.function.LongSupplier;
 
 /**
  * Service responsible for dispatching incoming Aeron messages to appropriate handlers.
@@ -67,13 +68,6 @@ public class MessageDispatcher {
     }
     
     /**
-     * Callback interface for HEAD broadcasts.
-     */
-    public interface HeadBroadcastCallback {
-        void onHeadBroadcast(String newHead, int epoch, long timestamp, int validatorCount);
-    }
-    
-    /**
      * Callback interface for GC operations.
      */
     public interface GCCallback {
@@ -94,16 +88,15 @@ public class MessageDispatcher {
     }
     
     private WriteCallback writeCallback;
-    private HeadBroadcastCallback headBroadcastCallback;
     private GCCallback gcCallback;
     private DurabilityCallback durabilityCallback;
+    private LongSupplier termProvider;
     
     /**
      * Create a new message dispatcher (default constructor for OSGi).
      */
     public MessageDispatcher() {
         this.writeCallback = null;
-        this.headBroadcastCallback = null;
         this.gcCallback = null;
         this.durabilityCallback = null;
     }
@@ -112,11 +105,9 @@ public class MessageDispatcher {
      * Create a new message dispatcher with callbacks (for programmatic use).
      * 
      * @param writeCallback callback for write/delete operations
-     * @param headBroadcastCallback callback for HEAD broadcasts
      */
-    public MessageDispatcher(WriteCallback writeCallback, HeadBroadcastCallback headBroadcastCallback) {
+    public MessageDispatcher(WriteCallback writeCallback) {
         this.writeCallback = writeCallback;
-        this.headBroadcastCallback = headBroadcastCallback;
         this.gcCallback = null;
         this.durabilityCallback = null;
     }
@@ -140,9 +131,8 @@ public class MessageDispatcher {
     /**
      * Set callbacks (for OSGi injection).
      */
-    public void setCallbacks(WriteCallback writeCallback, HeadBroadcastCallback headBroadcastCallback) {
+    public void setCallbacks(WriteCallback writeCallback) {
         this.writeCallback = writeCallback;
-        this.headBroadcastCallback = headBroadcastCallback;
         log.info("✅ MessageDispatcher callbacks set");
     }
     
@@ -157,6 +147,11 @@ public class MessageDispatcher {
     public void setDurabilityCallback(DurabilityCallback durabilityCallback) {
         this.durabilityCallback = durabilityCallback;
         log.info("✅ MessageDispatcher durability callback set");
+    }
+
+    public void setTermProvider(LongSupplier termProvider) {
+        this.termProvider = termProvider;
+        log.info("✅ MessageDispatcher term provider set");
     }
     
     /**
@@ -277,10 +272,15 @@ public class MessageDispatcher {
             String mimeType = extractJsonField(json, "mimeType");
             String ipfsCid = extractJsonField(json, "ipfsCid"); // ADR 016
             String proposalId = extractJsonField(json, "proposalId");
-            
+            Long proposalTerm = extractJsonLongField(json, "term");
+
             if (walletAddress == null || path == null) {
                 log.warn("Invalid write proposal: missing required fields (wallet={}, path={})", 
                     walletAddress != null, path != null);
+                return false;
+            }
+
+            if (isStaleTerm(proposalTerm)) {
                 return false;
             }
             
@@ -324,9 +324,14 @@ public class MessageDispatcher {
             String path = extractJsonField(json, "path");
             String signature = extractJsonField(json, "signature");
             String proposalId = extractJsonField(json, "proposalId");
+            Long proposalTerm = extractJsonLongField(json, "term");
             
             if (walletAddress == null || path == null) {
                 log.warn("Invalid delete proposal: missing required fields");
+                return false;
+            }
+
+            if (isStaleTerm(proposalTerm)) {
                 return false;
             }
             
@@ -398,9 +403,14 @@ public class MessageDispatcher {
                 String mimeType = extractJsonField(proposalJson, "mimeType");
                 String ipfsCid = extractJsonField(proposalJson, "ipfsCid"); // ADR 016
                 String proposalId = extractJsonField(proposalJson, "proposalId");
+                Long proposalTerm = extractJsonLongField(proposalJson, "term");
                 
                 if (walletAddress == null || path == null) {
                     log.warn("Invalid proposal in batch: missing required fields");
+                    continue;
+                }
+
+                if (isStaleTerm(proposalTerm)) {
                     continue;
                 }
                 
@@ -448,6 +458,22 @@ public class MessageDispatcher {
         }
         
         return proposals;
+    }
+
+    private boolean isStaleTerm(Long proposalTerm) {
+        if (termProvider == null) {
+            return false;
+        }
+        long currentTerm = termProvider.getAsLong();
+        if (proposalTerm == null) {
+            log.warn("⚠️  Proposal missing term; accepting for compatibility (currentTerm={})", currentTerm);
+            return false;
+        }
+        if (proposalTerm < currentTerm) {
+            log.warn("❌ Rejecting proposal from stale term: proposalTerm={}, currentTerm={}", proposalTerm, currentTerm);
+            return true;
+        }
+        return false;
     }
     
     /**

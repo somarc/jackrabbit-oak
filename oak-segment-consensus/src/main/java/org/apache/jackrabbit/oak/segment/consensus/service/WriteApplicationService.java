@@ -210,6 +210,13 @@ public class WriteApplicationService {
             // Set properties
             setContentProperties(contentNode, walletAddress, contentType, message, signature, path);
             
+            // ADR 059: Record binary storage mode (client vs validator)
+            if (blobId != null && !blobId.isEmpty()) {
+                contentNode.setProperty("oak:binaryStorageMode", "validator");
+            } else if (ipfsCid != null && !ipfsCid.isEmpty()) {
+                contentNode.setProperty("oak:binaryStorageMode", "client");
+            }
+
             // Handle binary content
             if (blobId != null && !blobId.isEmpty()) {
                 handleBinaryContent(contentNode, blobId, mimeType, ipfsCid);
@@ -304,6 +311,9 @@ public class WriteApplicationService {
         contentNode.setProperty("wallet", walletAddress);
         contentNode.setProperty("signature", signature);
         contentNode.setProperty("source", "aeron-replicated");
+
+        // ADR 059: Canonical JSON→JCR mapping (best-effort normalization)
+        normalizeCanonicalPayload(contentNode, message);
         
         // ADR 037: Extract and store organization from path
         String extractedOrg = extractOrganizationFromPath(path);
@@ -311,6 +321,127 @@ public class WriteApplicationService {
             contentNode.setProperty("organization", extractedOrg);
             log.debug("🏢 Stored organization property: {}", extractedOrg);
         }
+    }
+
+    private void normalizeCanonicalPayload(NodeBuilder contentNode, String message) {
+        if (message == null) {
+            return;
+        }
+        String trimmed = message.trim();
+        if (!(trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+            return;
+        }
+
+        String title = extractJsonString(trimmed, "title");
+        if (title != null) {
+            contentNode.setProperty("oak:title", title);
+        }
+
+        String body = extractJsonString(trimmed, "body");
+        if (body != null) {
+            contentNode.setProperty("oak:body", body);
+        }
+
+        String[] tags = extractJsonStringArray(trimmed, "tags");
+        if (tags != null) {
+            contentNode.setProperty("oak:tags", tags, Type.STRINGS);
+        }
+
+        String metaJson = extractJsonObject(trimmed, "meta");
+        if (metaJson != null) {
+            contentNode.setProperty("oak:metaJson", metaJson);
+        }
+
+        String payloadJson = extractJsonObject(trimmed, "payload");
+        if (payloadJson != null) {
+            contentNode.setProperty("oak:payloadJson", payloadJson);
+        }
+    }
+
+    private String extractJsonString(String json, String field) {
+        String fieldPrefix = "\"" + field + "\"";
+        int fieldStart = json.indexOf(fieldPrefix);
+        if (fieldStart == -1) {
+            return null;
+        }
+        int colonIndex = json.indexOf(":", fieldStart + fieldPrefix.length());
+        if (colonIndex == -1) {
+            return null;
+        }
+        int quoteStart = json.indexOf("\"", colonIndex);
+        if (quoteStart == -1) {
+            return null;
+        }
+        int quoteEnd = json.indexOf("\"", quoteStart + 1);
+        if (quoteEnd == -1) {
+            return null;
+        }
+        return json.substring(quoteStart + 1, quoteEnd);
+    }
+
+    private String extractJsonObject(String json, String field) {
+        String pattern = "\"" + field + "\":";
+        int start = json.indexOf(pattern);
+        if (start == -1) {
+            return null;
+        }
+        start = json.indexOf("{", start);
+        if (start == -1) {
+            return null;
+        }
+        int depth = 0;
+        int end = start;
+        while (end < json.length()) {
+            char c = json.charAt(end);
+            if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return json.substring(start, end + 1);
+                }
+            }
+            end++;
+        }
+        return null;
+    }
+
+    private String[] extractJsonStringArray(String json, String field) {
+        String pattern = "\"" + field + "\":";
+        int start = json.indexOf(pattern);
+        if (start == -1) {
+            return null;
+        }
+        start = json.indexOf("[", start);
+        if (start == -1) {
+            return null;
+        }
+        int end = json.indexOf("]", start);
+        if (end == -1) {
+            return null;
+        }
+        String inside = json.substring(start + 1, end).trim();
+        if (inside.isEmpty()) {
+            return new String[0];
+        }
+        java.util.List<String> values = new java.util.ArrayList<>();
+        int idx = 0;
+        while (idx < inside.length()) {
+            int quoteStart = inside.indexOf("\"", idx);
+            if (quoteStart == -1) {
+                break;
+            }
+            int quoteEnd = inside.indexOf("\"", quoteStart + 1);
+            if (quoteEnd == -1) {
+                break;
+            }
+            values.add(inside.substring(quoteStart + 1, quoteEnd));
+            idx = quoteEnd + 1;
+        }
+        if (values.isEmpty()) {
+            return null;
+        }
+        return values.toArray(new String[0]);
     }
     
     /**

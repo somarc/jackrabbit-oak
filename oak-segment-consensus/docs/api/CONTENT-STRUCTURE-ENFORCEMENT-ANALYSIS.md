@@ -14,11 +14,18 @@
 4. **Path ownership** - Wallet address must match path (can only write to own namespace)
 5. **Signature format** - `walletAddress:timestamp:contentType:message`
 
-**What's NOT enforced:**
-- ❌ Content structure (JSON schema, node types, properties)
-- ❌ Content validation (required fields, data types)
-- ❌ Content relationships (parent-child constraints)
+**What's NOT enforced (strictly):**
+- ❌ Full content schema enforcement (JSON schema, node types, properties)
+- ❌ Deep content relationships (parent-child constraints)
 - ❌ Content semantics (meaning, business rules)
+
+**What is now normalized (ADR 059):**
+- ✅ Canonical JSON fields (best-effort) mapped to stable properties:
+  - `title` → `oak:title`
+  - `body` → `oak:body`
+  - `tags` → `oak:tags`
+  - `meta` → `oak:metaJson`
+  - `payload` → `oak:payloadJson`
 
 ### Current Content Storage
 
@@ -32,7 +39,7 @@ contentNode.setProperty("wallet", walletAddress);
 contentNode.setProperty("signature", signature);
 ```
 
-**Observation**: Content is stored as **flat properties** on `nt:unstructured` nodes. No structure validation.
+**Observation**: Content is stored as **flat properties** on `nt:unstructured` nodes. Canonical JSON fields are normalized when present, but arbitrary payloads remain allowed.
 
 ---
 
@@ -166,7 +173,11 @@ public WriteResult proposeWrite(String contentType, String message) {
 
 **Current reality**: Content works fine without structure enforcement. Oak stores it. Clients read it. Consensus is achieved.
 
-**Verdict**: **Don't enforce** unless there's a specific problem it solves.
+**Verdict**: **Minimal enforcement**: normalize canonical fields but keep schema optional. This preserves flexibility while stabilizing query/index patterns.
+
+**ADR 059 alignment**:
+- Canonical JSON fields mapped when present (`title`, `body`, `tags`, `meta`, `payload`)
+- Arbitrary payloads remain accepted (no strict schema enforcement)
 
 ---
 

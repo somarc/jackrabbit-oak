@@ -129,4 +129,17 @@ JSON metrics endpoint.
 
 ---
 
+## GET /v1/blockchain/config
+
+Detect the current blockchain mode (MOCK/SEPOLIA/MAINNET) and client capabilities.
+
+Use this endpoint to toggle client behavior (e.g., MetaMask requirements, testnet prompts).
+
+Example:
+```bash
+curl http://localhost:8090/v1/blockchain/config
+```
+
+---
+
 *See [Monitoring Integration](../integration/README.md) for Prometheus/Grafana setup.*

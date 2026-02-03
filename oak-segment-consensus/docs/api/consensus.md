@@ -15,16 +15,18 @@ Propose a write transaction. Requires wallet signature and Ethereum payment veri
 **Parameters**:
 - `walletAddress` (required) - Ethereum wallet address (0x...)
 - `signature` (required) - Signed message (walletAddress:timestamp:contentType:message)
-- `message` (required) - Content to write (JSON string or text)
+- `message` (optional) - Content to write (JSON string or text; canonical fields: title, body, tags, meta, payload)
 - `contentType` (optional) - Content type (default: "page")
-- `contentPath` (required) - Path where content will be stored
 - `ethereumTxHash` (required) - Ethereum transaction hash for payment
 - `paymentTier` (optional) - Payment tier: `STANDARD`, `EXPRESS`, `PRIORITY` (default: STANDARD)
 - `organization` (optional) - Organization name (ADR 037)
-- `ipfsCid` (optional) - IPFS CID for binary content (ADR 016)
+- `ipfsCid` (optional) - IPFS CID for binary content (ADR 016, client-side default)
+- `intentToken` (optional) - Lazy binary upload token (ADR 020)
+- `binaryData` (optional) - Legacy base64 binary payload (validator-hosted, requires PRIORITY)
+- `mimeType` (optional) - MIME type for legacy base64
 
 **Multipart Form Data** (for binary uploads):
-- `file` - Binary file (will be stored in IPFS)
+- `file` - Binary file (validator-hosted, requires paymentTier=PRIORITY)
 - Other parameters as form fields
 
 ### Response
@@ -33,11 +35,28 @@ Propose a write transaction. Requires wallet signature and Ethereum payment veri
 ```json
 {
   "proposalId": "uuid-123",
-  "type": "WRITE",
   "state": "PENDING",
-  "contentPath": "/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page1",
-  "timestamp": 1733421234000,
-  "estimatedConfirmationTime": "6.4 minutes"
+  "message": "Proposal queued, waiting for Ethereum confirmation",
+  "ethereumTxHash": "0xabcd...",
+  "timeoutTimestamp": 1733421234000,
+  "wallet": "0xdd870fa1b7c4700f2bd7f44238821c26f7392148",
+  "storagePath": "/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page-1733421234000",
+  "contentType": "page"
+}
+```
+
+**200 OK** (immediate mode fallback)
+```json
+{
+  "success": true,
+  "proposalId": "uuid-123",
+  "wallet": "0xdd870fa1b7c4700f2bd7f44238821c26f7392148",
+  "contentId": "page-1733421234000",
+  "storagePath": "/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page-1733421234000",
+  "newHead": "abc123...",
+  "message": "Hello World",
+  "contentType": "page",
+  "mode": "immediate"
 }
 ```
 
@@ -64,7 +83,6 @@ curl -X POST http://localhost:8090/v1/propose-write \
   -d "walletAddress=0xdd870fa1b7c4700f2bd7f44238821c26f7392148" \
   -d "signature=0x1a2b3c..." \
   -d "message={\"title\":\"Hello World\"}" \
-  -d "contentPath=/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page1" \
   -d "ethereumTxHash=0xabcd..." \
   -d "paymentTier=EXPRESS"
 ```
@@ -91,6 +109,12 @@ Propose a delete transaction. Requires wallet signature and path ownership verif
   "proposalId": "uuid-456",
   "type": "DELETE",
   "state": "PENDING",
+  "message": "Delete proposal queued, waiting for Ethereum confirmation",
+  "ethereumTxHash": "0xabcd...",
+  "tier": "STANDARD",
+  "timeoutTimestamp": 1733421234000,
+  "wallet": "0xdd870fa1b7c4700f2bd7f44238821c26f7392148",
+  "contentPath": "/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page1",
   "gcDebtIncurred": "0.10",
   "totalDebt": "5.40",
   "pendingDebt": "0.10",
@@ -103,6 +127,22 @@ Propose a delete transaction. Requires wallet signature and path ownership verif
 {
   "error": "Path ownership violation: Content at /oak-chain/... does not belong to wallet 0x...",
   "code": "PATH_OWNERSHIP_VIOLATION"
+}
+```
+
+**402 Payment Required** (GC debt blocks writes/deletes)
+```json
+{
+  "success": false,
+  "error": "Writes blocked due to unpaid GC debt. Please pay debt to resume.",
+  "code": "write_blocked_gc_debt",
+  "status": 402,
+  "timestamp": 1733421234000,
+  "wallet": "0xdd870fa1b7c4700f2bd7f44238821c26f7392148",
+  "totalDebt": "5.40",
+  "pendingDebt": "0.10",
+  "debtLimit": "5.00",
+  "paymentUrl": "/v1/gc/account/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/pay"
 }
 ```
 
@@ -155,17 +195,19 @@ Get status of a specific proposal.
 ```json
 {
   "proposalId": "uuid-123",
-  "type": "WRITE",
-  "state": "CONFIRMED",
-  "walletAddress": "0xdd870fa1b7c4700f2bd7f44238821c26f7392148",
-  "contentPath": "/oak-chain/.../content/page1",
-  "createdAt": 1733421234000,
-  "confirmedAt": 1733421298000,
-  "raftLogIndex": 12345
+  "state": "VERIFIED",
+  "ethereumTxHash": "0xabcd...",
+  "timeoutTimestamp": 1733421234000,
+  "confirmedBlock": 12345678,
+  "rejectionReason": null,
+  "durabilityState": "ACKED",
+  "durabilityTimestamp": 1733421240000,
+  "durabilityError": null,
+  "durableHead": "abc123..."
 }
 ```
 
-**States**: `PENDING` → `VERIFIED` → `CONFIRMED` → `PROCESSED`
+**States**: `PENDING` → `VERIFIED` → `COMMITTED` or `REJECTED` (terminal)
 
 ### Example
 
@@ -183,16 +225,7 @@ Get count of pending proposals.
 
 ```json
 {
-  "pendingCount": 5,
-  "byType": {
-    "WRITE": 3,
-    "DELETE": 2
-  },
-  "byTier": {
-    "PRIORITY": 1,
-    "EXPRESS": 2,
-    "STANDARD": 2
-  }
+  "pendingCount": 5
 }
 ```
 

@@ -469,6 +469,18 @@ public class WriteProposalHandler {
                 return;
             }
 
+            // ADR 059: Validator-hosted binary uploads require premium tier
+            if (binaryBytes != null && binaryBytes.length > 0) {
+                if (paymentTier == null || !paymentTier.equalsIgnoreCase("priority")) {
+                    context.apiRejectedRequests.incrementAndGet();
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_PAYMENT_REQUIRED,
+                        "validator_binary_requires_priority",
+                        "Validator-hosted binary upload requires paymentTier=priority. " +
+                        "For default client-side IPFS, upload to IPFS and pass ipfsCid instead.");
+                    return;
+                }
+            }
+
             // ============================================================
             // BINARY UPLOAD TO BLOBSTORE
             // Supports: Multipart (preferred), base64 (legacy), ADR 020 (future)

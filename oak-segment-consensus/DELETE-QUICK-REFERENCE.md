@@ -112,12 +112,12 @@ curl -X POST http://localhost:8090/v1/propose-delete \
 # Expected: 202 Accepted, proposalId returned
 
 # 2. Wait for Ethereum confirmation (1-15s)
-curl http://localhost:8090/v1/proposal/{proposalId}
+curl http://localhost:8090/v1/proposals/{proposalId}/status
 
-# Expected: state transitions PENDING → VERIFIED → CONFIRMED
+# Expected: state transitions PENDING → VERIFIED → COMMITTED
 
 # 3. Check content removed
-curl http://localhost:8090/api/explore-node?path=/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content
+curl http://localhost:8090/api/explore?path=/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content
 
 # Expected: page1 not in children list
 
@@ -153,7 +153,7 @@ curl -X POST http://localhost:8090/v1/propose-write \
   -d "walletAddress=0xdd870fa1b7c4700f2bd7f44238821c26f7392148" \
   -d "..."
 
-# Expected: 403 Forbidden, "Writes blocked due to unpaid GC debt"
+# Expected: 402 Payment Required, "Writes blocked due to unpaid GC debt"
 ```
 
 ### Scenario 3: Payment & Unblock
@@ -185,7 +185,7 @@ curl -X POST http://localhost:8090/v1/propose-write \
 **Symptoms**: Content still visible after delete proposal confirmed
 
 **Check**:
-1. Proposal state: `GET /v1/proposal/{proposalId}` → should be `CONFIRMED`
+1. Proposal state: `GET /v1/proposals/{proposalId}/status` → should be `COMMITTED`
 2. Aeron logs: `grep "DELETE_PROPOSAL" /var/log/oak-validator.log`
 3. Oak commit logs: `grep "aeron-replication-delete" /var/log/oak-validator.log`
 4. Path ownership: Ensure contentPath starts with wallet's shard root
@@ -399,4 +399,3 @@ if (!current.hasChildNode(targetNodeName)) {
 **Last Updated**: December 4, 2025  
 **Maintainer**: Oak Segment Consensus Team  
 **Status**: 🧪 POC / Active Development
-

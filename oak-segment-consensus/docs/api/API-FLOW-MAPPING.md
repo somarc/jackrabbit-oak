@@ -43,7 +43,7 @@
 │  │  ✅ Wallet signature                                        │   │
 │  │  ✅ Payment (Ethereum tx)                                   │   │
 │  │  ✅ Path format & ownership                                 │   │
-│  │  ❌ Content structure (not enforced)                        │   │
+│  │  ⚠️ Content structure normalized (best-effort)             │   │
 │  └──────────────────────┬───────────────────────────────────────┘   │
 │                         │                                           │
 │                         │ Aeron Raft Consensus                     │
@@ -76,14 +76,13 @@
 |-----------|------|----------|-------------|----------|
 | `walletAddress` | string | ✅ Yes | Ethereum wallet (0x...) | ✅ Format validation |
 | `signature` | string | ✅ Yes | Signed message | ✅ Signature verification |
-| `message` | string | ✅ Yes | Content (JSON string or text) | ❌ No structure validation |
-| `contentPath` | string | ✅ Yes | Full Oak path | ✅ Path format & ownership |
+| `message` | string | ⚠️ Optional | Content (JSON string or text) | ⚠️ Canonical fields normalized |
 | `ethereumTxHash` | string | ✅ Yes | Payment transaction hash | ✅ On-chain verification |
 | `paymentTier` | string | ⚠️ Optional | STANDARD/EXPRESS/PRIORITY | ✅ Enum validation |
 | `contentType` | string | ⚠️ Optional | "page", "asset", etc. | ❌ No validation |
 | `organization` | string | ⚠️ Optional | Organization scope (ADR 037) | ❌ No validation |
-| `ipfsCid` | string | ⚠️ Optional | IPFS CID for binary | ❌ No validation |
-| `file` | binary | ⚠️ Optional | Binary file (multipart) | ❌ No validation |
+| `ipfsCid` | string | ⚠️ Optional | IPFS CID for binary (client-side default) | ❌ No validation |
+| `file` | binary | ⚠️ Optional | Binary file (validator-hosted, requires PRIORITY) | ✅ Tier check |
 
 #### Response Format
 
@@ -91,11 +90,13 @@
 ```json
 {
   "proposalId": "uuid-123",
-  "type": "WRITE",
   "state": "PENDING",
-  "contentPath": "/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page1",
-  "timestamp": 1733421234000,
-  "estimatedConfirmationTime": "6.4 minutes"
+  "message": "Proposal queued, waiting for Ethereum confirmation",
+  "ethereumTxHash": "0xabcd...",
+  "timeoutTimestamp": 1733421234000,
+  "wallet": "0xdd870fa1b7c4700f2bd7f44238821c26f7392148",
+  "storagePath": "/oak-chain/dd/87/0f/0xdd870fa1b7c4700f2bd7f44238821c26f7392148/content/page-1733421234000",
+  "contentType": "page"
 }
 ```
 
@@ -115,11 +116,12 @@ Request → Validate Wallet Format
          → Verify Payment (Ethereum)
          → Validate Path Format
          → Check Path Ownership
+         → Enforce PRIORITY tier for validator-hosted binary (if file/base64 present)
          → Queue Proposal
          → Return 202 Accepted
 ```
 
-**Note**: Content structure (`message` field) is **not validated**. It's stored as-is.
+**Note**: Content structure (`message` field) is not strictly validated. Canonical JSON fields are normalized when present (ADR 059), but arbitrary payloads are still accepted.
 
 ---
 
@@ -197,11 +199,10 @@ public WriteResult proposeWrite(String contentType, String message) {
 public Response proposeWrite(@FormParam("walletAddress") String wallet,
                             @FormParam("signature") String signature,
                             @FormParam("message") String message,
-                            @FormParam("contentPath") String path,
                             // ... other params
                             ) {
     // Validates: wallet format, signature, payment, path
-    // Does NOT validate: content structure (message field)
+    // Does NOT strictly validate: content structure (message field)
     // Stores: nt:unstructured node with flat properties
 }
 ```
@@ -210,7 +211,7 @@ public Response proposeWrite(@FormParam("walletAddress") String wallet,
 ```java
 contentNode.setProperty("jcr:primaryType", "nt:unstructured");
 contentNode.setProperty("contentType", contentType);
-contentNode.setProperty("message", message);  // ← Stored as-is, no validation
+contentNode.setProperty("message", message);  // ← Stored as-is, canonical fields normalized when present
 contentNode.setProperty("wallet", walletAddress);
 contentNode.setProperty("signature", signature);
 ```
@@ -221,7 +222,7 @@ contentNode.setProperty("signature", signature);
 - ✅ Ethereum payment verification
 - ✅ Path format (`/oak-chain/{shard}/{wallet}/...`)
 - ✅ Path ownership (wallet must match path)
-- ❌ Content structure (not enforced)
+- ⚠️ Canonical fields normalized (ADR 059), but no strict schema enforcement
 
 ---
 
@@ -247,7 +248,6 @@ contentNode.setProperty("signature", signature);
        walletAddress=0x742d...
        signature=0xabc123...
        message={"title":"Hello","body":"World"}
-       contentPath=/oak-chain/74/2d/0f/0x742d.../content/pages/hello
        ethereumTxHash=0xdef456...
        paymentTier=EXPRESS
    
@@ -257,7 +257,7 @@ contentNode.setProperty("signature", signature);
        ✅ Payment verified (Ethereum)
        ✅ Path format OK
        ✅ Path ownership OK (wallet matches path)
-       ❌ Content structure NOT validated (message stored as-is)
+       ⚠️ Content structure normalized (message stored as-is, canonical fields mapped)
    
 5. Validator Stores
    └─> Oak Node: /oak-chain/74/2d/0f/0x742d.../content/pages/hello
@@ -265,6 +265,8 @@ contentNode.setProperty("signature", signature);
          jcr:primaryType = "nt:unstructured"
          contentType = "page"
          message = "{\"title\":\"Hello\",\"body\":\"World\"}"  ← Stored as string
+         oak:title = "Hello"
+         oak:body = "World"
          wallet = "0x742d..."
          signature = "0xabc123..."
          timestamp = 1733421234000
@@ -287,11 +289,9 @@ contentNode.setProperty("signature", signature);
 
 ### What's NOT Enforced
 
-❌ **Content Structure**:
-- No JSON schema validation
-- No node type validation
-- No property validation
-- No relationship validation
+⚠️ **Content Structure**:
+- Canonical JSON fields normalized when present (ADR 059)
+- No hard schema enforcement for arbitrary payloads
 
 ### Why This Design?
 
