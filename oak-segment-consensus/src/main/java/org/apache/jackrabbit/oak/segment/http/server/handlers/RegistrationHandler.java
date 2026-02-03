@@ -54,15 +54,24 @@ public class RegistrationHandler {
      */
     public void handleClientRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
         try {
-            // Read JSON body if present
-            StringBuilder json = new StringBuilder();
-            BufferedReader reader = request.getReader();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                json.append(line);
+            String body = "";
+            String contentType = request.getContentType();
+            boolean isJson = contentType != null && contentType.toLowerCase().contains("application/json");
+            if (isJson) {
+                try {
+                    // Read JSON body if present
+                    StringBuilder json = new StringBuilder();
+                    BufferedReader reader = request.getReader();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        json.append(line);
+                    }
+                    body = json.toString();
+                } catch (IllegalStateException e) {
+                    log.debug("Registration request body already consumed; falling back to query params", e);
+                    body = "";
+                }
             }
-            
-            String body = json.toString();
             
             // Parse parameters (from JSON body or query params)
             String clientId = null;
@@ -253,4 +262,3 @@ public class RegistrationHandler {
         ));
     }
 }
-

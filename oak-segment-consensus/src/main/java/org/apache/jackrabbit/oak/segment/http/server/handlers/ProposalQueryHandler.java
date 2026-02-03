@@ -19,12 +19,15 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.Iterator;
+import java.util.Map;
 
 /**
  * Handler for proposal status and queue queries.
@@ -108,5 +111,81 @@ public class ProposalQueryHandler {
             log.error("Error getting pending count", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
         }
+    }
+
+    /**
+     * Get detailed proposal queue statistics.
+     * GET /v1/proposals/queue/stats
+     */
+    public void handleGetQueueStats(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+
+        try {
+            if (context.proposalQueueManager == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
+                return;
+            }
+
+            Map<String, Object> stats = context.proposalQueueManager.getQueueStats();
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(toJsonValue(stats));
+        } catch (Exception e) {
+            log.error("Error getting queue stats", e);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+        }
+    }
+
+    private String toJsonValue(Object value) {
+        if (value == null) {
+            return "null";
+        }
+        if (value instanceof Number || value instanceof Boolean) {
+            return String.valueOf(value);
+        }
+        if (value instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<Object, Object> map = (Map<Object, Object>) value;
+            StringBuilder json = new StringBuilder();
+            json.append("{");
+            Iterator<Map.Entry<Object, Object>> iterator = map.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<Object, Object> entry = iterator.next();
+                String key = entry.getKey() != null ? entry.getKey().toString() : "";
+                json.append("\"").append(FormatUtils.escapeJson(key)).append("\":");
+                json.append(toJsonValue(entry.getValue()));
+                if (iterator.hasNext()) {
+                    json.append(",");
+                }
+            }
+            json.append("}");
+            return json.toString();
+        }
+        if (value instanceof Iterable) {
+            StringBuilder json = new StringBuilder();
+            json.append("[");
+            Iterator<?> iterator = ((Iterable<?>) value).iterator();
+            while (iterator.hasNext()) {
+                json.append(toJsonValue(iterator.next()));
+                if (iterator.hasNext()) {
+                    json.append(",");
+                }
+            }
+            json.append("]");
+            return json.toString();
+        }
+        if (value.getClass().isArray()) {
+            StringBuilder json = new StringBuilder();
+            json.append("[");
+            int length = java.lang.reflect.Array.getLength(value);
+            for (int i = 0; i < length; i++) {
+                json.append(toJsonValue(java.lang.reflect.Array.get(value, i)));
+                if (i < length - 1) {
+                    json.append(",");
+                }
+            }
+            json.append("]");
+            return json.toString();
+        }
+        return "\"" + FormatUtils.escapeJson(String.valueOf(value)) + "\"";
     }
 }

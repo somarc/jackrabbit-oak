@@ -282,6 +282,10 @@ public class ConsensusApiHandler {
     public void handleGetPendingCount(HttpServletResponse response) throws IOException {
         proposalQueryHandler.handleGetPendingCount(response);
     }
+
+    public void handleGetQueueStats(HttpServletResponse response) throws IOException {
+        proposalQueryHandler.handleGetQueueStats(response);
+    }
     
     /**
      * ✈️ AERON NATIVE: Apply replicated write to FileStore.

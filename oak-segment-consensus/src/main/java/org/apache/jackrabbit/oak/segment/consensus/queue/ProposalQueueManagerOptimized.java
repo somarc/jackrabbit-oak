@@ -227,6 +227,7 @@ public class ProposalQueueManagerOptimized {
         
         // Queue sizes
         stats.put("unverifiedQueueSize", unverifiedQueue.size());
+        stats.put("mempoolSize", unverifiedQueue.size());
         stats.put("batchQueueSize", batchQueue.size());
         stats.put("totalProposals", allProposals.size());
         
@@ -243,6 +244,7 @@ public class ProposalQueueManagerOptimized {
         long processed = allProposals.values().stream().filter(p -> p.getState() == ProposalState.PROCESSED).count();
         
         stats.put("pendingCount", pending);
+        stats.put("mempoolPendingCount", pending);
         stats.put("verifiedCount", verified);
         stats.put("rejectedCount", rejected);
         stats.put("processedCount", processed);
@@ -930,6 +932,16 @@ public class ProposalQueueManagerOptimized {
                     PaymentProof proof = evmBridge.verifyPayment(proposal.getProposalId());
                     
                     if (proof == null) {
+                        if (org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance().isMockMode()) {
+                            proof = createMockProof(proposal);
+                            if (proof != null && evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
+                                ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
+                                    .simulatePayment(proof);
+                            }
+                        }
+                    }
+
+                    if (proof == null) {
                         // No payment found yet - re-queue (will retry)
                         // In mock mode, this immediately returns a valid proof
                         // In real mode, this polls the blockchain for the transaction
@@ -1161,6 +1173,45 @@ public class ProposalQueueManagerOptimized {
             return "evm-verifier-agent";
         }
     }
+
+    private org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof createMockProof(QueuedProposal proposal) {
+        try {
+            String proposalId = proposal.getProposalId();
+            if (proposalId == null || proposalId.isEmpty()) {
+                return null;
+            }
+            String proposalIdHex = proposalId.replace("-", "");
+            String mockTxHash = "0x" + proposalIdHex;
+            if (mockTxHash.length() < 66) {
+                int paddingNeeded = 66 - mockTxHash.length();
+                StringBuilder padding = new StringBuilder();
+                for (int i = 0; i < paddingNeeded; i++) {
+                    padding.append("0");
+                }
+                mockTxHash = mockTxHash + padding.toString();
+            } else if (mockTxHash.length() > 66) {
+                mockTxHash = mockTxHash.substring(0, 66);
+            }
+
+            String fromAddress = proposal.getWalletAddress() != null ? proposal.getWalletAddress()
+                : "0x0000000000000000000000000000000000000000";
+
+            log.warn("🎭 MOCK MODE: Auto-creating payment proof for proposal {} (from={})", proposalId, fromAddress);
+
+            return new org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof(
+                mockTxHash,
+                evmBridge.getCurrentBlockNumber(),
+                fromAddress,
+                evmBridge.getContractAddress(),
+                proposalId,
+                "1000000000000000",
+                3
+            );
+        } catch (Exception e) {
+            log.error("Failed to create mock payment proof for proposal {}", proposal.getProposalId(), e);
+            return null;
+        }
+    }
     
     // ============================================================================
     // AGENT 3: Epoch Finalizer (PERIODIC - Wallet Batching)
@@ -1325,9 +1376,13 @@ public class ProposalQueueManagerOptimized {
                 lastWatchdogCheck = now;
                 
                 long currentEpoch = epochQueue.getCurrentEpoch();
+                long finalizedEpoch = epochQueue.getFinalizedEpoch();
                 List<Long> allPendingEpochs = epochQueue.getAllPendingEpochs();
                 
                 for (Long pendingEpoch : allPendingEpochs) {
+                    if (pendingEpoch <= finalizedEpoch) {
+                        continue;
+                    }
                     // Check if this epoch is DEFINITELY past due
                     // (current epoch is at least MAX_TIER_DELAY epochs ahead)
                     long epochAge = currentEpoch - pendingEpoch;

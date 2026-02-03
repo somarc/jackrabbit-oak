@@ -546,6 +546,12 @@ public class RequestRouter {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/proposals/queue/stats".equals(path) && "GET".equals(method)) {
+                consensusApiHandler.handleGetQueueStats(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             // Registration
             if ("/v1/register-client".equals(path) && ("POST".equals(method) || "PUT".equals(method))) {

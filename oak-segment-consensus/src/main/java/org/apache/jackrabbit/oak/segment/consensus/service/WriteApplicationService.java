@@ -344,7 +344,7 @@ public class WriteApplicationService {
 
         String[] tags = extractJsonStringArray(trimmed, "tags");
         if (tags != null) {
-            contentNode.setProperty("oak:tags", tags, Type.STRINGS);
+            contentNode.setProperty("oak:tags", java.util.Arrays.asList(tags), Type.STRINGS);
         }
 
         String metaJson = extractJsonObject(trimmed, "meta");

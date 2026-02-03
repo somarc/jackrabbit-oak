@@ -1111,7 +1111,9 @@ public class AeronConsensusEngine implements ClusteredService {
             json.append("\"contentType\":\"").append(escapeJson(contentType != null ? contentType : "page")).append("\",");
             json.append("\"message\":\"").append(escapeJson(message != null ? message : "")).append("\",");
             json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
-            json.append(",\"term\":").append(getCurrentTerm());
+            if (shouldIncludeTerm()) {
+                json.append(",\"term\":").append(getCurrentTerm());
+            }
             if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 json.append(",\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\"");
             }
@@ -1243,7 +1245,9 @@ public class AeronConsensusEngine implements ClusteredService {
             json.append("\"contentType\":\"").append(escapeJson(contentType != null ? contentType : "page")).append("\",");
             json.append("\"message\":\"").append(escapeJson(message != null ? message : "")).append("\",");
             json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
-            json.append(",\"term\":").append(getCurrentTerm());
+            if (shouldIncludeTerm()) {
+                json.append(",\"term\":").append(getCurrentTerm());
+            }
             
             // Add blobId and mimeType if present
             if (blobId != null && !blobId.isEmpty()) {
@@ -1356,7 +1360,9 @@ public class AeronConsensusEngine implements ClusteredService {
             json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
             json.append("\"path\":\"").append(escapeJson(path)).append("\",");
             json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
-            json.append(",\"term\":").append(getCurrentTerm());
+            if (shouldIncludeTerm()) {
+                json.append(",\"term\":").append(getCurrentTerm());
+            }
             if (proposalId != null && !proposalId.isEmpty()) {
                 json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
             }
@@ -1474,7 +1480,9 @@ public class AeronConsensusEngine implements ClusteredService {
                 
                 json.append("{");
                 json.append("\"proposalId\":\"").append(escapeJson(proposal.getProposalId())).append("\",");
-                json.append("\"term\":").append(getCurrentTerm()).append(",");
+                if (shouldIncludeTerm()) {
+                    json.append("\"term\":").append(getCurrentTerm()).append(",");
+                }
                 json.append("\"walletAddress\":\"").append(escapeJson(proposal.getWalletAddress())).append("\",");
                 json.append("\"path\":\"").append(escapeJson(proposal.getPath())).append("\",");
                 json.append("\"contentType\":\"").append(escapeJson(proposal.getContentType() != null ? proposal.getContentType() : "page")).append("\",");
@@ -2410,6 +2418,10 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public int getCurrentTerm() {
         return currentTerm;
+    }
+
+    private boolean shouldIncludeTerm() {
+        return isLeader();
     }
     
     /**
