@@ -75,14 +75,16 @@ public class ProposalQueueManagerOptimized {
     private static final long CONFIRMATION_TIMEOUT_MS = 300_000; // 5 minutes
     private static final long RESTORE_TIMEOUT_MS =
         Long.getLong("oak.proposal.restore.timeout.ms", CONFIRMATION_TIMEOUT_MS);
-    private static final int MAX_MESSAGE_BATCH = 10; // Process up to 10 messages per Aeron cycle
+    private static final int MAX_MESSAGE_BATCH =
+        readIntProp("oak.proposal.batch.max", 10, 1); // Process up to N messages per Aeron cycle
     private static final int MAX_RETRY_COUNT = 5; // Maximum retries before rejecting a proposal
     // 🌐 PRODUCTION WAN: Aeron default MTU = 1408 bytes (safe for AWS/GCP/Azure)
     // maxPayloadLength = 1408 - 32 (frame header) = 1376 bytes
     // Each proposal ~366 bytes: 3 proposals = 1098 bytes + overhead (~20 bytes) = ~1118 bytes
     // Keeps batches safely under 1376-byte limit for global distributed deployment
     // See: Blockchain-AEM/06-test-results/2025-11-21-BATCH-UDP-MTU-LIMIT.md
-    private static final int FINALIZATION_CHUNK_SIZE = 3; // Production WAN safe (was 100)
+    private static final int FINALIZATION_CHUNK_SIZE =
+        readIntProp("oak.proposal.finalization.chunk.size", 3, 1); // Production WAN safe (was 100)
     
     // Queues
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
@@ -548,6 +550,14 @@ public class ProposalQueueManagerOptimized {
         while (candidate > (prev = max.get()) && !max.compareAndSet(prev, candidate)) {
             // retry until updated
         }
+    }
+
+    private static int readIntProp(String key, int defaultValue, int minValue) {
+        int value = Integer.getInteger(key, defaultValue);
+        if (value < minValue) {
+            return minValue;
+        }
+        return value;
     }
     
     /**
