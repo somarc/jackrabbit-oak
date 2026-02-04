@@ -73,6 +73,8 @@ public class ProposalQueueManagerOptimized {
     
     // Configuration
     private static final long CONFIRMATION_TIMEOUT_MS = 300_000; // 5 minutes
+    private static final long RESTORE_TIMEOUT_MS =
+        Long.getLong("oak.proposal.restore.timeout.ms", CONFIRMATION_TIMEOUT_MS);
     private static final int MAX_MESSAGE_BATCH = 10; // Process up to 10 messages per Aeron cycle
     private static final int MAX_RETRY_COUNT = 5; // Maximum retries before rejecting a proposal
     // 🌐 PRODUCTION WAN: Aeron default MTU = 1408 bytes (safe for AWS/GCP/Azure)
@@ -89,6 +91,16 @@ public class ProposalQueueManagerOptimized {
     private final ConcurrentHashMap<String, QueuedProposal> allProposals = new ConcurrentHashMap<>();
     private final ProposalPersistenceStore persistenceStore;
     private final Object persistenceLock = new Object();
+    private final long persistenceFlushIntervalMs =
+        Long.getLong("oak.proposal.persistence.flush.ms", 250L);
+    private final int persistenceFlushBatch =
+        Integer.getInteger("oak.proposal.persistence.flush.batch", 100);
+    private final java.util.concurrent.atomic.AtomicLong persistencePendingChanges =
+        new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicBoolean persistenceFlushInProgress =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile boolean persistenceDirty = false;
+    private java.util.concurrent.ScheduledExecutorService persistenceScheduler;
     
     // Dependencies
     private final EvmBridge evmBridge;
@@ -97,9 +109,11 @@ public class ProposalQueueManagerOptimized {
     
     // Agents (3-agent architecture)
     private AgentRunner aeronSenderAgent;
-    private AgentRunner evmVerifierAgent;
+    private AgentRunner[] evmVerifierAgents;
     private AgentRunner epochFinalizerAgent; // NEW: Finalizes epochs and creates batches
     private volatile boolean running = false;
+
+    private static final int DEFAULT_VERIFIER_THREADS = 1;
     
     // Metrics: Priority tier routing
     private final java.util.concurrent.atomic.AtomicLong priorityProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
@@ -112,6 +126,36 @@ public class ProposalQueueManagerOptimized {
     private static final long PROCESSED_RETENTION_MS =
         Long.getLong("oak.proposal.processed.retention.ms", 10 * 60 * 1000L);
     private volatile long lastProcessedCleanup = 0L;
+
+    // Metrics: EVM verifier timings and outcomes (for mempool bottleneck analysis)
+    private final java.util.concurrent.atomic.AtomicLong verifierAttemptCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierSuccessCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierRequeueNoProofCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierRequeueUnconfirmedCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierRejectedCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierErrorCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierTotalNanos = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierProofNanos = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierSignatureNanos = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierAuthNanos = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierPersistNanos = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierQueueWaitMsTotal = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierQueueWaitMsMax = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierLastTotalMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierLastProofMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierLastSignatureMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierLastAuthMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong verifierLastPersistMs = new java.util.concurrent.atomic.AtomicLong(0);
+
+    // Metrics: enqueue persistence overhead
+    private final java.util.concurrent.atomic.AtomicLong enqueuePersistNanos = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong enqueuePersistCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong enqueuePersistLastMs = new java.util.concurrent.atomic.AtomicLong(0);
+
+    // Metrics: persistence flush timing (async mode)
+    private final java.util.concurrent.atomic.AtomicLong persistenceFlushNanos = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong persistenceFlushCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong persistenceFlushLastMs = new java.util.concurrent.atomic.AtomicLong(0);
     
     /**
      * Create optimized proposal queue manager with Ethereum epoch-based batching.
@@ -162,6 +206,20 @@ public class ProposalQueueManagerOptimized {
         
         running = true;
         restorePersistedProposals();
+
+        if (persistenceStore != null && isAsyncPersistenceEnabled()) {
+            persistenceScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "proposal-persist-flusher");
+                t.setDaemon(true);
+                return t;
+            });
+            persistenceScheduler.scheduleAtFixedRate(
+                this::flushPersistedProposals,
+                persistenceFlushIntervalMs,
+                persistenceFlushIntervalMs,
+                java.util.concurrent.TimeUnit.MILLISECONDS
+            );
+        }
         
         // Agent 1: Aeron Sender (FAST path - batch send finalized proposals)
         aeronSenderAgent = new AgentRunner(
@@ -172,12 +230,19 @@ public class ProposalQueueManagerOptimized {
         );
         
         // Agent 2: EVM Verifier (SLOW path - 3-checkpoint security verification)
-        evmVerifierAgent = new AgentRunner(
-            new SleepingMillisIdleStrategy(10), // 10ms idle
-            throwable -> log.error("Error in EVM verifier agent", throwable),
-            null,
-            new EvmVerifierAgent()
-        );
+        int verifierThreads = Integer.getInteger("oak.proposal.verifier.threads", DEFAULT_VERIFIER_THREADS);
+        if (verifierThreads <= 0) {
+            verifierThreads = DEFAULT_VERIFIER_THREADS;
+        }
+        evmVerifierAgents = new AgentRunner[verifierThreads];
+        for (int i = 0; i < verifierThreads; i++) {
+            evmVerifierAgents[i] = new AgentRunner(
+                new SleepingMillisIdleStrategy(10), // 10ms idle
+                throwable -> log.error("Error in EVM verifier agent", throwable),
+                null,
+                new EvmVerifierAgent()
+            );
+        }
         
         // Agent 3: Epoch Finalizer (PERIODIC - checks for finalizable epochs every 1 second)
         epochFinalizerAgent = new AgentRunner(
@@ -193,11 +258,14 @@ public class ProposalQueueManagerOptimized {
             t.setDaemon(true);
             return t;
         });
-        AgentRunner.startOnThread(evmVerifierAgent, r -> {
-            Thread t = new Thread(r, "evm-verifier");
-            t.setDaemon(true);
-            return t;
-        });
+        for (int i = 0; i < evmVerifierAgents.length; i++) {
+            final int threadIndex = i;
+            AgentRunner.startOnThread(evmVerifierAgents[i], r -> {
+                Thread t = new Thread(r, "evm-verifier-" + threadIndex);
+                t.setDaemon(true);
+                return t;
+            });
+        }
         AgentRunner.startOnThread(epochFinalizerAgent, r -> {
             Thread t = new Thread(r, "epoch-finalizer");
             t.setDaemon(true);
@@ -206,10 +274,19 @@ public class ProposalQueueManagerOptimized {
         
         log.info("✅ ProposalQueueManager started (tri-agent + epoch batching)");
         log.info("   - Aeron Sender Agent: BackoffIdleStrategy (ultra-low latency)");
-        log.info("   - EVM Verifier Agent: SleepingIdleStrategy (10ms idle, 3-checkpoint security)");
+        log.info("   - EVM Verifier Agents: {} thread(s), SleepingIdleStrategy (10ms idle, 3-checkpoint security)", 
+            evmVerifierAgents.length);
         log.info("   - Epoch Finalizer Agent: SleepingIdleStrategy (1s idle, wallet batching)");
         log.info("   - Max batch size: {}", MAX_MESSAGE_BATCH);
         log.info("   - Finality: 2 epochs (~{} minutes)", (2 * 384_000) / 60000.0);
+        if (persistenceStore != null) {
+            if (isAsyncPersistenceEnabled()) {
+                log.info("   - Proposal persistence: async (flush every {}ms or {} changes)",
+                    persistenceFlushIntervalMs, persistenceFlushBatch);
+            } else {
+                log.info("   - Proposal persistence: synchronous (per-change)");
+            }
+        }
     }
     
     /**
@@ -237,17 +314,39 @@ public class ProposalQueueManagerOptimized {
         stats.put("epochsUntilFinality", epochQueue.getCurrentEpoch() - epochQueue.getFinalizedEpoch());
         stats.put("pendingEpochStats", epochQueue.getStats());
         
-        // Count proposals by state
-        long pending = allProposals.values().stream().filter(p -> p.getState() == ProposalState.PENDING).count();
-        long verified = allProposals.values().stream().filter(p -> p.getState() == ProposalState.VERIFIED).count();
-        long rejected = allProposals.values().stream().filter(p -> p.getState() == ProposalState.REJECTED).count();
-        long processed = allProposals.values().stream().filter(p -> p.getState() == ProposalState.PROCESSED).count();
+        // Count proposals by state + mempool age stats
+        long pending = 0;
+        long verified = 0;
+        long rejected = 0;
+        long processed = 0;
+        long mempoolAgeTotalMs = 0;
+        long mempoolOldestMs = 0;
+        long nowMs = System.currentTimeMillis();
+        for (QueuedProposal proposal : allProposals.values()) {
+            ProposalState state = proposal.getState();
+            if (state == ProposalState.PENDING) {
+                pending++;
+                long ageMs = nowMs - proposal.getTimestamp();
+                mempoolAgeTotalMs += ageMs;
+                if (ageMs > mempoolOldestMs) {
+                    mempoolOldestMs = ageMs;
+                }
+            } else if (state == ProposalState.VERIFIED) {
+                verified++;
+            } else if (state == ProposalState.REJECTED) {
+                rejected++;
+            } else if (state == ProposalState.PROCESSED) {
+                processed++;
+            }
+        }
         
         stats.put("pendingCount", pending);
         stats.put("mempoolPendingCount", pending);
         stats.put("verifiedCount", verified);
         stats.put("rejectedCount", rejected);
         stats.put("processedCount", processed);
+        stats.put("mempoolAvgAgeMs", pending == 0 ? 0 : mempoolAgeTotalMs / pending);
+        stats.put("mempoolOldestMs", mempoolOldestMs);
         
         // Persistent counters (survive proposal removal from allProposals)
         stats.put("totalRejectedCount", totalRejectedCount.get());
@@ -306,6 +405,37 @@ public class ProposalQueueManagerOptimized {
         stats.put("proposalsWithRetries", proposalsWithRetries);
         stats.put("maxRetryCount", maxRetryCount);
         stats.put("maxRetryLimit", MAX_RETRY_COUNT);
+
+        // Verifier metrics (mempool bottleneck analysis)
+        long attempts = verifierAttemptCount.get();
+        long successes = verifierSuccessCount.get();
+        stats.put("verifierAttemptCount", attempts);
+        stats.put("verifierSuccessCount", successes);
+        stats.put("verifierRequeueNoProofCount", verifierRequeueNoProofCount.get());
+        stats.put("verifierRequeueUnconfirmedCount", verifierRequeueUnconfirmedCount.get());
+        stats.put("verifierRejectedCount", verifierRejectedCount.get());
+        stats.put("verifierErrorCount", verifierErrorCount.get());
+        stats.put("verifierAvgTotalMs", attempts == 0 ? 0 : (verifierTotalNanos.get() / 1_000_000.0) / attempts);
+        stats.put("verifierAvgProofMs", attempts == 0 ? 0 : (verifierProofNanos.get() / 1_000_000.0) / attempts);
+        stats.put("verifierAvgSignatureMs", attempts == 0 ? 0 : (verifierSignatureNanos.get() / 1_000_000.0) / attempts);
+        stats.put("verifierAvgAuthMs", attempts == 0 ? 0 : (verifierAuthNanos.get() / 1_000_000.0) / attempts);
+        stats.put("verifierAvgPersistMs", attempts == 0 ? 0 : (verifierPersistNanos.get() / 1_000_000.0) / attempts);
+        stats.put("verifierQueueWaitAvgMs", successes == 0 ? 0 : verifierQueueWaitMsTotal.get() / successes);
+        stats.put("verifierQueueWaitMaxMs", verifierQueueWaitMsMax.get());
+        stats.put("verifierLastTotalMs", verifierLastTotalMs.get());
+        stats.put("verifierLastProofMs", verifierLastProofMs.get());
+        stats.put("verifierLastSignatureMs", verifierLastSignatureMs.get());
+        stats.put("verifierLastAuthMs", verifierLastAuthMs.get());
+        stats.put("verifierLastPersistMs", verifierLastPersistMs.get());
+        stats.put("enqueuePersistAvgMs", enqueuePersistCount.get() == 0 ? 0 :
+            (enqueuePersistNanos.get() / 1_000_000.0) / enqueuePersistCount.get());
+        stats.put("enqueuePersistLastMs", enqueuePersistLastMs.get());
+        stats.put("persistenceFlushAvgMs", persistenceFlushCount.get() == 0 ? 0 :
+            (persistenceFlushNanos.get() / 1_000_000.0) / persistenceFlushCount.get());
+        stats.put("persistenceFlushLastMs", persistenceFlushLastMs.get());
+        stats.put("persistenceFlushCount", persistenceFlushCount.get());
+        stats.put("persistencePendingChanges", persistencePendingChanges.get());
+        stats.put("persistenceAsyncEnabled", isAsyncPersistenceEnabled());
         
         return stats;
     }
@@ -333,16 +463,19 @@ public class ProposalQueueManagerOptimized {
             return;
         }
         int restored = 0;
+        int skippedTerminal = 0;
         for (QueuedProposal proposal : proposals) {
             if (proposal == null) {
                 continue;
             }
             if (proposal.getState() == ProposalState.PROCESSED || proposal.getState() == ProposalState.REJECTED) {
+                skippedTerminal++;
                 continue;
             }
             proposal.setState(ProposalState.PENDING);
             proposal.setConfirmedBlock(null);
             proposal.setRejectionReason(null);
+            proposal.overrideTimeoutTimestamp(System.currentTimeMillis() + RESTORE_TIMEOUT_MS);
             allProposals.put(proposal.getProposalId(), proposal);
             unverifiedQueue.offer(proposal);
             restored++;
@@ -352,8 +485,9 @@ public class ProposalQueueManagerOptimized {
                     .registerProposalWallet(proposal.getProposalId(), proposal.getWalletAddress());
             }
         }
-        if (restored > 0) {
-            log.info("🔁 Restored {} persisted proposals into unverified queue", restored);
+        if (restored > 0 || skippedTerminal > 0) {
+            log.info("🔁 Restored {} persisted proposals into unverified queue (skipped terminal: {})",
+                restored, skippedTerminal);
         }
     }
     
@@ -361,8 +495,58 @@ public class ProposalQueueManagerOptimized {
         if (persistenceStore == null) {
             return;
         }
+        if (!isAsyncPersistenceEnabled()) {
+            persistProposalsNow();
+            return;
+        }
+        persistencePendingChanges.incrementAndGet();
+        persistenceDirty = true;
+        if (persistenceFlushBatch > 0 && persistencePendingChanges.get() >= persistenceFlushBatch) {
+            flushPersistedProposals();
+        }
+    }
+
+    private void persistProposalsNow() {
         synchronized (persistenceLock) {
             persistenceStore.save(allProposals.values());
+        }
+    }
+
+    private void flushPersistedProposals() {
+        if (persistenceStore == null) {
+            return;
+        }
+        if (!persistenceDirty) {
+            return;
+        }
+        if (!persistenceFlushInProgress.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            if (!persistenceDirty) {
+                return;
+            }
+            long start = System.nanoTime();
+            persistProposalsNow();
+            long nanos = System.nanoTime() - start;
+            persistenceFlushNanos.addAndGet(nanos);
+            persistenceFlushCount.incrementAndGet();
+            persistenceFlushLastMs.set(nanos / 1_000_000L);
+            persistencePendingChanges.set(0);
+            persistenceDirty = false;
+        } finally {
+            persistenceFlushInProgress.set(false);
+        }
+    }
+
+    private boolean isAsyncPersistenceEnabled() {
+        return persistenceFlushIntervalMs > 0 || persistenceFlushBatch > 1;
+    }
+
+    private static void updateMax(java.util.concurrent.atomic.AtomicLong max, long candidate) {
+        long prev;
+        while (candidate > (prev = max.get()) && !max.compareAndSet(prev, candidate)) {
+            // retry until updated
         }
     }
     
@@ -380,11 +564,16 @@ public class ProposalQueueManagerOptimized {
             }
         }
         
-        if (evmVerifierAgent != null) {
-            try {
-                evmVerifierAgent.close();
-            } catch (Exception e) {
-                log.error("Error closing EVM verifier agent", e);
+        if (evmVerifierAgents != null) {
+            for (AgentRunner evmVerifierAgent : evmVerifierAgents) {
+                if (evmVerifierAgent == null) {
+                    continue;
+                }
+                try {
+                    evmVerifierAgent.close();
+                } catch (Exception e) {
+                    log.error("Error closing EVM verifier agent", e);
+                }
             }
         }
         
@@ -394,6 +583,16 @@ public class ProposalQueueManagerOptimized {
             } catch (Exception e) {
                 log.error("Error closing epoch finalizer agent", e);
             }
+        }
+
+        if (persistenceScheduler != null) {
+            persistenceScheduler.shutdown();
+            try {
+                persistenceScheduler.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            flushPersistedProposals();
         }
         
         log.info("✅ ProposalQueueManager stopped");
@@ -539,7 +738,12 @@ public class ProposalQueueManagerOptimized {
         
         log.debug("📥 Queued proposal {} for EVM verification in epoch {} (tier: {}, queue size: {})", 
             proposalId, epoch, tier, unverifiedQueue.size());
+        long persistStart = System.nanoTime();
         persistProposals();
+        long persistNanos = System.nanoTime() - persistStart;
+        enqueuePersistNanos.addAndGet(persistNanos);
+        enqueuePersistCount.incrementAndGet();
+        enqueuePersistLastMs.set(persistNanos / 1_000_000L);
         
         return proposal;
     }
@@ -617,7 +821,12 @@ public class ProposalQueueManagerOptimized {
         
         log.info("🗑️  Queued DELETE proposal {} for EVM verification in epoch {} (tier: {}, path: {}, queue size: {})", 
             proposalId, targetEpoch, tier, path, unverifiedQueue.size());
+        long persistStart = System.nanoTime();
         persistProposals();
+        long persistNanos = System.nanoTime() - persistStart;
+        enqueuePersistNanos.addAndGet(persistNanos);
+        enqueuePersistCount.incrementAndGet();
+        enqueuePersistLastMs.set(persistNanos / 1_000_000L);
         
         return proposal;
     }
@@ -909,11 +1118,14 @@ public class ProposalQueueManagerOptimized {
             // Process unverified proposals
             QueuedProposal proposal;
             while ((proposal = unverifiedQueue.poll()) != null) {
+                long attemptStartNs = System.nanoTime();
+                verifierAttemptCount.incrementAndGet();
                 try {
                     // ═══════════════════════════════════════════════════════════
                     // TIMEOUT CHECK: Ensure proposal doesn't wait forever
                     // ═══════════════════════════════════════════════════════════
                     if (System.currentTimeMillis() > proposal.getTimeoutTimestamp()) {
+                        verifierRejectedCount.incrementAndGet();
                         rejectProposal(proposal, "Timeout waiting for confirmation (" + 
                             (CONFIRMATION_TIMEOUT_MS / 1000) + "s)");
                         continue;
@@ -929,7 +1141,11 @@ public class ProposalQueueManagerOptimized {
                     // - Payment amount is sufficient
                     // ═══════════════════════════════════════════════════════════
                     
+                    long proofStartNs = System.nanoTime();
                     PaymentProof proof = evmBridge.verifyPayment(proposal.getProposalId());
+                    long proofNanos = System.nanoTime() - proofStartNs;
+                    verifierProofNanos.addAndGet(proofNanos);
+                    verifierLastProofMs.set(proofNanos / 1_000_000L);
                     
                     if (proof == null) {
                         if (org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance().isMockMode()) {
@@ -945,12 +1161,14 @@ public class ProposalQueueManagerOptimized {
                         // No payment found yet - re-queue (will retry)
                         // In mock mode, this immediately returns a valid proof
                         // In real mode, this polls the blockchain for the transaction
+                        verifierRequeueNoProofCount.incrementAndGet();
                         unverifiedQueue.offer(proposal);
                         continue;
                     }
                     
                     if (!proof.isConfirmed(1)) {
                         // Payment exists but not confirmed yet - re-queue
+                        verifierRequeueUnconfirmedCount.incrementAndGet();
                         unverifiedQueue.offer(proposal);
                         continue;
                     }
@@ -958,6 +1176,7 @@ public class ProposalQueueManagerOptimized {
                     // Verify payment went to correct contract
                     String expectedContract = evmBridge.getContractAddress();
                     if (!proof.getContractAddress().equalsIgnoreCase(expectedContract)) {
+                        verifierRejectedCount.incrementAndGet();
                         rejectProposal(proposal, "Payment to wrong contract (expected: " + 
                             expectedContract + ", got: " + proof.getContractAddress() + ")");
                         continue;
@@ -969,10 +1188,12 @@ public class ProposalQueueManagerOptimized {
                     try {
                         long amountWei = Long.parseLong(proof.getAmountWei());
                         if (amountWei <= 0) {
+                            verifierRejectedCount.incrementAndGet();
                             rejectProposal(proposal, "Insufficient payment amount: " + amountWei + " wei");
                             continue;
                         }
                     } catch (NumberFormatException e) {
+                        verifierRejectedCount.incrementAndGet();
                         rejectProposal(proposal, "Invalid payment amount format: " + proof.getAmountWei());
                         continue;
                     }
@@ -991,6 +1212,7 @@ public class ProposalQueueManagerOptimized {
                     
                     // Verify from address matches proposal wallet (payment verification)
                     if (!proof.getFromAddress().equalsIgnoreCase(proposal.getWalletAddress())) {
+                        verifierRejectedCount.incrementAndGet();
                         rejectProposal(proposal, "Payment from address (" + proof.getFromAddress() + 
                             ") does not match proposal wallet (" + proposal.getWalletAddress() + ")");
                         continue;
@@ -1009,10 +1231,15 @@ public class ProposalQueueManagerOptimized {
                         if (proposalSignature != null && !proposalSignature.isEmpty() && 
                             org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.isFullVerificationAvailable()) {
                             
+                            long signatureStartNs = System.nanoTime();
                             boolean signatureValid = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
                                 .verifySignature(signedMessage, proposalSignature, proposal.getWalletAddress());
+                            long signatureNanos = System.nanoTime() - signatureStartNs;
+                            verifierSignatureNanos.addAndGet(signatureNanos);
+                            verifierLastSignatureMs.set(signatureNanos / 1_000_000L);
                             
                             if (!signatureValid) {
+                                verifierRejectedCount.incrementAndGet();
                                 rejectProposal(proposal, "Cryptographic signature verification failed for wallet " + 
                                     proposal.getWalletAddress());
                                 continue;
@@ -1038,13 +1265,18 @@ public class ProposalQueueManagerOptimized {
                     // ═══════════════════════════════════════════════════════════
                     
                     // Verify path belongs to wallet's shard (using WalletPathUtil for wallet-scoped paths)
+                    long authStartNs = System.nanoTime();
                     String expectedShardRoot = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.getShardRoot(proposal.getWalletAddress());
                     if (!proposal.getPath().startsWith(expectedShardRoot + "/")) {
+                        verifierRejectedCount.incrementAndGet();
                         rejectProposal(proposal, "Wallet " + proposal.getWalletAddress() + 
                             " cannot write to path outside its shard: " + proposal.getPath() + 
                             " (expected shard root: " + expectedShardRoot + ")");
                         continue;
                     }
+                    long authNanos = System.nanoTime() - authStartNs;
+                    verifierAuthNanos.addAndGet(authNanos);
+                    verifierLastAuthMs.set(authNanos / 1_000_000L);
                     
                     // Additional authorization checks could go here:
                     // - Check wallet is not banned
@@ -1065,10 +1297,18 @@ public class ProposalQueueManagerOptimized {
                     
                     proposal.setState(ProposalState.VERIFIED);
                     proposal.setConfirmedBlock(proof.getBlockNumber());
+                    long persistStartNs = System.nanoTime();
                     persistProposals();
+                    long persistNanos = System.nanoTime() - persistStartNs;
+                    verifierPersistNanos.addAndGet(persistNanos);
+                    verifierLastPersistMs.set(persistNanos / 1_000_000L);
                     
                     // Track verification persistently
                     totalVerifiedCount.incrementAndGet();
+                    verifierSuccessCount.incrementAndGet();
+                    long queueWaitMs = System.currentTimeMillis() - proposal.getTimestamp();
+                    verifierQueueWaitMsTotal.addAndGet(queueWaitMs);
+                    updateMax(verifierQueueWaitMsMax, queueWaitMs);
                     
                     // ═══════════════════════════════════════════════════════════
                     // PRIORITY TIER: Fast-path directly to Aeron (bypass epoch batching)
@@ -1104,7 +1344,11 @@ public class ProposalQueueManagerOptimized {
                             proposal.setState(ProposalState.PROCESSED);
                             allProposals.remove(proposal.getProposalId());
                             totalFinalizedCount.incrementAndGet();
+                            long priorityPersistStartNs = System.nanoTime();
                             persistProposals();
+                            long priorityPersistNanos = System.nanoTime() - priorityPersistStartNs;
+                            verifierPersistNanos.addAndGet(priorityPersistNanos);
+                            verifierLastPersistMs.set(priorityPersistNanos / 1_000_000L);
                             
                             // Track for backpressure
                             backpressureManager.incrementSent();
@@ -1144,8 +1388,13 @@ public class ProposalQueueManagerOptimized {
                     }
                     
                 } catch (Exception e) {
+                    verifierErrorCount.incrementAndGet();
                     log.error("Error verifying proposal {}", proposal.getProposalId(), e);
                     rejectProposal(proposal, "Verification error: " + e.getMessage());
+                } finally {
+                    long attemptTotalNanos = System.nanoTime() - attemptStartNs;
+                    verifierTotalNanos.addAndGet(attemptTotalNanos);
+                    verifierLastTotalMs.set(attemptTotalNanos / 1_000_000L);
                 }
             }
             

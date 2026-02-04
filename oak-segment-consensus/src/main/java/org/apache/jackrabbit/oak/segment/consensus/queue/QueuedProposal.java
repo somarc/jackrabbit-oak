@@ -31,7 +31,7 @@ public class QueuedProposal implements java.io.Serializable {
     private final String proposalId;
     private final String ethereumTxHash;
     private final long timestamp;
-    private final long timeoutTimestamp;
+    private volatile long timeoutTimestamp;
     private volatile ProposalState state;
     private volatile Long confirmedBlock;
     private volatile String rejectionReason;
@@ -158,6 +158,10 @@ public class QueuedProposal implements java.io.Serializable {
     
     public long getTimeoutTimestamp() {
         return timeoutTimestamp;
+    }
+
+    public void overrideTimeoutTimestamp(long timeoutTimestamp) {
+        this.timeoutTimestamp = timeoutTimestamp;
     }
     
     public ProposalState getState() {
