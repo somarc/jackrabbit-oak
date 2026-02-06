@@ -42,6 +42,8 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -67,7 +69,21 @@ public class AeronClusterLauncher {
     private static final int TRANSFER_PORT_OFFSET = 5;
     private static final int LOG_CONTROL_PORT_OFFSET = 6;
     private static final int REPLICATION_PORT_OFFSET = 7;
-    private static final int TERM_LENGTH = 128 * 1024 * 1024; // 128MB
+    private static final int DEFAULT_CLUSTER_TERM_LENGTH_BYTES = 128 * 1024 * 1024; // 128MB
+    private static final int DEFAULT_PUBLICATION_TERM_BUFFER_LENGTH_BYTES = 64 * 1024 * 1024; // 64MB
+    private static final int DEFAULT_DRIVER_TIMEOUT_MS = 60000;
+    private static final int DEFAULT_SOCKET_BUFFER_BYTES = 16 * 1024;
+    private static final String SOCKET_SNDBUF_PROPERTY = "aeron.socket.so_sndbuf";
+    private static final String SOCKET_RCVBUF_PROPERTY = "aeron.socket.so_rcvbuf";
+    private static final String MEDIA_DRIVER_TIMEOUT_MS_PROPERTY = "oak.cluster.media.driver.timeout.ms";
+    private static final String PUBLICATION_TERM_BUFFER_LENGTH_PROPERTY = "oak.cluster.publication.term.buffer.length.bytes";
+    private static final String CLUSTER_TERM_LENGTH_PROPERTY = "oak.cluster.term.length.bytes";
+    private static final int DEFAULT_SESSION_TIMEOUT_MINUTES = 20;
+    private static final int DEV_SESSION_TIMEOUT_MINUTES = 2;
+    private static final int STAGING_SESSION_TIMEOUT_MINUTES = 5;
+    private static final String SESSION_TIMEOUT_MINUTES_PROPERTY = "oak.cluster.session.timeout.minutes";
+    private static final String CLUSTER_ENVIRONMENT_PROPERTY = "oak.cluster.environment";
+    private static final String CLUSTER_ENVIRONMENT_ENV = "OAK_CLUSTER_ENV";
     
     private final int nodeId;
     private final List<String> hostnames;
@@ -226,10 +242,25 @@ public class AeronClusterLauncher {
         // Socket buffer sizes (configurable via system properties)
         // Default: 16KB for Mac/Darwin (Aeron best practices)
         // Can be overridden: -Daeron.socket.so_sndbuf=32768 -Daeron.socket.so_rcvbuf=32768
-        int socketSndbufLength = Integer.getInteger("aeron.socket.so_sndbuf", 16 * 1024);
-        int socketRcvbufLength = Integer.getInteger("aeron.socket.so_rcvbuf", 16 * 1024);
+        int socketSndbufLength = getPositiveIntProperty(SOCKET_SNDBUF_PROPERTY, DEFAULT_SOCKET_BUFFER_BYTES);
+        int socketRcvbufLength = getPositiveIntProperty(SOCKET_RCVBUF_PROPERTY, DEFAULT_SOCKET_BUFFER_BYTES);
+        int publicationTermBufferLength = getPositiveIntProperty(
+            PUBLICATION_TERM_BUFFER_LENGTH_PROPERTY,
+            DEFAULT_PUBLICATION_TERM_BUFFER_LENGTH_BYTES
+        );
+        int driverTimeoutMs = getPositiveIntProperty(
+            MEDIA_DRIVER_TIMEOUT_MS_PROPERTY,
+            DEFAULT_DRIVER_TIMEOUT_MS
+        );
+        int clusterTermLengthBytes = resolveClusterTermLengthBytes();
         log.info("📡 Socket buffer configuration: SO_SNDBUF={}KB, SO_RCVBUF={}KB", 
             socketSndbufLength / 1024, socketRcvbufLength / 1024);
+        log.info(
+            "✈️  Aeron transport config: publicationTermBuffer={}MB, clusterTermLength={}MB, driverTimeout={}ms",
+            publicationTermBufferLength / (1024 * 1024),
+            clusterTermLengthBytes / (1024 * 1024),
+            driverTimeoutMs
+        );
         
         MediaDriver.Context mediaDriverContext = new MediaDriver.Context()
                 .aeronDirectoryName(aeronDirName)
@@ -243,7 +274,7 @@ public class AeronClusterLauncher {
                 // ✈️ RESILIENCE: Increase term buffer size to reduce backpressure
                 // Default is 64MB, larger buffers handle bursts better
                 // Note: Aeron aims for garbage-free operation, so larger buffers don't increase GC pressure
-                .publicationTermBufferLength(64 * 1024 * 1024)  // 64MB (default, explicit for clarity)
+                .publicationTermBufferLength(publicationTermBufferLength)
                 // ✈️ RESILIENCE: Enable conductor idle strategy for better CPU efficiency
                 // Uses backoff strategy to reduce CPU spinning when idle
                 .conductorIdleStrategy(new org.agrona.concurrent.BackoffIdleStrategy(100, 100, 1000, 1000000))
@@ -252,7 +283,7 @@ public class AeronClusterLauncher {
                 // Production: 60s (tested - prevents false positives from macOS/system pauses)
                 // Note: This is a trade-off - longer timeout means slower failure detection
                 // But MediaDriver thread hangs need longer timeout to avoid false positives
-                .driverTimeoutMs(60000);  // 60 seconds (production-grade, was 20s)
+                .driverTimeoutMs(driverTimeoutMs);
         
         // Archive Context (use IP address for Aeron channels)
         AeronArchive.Context replicationArchiveContext = new AeronArchive.Context()
@@ -279,16 +310,23 @@ public class AeronClusterLauncher {
         // Snapshots are taken periodically by the leader to enable faster recovery
         // Default behavior: snapshot after significant log growth (typically ~1024 entries)
         log.info("📸 Aeron snapshot management: automatic (leader-controlled)");
+        SessionTimeoutConfig sessionTimeoutConfig = resolveSessionTimeoutConfig();
+        log.info(
+            "⏱️  Aeron session timeout: {} minute(s) [source={}, env={}]",
+            sessionTimeoutConfig.timeoutMinutes,
+            sessionTimeoutConfig.source,
+            sessionTimeoutConfig.environment
+        );
         
         ConsensusModule.Context consensusModuleContext = new ConsensusModule.Context()
                 .errorHandler(closingErrorHandler(errorHandler("Consensus Module")))
                 .clusterMemberId(nodeId)
                 .clusterMembers(clusterMembers(ipAddresses))  // Use IPs instead of hostnames
                 .clusterDir(new File(baseDir, "cluster"))
-                .ingressChannel("aeron:udp?term-length=128m")  // CRITICAL: Explicitly match log term-length (128MB)
+                .ingressChannel("aeron:udp?term-length=" + clusterTermLengthBytes)
                 .logChannel(logControlChannel(nodeId, myIPAddress, LOG_CONTROL_PORT_OFFSET))
                 .replicationChannel(logReplicationChannel(myIPAddress))
-                .sessionTimeoutNs(java.util.concurrent.TimeUnit.MINUTES.toNanos(20))  // CRITICAL: 20-min timeout + reconnect logic for robustness
+                .sessionTimeoutNs(sessionTimeoutConfig.timeoutNs)
                 .archiveContext(aeronArchiveContext.clone());
         
         // Clustered Service Container Context
@@ -637,7 +675,7 @@ public class AeronClusterLauncher {
         int port = calculatePort(nodeId, portOffset);
         return new ChannelUriStringBuilder()
                 .media("udp")
-                .termLength(TERM_LENGTH)
+                .termLength(resolveClusterTermLengthBytes())
                 .endpoint(ipAddress + ":" + port)
                 .build();
     }
@@ -649,7 +687,7 @@ public class AeronClusterLauncher {
         int port = calculatePort(nodeId, portOffset);
         return new ChannelUriStringBuilder()
                 .media("udp")
-                .termLength(TERM_LENGTH)
+                .termLength(resolveClusterTermLengthBytes())
                 .controlMode(CommonContext.MDC_CONTROL_MODE_MANUAL)
                 .controlEndpoint(ipAddress + ":" + port)
                 .build();
@@ -836,6 +874,84 @@ public class AeronClusterLauncher {
     public MediaDriverHealthMonitor getHealthMonitor() {
         return healthMonitor;
     }
+
+    static SessionTimeoutConfig resolveSessionTimeoutConfig() {
+        String explicit = System.getProperty(SESSION_TIMEOUT_MINUTES_PROPERTY);
+        Integer explicitMinutes = parsePositiveInt(explicit);
+        if (explicitMinutes != null) {
+            return new SessionTimeoutConfig(
+                explicitMinutes,
+                TimeUnit.MINUTES.toNanos(explicitMinutes),
+                "system-property",
+                "override"
+            );
+        }
+
+        String environment = firstNonBlank(
+            System.getProperty(CLUSTER_ENVIRONMENT_PROPERTY),
+            System.getenv(CLUSTER_ENVIRONMENT_ENV)
+        );
+        String normalized = environment == null ? "prod" : environment.trim().toLowerCase(Locale.ROOT);
+        int minutes;
+        if ("dev".equals(normalized) || "development".equals(normalized) || "local".equals(normalized) || "test".equals(normalized)) {
+            minutes = DEV_SESSION_TIMEOUT_MINUTES;
+        } else if ("staging".equals(normalized) || "stage".equals(normalized) || "preprod".equals(normalized)) {
+            minutes = STAGING_SESSION_TIMEOUT_MINUTES;
+        } else {
+            minutes = DEFAULT_SESSION_TIMEOUT_MINUTES;
+        }
+        return new SessionTimeoutConfig(
+            minutes,
+            TimeUnit.MINUTES.toNanos(minutes),
+            "environment-profile",
+            normalized
+        );
+    }
+
+    private static Integer parsePositiveInt(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            return parsed > 0 ? parsed : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static int getPositiveIntProperty(String key, int defaultValue) {
+        Integer configured = parsePositiveInt(System.getProperty(key));
+        return configured != null ? configured : defaultValue;
+    }
+
+    private static int resolveClusterTermLengthBytes() {
+        return getPositiveIntProperty(CLUSTER_TERM_LENGTH_PROPERTY, DEFAULT_CLUSTER_TERM_LENGTH_BYTES);
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        if (first != null && !first.trim().isEmpty()) {
+            return first;
+        }
+        if (second != null && !second.trim().isEmpty()) {
+            return second;
+        }
+        return null;
+    }
+
+    static final class SessionTimeoutConfig {
+        final int timeoutMinutes;
+        final long timeoutNs;
+        final String source;
+        final String environment;
+
+        SessionTimeoutConfig(int timeoutMinutes, long timeoutNs, String source, String environment) {
+            this.timeoutMinutes = timeoutMinutes;
+            this.timeoutNs = timeoutNs;
+            this.source = source;
+            this.environment = environment;
+        }
+    }
     
     /**
      * ✅ ADR 025: Clean up stale Aeron directory on startup (optional).
@@ -889,4 +1005,3 @@ public class AeronClusterLauncher {
         }
     }
 }
-

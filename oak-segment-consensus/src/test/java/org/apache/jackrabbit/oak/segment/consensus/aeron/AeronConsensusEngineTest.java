@@ -16,40 +16,37 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import io.aeron.cluster.service.Cluster;
+import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
+import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import java.io.File;
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.junit.Before;
-import org.junit.Test;
 import org.junit.Rule;
+import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
-import org.apache.jackrabbit.oak.segment.file.FileStore;
-import org.apache.jackrabbit.oak.spi.state.NodeStore;
-
-import java.io.File;
-import java.util.concurrent.TimeUnit;
-
-import static org.junit.Assert.*;
-import static org.mockito.Mockito.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for AeronConsensusEngine.
- * 
- * <p>Tests cover:
- * <ul>
- *   <li>Role transitions (FOLLOWER, LEADER, CANDIDATE)</li>
- *   <li>Write proposal processing</li>
- *   <li>Snapshot creation and restoration</li>
- *   <li>Leader discovery</li>
- *   <li>Epoch tracking</li>
- * </ul>
- * 
- * <p><b>TEST_STUB:</b> These tests are placeholder stubs documenting required test coverage.
- * Requires JDK 21 (enforced in oak-parent pom.xml). JDK 22+ breaks Mockito/ByteBuddy.
- * AeronConsensusEngine also requires dependency injection support for proper unit testing.
- * See GAPS-AND-TESTING-REQUIREMENTS.md for details.
- * 
- * @see AeronConsensusEngine
+ * Focused unit tests for core AeronConsensusEngine behavior that can be verified
+ * without a running Aeron cluster.
  */
 public class AeronConsensusEngineTest {
 
@@ -62,6 +59,9 @@ public class AeronConsensusEngineTest {
     @Mock
     private NodeStore mockNodeStore;
 
+    @Mock
+    private EthereumWallet mockWallet;
+
     private File storeDirectory;
 
     @Before
@@ -70,182 +70,221 @@ public class AeronConsensusEngineTest {
         storeDirectory = tempFolder.newFolder("segmentstore");
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // ROLE TRANSITION TESTS
-    // ═══════════════════════════════════════════════════════════════
-
     @Test
-    public void testInitialRoleIsFollower() {
-        // Given: A new consensus engine
-        // When: Engine is created
-        // Then: Initial role should be FOLLOWER
-        
-        // TEST_STUB: Requires AeronConsensusEngine dependency injection - blocked by Mockito JDK 21+ issue
-        // AeronConsensusEngine engine = createTestEngine();
-        // assertEquals(ValidatorRole.FOLLOWER, engine.getCurrentRole());
-        assertTrue("Test stub - implement when Mockito fixed", true);
+    public void roleChangeToLeaderUpdatesRoleTermAndLeaderUrl() {
+        AeronConsensusEngine engine = createEngine();
+
+        assertEquals(0, engine.getCurrentTerm());
+
+        engine.onRoleChange(Cluster.Role.LEADER);
+
+        assertEquals(1, engine.getCurrentTerm());
+        assertTrue(engine.isLeader());
+        assertEquals("http://self:8080", engine.getCurrentLeader());
     }
 
     @Test
-    public void testRoleTransitionFollowerToLeader() {
-        // Given: Engine in FOLLOWER role
-        // When: Elected as leader by Aeron cluster
-        // Then: Role should transition to LEADER
-        
-        // TEST_STUB: Requires mock Aeron cluster - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
+    public void currentRoleUsesClusterAsSourceOfTruthWhenAvailable() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        engine.onRoleChange(Cluster.Role.LEADER);
+
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.role()).thenReturn(Cluster.Role.FOLLOWER);
+        setField(engine, "cluster", cluster);
+
+        assertFalse(engine.isLeader());
     }
 
     @Test
-    public void testRoleTransitionLeaderToFollower() {
-        // Given: Engine in LEADER role
-        // When: Higher term leader detected
-        // Then: Role should transition to FOLLOWER
-        
-        // TEST_STUB: Requires mock Aeron cluster - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
+    public void leadershipHistoryCapturesMemberMetadata() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.memberId()).thenReturn(7);
+        when(cluster.time()).thenReturn(12345L);
+        setField(engine, "cluster", cluster);
+
+        engine.onRoleChange(Cluster.Role.LEADER);
+
+        List<LeadershipChange> history = engine.getLeadershipHistory(0);
+        assertEquals(1, history.size());
+        assertEquals(Cluster.Role.LEADER, history.get(0).newRole);
+        assertEquals(7, history.get(0).memberId);
+        assertEquals(12345L, history.get(0).timestamp);
     }
 
     @Test
-    public void testRoleTransitionOnHigherTerm() {
-        // Given: Engine with term N
-        // When: Message received with term N+1
-        // Then: Should step down to FOLLOWER
-        
-        // TEST_STUB: Requires mock Aeron cluster - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
-    }
+    public void timerEventExpiresTransactionAndInvokesAbortCallback() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        AeronConsensusEngine.TransactionLifecycleCallback callback =
+            mock(AeronConsensusEngine.TransactionLifecycleCallback.class);
+        engine.setTransactionLifecycleCallback(callback);
 
-    // ═══════════════════════════════════════════════════════════════
-    // WRITE PROCESSING TESTS
-    // ═══════════════════════════════════════════════════════════════
+        TransactionLifecycleManager manager =
+            (TransactionLifecycleManager) getField(engine, "transactionLifecycleManager");
+        manager.onStart("tx-1", "corr-1", 1L, "0xabc");
+        Thread.sleep(5L);
 
-    @Test
-    public void testApplyReplicatedWrite() {
-        // Given: A valid write proposal
-        // When: Applied through consensus
-        // Then: Content should be written to NodeStore
-        
-        // TEST_STUB: Requires mock NodeStore - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
+        engine.onTimerEvent(100L, System.currentTimeMillis());
+
+        verify(callback).onAbortTransaction("tx-1", "corr-1", "timeout");
+        Optional<Map<String, Object>> tx = engine.getTransactionRecord("tx-1");
+        assertTrue(tx.isPresent());
+        assertEquals("TIMED_OUT", tx.get().get("status"));
     }
 
     @Test
-    public void testApplyReplicatedDelete() {
-        // Given: A valid delete proposal
-        // When: Applied through consensus
-        // Then: Content should be deleted from NodeStore
-        
-        // TEST_STUB: Requires mock NodeStore - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
+    public void reconnectShortCircuitsWhenClientAlreadyHealthy() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster healthyClient = mock(io.aeron.cluster.client.AeronCluster.class);
+        when(healthyClient.isClosed()).thenReturn(false);
+        setField(engine, "internalClusterClient", healthyClient);
+        setField(engine, "reconnectInProgress", true);
+
+        AtomicInteger ensureCalls = new AtomicInteger(0);
+        engine.attemptReconnectForTest(
+            "test",
+            3,
+            attempt -> 0L,
+            ensureCalls::incrementAndGet,
+            backoff -> {
+                fail("sleep should not be called when client is healthy");
+                return false;
+            }
+        );
+
+        assertEquals(0, ensureCalls.get());
+        assertFalse((Boolean) getField(engine, "reconnectInProgress"));
     }
 
     @Test
-    public void testWriteWithInvalidSignature() {
-        // Given: A write proposal with invalid signature
-        // When: Verification attempted
-        // Then: Should reject the proposal
-        
-        // TEST_STUB: Requires mock signature verifier - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
+    public void reconnectRetriesUntilClientBecomesHealthy() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        setField(engine, "reconnectInProgress", true);
+
+        AtomicInteger ensureCalls = new AtomicInteger(0);
+        List<Long> backoffs = new ArrayList<>();
+        engine.attemptReconnectForTest(
+            "test",
+            4,
+            attempt -> (long) attempt * 10L,
+            () -> {
+                int call = ensureCalls.incrementAndGet();
+                if (call == 2) {
+                    try {
+                        io.aeron.cluster.client.AeronCluster healthyClient = mock(io.aeron.cluster.client.AeronCluster.class);
+                        when(healthyClient.isClosed()).thenReturn(false);
+                        setField(engine, "internalClusterClient", healthyClient);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            },
+            backoff -> {
+                backoffs.add(backoff);
+                return true;
+            }
+        );
+
+        assertEquals(2, ensureCalls.get());
+        assertEquals(1, backoffs.size());
+        assertEquals(Long.valueOf(10L), backoffs.get(0));
+        assertFalse((Boolean) getField(engine, "reconnectInProgress"));
     }
 
     @Test
-    public void testWriteToUnauthorizedPath() {
-        // Given: A write proposal to path not owned by wallet
-        // When: Authorization checked
-        // Then: Should reject the proposal
-        
-        // TEST_STUB: Requires mock authorization - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
-    }
+    public void reconnectExhaustionDoesNotSleepAfterFinalAttempt() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        setField(engine, "reconnectInProgress", true);
 
-    // ═══════════════════════════════════════════════════════════════
-    // SNAPSHOT TESTS
-    // ═══════════════════════════════════════════════════════════════
+        AtomicInteger ensureCalls = new AtomicInteger(0);
+        List<Long> backoffs = new ArrayList<>();
+        engine.attemptReconnectForTest(
+            "test",
+            3,
+            attempt -> (long) attempt,
+            ensureCalls::incrementAndGet,
+            backoff -> {
+                backoffs.add(backoff);
+                return true;
+            }
+        );
 
-    @Test
-    public void testSnapshotCreation() {
-        // Given: Engine with some state
-        // When: Snapshot requested
-        // Then: Should create valid snapshot
-        
-        // TEST_STUB: Requires mock FileStore - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
-    }
-
-    @Test
-    public void testSnapshotRestoration() {
-        // Given: A valid snapshot
-        // When: Restoration requested
-        // Then: State should be restored correctly
-        
-        // TEST_STUB: Requires mock FileStore - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // LEADER DISCOVERY TESTS
-    // ═══════════════════════════════════════════════════════════════
-
-    @Test
-    public void testDiscoverLeaderFromCache() {
-        // Given: Known leader URL in cache
-        // When: Leader discovery requested
-        // Then: Should return cached leader
-        
-        // TEST_STUB: Requires mock leader cache - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
+        assertEquals(3, ensureCalls.get());
+        assertEquals(2, backoffs.size());
+        assertEquals(Long.valueOf(1L), backoffs.get(0));
+        assertEquals(Long.valueOf(2L), backoffs.get(1));
+        assertFalse((Boolean) getField(engine, "reconnectInProgress"));
     }
 
     @Test
-    public void testDiscoverLeaderFromPeers() {
-        // Given: No cached leader
-        // When: Leader discovery requested
-        // Then: Should query peers for leader
-        
-        // TEST_STUB: Requires mock HTTP client - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
-    }
+    public void durabilityAckFailureInvokesFailureCallbackAndClearsPendingState() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        AeronConsensusEngine.DurabilityStatusCallback callback =
+            mock(AeronConsensusEngine.DurabilityStatusCallback.class);
+        engine.setDurabilityStatusCallback(callback);
 
-    // ═══════════════════════════════════════════════════════════════
-    // EPOCH TRACKING TESTS
-    // ═══════════════════════════════════════════════════════════════
+        DurabilityAckTracker tracker = (DurabilityAckTracker) getField(engine, "durabilityAckTracker");
+        tracker.track("p-fail", 3, 2);
+        assertEquals(1, pendingDurabilityCount(tracker));
 
-    @Test
-    public void testEpochIncrement() {
-        // Given: Engine at epoch N
-        // When: New Ethereum epoch detected
-        // Then: Internal epoch should increment
-        
-        // TEST_STUB: Requires mock beacon client - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
+        MessageDispatcher dispatcher = (MessageDispatcher) getField(engine, "messageDispatcher");
+        MessageDispatcher.DurabilityCallback durabilityCallback =
+            (MessageDispatcher.DurabilityCallback) getField(dispatcher, "durabilityCallback");
+        durabilityCallback.onAckSegmentPersisted("p-fail", false, null, "disk full", 3, 2);
+
+        verify(callback).onFailure("p-fail", "disk full");
+        verify(callback, never()).onDurable("p-fail", null);
+        assertEquals(0, pendingDurabilityCount(tracker));
     }
 
     @Test
-    public void testEpochFinalityTracking() {
-        // Given: Proposals at epoch N
-        // When: Epoch N+2 reached (finality)
-        // Then: Proposals should be marked final
-        
-        // TEST_STUB: Requires mock beacon client - blocked by Mockito JDK 21+ issue
-        assertTrue("Test stub - implement when Mockito fixed", true);
+    public void durabilityAckFailureWithoutErrorUsesDefaultMessage() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        AeronConsensusEngine.DurabilityStatusCallback callback =
+            mock(AeronConsensusEngine.DurabilityStatusCallback.class);
+        engine.setDurabilityStatusCallback(callback);
+
+        DurabilityAckTracker tracker = (DurabilityAckTracker) getField(engine, "durabilityAckTracker");
+        tracker.track("p-default-error", 3, 2);
+        assertEquals(1, pendingDurabilityCount(tracker));
+
+        MessageDispatcher dispatcher = (MessageDispatcher) getField(engine, "messageDispatcher");
+        MessageDispatcher.DurabilityCallback durabilityCallback =
+            (MessageDispatcher.DurabilityCallback) getField(dispatcher, "durabilityCallback");
+        durabilityCallback.onAckSegmentPersisted("p-default-error", false, null, null, 3, 2);
+
+        verify(callback).onFailure("p-default-error", "durability failed");
+        assertEquals(0, pendingDurabilityCount(tracker));
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // HELPER METHODS
-    // ═══════════════════════════════════════════════════════════════
+    private AeronConsensusEngine createEngine() {
+        return new AeronConsensusEngine(
+            mockFileStore,
+            mockNodeStore,
+            "http://self:8080",
+            List.of(),
+            mockWallet,
+            storeDirectory.getAbsolutePath(),
+            null
+        );
+    }
 
-    /**
-     * Create a test engine with mocked dependencies.
-     * 
-     * TEST_STUB: Implement when AeronConsensusEngine supports dependency injection
-     */
-    // private AeronConsensusEngine createTestEngine() {
-    //     return new AeronConsensusEngine.Builder()
-    //         .withFileStore(mockFileStore)
-    //         .withNodeStore(mockNodeStore)
-    //         .withStoreDirectory(storeDirectory)
-    //         .build();
-    // }
+    private static void setField(Object target, String name, Object value) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    private static Object getField(Object target, String name) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(target);
+    }
+
+    private static int pendingDurabilityCount(DurabilityAckTracker tracker) throws Exception {
+        Field pendingField = DurabilityAckTracker.class.getDeclaredField("pending");
+        pendingField.setAccessible(true);
+        Map<?, ?> pending = (Map<?, ?>) pendingField.get(tracker);
+        return pending.size();
+    }
 }

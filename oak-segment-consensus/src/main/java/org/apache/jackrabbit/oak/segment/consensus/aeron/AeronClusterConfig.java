@@ -69,4 +69,88 @@ public @interface AeronClusterConfig {
         description = "Ethereum beacon API URL"
     )
     String beaconApiUrl() default "https://beaconcha.in/api";
+
+    @AttributeDefinition(
+        name = "Cluster Environment",
+        description = "Environment profile used for timeout defaults (dev/staging/prod). Optional."
+    )
+    String clusterEnvironment() default "";
+
+    @AttributeDefinition(
+        name = "Session Timeout Minutes",
+        description = "Explicit Aeron cluster session timeout in minutes. 0 = use environment profile defaults."
+    )
+    int sessionTimeoutMinutes() default 0;
+
+    @AttributeDefinition(
+        name = "Media Driver Timeout (ms)",
+        description = "MediaDriver driverTimeoutMs. 0 = use built-in default."
+    )
+    int mediaDriverTimeoutMs() default 0;
+
+    @AttributeDefinition(
+        name = "Socket Send Buffer (bytes)",
+        description = "Aeron UDP socket send buffer length. 0 = use built-in default."
+    )
+    int socketSendBufferBytes() default 0;
+
+    @AttributeDefinition(
+        name = "Socket Receive Buffer (bytes)",
+        description = "Aeron UDP socket receive buffer length. 0 = use built-in default."
+    )
+    int socketReceiveBufferBytes() default 0;
+
+    @AttributeDefinition(
+        name = "Publication Term Buffer Length (bytes)",
+        description = "MediaDriver publicationTermBufferLength. 0 = use built-in default."
+    )
+    int publicationTermBufferLengthBytes() default 0;
+
+    @AttributeDefinition(
+        name = "Cluster Term Length (bytes)",
+        description = "Aeron cluster channel term length used for log/ingress channels. 0 = use built-in default."
+    )
+    int clusterTermLengthBytes() default 0;
+
+    @AttributeDefinition(
+        name = "Heartbeat Max Age (ms)",
+        description = "Maximum heartbeat age before stale health. 0 = use built-in default."
+    )
+    long heartbeatMaxAgeMs() default 0L;
+
+    @AttributeDefinition(
+        name = "Reachability Cache (ms)",
+        description = "Peer reachability cache duration in ms. 0 = use built-in default."
+    )
+    long reachabilityCacheMs() default 0L;
+
+    @AttributeDefinition(
+        name = "Reachability Connect Timeout (ms)",
+        description = "HTTP connect timeout for peer reachability checks. 0 = use built-in default."
+    )
+    int reachabilityConnectTimeoutMs() default 0;
+
+    @AttributeDefinition(
+        name = "Reachability Read Timeout (ms)",
+        description = "HTTP read timeout for peer reachability checks. 0 = use built-in default."
+    )
+    int reachabilityReadTimeoutMs() default 0;
+
+    @AttributeDefinition(
+        name = "Reconnect Max Attempts",
+        description = "Maximum reconnect attempts for internal Aeron client. 0 = use built-in default."
+    )
+    int reconnectMaxAttempts() default 0;
+
+    @AttributeDefinition(
+        name = "Peer Probe Mode",
+        description = "Peer probe mode for health checks: none or http. Optional."
+    )
+    String peerProbeMode() default "";
+
+    @AttributeDefinition(
+        name = "Delete Aeron Dirs On Startup",
+        description = "If true, clean stale Aeron directories on startup (dev/test only)."
+    )
+    boolean deleteAeronDirsOnStartup() default false;
 }

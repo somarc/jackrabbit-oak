@@ -130,6 +130,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager backpressureManager;
     private final org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     private final DurabilityAckTracker durabilityAckTracker = new DurabilityAckTracker();
+    private final TransactionLifecycleManager transactionLifecycleManager;
     private final PeerProbeMode peerProbeMode;
     
     // ✅ PRODUCTION REFACTOR: Service layer components (extracted from monolithic class)
@@ -170,8 +171,18 @@ public class AeronConsensusEngine implements ClusteredService {
         void onDurable(String proposalId, String durableHead);
         void onFailure(String proposalId, String error);
     }
+    
+    /**
+     * Callback interface for explicit transaction boundary protocol.
+     */
+    public interface TransactionLifecycleCallback {
+        void onStartTransaction(String transactionId, String correlationId, long timeoutMs, String initiatorWallet);
+        void onCommitTransaction(String transactionId, String correlationId);
+        void onAbortTransaction(String transactionId, String correlationId, String reason);
+    }
     private WriteApplicationCallback writeCallback;
     private volatile DurabilityStatusCallback durabilityStatusCallback;
+    private volatile TransactionLifecycleCallback transactionLifecycleCallback;
     
     // Ethereum integration
     private BeaconChainClient beaconClient;
@@ -182,12 +193,14 @@ public class AeronConsensusEngine implements ClusteredService {
     // ✅ ADR 025: Track term locally (Aeron Cluster doesn't expose leadershipTermId on Cluster interface)
     // This is updated on role changes and used as fallback when Aeron term not available
     private volatile int currentTerm = 0;
+    private static final long LEADER_TERM_TTL_MS = 5000;
+    private volatile long lastLeaderTermFetchMs = 0;
     private volatile String currentLeader = null;
     // Heartbeat tracking handled by AeronHealthService
-    private static final long REACHABILITY_CACHE_MS = Long.getLong("oak.cluster.reachability.cacheMs", 5000L);
-    private static final int REACHABILITY_CONNECT_TIMEOUT_MS = Integer.getInteger("oak.cluster.reachability.connectTimeoutMs", 1500);
-    private static final int REACHABILITY_READ_TIMEOUT_MS = Integer.getInteger("oak.cluster.reachability.readTimeoutMs", 1500);
-    private static final int RECONNECT_MAX_ATTEMPTS = Integer.getInteger("oak.cluster.reconnect.maxAttempts", 5);
+    private final long reachabilityCacheMs;
+    private final int reachabilityConnectTimeoutMs;
+    private final int reachabilityReadTimeoutMs;
+    private final int reconnectMaxAttempts;
     
     // ✅ ADR 025: Replication lag monitoring
     private volatile long leaderLogPosition = 0; // Track leader's position for lag calculation
@@ -226,6 +239,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final Object reconnectLock = new Object();
     private volatile java.util.concurrent.ScheduledExecutorService reconnectScheduler;
     private volatile boolean reconnectInProgress = false;
+    private volatile java.util.concurrent.ScheduledExecutorService transactionTimeoutScheduler;
     
     /**
      * Create Aeron-based consensus engine.
@@ -254,7 +268,12 @@ public class AeronConsensusEngine implements ClusteredService {
         this.blobStore = blobStore;
         this.replicator = AeronEngineComponentFactory.createSegmentReplicator(fileStore);
         this.backpressureManager = AeronEngineComponentFactory.createBackpressureManager();
+        this.transactionLifecycleManager = new TransactionLifecycleManager(resolveTransactionLifecycleDirectory(storeDirectory));
         this.peerProbeMode = parsePeerProbeMode();
+        this.reachabilityCacheMs = Long.getLong("oak.cluster.reachability.cacheMs", 5000L);
+        this.reachabilityConnectTimeoutMs = Integer.getInteger("oak.cluster.reachability.connectTimeoutMs", 1500);
+        this.reachabilityReadTimeoutMs = Integer.getInteger("oak.cluster.reachability.readTimeoutMs", 1500);
+        this.reconnectMaxAttempts = Integer.getInteger("oak.cluster.reconnect.maxAttempts", 5);
         
         // Build node ID to URL mapping (will be populated when cluster starts)
         // This allows us to map Aeron Cluster leaderMemberId to validator URL
@@ -341,6 +360,52 @@ public class AeronConsensusEngine implements ClusteredService {
                 durabilityAckTracker.complete(proposalId);
             }
         });
+        this.messageDispatcher.setTransactionCallback(new MessageDispatcher.TransactionCallback() {
+            @Override
+            public void onStartTransaction(String transactionId, String correlationId, long timeoutMs, String initiatorWallet) {
+                TransactionLifecycleManager.TransitionResult result =
+                    transactionLifecycleManager.onStart(transactionId, correlationId, timeoutMs, initiatorWallet);
+                if (result.isApplied()) {
+                    if (transactionLifecycleCallback != null) {
+                        transactionLifecycleCallback.onStartTransaction(transactionId, correlationId, timeoutMs, initiatorWallet);
+                    }
+                    return;
+                }
+                if (!result.isIdempotent()) {
+                    log.warn("⚠️  Rejected START transaction {} (correlation={}): {}", transactionId, correlationId, result.getReason());
+                }
+            }
+
+            @Override
+            public void onCommitTransaction(String transactionId, String correlationId) {
+                TransactionLifecycleManager.TransitionResult result =
+                    transactionLifecycleManager.onCommit(transactionId, correlationId);
+                if (result.isApplied()) {
+                    if (transactionLifecycleCallback != null) {
+                        transactionLifecycleCallback.onCommitTransaction(transactionId, correlationId);
+                    }
+                    return;
+                }
+                if (!result.isIdempotent()) {
+                    log.warn("⚠️  Rejected COMMIT transaction {} (correlation={}): {}", transactionId, correlationId, result.getReason());
+                }
+            }
+
+            @Override
+            public void onAbortTransaction(String transactionId, String correlationId, String reason) {
+                TransactionLifecycleManager.TransitionResult result =
+                    transactionLifecycleManager.onAbort(transactionId, correlationId, reason);
+                if (result.isApplied()) {
+                    if (transactionLifecycleCallback != null) {
+                        transactionLifecycleCallback.onAbortTransaction(transactionId, correlationId, reason);
+                    }
+                    return;
+                }
+                if (!result.isIdempotent()) {
+                    log.warn("⚠️  Rejected ABORT transaction {} (correlation={}): {}", transactionId, correlationId, result.getReason());
+                }
+            }
+        });
 
         this.headStateService = AeronEngineComponentFactory.createHeadStateService(fileStore);
         this.ingressHandler = AeronEngineComponentFactory.createIngressHandler(
@@ -376,6 +441,31 @@ public class AeronConsensusEngine implements ClusteredService {
     public void setDurabilityStatusCallback(DurabilityStatusCallback callback) {
         this.durabilityStatusCallback = callback;
         log.info("✅ Durability status callback set: {}", callback != null ? "present" : "null");
+    }
+
+    public void setTransactionLifecycleCallback(TransactionLifecycleCallback callback) {
+        this.transactionLifecycleCallback = callback;
+        log.info("✅ Transaction lifecycle callback set: {}", callback != null ? "present" : "null");
+    }
+
+    public java.util.Optional<java.util.Map<String, Object>> getTransactionRecord(String transactionId) {
+        return transactionLifecycleManager.get(transactionId).map(record -> {
+            java.util.Map<String, Object> value = new java.util.LinkedHashMap<>();
+            value.put("transactionId", record.transactionId);
+            value.put("correlationId", record.correlationId);
+            value.put("initiatorWallet", record.initiatorWallet);
+            value.put("status", record.status.name());
+            value.put("startedAtMs", record.startedAtMs);
+            value.put("timeoutMs", record.timeoutMs);
+            value.put("deadlineMs", record.deadlineMs);
+            value.put("completedAtMs", record.completedAtMs);
+            value.put("abortReason", record.abortReason);
+            return value;
+        });
+    }
+
+    public java.util.Map<String, Object> getTransactionStats() {
+        return transactionLifecycleManager.stats();
     }
     
     /**
@@ -427,6 +517,7 @@ public class AeronConsensusEngine implements ClusteredService {
             // Start background timer for checking pending HEAD broadcasts
             // This ensures broadcasts happen even when no new writes arrive
             // No background head broadcast timer in deterministic consensus mode.
+            startTransactionTimeoutScheduler();
             
             log.info("Aeron Consensus Engine started - Status: Ready");
             
@@ -445,6 +536,7 @@ public class AeronConsensusEngine implements ClusteredService {
         // Stop background timer
         // No head broadcast timer to stop in deterministic consensus mode.
         stopReconnectScheduler();
+        stopTransactionTimeoutScheduler();
         
         // Aeron Cluster components are closed by AeronClusterLauncher.close()
         // which handles: MediaDriver, Archive, ConsensusModule, ClusteredService
@@ -960,6 +1052,76 @@ public class AeronConsensusEngine implements ClusteredService {
     // ADR 026: DURABILITY ACK MESSAGE FLOW
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+    public boolean sendStartTransactionThroughIngress(String transactionId, String correlationId,
+                                                      long timeoutMs, String initiatorWallet) {
+        if (transactionId == null || transactionId.isEmpty()) {
+            return false;
+        }
+        TransactionLifecycleManager.TransitionResult gate =
+            transactionLifecycleManager.canStart(transactionId);
+        if (!gate.isApplied() && !gate.isIdempotent()) {
+            log.warn("⚠️  Not sending START transaction {}: {}", transactionId, gate.getReason());
+            return false;
+        }
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"transactionId\":\"").append(escapeJson(transactionId)).append("\"");
+        if (correlationId != null && !correlationId.isEmpty()) {
+            json.append(",\"correlationId\":\"").append(escapeJson(correlationId)).append("\"");
+        }
+        if (initiatorWallet != null && !initiatorWallet.isEmpty()) {
+            json.append(",\"initiatorWallet\":\"").append(escapeJson(initiatorWallet)).append("\"");
+        }
+        json.append(",\"timeoutMs\":").append(timeoutMs > 0 ? timeoutMs : 30000L);
+        json.append(",\"term\":").append(getCurrentTerm());
+        json.append("}");
+        return sendTransactionMessage(SimpleMessageHeader.TEMPLATE_ID_START_TRANSACTION, json.toString(), "start-transaction");
+    }
+
+    public boolean sendCommitTransactionThroughIngress(String transactionId, String correlationId) {
+        if (transactionId == null || transactionId.isEmpty()) {
+            return false;
+        }
+        TransactionLifecycleManager.TransitionResult gate = transactionLifecycleManager.canCommit(transactionId);
+        if (!gate.isApplied() && !gate.isIdempotent()) {
+            log.warn("⚠️  Not sending COMMIT transaction {}: {}", transactionId, gate.getReason());
+            return false;
+        }
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"transactionId\":\"").append(escapeJson(transactionId)).append("\"");
+        if (correlationId != null && !correlationId.isEmpty()) {
+            json.append(",\"correlationId\":\"").append(escapeJson(correlationId)).append("\"");
+        }
+        json.append(",\"term\":").append(getCurrentTerm());
+        json.append("}");
+        return sendTransactionMessage(SimpleMessageHeader.TEMPLATE_ID_COMMIT_TRANSACTION, json.toString(), "commit-transaction");
+    }
+
+    public boolean sendAbortTransactionThroughIngress(String transactionId, String correlationId, String reason) {
+        if (transactionId == null || transactionId.isEmpty()) {
+            return false;
+        }
+        TransactionLifecycleManager.TransitionResult gate =
+            transactionLifecycleManager.canAbort(transactionId);
+        if (!gate.isApplied() && !gate.isIdempotent()) {
+            log.warn("⚠️  Not sending ABORT transaction {}: {}", transactionId, gate.getReason());
+            return false;
+        }
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"transactionId\":\"").append(escapeJson(transactionId)).append("\"");
+        if (correlationId != null && !correlationId.isEmpty()) {
+            json.append(",\"correlationId\":\"").append(escapeJson(correlationId)).append("\"");
+        }
+        if (reason != null && !reason.isEmpty()) {
+            json.append(",\"reason\":\"").append(escapeJson(reason)).append("\"");
+        }
+        json.append(",\"term\":").append(getCurrentTerm());
+        json.append("}");
+        return sendTransactionMessage(SimpleMessageHeader.TEMPLATE_ID_ABORT_TRANSACTION, json.toString(), "abort-transaction");
+    }
+
     public boolean sendQueueSegment(String proposalId) {
         if (proposalId == null || proposalId.isEmpty()) {
             return false;
@@ -1074,6 +1236,33 @@ public class AeronConsensusEngine implements ClusteredService {
             return false;
         }
     }
+
+    private boolean sendTransactionMessage(int templateId, String json, String label) {
+        if (cluster == null) {
+            log.error("❌ Cluster not initialized - cannot send transaction message ({})", label);
+            return false;
+        }
+
+        ensureInternalClusterClient();
+        if (internalClusterClient == null) {
+            log.error("❌ Internal AeronCluster client not available - cannot send transaction message ({})", label);
+            return false;
+        }
+
+        try {
+            byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            int totalLength = SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
+            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
+                new byte[totalLength]
+            );
+            SimpleMessageHeader.encode(messageBuffer, 0, jsonBytes.length, templateId);
+            messageBuffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+            return sendMessageWithRetry(messageBuffer, totalLength, "TX " + label);
+        } catch (Exception e) {
+            log.error("❌ Exception sending transaction message ({})", label, e);
+            return false;
+        }
+    }
     
     public boolean sendWriteThroughIngress(String walletAddress, String path, 
                                            String contentType, String message, String signature) {
@@ -1097,7 +1286,7 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         
         // 🔍 GROK DIAGNOSTIC: Check client/session state for PRIORITY path
-        log.info("🔍 PRIORITY PATH: client={}, sessionId={}, isClosed={}", 
+        log.debug("🔍 PRIORITY PATH: client={}, sessionId={}, isClosed={}", 
             System.identityHashCode(internalClusterClient),
             internalClusterClient.clusterSessionId(),
             internalClusterClient.isClosed());
@@ -1112,7 +1301,7 @@ public class AeronConsensusEngine implements ClusteredService {
             json.append("\"message\":\"").append(escapeJson(message != null ? message : "")).append("\",");
             json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
             if (shouldIncludeTerm()) {
-                json.append(",\"term\":").append(getCurrentTerm());
+                json.append(",\"term\":").append(getIngressTerm());
             }
             if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 json.append(",\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\"");
@@ -1231,7 +1420,7 @@ public class AeronConsensusEngine implements ClusteredService {
             return false;
         }
         
-        log.info("🔍 PRIORITY PATH (with binary): client={}, sessionId={}, blobId={}", 
+        log.debug("🔍 PRIORITY PATH (with binary): client={}, sessionId={}, blobId={}", 
             System.identityHashCode(internalClusterClient),
             internalClusterClient.clusterSessionId(),
             blobId);
@@ -1246,7 +1435,7 @@ public class AeronConsensusEngine implements ClusteredService {
             json.append("\"message\":\"").append(escapeJson(message != null ? message : "")).append("\",");
             json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
             if (shouldIncludeTerm()) {
-                json.append(",\"term\":").append(getCurrentTerm());
+                json.append(",\"term\":").append(getIngressTerm());
             }
             
             // Add blobId and mimeType if present
@@ -1361,7 +1550,7 @@ public class AeronConsensusEngine implements ClusteredService {
             json.append("\"path\":\"").append(escapeJson(path)).append("\",");
             json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
             if (shouldIncludeTerm()) {
-                json.append(",\"term\":").append(getCurrentTerm());
+                json.append(",\"term\":").append(getIngressTerm());
             }
             if (proposalId != null && !proposalId.isEmpty()) {
                 json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
@@ -1452,7 +1641,7 @@ public class AeronConsensusEngine implements ClusteredService {
         
         // 🔍 GROK DIAGNOSTIC: Check client/session state for BATCH path
         if (internalClusterClient != null) {
-            log.info("🔍 BATCH PATH: client={}, sessionId={}, isClosed={}", 
+            log.debug("🔍 BATCH PATH: client={}, sessionId={}, isClosed={}", 
                 System.identityHashCode(internalClusterClient),
                 internalClusterClient.clusterSessionId(),
                 internalClusterClient.isClosed());
@@ -1481,7 +1670,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 json.append("{");
                 json.append("\"proposalId\":\"").append(escapeJson(proposal.getProposalId())).append("\",");
                 if (shouldIncludeTerm()) {
-                    json.append("\"term\":").append(getCurrentTerm()).append(",");
+                    json.append("\"term\":").append(getIngressTerm()).append(",");
                 }
                 json.append("\"walletAddress\":\"").append(escapeJson(proposal.getWalletAddress())).append("\",");
                 json.append("\"path\":\"").append(escapeJson(proposal.getPath())).append("\",");
@@ -1496,7 +1685,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 
                 // Add blobId and mimeType if present (eager binary upload)
                 String pBlobId = proposal.getBlobId();
-                log.info("🔍 Serializing proposal: path={}, blobId={}", proposal.getPath(), pBlobId);
+                log.debug("🔍 Serializing proposal: path={}, blobId={}", proposal.getPath(), pBlobId);
                 if (pBlobId != null && !pBlobId.isEmpty()) {
                     json.append(",\"blobId\":\"").append(escapeJson(pBlobId)).append("\"");
                     json.append(",\"mimeType\":\"").append(escapeJson(proposal.getMimeType() != null ? proposal.getMimeType() : "application/octet-stream")).append("\"");
@@ -1507,7 +1696,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 String pIpfsCid = proposal.getIpfsCid();
                 if (pIpfsCid != null && !pIpfsCid.isEmpty()) {
                     json.append(",\"ipfsCid\":\"").append(escapeJson(pIpfsCid)).append("\"");
-                    log.info("🔗 Including ipfsCid in Aeron JSON: {}", pIpfsCid);
+                    log.debug("🔗 Including ipfsCid in Aeron JSON: {}", pIpfsCid);
                 }
                 
                 json.append("}");
@@ -1890,6 +2079,7 @@ public class AeronConsensusEngine implements ClusteredService {
     public void onTimerEvent(long correlationId, long timestamp) {
         // Handle timer events
         // SEPOLIA_PHASE: Implement timer-based Ethereum epoch polling via Web3j
+        processTransactionTimeouts();
         log.debug("⏰ Timer event: {}", correlationId);
     }
     
@@ -1929,6 +2119,9 @@ public class AeronConsensusEngine implements ClusteredService {
         if (newRole == Cluster.Role.LEADER && previousRole != Cluster.Role.LEADER) {
             currentTerm++;
             log.info("Term incremented to: {}", currentTerm);
+        }
+        if (newRole == Cluster.Role.FOLLOWER) {
+            refreshLeaderTermIfNeeded(true);
         }
         
         if (leaderTracker != null) {
@@ -2024,6 +2217,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 log.error("Error closing internal cluster client", e);
             }
         }
+        stopTransactionTimeoutScheduler();
         
         // Cleanup resources
         if (beaconClient != null) {
@@ -2420,8 +2614,60 @@ public class AeronConsensusEngine implements ClusteredService {
         return currentTerm;
     }
 
+    private int getIngressTerm() {
+        if (cluster == null) {
+            return currentTerm;
+        }
+        if (cluster.role() == Cluster.Role.LEADER) {
+            return currentTerm;
+        }
+        refreshLeaderTermIfNeeded(false);
+        return currentTerm;
+    }
+
+    private void refreshLeaderTermIfNeeded(boolean force) {
+        long now = System.currentTimeMillis();
+        if (!force && (now - lastLeaderTermFetchMs) < LEADER_TERM_TTL_MS) {
+            return;
+        }
+        lastLeaderTermFetchMs = now;
+        try {
+            String leaderUrl = leaderDiscoveryService != null ? leaderDiscoveryService.discoverLeader(cluster) : null;
+            if (leaderUrl == null) {
+                return;
+            }
+            if (selfUrl != null && isSameUrlByPort(leaderUrl, selfUrl)) {
+                return;
+            }
+            java.net.URL apiUrl = new java.net.URL(leaderUrl + "/v1/aeron/cluster-state");
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(1000);
+            conn.setReadTimeout(1000);
+            int responseCode = conn.getResponseCode();
+            if (responseCode != 200) {
+                return;
+            }
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(conn.getInputStream())
+            );
+            String response = reader.lines().collect(java.util.stream.Collectors.joining());
+            reader.close();
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\"term\"\\s*:\\s*(\\d+)").matcher(response);
+            if (matcher.find()) {
+                int leaderTerm = Integer.parseInt(matcher.group(1));
+                if (leaderTerm > currentTerm) {
+                    currentTerm = leaderTerm;
+                    log.info("Synced term from leader: {}", currentTerm);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to sync term from leader: {}", e.getMessage());
+        }
+    }
+
     private boolean shouldIncludeTerm() {
-        return isLeader();
+        return true;
     }
     
     /**
@@ -2913,6 +3159,8 @@ public class AeronConsensusEngine implements ClusteredService {
             genesis.setProperty("jcr:description", "This node is the living documentation for the OakChain network. " +
                 "Read the child nodes to learn how to use this system.");
             genesis.setProperty("tagline", "Billions of enterprise content rides these rails. We're making it decentralized.");
+            genesis.setProperty("ethos", "Trust the data, not the operator. Determinism first. Availability without ambiguity.");
+            genesis.setProperty("northStar", "Make content verifiable, portable, and durable at global enterprise scale.");
             genesis.setProperty("version", "1.0.0");
             genesis.setProperty("chainId", "oak-blockchain-aem");
             genesis.setProperty("genesisTimestamp", timestamp);
@@ -2981,34 +3229,34 @@ public class AeronConsensusEngine implements ClusteredService {
             // Health & Status
             org.apache.jackrabbit.oak.spi.state.NodeBuilder apiHealth = api.child("health-status");
             apiHealth.setProperty("jcr:primaryType", "nt:unstructured");
-            apiHealth.setProperty("GET /health", "Health check - returns {status, role, epoch}");
-            apiHealth.setProperty("GET /v1/status", "Detailed status - cluster info, HEAD, validators");
-            apiHealth.setProperty("GET /v1/cluster-info", "Cluster membership and leader info");
-            apiHealth.setProperty("GET /", "Dashboard UI (HTML)");
+            apiHealth.setProperty("GET_health", "Health check - returns {status, role, epoch}");
+            apiHealth.setProperty("GET_v1_status", "Detailed status - cluster info, HEAD, validators");
+            apiHealth.setProperty("GET_v1_cluster_info", "Cluster membership and leader info");
+            apiHealth.setProperty("GET_root", "Dashboard UI (HTML)");
             
             // Content Operations
             org.apache.jackrabbit.oak.spi.state.NodeBuilder apiContent = api.child("content-operations");
             apiContent.setProperty("jcr:primaryType", "nt:unstructured");
-            apiContent.setProperty("POST /v1/propose-write", "Propose a write - requires wallet, signature, path, content");
-            apiContent.setProperty("POST /v1/propose-delete", "Propose a delete - requires wallet, signature, path");
-            apiContent.setProperty("GET /v1/content/{wallet}/{path}", "Read content at path");
-            apiContent.setProperty("GET /v1/content/{wallet}", "List content for wallet");
-            apiContent.setProperty("GET /v1/proposal-status/{id}", "Check proposal status");
+            apiContent.setProperty("POST_v1_propose_write", "Propose a write - requires wallet, signature, path, content");
+            apiContent.setProperty("POST_v1_propose_delete", "Propose a delete - requires wallet, signature, path");
+            apiContent.setProperty("GET_v1_content_wallet_path", "Read content at path");
+            apiContent.setProperty("GET_v1_content_wallet", "List content for wallet");
+            apiContent.setProperty("GET_v1_proposal_status_id", "Check proposal status");
             
             // Binary Operations (IPFS)
             org.apache.jackrabbit.oak.spi.state.NodeBuilder apiBinary = api.child("binary-operations");
             apiBinary.setProperty("jcr:primaryType", "nt:unstructured");
-            apiBinary.setProperty("POST /v1/binary/declare-intent", "Declare intent to upload binary - returns intentToken");
-            apiBinary.setProperty("GET /v1/binary/check-intent/{token}", "Check upload status");
-            apiBinary.setProperty("POST /v1/binary/complete-upload", "Complete upload with IPFS CID");
+            apiBinary.setProperty("POST_v1_binary_declare_intent", "Declare intent to upload binary - returns intentToken");
+            apiBinary.setProperty("GET_v1_binary_check_intent_token", "Check upload status");
+            apiBinary.setProperty("POST_v1_binary_complete_upload", "Complete upload with IPFS CID");
             apiBinary.setProperty("note", "Binaries are stored on IPFS, only CIDs are stored on-chain");
             
             // Segment Transfer (for validators/Sling)
             org.apache.jackrabbit.oak.spi.state.NodeBuilder apiSegments = api.child("segment-transfer");
             apiSegments.setProperty("jcr:primaryType", "nt:unstructured");
-            apiSegments.setProperty("GET /journal.log", "Journal file for segment sync");
-            apiSegments.setProperty("GET /manifest", "Segment manifest");
-            apiSegments.setProperty("GET /segments/{id}", "Fetch specific segment by ID");
+            apiSegments.setProperty("GET_journal_log", "Journal file for segment sync");
+            apiSegments.setProperty("GET_manifest", "Segment manifest");
+            apiSegments.setProperty("GET_segments_id", "Fetch specific segment by ID");
             apiSegments.setProperty("note", "Used by Sling authors for read-only replication");
             
             // ═══════════════════════════════════════════════════════════════════════════════
@@ -3162,6 +3410,59 @@ public class AeronConsensusEngine implements ClusteredService {
             about.setProperty("license", "Apache 2.0");
             
             // ═══════════════════════════════════════════════════════════════════════════════
+            // 7b. THESIS - The big idea in plain language
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder thesis = genesis.child("thesis");
+            thesis.setProperty("jcr:primaryType", "nt:unstructured");
+            thesis.setProperty("jcr:title", "The Thesis");
+            thesis.setProperty("premise-1", "Enterprise content is the most valuable data no one can prove.");
+            thesis.setProperty("premise-2", "Audit trails should be data, not policy.");
+            thesis.setProperty("premise-3", "Determinism is the only safe way to scale trust.");
+            thesis.setProperty("result", "OakChain makes content provable, portable, and economically secure.");
+            thesis.setProperty("audience", "Builders who want boring reliability and bold guarantees.");
+            
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 7c. BOLD BETS - What we are willing to be wrong about
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder boldBets = genesis.child("bold-bets");
+            boldBets.setProperty("jcr:primaryType", "nt:unstructured");
+            boldBets.setProperty("bet-1", "Every serious enterprise will demand verifiable content history.");
+            boldBets.setProperty("bet-2", "AEM-scale systems can be decentralized without losing performance.");
+            boldBets.setProperty("bet-3", "Proof of custody will become the default compliance standard.");
+            boldBets.setProperty("bet-4", "Developers will choose APIs over platforms if guarantees are stronger.");
+            boldBets.setProperty("bet-4", "Developers will choose systems with stronger guarantees over familiar platforms.");
+            
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 7d. GUARANTEES - What the system must always hold true
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder guarantees = genesis.child("guarantees");
+            guarantees.setProperty("jcr:primaryType", "nt:unstructured");
+            guarantees.setProperty("determinism", "Same inputs, same state on every validator.");
+            guarantees.setProperty("auditability", "Every change is traceable by ID, time, and signer.");
+            guarantees.setProperty("durability", "Committed content survives validator loss.");
+            guarantees.setProperty("portability", "Content is readable without privileged infrastructure.");
+            guarantees.setProperty("integrity", "Signatures bind authorship to the data path.");
+            
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 7e. NON-GOALS - What we intentionally do not optimize for
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder nonGoals = genesis.child("non-goals");
+            nonGoals.setProperty("jcr:primaryType", "nt:unstructured");
+            nonGoals.setProperty("non-goal-1", "We do not chase maximal throughput at the expense of determinism.");
+            nonGoals.setProperty("non-goal-2", "We do not require custodial identity or closed networks.");
+            nonGoals.setProperty("non-goal-3", "We do not hide failures; we surface them early and loudly.");
+            
+            // ═══════════════════════════════════════════════════════════════════════════════
+            // 7f. OPERATOR OATH - Expectations for validator operators
+            // ═══════════════════════════════════════════════════════════════════════════════
+            org.apache.jackrabbit.oak.spi.state.NodeBuilder oath = genesis.child("operator-oath");
+            oath.setProperty("jcr:primaryType", "nt:unstructured");
+            oath.setProperty("oath-1", "Run the node as if the audit depends on you.");
+            oath.setProperty("oath-2", "Do not change history. Fix the system.");
+            oath.setProperty("oath-3", "Measure everything; guess nothing.");
+            oath.setProperty("oath-4", "If it fails, document the failure in the chain.");
+            
+            // ═══════════════════════════════════════════════════════════════════════════════
             // 8. IPFS & GENESIS IMAGE
             // ═══════════════════════════════════════════════════════════════════════════════
             String ipfsCid = null;
@@ -3267,7 +3568,7 @@ public class AeronConsensusEngine implements ClusteredService {
             return getTotalMemberCount();
         }
         long now = System.currentTimeMillis();
-        if ((now - lastReachabilityCheckMs) < REACHABILITY_CACHE_MS) {
+        if ((now - lastReachabilityCheckMs) < reachabilityCacheMs) {
             return lastReachableCount;
         }
         
@@ -3426,8 +3727,8 @@ public class AeronConsensusEngine implements ClusteredService {
             java.net.URL url = new java.net.URL(peerUrl + "/health");
             java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(REACHABILITY_CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(REACHABILITY_READ_TIMEOUT_MS);
+            conn.setConnectTimeout(reachabilityConnectTimeoutMs);
+            conn.setReadTimeout(reachabilityReadTimeoutMs);
             int responseCode = conn.getResponseCode();
             return responseCode > 0;
         } catch (Exception e) {
@@ -3454,33 +3755,72 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     private void attemptReconnect(String reason) {
+        attemptReconnectInternal(
+            reason,
+            reconnectMaxAttempts,
+            attempt -> Math.min(1000L * (1L << attempt), 30000L),
+            this::ensureInternalClusterClient,
+            this::sleepBackoff
+        );
+    }
+
+    void attemptReconnectForTest(
+            String reason,
+            int maxAttempts,
+            java.util.function.IntToLongFunction backoffMsFn,
+            Runnable ensureClientAction,
+            java.util.function.LongPredicate sleepFn) {
+        attemptReconnectInternal(reason, maxAttempts, backoffMsFn, ensureClientAction, sleepFn);
+    }
+
+    private void attemptReconnectInternal(
+            String reason,
+            int maxAttempts,
+            java.util.function.IntToLongFunction backoffMsFn,
+            Runnable ensureClientAction,
+            java.util.function.LongPredicate sleepFn) {
+        int boundedAttempts = Math.max(1, maxAttempts);
         try {
             log.warn("🔄 Attempting Aeron cluster reconnect (reason: {})", reason);
-            for (int attempt = 1; attempt <= RECONNECT_MAX_ATTEMPTS; attempt++) {
-                if (internalClusterClient != null && !internalClusterClient.isClosed()) {
+            for (int attempt = 1; attempt <= boundedAttempts; attempt++) {
+                if (isInternalClusterClientHealthy()) {
                     log.info("✅ Internal cluster client healthy, reconnect not needed");
                     return;
                 }
-                
-                ensureInternalClusterClient();
-                
-                if (internalClusterClient != null && !internalClusterClient.isClosed()) {
+
+                ensureClientAction.run();
+
+                if (isInternalClusterClientHealthy()) {
                     log.info("✅ Reconnected to cluster on attempt {}", attempt);
                     return;
                 }
-                
-                long backoffMs = Math.min(1000L * (1L << attempt), 30000L);
+
+                if (attempt >= boundedAttempts) {
+                    continue;
+                }
+                long backoffMs = backoffMsFn.applyAsLong(attempt);
                 log.warn("⚠️  Reconnect attempt {} failed - retrying in {}ms", attempt, backoffMs);
-                try {
-                    Thread.sleep(backoffMs);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
+                if (!sleepFn.test(backoffMs)) {
                     return;
                 }
             }
-            log.error("❌ Failed to reconnect after {} attempts", RECONNECT_MAX_ATTEMPTS);
+            log.error("❌ Failed to reconnect after {} attempts", boundedAttempts);
         } finally {
             reconnectInProgress = false;
+        }
+    }
+
+    private boolean isInternalClusterClientHealthy() {
+        return internalClusterClient != null && !internalClusterClient.isClosed();
+    }
+
+    private boolean sleepBackoff(long backoffMs) {
+        try {
+            Thread.sleep(backoffMs);
+            return true;
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
     
@@ -3494,103 +3834,57 @@ public class AeronConsensusEngine implements ClusteredService {
         }
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ADR 026: DURABILITY ACK TRACKING
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    private static java.nio.file.Path resolveTransactionLifecycleDirectory(String storeDirectory) {
+        String base = storeDirectory;
+        if (base == null || base.trim().isEmpty()) {
+            base = System.getProperty("java.io.tmpdir");
+        }
+        return java.nio.file.Path.of(base, "transaction-lifecycle");
+    }
 
-    private static final class DurabilityAckTracker {
-        private final java.util.concurrent.ConcurrentHashMap<String, PendingDurability> pending =
-            new java.util.concurrent.ConcurrentHashMap<>();
-
-        private void track(String proposalId, int totalMembers, int requiredAcks) {
-            pending.compute(proposalId, (id, existing) -> {
-                if (existing == null) {
-                    return new PendingDurability(totalMembers, requiredAcks);
-                }
-                existing.totalMembers = totalMembers;
-                existing.requiredAcks = requiredAcks;
-                return existing;
+    private void startTransactionTimeoutScheduler() {
+        if (transactionTimeoutScheduler != null) {
+            return;
+        }
+        synchronized (this) {
+            if (transactionTimeoutScheduler != null) {
+                return;
+            }
+            transactionTimeoutScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread thread = new Thread(r, "oak-tx-timeout");
+                thread.setDaemon(true);
+                return thread;
             });
-        }
-
-        private Outcome record(String proposalId, int memberId, String durableHead, boolean success, String error,
-                               int defaultTotalMembers, int defaultRequiredAcks) {
-            if (memberId < 0) {
-                return null;
-            }
-            PendingDurability current = pending.compute(proposalId, (id, existing) -> {
-                PendingDurability state = existing != null ? existing : new PendingDurability(defaultTotalMembers, defaultRequiredAcks);
-                if (state.completed) {
-                    return state;
+            transactionTimeoutScheduler.scheduleAtFixedRate(() -> {
+                try {
+                    processTransactionTimeouts();
+                } catch (Exception e) {
+                    log.warn("Failed processing transaction timeouts: {}", e.getMessage());
                 }
-                if (success) {
-                    state.ackedMembers.add(memberId);
-                    if (durableHead != null && !durableHead.isEmpty() && state.durableHead == null) {
-                        state.durableHead = durableHead;
-                    }
-                } else {
-                    state.failedMembers.add(memberId);
-                    if (error != null && !error.isEmpty() && state.lastError == null) {
-                        state.lastError = error;
-                    }
-                }
-                return state;
-            });
-
-            if (current == null || current.completed) {
-                return null;
-            }
-
-            if (current.ackedMembers.size() >= current.requiredAcks) {
-                current.completed = true;
-                return new Outcome(true, true, current.durableHead, null, current.totalMembers, current.requiredAcks);
-            }
-
-            int maxPossibleSuccess = current.totalMembers - current.failedMembers.size();
-            if (maxPossibleSuccess < current.requiredAcks) {
-                current.completed = true;
-                return new Outcome(true, false, current.durableHead, current.lastError, current.totalMembers, current.requiredAcks);
-            }
-
-            return new Outcome(false, false, current.durableHead, current.lastError, current.totalMembers, current.requiredAcks);
-        }
-
-        private void complete(String proposalId) {
-            pending.remove(proposalId);
-        }
-
-        private static final class PendingDurability {
-            private volatile int totalMembers;
-            private volatile int requiredAcks;
-            private final java.util.Set<Integer> ackedMembers = java.util.concurrent.ConcurrentHashMap.newKeySet();
-            private final java.util.Set<Integer> failedMembers = java.util.concurrent.ConcurrentHashMap.newKeySet();
-            private volatile String durableHead;
-            private volatile String lastError;
-            private volatile boolean completed;
-
-            private PendingDurability(int totalMembers, int requiredAcks) {
-                this.totalMembers = totalMembers;
-                this.requiredAcks = requiredAcks;
-            }
-        }
-
-        private static final class Outcome {
-            private final boolean shouldAck;
-            private final boolean success;
-            private final String durableHead;
-            private final String error;
-            private final int totalMembers;
-            private final int requiredAcks;
-
-            private Outcome(boolean shouldAck, boolean success, String durableHead, String error,
-                            int totalMembers, int requiredAcks) {
-                this.shouldAck = shouldAck;
-                this.success = success;
-                this.durableHead = durableHead;
-                this.error = error;
-                this.totalMembers = totalMembers;
-                this.requiredAcks = requiredAcks;
-            }
+            }, 1, 1, java.util.concurrent.TimeUnit.SECONDS);
         }
     }
+
+    private void stopTransactionTimeoutScheduler() {
+        java.util.concurrent.ScheduledExecutorService scheduler = transactionTimeoutScheduler;
+        transactionTimeoutScheduler = null;
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+        }
+    }
+
+    private void processTransactionTimeouts() {
+        java.util.List<TransactionLifecycleManager.TxRecord> expired = transactionLifecycleManager.expireTimedOut();
+        if (expired.isEmpty()) {
+            return;
+        }
+        for (TransactionLifecycleManager.TxRecord tx : expired) {
+            if (transactionLifecycleCallback != null) {
+                transactionLifecycleCallback.onAbortTransaction(tx.transactionId, tx.correlationId, "timeout");
+            }
+            log.warn("⏰ Transaction timed out: txId={}, correlationId={}, deadlineMs={}",
+                tx.transactionId, tx.correlationId, tx.deadlineMs);
+        }
+    }
+
 }

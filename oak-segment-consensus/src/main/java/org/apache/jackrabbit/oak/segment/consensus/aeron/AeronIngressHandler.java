@@ -26,6 +26,9 @@ import org.osgi.service.component.annotations.Reference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
  * Handles Aeron ingress messages and delegates to the MessageDispatcher.
  */
@@ -33,6 +36,9 @@ import org.slf4j.LoggerFactory;
 public class AeronIngressHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AeronIngressHandler.class);
+    private static final long DISPATCH_FAIL_LOG_INTERVAL_MS = 5000;
+    private final AtomicLong lastDispatchFailLogMs = new AtomicLong(0);
+    private final AtomicInteger dispatchFailSuppressed = new AtomicInteger(0);
 
     private final AeronMessageCodec codec;
     private final MessageDispatcher dispatcher;
@@ -93,13 +99,28 @@ public class AeronIngressHandler {
 
             boolean success = dispatcher.dispatch(timestamp, buffer, offset, length);
             if (!success) {
-                log.warn("⚠️  MessageDispatcher failed to process message (templateId: {})",
-                    headerInfo.templateId);
+                logDispatchFailure(headerInfo.templateId);
             }
             return success;
         } catch (Exception e) {
             log.error("❌ Failed to process replicated message", e);
             return false;
+        }
+    }
+
+    private void logDispatchFailure(int templateId) {
+        long now = System.currentTimeMillis();
+        long last = lastDispatchFailLogMs.get();
+        if ((now - last) >= DISPATCH_FAIL_LOG_INTERVAL_MS && lastDispatchFailLogMs.compareAndSet(last, now)) {
+            int suppressed = dispatchFailSuppressed.getAndSet(0);
+            if (suppressed > 0) {
+                log.warn("⚠️  MessageDispatcher failed to process message (templateId: {}) (RATE LIMITED - suppressed {} in last {}ms)",
+                    templateId, suppressed, DISPATCH_FAIL_LOG_INTERVAL_MS);
+            } else {
+                log.warn("⚠️  MessageDispatcher failed to process message (templateId: {}) (RATE LIMITED)", templateId);
+            }
+        } else {
+            dispatchFailSuppressed.incrementAndGet();
         }
     }
 }

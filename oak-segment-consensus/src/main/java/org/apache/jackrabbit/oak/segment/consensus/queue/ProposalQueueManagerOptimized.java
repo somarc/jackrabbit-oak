@@ -70,21 +70,29 @@ import java.util.concurrent.*;
 public class ProposalQueueManagerOptimized {
     
     private static final Logger log = LoggerFactory.getLogger(ProposalQueueManagerOptimized.class);
+    private static final long HIGH_FREQ_LOG_INTERVAL_MS = 5000;
+    private final java.util.concurrent.atomic.AtomicLong lastQueueDepthLogMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicInteger queueDepthSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicLong lastDequeuedLogMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicInteger dequeuedSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicLong lastBatchSentLogMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicInteger batchSentSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicLong lastEpochQueueLogMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicInteger epochQueueSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicLong lastPriorityLogMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicInteger prioritySuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
     
     // Configuration
-    private static final long CONFIRMATION_TIMEOUT_MS = 300_000; // 5 minutes
-    private static final long RESTORE_TIMEOUT_MS =
-        Long.getLong("oak.proposal.restore.timeout.ms", CONFIRMATION_TIMEOUT_MS);
-    private static final int MAX_MESSAGE_BATCH =
-        readIntProp("oak.proposal.batch.max", 10, 1); // Process up to N messages per Aeron cycle
-    private static final int MAX_RETRY_COUNT = 5; // Maximum retries before rejecting a proposal
+    private final long confirmationTimeoutMs;
+    private final long restoreTimeoutMs;
+    private final int maxMessageBatch;
+    private final int maxRetryCount;
     // 🌐 PRODUCTION WAN: Aeron default MTU = 1408 bytes (safe for AWS/GCP/Azure)
     // maxPayloadLength = 1408 - 32 (frame header) = 1376 bytes
     // Each proposal ~366 bytes: 3 proposals = 1098 bytes + overhead (~20 bytes) = ~1118 bytes
     // Keeps batches safely under 1376-byte limit for global distributed deployment
     // See: Blockchain-AEM/06-test-results/2025-11-21-BATCH-UDP-MTU-LIMIT.md
-    private static final int FINALIZATION_CHUNK_SIZE =
-        readIntProp("oak.proposal.finalization.chunk.size", 3, 1); // Production WAN safe (was 100)
+    private final int finalizationChunkSize;
     
     // Queues
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
@@ -93,10 +101,8 @@ public class ProposalQueueManagerOptimized {
     private final ConcurrentHashMap<String, QueuedProposal> allProposals = new ConcurrentHashMap<>();
     private final ProposalPersistenceStore persistenceStore;
     private final Object persistenceLock = new Object();
-    private final long persistenceFlushIntervalMs =
-        Long.getLong("oak.proposal.persistence.flush.ms", 250L);
-    private final int persistenceFlushBatch =
-        Integer.getInteger("oak.proposal.persistence.flush.batch", 100);
+    private final long persistenceFlushIntervalMs;
+    private final int persistenceFlushBatch;
     private final java.util.concurrent.atomic.AtomicLong persistencePendingChanges =
         new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicBoolean persistenceFlushInProgress =
@@ -115,7 +121,7 @@ public class ProposalQueueManagerOptimized {
     private AgentRunner epochFinalizerAgent; // NEW: Finalizes epochs and creates batches
     private volatile boolean running = false;
 
-    private static final int DEFAULT_VERIFIER_THREADS = 1;
+    private final int verifierThreads;
     
     // Metrics: Priority tier routing
     private final java.util.concurrent.atomic.AtomicLong priorityProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
@@ -125,8 +131,7 @@ public class ProposalQueueManagerOptimized {
     private final java.util.concurrent.atomic.AtomicLong totalRejectedCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong totalVerifiedCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong totalFinalizedCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private static final long PROCESSED_RETENTION_MS =
-        Long.getLong("oak.proposal.processed.retention.ms", 10 * 60 * 1000L);
+    private final long processedRetentionMs;
     private volatile long lastProcessedCleanup = 0L;
 
     // Metrics: EVM verifier timings and outcomes (for mempool bottleneck analysis)
@@ -172,7 +177,8 @@ public class ProposalQueueManagerOptimized {
             RaftAppendCallback raftAppendCallback,
             BackpressureManager backpressureManager,
             org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient) {
-        this(evmBridge, raftAppendCallback, backpressureManager, beaconClient, null);
+        this(evmBridge, raftAppendCallback, backpressureManager, beaconClient, null,
+            ProposalQueueTuningRegistry.get());
     }
     
     /**
@@ -190,11 +196,32 @@ public class ProposalQueueManagerOptimized {
             BackpressureManager backpressureManager,
             org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient,
             String persistenceDir) {
+        this(evmBridge, raftAppendCallback, backpressureManager, beaconClient, persistenceDir,
+            ProposalQueueTuningRegistry.get());
+    }
+
+    ProposalQueueManagerOptimized(
+            EvmBridge evmBridge,
+            RaftAppendCallback raftAppendCallback,
+            BackpressureManager backpressureManager,
+            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient,
+            String persistenceDir,
+            ProposalQueueTuning tuning) {
         this.evmBridge = evmBridge;
         this.raftAppendCallback = raftAppendCallback;
         this.backpressureManager = backpressureManager;
         this.epochQueue = new EpochBasedBatchQueue(beaconClient);
         this.persistenceStore = createPersistenceStore(persistenceDir);
+        ProposalQueueTuning resolved = tuning != null ? tuning : ProposalQueueTuningRegistry.get();
+        this.confirmationTimeoutMs = resolved.getConfirmationTimeoutMs();
+        this.restoreTimeoutMs = resolved.getRestoreTimeoutMs();
+        this.maxMessageBatch = resolved.getMaxMessageBatch();
+        this.maxRetryCount = resolved.getMaxRetryCount();
+        this.finalizationChunkSize = resolved.getFinalizationChunkSize();
+        this.verifierThreads = resolved.getVerifierThreads();
+        this.processedRetentionMs = resolved.getProcessedRetentionMs();
+        this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
+        this.persistenceFlushBatch = resolved.getPersistenceFlushBatch();
     }
     
     /**
@@ -232,10 +259,6 @@ public class ProposalQueueManagerOptimized {
         );
         
         // Agent 2: EVM Verifier (SLOW path - 3-checkpoint security verification)
-        int verifierThreads = Integer.getInteger("oak.proposal.verifier.threads", DEFAULT_VERIFIER_THREADS);
-        if (verifierThreads <= 0) {
-            verifierThreads = DEFAULT_VERIFIER_THREADS;
-        }
         evmVerifierAgents = new AgentRunner[verifierThreads];
         for (int i = 0; i < verifierThreads; i++) {
             evmVerifierAgents[i] = new AgentRunner(
@@ -279,7 +302,7 @@ public class ProposalQueueManagerOptimized {
         log.info("   - EVM Verifier Agents: {} thread(s), SleepingIdleStrategy (10ms idle, 3-checkpoint security)", 
             evmVerifierAgents.length);
         log.info("   - Epoch Finalizer Agent: SleepingIdleStrategy (1s idle, wallet batching)");
-        log.info("   - Max batch size: {}", MAX_MESSAGE_BATCH);
+        log.info("   - Max batch size: {}", maxMessageBatch);
         log.info("   - Finality: 2 epochs (~{} minutes)", (2 * 384_000) / 60000.0);
         if (persistenceStore != null) {
             if (isAsyncPersistenceEnabled()) {
@@ -387,8 +410,11 @@ public class ProposalQueueManagerOptimized {
         stats.put("proposalsByEpochAndTier", proposalsByEpochAndTier);
         
         // Backpressure stats
-        stats.put("backpressureActive", backpressureManager.getPendingCount() >= 2000);
-        stats.put("backpressurePendingCount", backpressureManager.getPendingCount());
+        long backpressurePending = backpressureManager.getPendingCount();
+        long backpressureMax = backpressureManager.getMaxPendingMessages();
+        stats.put("backpressureActive", backpressurePending >= backpressureMax);
+        stats.put("backpressurePendingCount", backpressurePending);
+        stats.put("backpressureMaxPending", backpressureMax);
         stats.put("backpressureStats", backpressureManager.getStats());
         
         // Tier routing stats
@@ -400,13 +426,13 @@ public class ProposalQueueManagerOptimized {
         long proposalsWithRetries = allProposals.values().stream()
             .filter(p -> p.getRetryCount() > 0)
             .count();
-        long maxRetryCount = allProposals.values().stream()
+        long maxRetryObserved = allProposals.values().stream()
             .mapToInt(QueuedProposal::getRetryCount)
             .max()
             .orElse(0);
         stats.put("proposalsWithRetries", proposalsWithRetries);
-        stats.put("maxRetryCount", maxRetryCount);
-        stats.put("maxRetryLimit", MAX_RETRY_COUNT);
+        stats.put("maxRetryCount", maxRetryObserved);
+        stats.put("maxRetryLimit", maxRetryCount);
 
         // Verifier metrics (mempool bottleneck analysis)
         long attempts = verifierAttemptCount.get();
@@ -477,7 +503,7 @@ public class ProposalQueueManagerOptimized {
             proposal.setState(ProposalState.PENDING);
             proposal.setConfirmedBlock(null);
             proposal.setRejectionReason(null);
-            proposal.overrideTimeoutTimestamp(System.currentTimeMillis() + RESTORE_TIMEOUT_MS);
+            proposal.overrideTimeoutTimestamp(System.currentTimeMillis() + restoreTimeoutMs);
             allProposals.put(proposal.getProposalId(), proposal);
             unverifiedQueue.offer(proposal);
             restored++;
@@ -552,14 +578,6 @@ public class ProposalQueueManagerOptimized {
         }
     }
 
-    private static int readIntProp(String key, int defaultValue, int minValue) {
-        int value = Integer.getInteger(key, defaultValue);
-        if (value < minValue) {
-            return minValue;
-        }
-        return value;
-    }
-    
     /**
      * Stop agents and cleanup.
      */
@@ -721,7 +739,7 @@ public class ProposalQueueManagerOptimized {
             ethereumTxHash,
             null, // unused compatibility parameter
             now,
-            now + CONFIRMATION_TIMEOUT_MS,
+            now + confirmationTimeoutMs,
             ProposalState.PENDING
         );
         
@@ -804,7 +822,7 @@ public class ProposalQueueManagerOptimized {
             ethereumTxHash,
             null, // unused compatibility parameter
             now,
-            now + CONFIRMATION_TIMEOUT_MS,
+            now + confirmationTimeoutMs,
             ProposalState.PENDING
         );
         
@@ -919,16 +937,17 @@ public class ProposalQueueManagerOptimized {
             // 🚀 EPOCH-BASED BATCHING: Process pre-batched proposals from epoch finalizer
             // Batches are organized by wallet address for optimal segment packing
             
-            // Process up to MAX_MESSAGE_BATCH batches per cycle
+            // Process up to maxMessageBatch batches per cycle
             int batchesProcessed = 0;
             int queueDepth = batchQueue.size();
             
             // Log queue activity periodically  
             if (queueDepth > 0) {
-                log.info("🔄 AeronSenderAgent: {} batches waiting in queue", queueDepth);
+                logRateLimitedInfo(lastQueueDepthLogMs, queueDepthSuppressed,
+                    "🔄 AeronSenderAgent: {} batches waiting in queue", queueDepth);
             }
             
-            while (batchesProcessed < MAX_MESSAGE_BATCH) {
+            while (batchesProcessed < maxMessageBatch) {
                 List<QueuedProposal> batch = batchQueue.poll();
                 if (batch == null || batch.isEmpty()) {
                     break;
@@ -936,8 +955,9 @@ public class ProposalQueueManagerOptimized {
                 
                 batchesProcessed++;
                 QueuedProposal firstProposal = batch.get(0);
-                log.info("📤 AeronSenderAgent: DEQUEUED batch {} of {} | {} proposals | wallet: {} | epoch: {} | remaining in queue: {}",
-                    batchesProcessed, queueDepth, batch.size(), 
+                logRateLimitedInfo(lastDequeuedLogMs, dequeuedSuppressed,
+                    "📤 AeronSenderAgent: DEQUEUED batch {} of {} | {} proposals | wallet: {} | epoch: {} | remaining in queue: {}",
+                    batchesProcessed, queueDepth, batch.size(),
                     firstProposal.getWalletAddress().substring(0, 10),
                     firstProposal.getEpoch(),
                     batchQueue.size());
@@ -964,7 +984,7 @@ public class ProposalQueueManagerOptimized {
                         
                         // Check proposal type: WRITE or DELETE
                         if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
-                            log.info("🗑️  Sending DELETE proposal (templateId 101)");
+                            log.debug("🗑️  Sending DELETE proposal (templateId 101)");
                             raftAppendCallback.appendDeleteProposalWithId(
                                 proposal.getProposalId(),
                                 proposal.getWalletAddress(),
@@ -972,7 +992,7 @@ public class ProposalQueueManagerOptimized {
                                 proposal.getSignature()
                             );
                         } else {
-                            log.info("📝 Sending WRITE proposal (templateId 100) blobId={}, ipfsCid={}", 
+                            log.debug("📝 Sending WRITE proposal (templateId 100) blobId={}, ipfsCid={}", 
                                 proposal.getBlobId(), proposal.getIpfsCid());
                             raftAppendCallback.appendProposalWithId(
                                 proposal.getProposalId(),
@@ -989,10 +1009,10 @@ public class ProposalQueueManagerOptimized {
                         sent = 1; // appendProposal/appendDeleteProposal returns void, assume success
                     } else {
                         // Multi-proposal batch: use templateId 106
-                        log.info("🔥 CALLING appendProposalBatch on instance of: {}", 
+                        log.debug("🔥 CALLING appendProposalBatch on instance of: {}", 
                             raftAppendCallback.getClass().getName());
                         sent = raftAppendCallback.appendProposalBatch(batch);
-                        log.info("🔥 appendProposalBatch RETURNED: {}", sent);
+                        log.debug("🔥 appendProposalBatch RETURNED: {}", sent);
                     }
                     
                     if (sent > 0) {
@@ -1008,7 +1028,8 @@ public class ProposalQueueManagerOptimized {
                         }
                         persistProposals();
                         
-                        log.info("✅ Batch sent to Aeron: {} proposals in 1 message (diagnostic mode: {})", 
+                        logRateLimitedInfo(lastBatchSentLogMs, batchSentSuppressed,
+                            "✅ Batch sent to Aeron: {} proposals in 1 message (diagnostic mode: {})",
                             sent, batch.size() == 1 ? "templateId 100" : "templateId 106");
                     } else {
                         // Batch send failed - re-queue for retry
@@ -1029,20 +1050,20 @@ public class ProposalQueueManagerOptimized {
                     boolean allExhausted = true;
                     for (QueuedProposal proposal : batch) {
                         int retries = proposal.incrementRetryCount();
-                        if (retries <= MAX_RETRY_COUNT) {
+                        if (retries <= maxRetryCount) {
                             allExhausted = false;
                         }
                         log.debug("  Proposal {} retry count: {}/{}", 
-                            proposal.getProposalId(), retries, MAX_RETRY_COUNT);
+                            proposal.getProposalId(), retries, maxRetryCount);
                     }
                     
                     if (allExhausted) {
                         // All proposals in batch have exceeded retry limit - reject them
                         log.error("❌ Batch exceeded max retries ({}) - rejecting {} proposals", 
-                            MAX_RETRY_COUNT, batch.size());
+                            maxRetryCount, batch.size());
                         for (QueuedProposal proposal : batch) {
                             proposal.setState(ProposalState.REJECTED);
-                            proposal.setRejectionReason("Exceeded max retry count (" + MAX_RETRY_COUNT + 
+                            proposal.setRejectionReason("Exceeded max retry count (" + maxRetryCount + 
                                 ") after Aeron send failures: " + e.getMessage());
                             totalRejectedCount.incrementAndGet();
                         }
@@ -1051,7 +1072,7 @@ public class ProposalQueueManagerOptimized {
                         // Re-queue for retry
                         batchQueue.offer(batch);
                         log.warn("🔄 Re-queuing batch for retry (attempt {}/{})", 
-                            batch.get(0).getRetryCount(), MAX_RETRY_COUNT);
+                            batch.get(0).getRetryCount(), maxRetryCount);
                     }
                     break;
                 }
@@ -1083,7 +1104,7 @@ public class ProposalQueueManagerOptimized {
                 return false;
             }
             long age = now - proposal.getTimestamp();
-            if (age < PROCESSED_RETENTION_MS) {
+        if (age < processedRetentionMs) {
                 return false;
             }
             DurabilityState durability = proposal.getDurabilityState();
@@ -1095,6 +1116,27 @@ public class ProposalQueueManagerOptimized {
         });
         if (removed[0] > 0) {
             persistProposals();
+        }
+    }
+
+    private void logRateLimitedInfo(java.util.concurrent.atomic.AtomicLong lastMs,
+                                    java.util.concurrent.atomic.AtomicInteger suppressed,
+                                    String format,
+                                    Object... args) {
+        long now = System.currentTimeMillis();
+        long last = lastMs.get();
+        if ((now - last) >= HIGH_FREQ_LOG_INTERVAL_MS && lastMs.compareAndSet(last, now)) {
+            int dropped = suppressed.getAndSet(0);
+            if (dropped > 0) {
+                Object[] withMeta = java.util.Arrays.copyOf(args, args.length + 2);
+                withMeta[args.length] = dropped;
+                withMeta[args.length + 1] = HIGH_FREQ_LOG_INTERVAL_MS;
+                log.info(format + " (RATE LIMITED - suppressed {} in last {}ms)", withMeta);
+            } else {
+                log.info(format + " (RATE LIMITED)", args);
+            }
+        } else {
+            suppressed.incrementAndGet();
         }
     }
     
@@ -1137,7 +1179,7 @@ public class ProposalQueueManagerOptimized {
                     if (System.currentTimeMillis() > proposal.getTimeoutTimestamp()) {
                         verifierRejectedCount.incrementAndGet();
                         rejectProposal(proposal, "Timeout waiting for confirmation (" + 
-                            (CONFIRMATION_TIMEOUT_MS / 1000) + "s)");
+                            (confirmationTimeoutMs / 1000) + "s)");
                         continue;
                     }
                     
@@ -1324,21 +1366,21 @@ public class ProposalQueueManagerOptimized {
                     // PRIORITY TIER: Fast-path directly to Aeron (bypass epoch batching)
                     // ═══════════════════════════════════════════════════════════
                     if (proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
-                        log.info("🚀 PRIORITY TIER: Fast-tracking proposal {} directly to Aeron (bypassing epoch queue, type: {})", 
+                        log.debug("🚀 PRIORITY TIER: Fast-tracking proposal {} directly to Aeron (bypassing epoch queue, type: {})", 
                             proposal.getProposalId(), proposal.getType());
                         
                         try {
                             // Send directly to Aeron (bypass batch queue)
                             // Check type: WRITE or DELETE
                             if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
-                                log.info("🗑️  PRIORITY DELETE: Sending directly to Aeron");
+                                log.debug("🗑️  PRIORITY DELETE: Sending directly to Aeron");
                                 raftAppendCallback.appendDeleteProposal(
                                     proposal.getWalletAddress(),
                                     proposal.getPath(),
                                     proposal.getSignature()
                                 );
                             } else {
-                                log.info("📝 PRIORITY WRITE: Sending directly to Aeron (ipfsCid={})", proposal.getIpfsCid());
+                                log.debug("📝 PRIORITY WRITE: Sending directly to Aeron (ipfsCid={})", proposal.getIpfsCid());
                                 raftAppendCallback.appendProposal(
                                     proposal.getWalletAddress(),
                                     proposal.getPath(),
@@ -1363,7 +1405,8 @@ public class ProposalQueueManagerOptimized {
                             // Track for backpressure
                             backpressureManager.incrementSent();
                             
-                            log.info("✅ Priority proposal {} sent to Aeron (tx: {}, block: {}, latency: ~30s)", 
+                            logRateLimitedInfo(lastPriorityLogMs, prioritySuppressed,
+                                "✅ Priority proposal {} sent to Aeron (tx: {}, block: {}, latency: ~30s)",
                                 proposal.getProposalId(),
                                 proof.getTransactionHash().substring(0, Math.min(10, proof.getTransactionHash().length())) + "...",
                                 proof.getBlockNumber());
@@ -1382,13 +1425,14 @@ public class ProposalQueueManagerOptimized {
                         String tierLabel = proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS 
                             ? "EXPRESS (1-epoch)" : "STANDARD (2-epoch)";
                         
-                        log.info("📥 Proposal added to epoch queue: {} | wallet: {} | epoch: {} | tier: {}",
-                            proposal.getProposalId().substring(0, 8), 
+                        logRateLimitedInfo(lastEpochQueueLogMs, epochQueueSuppressed,
+                            "📥 Proposal added to epoch queue: {} | wallet: {} | epoch: {} | tier: {}",
+                            proposal.getProposalId().substring(0, 8),
                             proposal.getWalletAddress().substring(0, 10),
                             proposal.getEpoch(),
                             tierLabel);
                         
-                        log.info("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, tier: {}, wallet: {}) → queued for epoch finality", 
+                        log.debug("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, tier: {}, wallet: {}) → queued for epoch finality", 
                             proposal.getProposalId(),
                             proof.getTransactionHash().substring(0, Math.min(10, proof.getTransactionHash().length())) + "...",
                             proof.getBlockNumber(),
@@ -1567,20 +1611,20 @@ public class ProposalQueueManagerOptimized {
                         totalProposals += batch.size();
                         
                         // If batch is large, chunk it to avoid overwhelming Aeron
-                        if (batch.size() > FINALIZATION_CHUNK_SIZE) {
+                        if (batch.size() > finalizationChunkSize) {
                             log.debug("📦 Large batch detected ({} proposals), chunking into {}s",
-                                batch.size(), FINALIZATION_CHUNK_SIZE);
+                                batch.size(), finalizationChunkSize);
                             
-                            for (int i = 0; i < batch.size(); i += FINALIZATION_CHUNK_SIZE) {
-                                int endIdx = Math.min(i + FINALIZATION_CHUNK_SIZE, batch.size());
+                            for (int i = 0; i < batch.size(); i += finalizationChunkSize) {
+                                int endIdx = Math.min(i + finalizationChunkSize, batch.size());
                                 List<QueuedProposal> chunk = batch.subList(i, endIdx);
                                 batchQueue.offer(chunk);
                                 totalChunks++;
                                 workCount++;
                                 
                                 log.debug("  ↳ Chunk {}/{}: {} proposals, wallet: {}",
-                                    (i / FINALIZATION_CHUNK_SIZE) + 1,
-                                    (batch.size() + FINALIZATION_CHUNK_SIZE - 1) / FINALIZATION_CHUNK_SIZE,
+                                    (i / finalizationChunkSize) + 1,
+                                    (batch.size() + finalizationChunkSize - 1) / finalizationChunkSize,
                                     chunk.size(),
                                     chunk.get(0).getWalletAddress());
                                 
@@ -1609,7 +1653,7 @@ public class ProposalQueueManagerOptimized {
                     }
                     
                     log.info("✅ Finalized epoch {}: {} proposals → {} batches/chunks (chunk size: {}, avg batch: {})",
-                        epoch, totalProposals, totalChunks, FINALIZATION_CHUNK_SIZE,
+                        epoch, totalProposals, totalChunks, finalizationChunkSize,
                         totalChunks > 0 ? totalProposals / totalChunks : 0);
                     
                     // Update batch sent counter

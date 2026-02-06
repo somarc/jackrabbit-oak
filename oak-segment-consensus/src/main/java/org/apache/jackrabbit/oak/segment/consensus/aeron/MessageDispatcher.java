@@ -25,6 +25,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 /**
@@ -86,11 +88,24 @@ public class MessageDispatcher {
         void onAckSegmentPersisted(String proposalId, boolean success, String durableHead, String error,
                                    int totalMembers, int requiredAcks);
     }
+
+    /**
+     * Callback interface for explicit transaction boundary messages.
+     */
+    public interface TransactionCallback {
+        void onStartTransaction(String transactionId, String correlationId, long timeoutMs, String initiatorWallet);
+        void onCommitTransaction(String transactionId, String correlationId);
+        void onAbortTransaction(String transactionId, String correlationId, String reason);
+    }
     
     private WriteCallback writeCallback;
     private GCCallback gcCallback;
     private DurabilityCallback durabilityCallback;
+    private TransactionCallback transactionCallback;
     private LongSupplier termProvider;
+    private static final long STALE_TERM_LOG_INTERVAL_MS = 5000;
+    private final AtomicLong lastStaleTermLogMs = new AtomicLong(0);
+    private final AtomicInteger staleTermSuppressed = new AtomicInteger(0);
     
     /**
      * Create a new message dispatcher (default constructor for OSGi).
@@ -99,6 +114,7 @@ public class MessageDispatcher {
         this.writeCallback = null;
         this.gcCallback = null;
         this.durabilityCallback = null;
+        this.transactionCallback = null;
     }
     
     /**
@@ -110,6 +126,7 @@ public class MessageDispatcher {
         this.writeCallback = writeCallback;
         this.gcCallback = null;
         this.durabilityCallback = null;
+        this.transactionCallback = null;
     }
     
     /**
@@ -147,6 +164,11 @@ public class MessageDispatcher {
     public void setDurabilityCallback(DurabilityCallback durabilityCallback) {
         this.durabilityCallback = durabilityCallback;
         log.info("✅ MessageDispatcher durability callback set");
+    }
+
+    public void setTransactionCallback(TransactionCallback transactionCallback) {
+        this.transactionCallback = transactionCallback;
+        log.info("✅ MessageDispatcher transaction callback set");
     }
 
     public void setTermProvider(LongSupplier termProvider) {
@@ -224,6 +246,15 @@ public class MessageDispatcher {
                     
                 case SimpleMessageHeader.TEMPLATE_ID_ACK_SEGMENT_PERSISTED:
                     return handleAckSegmentPersisted(buffer, payloadOffset, header.blockLength);
+
+                case SimpleMessageHeader.TEMPLATE_ID_START_TRANSACTION:
+                    return handleStartTransaction(buffer, payloadOffset, header.blockLength);
+
+                case SimpleMessageHeader.TEMPLATE_ID_COMMIT_TRANSACTION:
+                    return handleCommitTransaction(buffer, payloadOffset, header.blockLength);
+
+                case SimpleMessageHeader.TEMPLATE_ID_ABORT_TRANSACTION:
+                    return handleAbortTransaction(buffer, payloadOffset, header.blockLength);
                     
                 case SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL:
                     log.info("🎬 GENESIS proposal received - delegating to genesis callback");
@@ -470,10 +501,27 @@ public class MessageDispatcher {
             return false;
         }
         if (proposalTerm < currentTerm) {
-            log.warn("❌ Rejecting proposal from stale term: proposalTerm={}, currentTerm={}", proposalTerm, currentTerm);
+            logStaleTermRejected(proposalTerm, currentTerm);
             return true;
         }
         return false;
+    }
+
+    private void logStaleTermRejected(Long proposalTerm, long currentTerm) {
+        long now = System.currentTimeMillis();
+        long last = lastStaleTermLogMs.get();
+        if ((now - last) >= STALE_TERM_LOG_INTERVAL_MS && lastStaleTermLogMs.compareAndSet(last, now)) {
+            int suppressed = staleTermSuppressed.getAndSet(0);
+            if (suppressed > 0) {
+                log.warn("❌ Rejecting proposal from stale term: proposalTerm={}, currentTerm={} (RATE LIMITED - suppressed {} in last {}ms)",
+                    proposalTerm, currentTerm, suppressed, STALE_TERM_LOG_INTERVAL_MS);
+            } else {
+                log.warn("❌ Rejecting proposal from stale term: proposalTerm={}, currentTerm={} (RATE LIMITED)",
+                    proposalTerm, currentTerm);
+            }
+        } else {
+            staleTermSuppressed.incrementAndGet();
+        }
     }
     
     /**
@@ -808,6 +856,111 @@ public class MessageDispatcher {
             return true;
         } catch (Exception e) {
             log.error("Failed to handle ack segment persisted", e);
+            return false;
+        }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // TRANSACTION MESSAGE HANDLERS
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    private boolean handleStartTransaction(DirectBuffer buffer, int payloadOffset, int payloadLength) {
+        if (transactionCallback == null) {
+            log.warn("⚠️  Transaction callback not set - cannot process start transaction");
+            return false;
+        }
+
+        try {
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
+
+            String transactionId = extractJsonField(json, "transactionId");
+            String correlationId = extractJsonField(json, "correlationId");
+            Long timeoutMs = extractJsonLongField(json, "timeoutMs");
+            String initiatorWallet = extractJsonField(json, "initiatorWallet");
+            Long proposalTerm = extractJsonLongField(json, "term");
+
+            if (transactionId == null) {
+                log.warn("Invalid start transaction: missing transactionId");
+                return false;
+            }
+            if (isStaleTerm(proposalTerm)) {
+                return false;
+            }
+
+            transactionCallback.onStartTransaction(
+                transactionId,
+                correlationId,
+                timeoutMs != null ? timeoutMs : 30000L,
+                initiatorWallet
+            );
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to handle start transaction", e);
+            return false;
+        }
+    }
+
+    private boolean handleCommitTransaction(DirectBuffer buffer, int payloadOffset, int payloadLength) {
+        if (transactionCallback == null) {
+            log.warn("⚠️  Transaction callback not set - cannot process commit transaction");
+            return false;
+        }
+
+        try {
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
+
+            String transactionId = extractJsonField(json, "transactionId");
+            String correlationId = extractJsonField(json, "correlationId");
+            Long proposalTerm = extractJsonLongField(json, "term");
+
+            if (transactionId == null) {
+                log.warn("Invalid commit transaction: missing transactionId");
+                return false;
+            }
+            if (isStaleTerm(proposalTerm)) {
+                return false;
+            }
+
+            transactionCallback.onCommitTransaction(transactionId, correlationId);
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to handle commit transaction", e);
+            return false;
+        }
+    }
+
+    private boolean handleAbortTransaction(DirectBuffer buffer, int payloadOffset, int payloadLength) {
+        if (transactionCallback == null) {
+            log.warn("⚠️  Transaction callback not set - cannot process abort transaction");
+            return false;
+        }
+
+        try {
+            byte[] jsonBytes = new byte[payloadLength];
+            buffer.getBytes(payloadOffset, jsonBytes);
+            String json = new String(jsonBytes, StandardCharsets.UTF_8).trim();
+
+            String transactionId = extractJsonField(json, "transactionId");
+            String correlationId = extractJsonField(json, "correlationId");
+            String reason = extractJsonField(json, "reason");
+            Long proposalTerm = extractJsonLongField(json, "term");
+
+            if (transactionId == null) {
+                log.warn("Invalid abort transaction: missing transactionId");
+                return false;
+            }
+            if (isStaleTerm(proposalTerm)) {
+                return false;
+            }
+
+            transactionCallback.onAbortTransaction(transactionId, correlationId, reason);
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to handle abort transaction", e);
             return false;
         }
     }

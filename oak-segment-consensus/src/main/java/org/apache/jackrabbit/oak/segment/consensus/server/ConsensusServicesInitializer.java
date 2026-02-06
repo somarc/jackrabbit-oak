@@ -31,8 +31,12 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class ConsensusServicesInitializer {
+
+    private static final Logger log = LoggerFactory.getLogger(ConsensusServicesInitializer.class);
 
     void initialize(AeronConsensusEngine aeronEngine,
                     SegmentHttpServer httpServer,
@@ -109,42 +113,43 @@ final class ConsensusServicesInitializer {
             @Override
             public void appendDeleteProposal(String walletAddress, String path, String signature) {
                 if (aeronEngine == null) {
-                    System.err.println("❌ aeronEngine is NULL in appendDeleteProposal!");
+                    log.error("❌ aeronEngine is NULL in appendDeleteProposal!");
                     return;
                 }
-                System.out.println("🗑️  appendDeleteProposal() called - forwarding to Aeron (role: " + aeronEngine.getCurrentRole() + ")");
+                log.debug("🗑️  appendDeleteProposal() called - forwarding to Aeron (role: {})", aeronEngine.getCurrentRole());
                 boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature);
                 if (!success) {
-                    System.err.println("❌ sendDeleteThroughIngress() returned false!");
+                    log.error("❌ sendDeleteThroughIngress() returned false!");
                 }
             }
 
             @Override
             public void appendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
                 if (aeronEngine == null) {
-                    System.err.println("❌ aeronEngine is NULL in appendDeleteProposalWithId!");
+                    log.error("❌ aeronEngine is NULL in appendDeleteProposalWithId!");
                     return;
                 }
                 boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature, proposalId);
                 if (!success) {
-                    System.err.println("❌ sendDeleteThroughIngress() returned false!");
+                    log.error("❌ sendDeleteThroughIngress() returned false!");
                 }
             }
 
             @Override
             public int appendProposalBatch(List<QueuedProposal> proposals) {
-                System.out.println("🔥🔥🔥 OVERRIDE CALLED: appendProposalBatch() - batch size: " + proposals.size() +
-                    ", class: " + this.getClass().getName());
+                log.debug("🔥🔥🔥 OVERRIDE CALLED: appendProposalBatch() - batch size: {}, class: {}",
+                    proposals.size(), this.getClass().getName());
 
                 if (aeronEngine == null) {
-                    System.err.println("❌ aeronEngine is NULL in appendProposalBatch!");
+                    log.error("❌ aeronEngine is NULL in appendProposalBatch!");
                     return 0;
                 }
-                System.out.println("📤 appendProposalBatch() forwarding to aeronEngine.sendWriteBatchThroughIngress() - role: " + aeronEngine.getCurrentRole());
+                log.debug("📤 appendProposalBatch() forwarding to aeronEngine.sendWriteBatchThroughIngress() - role: {}",
+                    aeronEngine.getCurrentRole());
                 int sent = aeronEngine.sendWriteBatchThroughIngress(proposals);
-                System.out.println("📤 appendProposalBatch() result: " + sent + " proposals sent");
+                log.debug("📤 appendProposalBatch() result: {} proposals sent", sent);
                 if (sent == 0) {
-                    System.err.println("❌ sendWriteBatchThroughIngress() returned 0 (failed)!");
+                    log.error("❌ sendWriteBatchThroughIngress() returned 0 (failed)!");
                 }
                 return sent;
             }
@@ -154,13 +159,13 @@ final class ConsensusServicesInitializer {
             aeronEngine != null ? aeronEngine.getBackpressureManager() : null;
 
         if (backpressureManager == null) {
-            System.out.println("   ⚠️  WARNING: BackpressureManager not available - using fallback");
+            log.warn("⚠️  BackpressureManager not available - using fallback");
             backpressureManager = new BackpressureManager();
         }
 
         BeaconChainClient beaconClient = new BeaconChainClient(beaconApiUrl);
         beaconClient.startBackgroundPolling();
-        System.out.println("   ✅ Beacon Chain client initialized (tracking Ethereum epochs from " + beaconApiUrl + ")");
+        log.info("✅ Beacon Chain client initialized (tracking Ethereum epochs from {})", beaconApiUrl);
 
         ProposalQueueManagerOptimized proposalQueueManager =
             new ProposalQueueManagerOptimized(
@@ -173,8 +178,7 @@ final class ConsensusServicesInitializer {
         proposalQueueManager.start();
         httpServer.getContext().setProposalQueueManager(proposalQueueManager);
         httpServer.getContext().evmBridge = evmBridge;
-        proposalQueueManager.start();
-        System.out.println("   ✅ Proposal Queue Manager initialized (Ethereum epoch-based batching + 3-checkpoint security)");
+        log.info("✅ Proposal Queue Manager initialized (Ethereum epoch-based batching + 3-checkpoint security)");
 
         // Initialize Validator Earnings Tracker (economic simulation)
         List<String> validatorWallets = new ArrayList<>();
@@ -194,9 +198,10 @@ final class ConsensusServicesInitializer {
         httpServer.getContext().clusterWalletAddress = finalClusterWallet;
         System.out.println("   - Payments routed to cluster wallet: " + finalClusterWallet);
 
-        // Aeron Cluster handles membership via Raft consensus - HTTP registration is legacy
+        // Aeron Cluster handles membership via Raft consensus.
+        // Keep only local self-registration for compatibility state (health/metrics/peer views).
         String validatorId = wallet.getWalletAddress();
-        httpServer.registerWithPeers(validatorId, java.util.Collections.emptyList());
-        System.out.println("   - Self registered: " + validatorId + " (Aeron Cluster handles peer membership via Raft)");
+        httpServer.registerSelfValidator(validatorId);
+        System.out.println("   - Self registered (local context only): " + validatorId);
     }
 }

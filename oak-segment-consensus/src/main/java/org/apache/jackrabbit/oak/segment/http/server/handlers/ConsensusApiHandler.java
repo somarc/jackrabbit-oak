@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.service.DeleteApplicationService;
+import org.apache.jackrabbit.oak.segment.consensus.service.FileStoreFlushService;
 import org.apache.jackrabbit.oak.segment.consensus.service.WriteApplicationService;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.slf4j.Logger;
@@ -39,6 +40,7 @@ public class ConsensusApiHandler {
     private final ServerContext context;
     private final WriteApplicationService writeApplicationService;
     private final DeleteApplicationService deleteApplicationService;
+    private final FileStoreFlushService flushService;
     private final WriteProposalHandler writeProposalHandler;
     private final DeleteProposalHandler deleteProposalHandler;
     private final ConsensusStatusHandler consensusStatusHandler;
@@ -50,14 +52,17 @@ public class ConsensusApiHandler {
         this.context = context;
         
         // Initialize application services
+        this.flushService = new FileStoreFlushService(context.fileStore);
         this.writeApplicationService = new WriteApplicationService(
             context.fileStore,
             context.nodeStore,
-            context.blobStore
+            context.blobStore,
+            flushService
         );
         this.deleteApplicationService = new DeleteApplicationService(
             context.fileStore,
-            context.nodeStore
+            context.nodeStore,
+            flushService
         );
         
         // Wire callbacks for integration

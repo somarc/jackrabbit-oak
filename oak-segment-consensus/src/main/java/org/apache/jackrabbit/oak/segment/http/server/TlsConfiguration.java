@@ -28,12 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.security.KeyStore;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.security.cert.CertificateException;
 
 /**
  * TLS/SSL configuration for the Segment HTTP Server.
@@ -48,7 +43,8 @@ import java.security.cert.CertificateException;
  * <p>Configuration options:
  * <ul>
  *   <li>Keystore-based: Use Java keystore (JKS/PKCS12) with certificate and private key</li>
- *   <li>PEM-based: Use PEM certificate and key files (for Kubernetes/cert-manager)</li>
+ *   <li>PEM input guidance: cert/key paths are validated, but direct PEM loading is disabled.
+ *       Convert PEM to PKCS12 before use.</li>
  *   <li>mTLS: Mutual TLS for validator-to-validator authentication</li>
  * </ul>
  * 
@@ -58,8 +54,8 @@ import java.security.cert.CertificateException;
  *   <li>{@code tls.keystore.path} - Path to keystore file</li>
  *   <li>{@code tls.keystore.password} - Keystore password</li>
  *   <li>{@code tls.keystore.type} - Keystore type (JKS, PKCS12)</li>
- *   <li>{@code tls.cert.path} - Path to PEM certificate file</li>
- *   <li>{@code tls.key.path} - Path to PEM private key file</li>
+ *   <li>{@code tls.cert.path} - Path to PEM certificate file (validated only, direct load disabled)</li>
+ *   <li>{@code tls.key.path} - Path to PEM private key file (validated only, direct load disabled)</li>
  *   <li>{@code tls.truststore.path} - Path to truststore for mTLS</li>
  *   <li>{@code tls.truststore.password} - Truststore password</li>
  *   <li>{@code tls.client.auth} - Client authentication mode (none, want, need)</li>
@@ -229,27 +225,16 @@ public class TlsConfiguration {
      */
     private SslContextFactory.Server createSslContextFactory() throws Exception {
         SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
-        
+
+        validateTlsMaterialConfiguration();
+
         // Configure keystore (certificate + private key)
-        if (keystorePath != null && !keystorePath.isEmpty()) {
+        if (hasText(keystorePath)) {
             // Keystore-based configuration
             log.info("Using keystore: {}", keystorePath);
             sslContextFactory.setKeyStorePath(keystorePath);
             sslContextFactory.setKeyStorePassword(keystorePassword);
             sslContextFactory.setKeyStoreType(keystoreType);
-        } else if (certPath != null && keyPath != null) {
-            // PEM-based configuration (for Kubernetes/cert-manager)
-            log.info("Using PEM certificate: {}", certPath);
-            log.info("Using PEM key: {}", keyPath);
-            
-            // Jetty 9.4+ supports PEM files directly via KeyStore
-            KeyStore keyStore = loadPemKeyStore(certPath, keyPath);
-            sslContextFactory.setKeyStore(keyStore);
-            sslContextFactory.setKeyStorePassword("");
-        } else {
-            throw new IllegalStateException(
-                "TLS enabled but no keystore or certificate configured. " +
-                "Set either tls.keystore.path or tls.cert.path + tls.key.path");
         }
         
         // Configure truststore for mTLS (optional)
@@ -297,41 +282,59 @@ public class TlsConfiguration {
         
         return sslContextFactory;
     }
-    
-    /**
-     * Load PEM certificate and key into a KeyStore.
-     * 
-     * <p>This is a simplified implementation. For production, consider using
-     * Bouncy Castle or a dedicated PEM parser.
-     */
-    private KeyStore loadPemKeyStore(String certPath, String keyPath) 
-            throws KeyStoreException, IOException, NoSuchAlgorithmException, CertificateException {
-        
+
+    private void validateTlsMaterialConfiguration() throws IOException {
+        boolean hasKeystore = hasText(keystorePath);
+        boolean hasCert = hasText(certPath);
+        boolean hasKey = hasText(keyPath);
+        boolean needClientAuth = "need".equalsIgnoreCase(clientAuth);
+        boolean hasTruststore = hasText(truststorePath);
+
+        if (hasKeystore && (hasCert || hasKey)) {
+            throw new IllegalStateException(
+                "Ambiguous TLS configuration: use either tls.keystore.path (PKCS12/JKS) OR " +
+                "tls.cert.path + tls.key.path (PEM), not both.");
+        }
+
+        if (!hasKeystore && !hasCert && !hasKey) {
+            throw new IllegalStateException(
+                "TLS enabled but no key material configured. Set tls.keystore.path (recommended PKCS12).");
+        }
+
+        if (hasCert ^ hasKey) {
+            throw new IllegalStateException(
+                "Incomplete PEM TLS configuration: both tls.cert.path and tls.key.path are required.");
+        }
+
+        if (hasCert && hasKey) {
+            validatePemInputsExist();
+            throw new IllegalStateException(
+                "Direct PEM TLS loading is not supported in oak-segment-consensus. " +
+                "Convert PEM to PKCS12 and set tls.keystore.path. Example: " +
+                "openssl pkcs12 -export -in " + certPath + " -inkey " + keyPath +
+                " -out keystore.p12 -name server");
+        }
+
+        if (needClientAuth && !hasTruststore) {
+            throw new IllegalStateException(
+                "mTLS strict mode requires truststore configuration. " +
+                "Set tls.truststore.path and tls.truststore.password when tls.client.auth=need.");
+        }
+    }
+
+    private void validatePemInputsExist() throws IOException {
         File certFile = new File(certPath);
         File keyFile = new File(keyPath);
-        
         if (!certFile.exists()) {
             throw new IOException("Certificate file not found: " + certPath);
         }
         if (!keyFile.exists()) {
             throw new IOException("Key file not found: " + keyPath);
         }
-        
-        // For PEM files, we need to use Jetty's PEM utilities or Bouncy Castle
-        // This is a placeholder - in production, use proper PEM parsing
-        // Jetty 10+ has better PEM support via SslContextFactory.Server.setKeyStorePath()
-        
-        // For now, recommend converting PEM to PKCS12:
-        // openssl pkcs12 -export -in cert.pem -inkey key.pem -out keystore.p12 -name server
-        
-        log.warn("PEM file loading requires conversion to PKCS12. " +
-                "Use: openssl pkcs12 -export -in {} -inkey {} -out keystore.p12 -name server",
-                certPath, keyPath);
-        
-        throw new UnsupportedOperationException(
-            "Direct PEM loading not yet implemented. " +
-            "Convert to PKCS12: openssl pkcs12 -export -in " + certPath + 
-            " -inkey " + keyPath + " -out keystore.p12 -name server");
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
     }
     
     /**

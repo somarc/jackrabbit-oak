@@ -25,8 +25,7 @@ import org.osgi.service.component.annotations.Component;
 @Component(service = AeronHealthService.class)
 public class AeronHealthService {
 
-    private static final long HEARTBEAT_MAX_AGE_MS =
-        Long.getLong("oak.cluster.heartbeat.maxAgeMs", 30000L);
+    private static final long DEFAULT_HEARTBEAT_MAX_AGE_MS = 30000L;
 
     private volatile long lastHeartbeatTime = System.currentTimeMillis();
 
@@ -43,7 +42,7 @@ public class AeronHealthService {
     }
 
     public boolean isHeartbeatStale() {
-        return getHeartbeatAgeMs() > HEARTBEAT_MAX_AGE_MS;
+        return getHeartbeatAgeMs() > Long.getLong("oak.cluster.heartbeat.maxAgeMs", DEFAULT_HEARTBEAT_MAX_AGE_MS);
     }
 
     public boolean isClusterHealthy(Cluster cluster,

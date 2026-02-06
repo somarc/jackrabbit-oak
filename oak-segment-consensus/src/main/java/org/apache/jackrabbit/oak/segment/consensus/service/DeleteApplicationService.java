@@ -52,6 +52,7 @@ public class DeleteApplicationService {
     
     private final FileStore fileStore;
     private final NodeStore nodeStore;
+    private final FileStoreFlushService flushService;
     
     // Optional callbacks for integration
     private HeadUpdateCallback headUpdateCallback;
@@ -66,9 +67,11 @@ public class DeleteApplicationService {
      */
     public DeleteApplicationService(
             @NotNull FileStore fileStore,
-            @NotNull NodeStore nodeStore) {
+            @NotNull NodeStore nodeStore,
+            @NotNull FileStoreFlushService flushService) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
+        this.flushService = flushService;
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -184,7 +187,7 @@ public class DeleteApplicationService {
             } catch (CommitFailedException e) {
                 throw new RuntimeException("Failed to commit delete", e);
             }
-            fileStore.flush();
+            flushService.onChangeApplied();
             
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();

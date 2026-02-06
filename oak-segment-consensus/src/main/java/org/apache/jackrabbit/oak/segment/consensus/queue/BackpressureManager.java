@@ -50,40 +50,9 @@ import java.util.concurrent.locks.LockSupport;
 public class BackpressureManager {
     
     private static final Logger log = LoggerFactory.getLogger(BackpressureManager.class);
-    
-    /**
-     * Maximum pending (unacknowledged) messages before applying backpressure.
-     * Configurable via system property.
-     * 
-     * Default: 10000 messages (increased from 2000 to handle large batch volumes)
-     * 
-     * Rationale: Epoch finalization can create 3000+ proposals at once.
-     * Previous limit (2000) caused immediate backpressure and re-queue loops.
-     * New limit (10000) accommodates large finalization waves while still
-     * protecting against unbounded growth.
-     */
-    private static final long MAX_PENDING_MESSAGES = 
-        Long.getLong("oak.consensus.max.pending.messages", 10000);
-    
-    /**
-     * Timeout in milliseconds for backpressure wait.
-     * If pending messages remain above max for this long, throw exception.
-     * 
-     * Default: 30000ms (30 seconds, increased from 10s for large batches)
-     * 
-     * Rationale: Large batches (3000+ proposals) take longer to send through Aeron.
-     * 10 seconds was too short for big finalization waves. 30 seconds gives
-     * Aeron time to process large volumes while still protecting against
-     * infinite waits.
-     */
-    private static final long BACKPRESSURE_TIMEOUT_MS =
-        Long.getLong("oak.consensus.backpressure.timeout.ms", 30000);
-    
-    /**
-     * Park duration in nanoseconds when waiting for acknowledgments.
-     * 1ms = 1,000,000 nanoseconds
-     */
-    private static final long PARK_NANOS = 1_000_000; // 1ms
+    private final long maxPendingMessages;
+    private final long backpressureTimeoutMs;
+    private final long parkNanos;
     
     /**
      * Counter for messages sent to Aeron cluster.
@@ -107,9 +76,22 @@ public class BackpressureManager {
      * Create a new backpressure manager.
      */
     public BackpressureManager() {
+        this(ProposalQueueTuningRegistry.get().getMaxPendingMessages(),
+            ProposalQueueTuningRegistry.get().getBackpressureTimeoutMs(),
+            ProposalQueueTuningRegistry.get().getBackpressureParkNanos());
+    }
+
+    /**
+     * Create a new backpressure manager with explicit tuning.
+     */
+    public BackpressureManager(long maxPendingMessages, long backpressureTimeoutMs, long parkNanos) {
+        this.maxPendingMessages = maxPendingMessages;
+        this.backpressureTimeoutMs = backpressureTimeoutMs;
+        this.parkNanos = parkNanos;
         log.info("BackpressureManager initialized:");
-        log.info("  Max pending messages: {}", MAX_PENDING_MESSAGES);
-        log.info("  Backpressure timeout: {}ms", BACKPRESSURE_TIMEOUT_MS);
+        log.info("  Max pending messages: {}", this.maxPendingMessages);
+        log.info("  Backpressure timeout: {}ms", this.backpressureTimeoutMs);
+        log.info("  Backpressure park nanos: {}", this.parkNanos);
     }
     
     /**
@@ -163,6 +145,18 @@ public class BackpressureManager {
     public boolean isBackpressureActive() {
         return backpressureActive;
     }
+
+    public long getMaxPendingMessages() {
+        return maxPendingMessages;
+    }
+
+    public long getBackpressureTimeoutMs() {
+        return backpressureTimeoutMs;
+    }
+
+    public long getBackpressureParkNanos() {
+        return parkNanos;
+    }
     
     /**
      * Apply backpressure if pending messages exceed maximum.
@@ -187,11 +181,11 @@ public class BackpressureManager {
         long pending = getPendingCount();
         
         // Fast path: no backpressure needed
-        if (pending < MAX_PENDING_MESSAGES) {
+        if (pending < maxPendingMessages) {
             if (backpressureActive) {
                 backpressureActive = false;
                 log.info("✅ Releasing backpressure: pending={}, max={}", 
-                    pending, MAX_PENDING_MESSAGES);
+                    pending, maxPendingMessages);
             }
             return;
         }
@@ -200,37 +194,37 @@ public class BackpressureManager {
         if (!backpressureActive) {
             backpressureActive = true;
             log.warn("⚠️  Applying backpressure: pending={}, max={}", 
-                pending, MAX_PENDING_MESSAGES);
+                pending, maxPendingMessages);
             log.warn("   Aeron cluster is slower than write rate - blocking new writes");
         }
         
         long startTime = System.currentTimeMillis();
-        long deadline = startTime + BACKPRESSURE_TIMEOUT_MS;
+        long deadline = startTime + backpressureTimeoutMs;
         
         // Wait for pending count to drop below max
-        while (getPendingCount() >= MAX_PENDING_MESSAGES) {
+        while (getPendingCount() >= maxPendingMessages) {
             // Check timeout
             if (System.currentTimeMillis() > deadline) {
                 long currentPending = getPendingCount();
                 log.error("❌ Backpressure timeout: pending={}, max={}, waited={}ms",
-                    currentPending, MAX_PENDING_MESSAGES, BACKPRESSURE_TIMEOUT_MS);
+                    currentPending, maxPendingMessages, backpressureTimeoutMs);
                 throw new BackpressureTimeoutException(
                     currentPending, 
-                    MAX_PENDING_MESSAGES, 
-                    BACKPRESSURE_TIMEOUT_MS
+                    maxPendingMessages, 
+                    backpressureTimeoutMs
                 );
             }
             
             // Park thread for 1ms (efficient waiting)
             // LockSupport.parkNanos() yields CPU instead of busy-waiting
-            LockSupport.parkNanos(PARK_NANOS);
+            LockSupport.parkNanos(parkNanos);
         }
         
         // Backpressure released
         long waitTime = System.currentTimeMillis() - startTime;
         backpressureActive = false;
         log.info("✅ Backpressure released after {}ms: pending={}, max={}",
-            waitTime, getPendingCount(), MAX_PENDING_MESSAGES);
+            waitTime, getPendingCount(), maxPendingMessages);
     }
     
     /**
@@ -253,9 +247,8 @@ public class BackpressureManager {
             getSentCount(),
             getAcknowledgedCount(),
             getPendingCount(),
-            MAX_PENDING_MESSAGES,
+            maxPendingMessages,
             backpressureActive
         );
     }
 }
-

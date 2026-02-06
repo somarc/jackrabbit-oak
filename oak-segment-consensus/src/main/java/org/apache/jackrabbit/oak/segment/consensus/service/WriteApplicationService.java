@@ -66,6 +66,7 @@ public class WriteApplicationService {
     private final FileStore fileStore;
     private final NodeStore nodeStore;
     private final BlobStore blobStore;
+    private final FileStoreFlushService flushService;
     
     // Optional callbacks for integration
     private HeadUpdateCallback headUpdateCallback;
@@ -84,10 +85,12 @@ public class WriteApplicationService {
     public WriteApplicationService(
             @NotNull FileStore fileStore,
             @NotNull NodeStore nodeStore,
-            @Nullable BlobStore blobStore) {
+            @Nullable BlobStore blobStore,
+            @NotNull FileStoreFlushService flushService) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.blobStore = blobStore;
+        this.flushService = flushService;
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -224,7 +227,7 @@ public class WriteApplicationService {
                 // Pure IPFS reference without local blob
                 contentNode.setProperty("ipfsCid", ipfsCid);
                 contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + ipfsCid);
-                log.info("🔗 Stored pure IPFS reference (no local blob): ipfsCid={}", ipfsCid);
+                log.debug("🔗 Stored pure IPFS reference (no local blob): ipfsCid={}", ipfsCid);
             }
             
             // Handle intent token for lazy uploads (ADR 020)
@@ -246,7 +249,7 @@ public class WriteApplicationService {
             } catch (CommitFailedException e) {
                 throw new RuntimeException("Failed to commit write", e);
             }
-            fileStore.flush();
+            flushService.onChangeApplied();
             
             // Track fragmentation
             if (fragmentationCallback != null) {

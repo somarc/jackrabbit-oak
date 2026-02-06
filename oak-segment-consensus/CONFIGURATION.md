@@ -34,6 +34,10 @@ export OAK_BLOCKCHAIN_CONTRACT_ADDRESS=0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
 2. **System properties** (medium priority) - `-Dvar=value`
 3. **Default values** (lowest priority) - hardcoded defaults
 
+**OSGi file-based configuration (when running in OSGi):**
+- For proposal queue / backpressure tuning, **OSGi config files override system properties**.
+- If the OSGi config file is absent, the system property values are used.
+
 **Example:**
 ```bash
 # Environment variable (highest priority)
@@ -218,6 +222,120 @@ java -Dconsensus.mode=aeron -jar oak-segment-consensus.jar
 
 **Required for:** `CONSENSUS_MODE=aeron`
 
+---
+
+### Aeron Session Timeout Profiles
+
+**Description:** Controls Aeron cluster session timeout and failover detection behavior.
+
+**System Property Override (highest priority):**
+```bash
+java -Doak.cluster.session.timeout.minutes=7 -jar oak-segment-consensus.jar
+```
+
+**Environment Profile Selector:**
+- System property: `-Doak.cluster.environment=dev|staging|prod`
+- Environment variable: `OAK_CLUSTER_ENV=dev|staging|prod`
+
+**Profile Defaults:**
+- `dev` / `development` / `local` / `test` → `2` minutes
+- `staging` / `stage` / `preprod` → `5` minutes
+- `prod` / `production` (and unknown values) → `20` minutes
+
+**Operational Guidance:**
+- Lower values improve failover speed but increase sensitivity to transient pauses.
+- Higher values reduce false positives but delay failure detection.
+- For deterministic behavior across environments, set `oak.cluster.session.timeout.minutes` explicitly.
+
+---
+
+### Aeron OSGi Runtime Tuning Knobs
+
+When running via OSGi (`AeronClusterService` / `AeronClusterConfig`), the following
+properties can be set as OSGi config and are propagated to runtime system properties
+before Aeron startup:
+
+- `clusterEnvironment` → `oak.cluster.environment`
+- `sessionTimeoutMinutes` → `oak.cluster.session.timeout.minutes`
+- `mediaDriverTimeoutMs` → `oak.cluster.media.driver.timeout.ms`
+- `socketSendBufferBytes` → `aeron.socket.so_sndbuf`
+- `socketReceiveBufferBytes` → `aeron.socket.so_rcvbuf`
+- `publicationTermBufferLengthBytes` → `oak.cluster.publication.term.buffer.length.bytes`
+- `clusterTermLengthBytes` → `oak.cluster.term.length.bytes`
+- `heartbeatMaxAgeMs` → `oak.cluster.heartbeat.maxAgeMs`
+- `reachabilityCacheMs` → `oak.cluster.reachability.cacheMs`
+- `reachabilityConnectTimeoutMs` → `oak.cluster.reachability.connectTimeoutMs`
+- `reachabilityReadTimeoutMs` → `oak.cluster.reachability.readTimeoutMs`
+- `reconnectMaxAttempts` → `oak.cluster.reconnect.maxAttempts`
+- `peerProbeMode` → `oak.health.peerProbeMode` (`none` or `http`)
+- `deleteAeronDirsOnStartup` → `aeron.delete.dirs.on.startup=true` (dev/test only)
+
+Notes:
+- These are startup-time knobs for Aeron components; changing them typically requires restart.
+- For safe operations, prefer changing one knob at a time and validating failover behavior.
+
+---
+
+## 4. Proposal Queue & Backpressure Tuning (OSGi File-Based)
+
+The proposal queue uses **file-based OSGi configuration** for tuning in production.
+This works without the Felix WebConsole or ConfigMgr, and the tuning component
+**requires** a config file (embedded default or runtime override).
+
+**PID:** `org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueTuningService`
+
+**Default file location (inside the bundle):**
+`src/main/resources/OSGI-INF/config/org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueTuningService.cfg`
+
+**Runtime override location (preferred):**
+Place a `.cfg` with the same PID in your OSGi `config/` or `config.<runmode>/` directory.
+
+### Example OSGi Config
+
+```properties
+confirmation_timeout_ms=300000
+restore_timeout_ms=300000
+max_message_batch=10
+max_retry_count=5
+finalization_chunk_size=3
+verifier_threads=1
+processed_retention_ms=600000
+persistence_flush_interval_ms=250
+persistence_flush_batch=100
+max_pending_messages=10000
+backpressure_timeout_ms=30000
+backpressure_park_nanos=1000000
+```
+
+### Tuning Reference
+
+| OSGi Key | Default | Description | System Property (non-OSGi) |
+|---|---:|---|---|
+| `confirmation_timeout_ms` | 300000 | Max time to wait for a proposal confirmation before rejection. | `oak.proposal.confirmation.timeout.ms` |
+| `restore_timeout_ms` | 300000 | Timeout applied to proposals restored from persistence. Uses confirmation timeout if <= 0. | `oak.proposal.restore.timeout.ms` |
+| `max_message_batch` | 10 | Max proposal batches processed per Aeron sender cycle. | `oak.proposal.batch.max` |
+| `max_retry_count` | 5 | Max retries before a proposal is rejected. | `oak.proposal.max.retry.count` |
+| `finalization_chunk_size` | 3 | Max proposals per chunk when finalizing an epoch (WAN-safe). | `oak.proposal.finalization.chunk.size` |
+| `verifier_threads` | 1 | Number of EVM verifier agent threads. | `oak.proposal.verifier.threads` |
+| `processed_retention_ms` | 600000 | Retention window for processed proposals (metrics visibility). | `oak.proposal.processed.retention.ms` |
+| `persistence_flush_interval_ms` | 250 | Async persistence flush interval (0 disables). | `oak.proposal.persistence.flush.ms` |
+| `persistence_flush_batch` | 100 | Flush after N pending changes (0 disables). | `oak.proposal.persistence.flush.batch` |
+| `max_pending_messages` | 10000 | Pending (unacked) message cap before backpressure applies. | `oak.consensus.max.pending.messages` |
+| `backpressure_timeout_ms` | 30000 | Time to wait for pending to drain before failing. | `oak.consensus.backpressure.timeout.ms` |
+| `backpressure_park_nanos` | 1000000 | Park duration (ns) while waiting under backpressure. | `oak.consensus.backpressure.park.nanos` |
+
+### FileStore Flush Batching (Determinism-safe)
+
+For Aeron mode, ACK happens after Aeron commit. FileStore flush is batched/async to
+avoid per-write fsync contention.
+
+**System Properties:**
+
+| Property | Default | Description |
+|---|---:|---|
+| `oak.filestore.flush.ms` | 250 | Async FileStore flush interval (0 disables async). |
+| `oak.filestore.flush.batch` | 100 | Flush after N applied changes (1 disables async). |
+
 **Values:** `0`, `1`, `2`, `3`, ... (must be unique per validator)
 
 **Environment Variable:**
@@ -347,6 +465,47 @@ java -Doak.validator.auth.token=your-secret-token-here -jar oak-segment-consensu
 # Generate secure random token
 export OAK_VALIDATOR_AUTH_TOKEN=$(openssl rand -hex 32)
 ```
+
+---
+
+### TLS Key Material Policy (`tls.*`)
+
+`oak-segment-consensus` currently supports TLS with keystore-backed credentials
+(`PKCS12`/`JKS`). Direct PEM certificate/key loading is intentionally rejected
+with a fail-fast error and conversion guidance.
+
+**Supported in-process TLS mode:**
+- `tls.keystore.path` (+ `tls.keystore.password`, `tls.keystore.type`)
+
+**Not supported directly (fail-fast):**
+- `tls.cert.path` + `tls.key.path` (PEM pair)
+
+**Convert PEM to PKCS12:**
+```bash
+openssl pkcs12 -export \
+  -in cert.pem \
+  -inkey key.pem \
+  -out keystore.p12 \
+  -name server
+```
+
+**Then configure validator TLS:**
+```bash
+java \
+  -Dtls.enabled=true \
+  -Dtls.keystore.path=/path/to/keystore.p12 \
+  -Dtls.keystore.password=changeit \
+  -Dtls.keystore.type=PKCS12 \
+  -jar oak-segment-consensus.jar
+```
+
+**mTLS strict mode:**
+- If `tls.client.auth=need`, configure `tls.truststore.path` and `tls.truststore.password`.
+- Startup now fails fast if strict mTLS is enabled without a truststore.
+
+**AWS deployment note:**
+- Recommended pattern is TLS termination at edge (ALB/Nginx/API Gateway) with private VPC traffic to validators.
+- If terminating at edge only, keep validator TLS disabled (`tls.enabled=false`) unless internal mTLS is explicitly required.
 
 ---
 

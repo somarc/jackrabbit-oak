@@ -45,6 +45,9 @@ Read content, explore node tree, binary operations.
 ### [Health & Metrics](health.md)
 Health checks, Prometheus metrics, performance monitoring.
 
+### [Control Plane Contract](control-plane-dashboard-contract.md)
+API/CLI-first contract for external dashboard derivation (ADR 063/064 groundwork).
+
 ### [Segment Transfer](segments.md)
 Journal, manifest, segment fetching (for Sling authors).
 

@@ -175,6 +175,24 @@ public class SegmentHttpServer {
         context.setSelfUrl(url);
         log.info("Self URL set to: {}", url);
     }
+
+    /**
+     * Register only this validator in local HTTP context state.
+     *
+     * <p>Use this in Aeron mode where cluster membership is managed by Raft,
+     * but local compatibility state (health/metrics/peer views) still needs
+     * the self validator entry.
+     */
+    public void registerSelfValidator(String validatorId) {
+        if (validatorId == null || validatorId.isEmpty()) {
+            log.warn("⚠️  Skipping self registration: validatorId missing");
+            return;
+        }
+        ValidatorRegistration selfReg = new ValidatorRegistration(validatorId, context.selfUrl);
+        selfReg.updateStatus(ValidatorRegistration.Status.READY);
+        context.registeredValidators.put(validatorId, selfReg);
+        log.info("✅ Self registered (local context): {} ({})", validatorId, context.selfUrl);
+    }
     
     /**
      * Generate Proof-of-Readiness for joining consensus.

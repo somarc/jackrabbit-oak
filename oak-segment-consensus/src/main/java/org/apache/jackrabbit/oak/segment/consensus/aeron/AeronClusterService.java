@@ -126,6 +126,20 @@ public class AeronClusterService {
         log.info("  observeElections: {}", config.observeElections());
         log.info("  logClusterStateDetails: {}", config.logClusterStateDetails());
         log.info("  beaconApiUrl: {}", config.beaconApiUrl());
+        log.info("  clusterEnvironment: {}", config.clusterEnvironment());
+        log.info("  sessionTimeoutMinutes: {}", config.sessionTimeoutMinutes());
+        log.info("  mediaDriverTimeoutMs: {}", config.mediaDriverTimeoutMs());
+        log.info("  socketSendBufferBytes: {}", config.socketSendBufferBytes());
+        log.info("  socketReceiveBufferBytes: {}", config.socketReceiveBufferBytes());
+        log.info("  publicationTermBufferLengthBytes: {}", config.publicationTermBufferLengthBytes());
+        log.info("  clusterTermLengthBytes: {}", config.clusterTermLengthBytes());
+        log.info("  heartbeatMaxAgeMs: {}", config.heartbeatMaxAgeMs());
+        log.info("  reachabilityCacheMs: {}", config.reachabilityCacheMs());
+        log.info("  reachabilityConnectTimeoutMs: {}", config.reachabilityConnectTimeoutMs());
+        log.info("  reachabilityReadTimeoutMs: {}", config.reachabilityReadTimeoutMs());
+        log.info("  reconnectMaxAttempts: {}", config.reconnectMaxAttempts());
+        log.info("  peerProbeMode: {}", config.peerProbeMode());
+        log.info("  deleteAeronDirsOnStartup: {}", config.deleteAeronDirsOnStartup());
     }
 
     private void applyConfigToSystemProperties(String selfUrl, List<String> peerUrls) {
@@ -138,6 +152,7 @@ public class AeronClusterService {
         if (config.beaconApiUrl() != null && !config.beaconApiUrl().isEmpty()) {
             System.setProperty("ethereum.beacon.api.url", config.beaconApiUrl());
         }
+        applyOptionalConfigProperties();
 
         String existingHostnames = System.getProperty("aeron.cluster.hostnames", "");
         if ((existingHostnames == null || existingHostnames.isEmpty())
@@ -167,6 +182,43 @@ public class AeronClusterService {
             return new java.net.URL(url).getHost();
         } catch (Exception e) {
             return "";
+        }
+    }
+
+    private void applyOptionalConfigProperties() {
+        setIfNotBlank("oak.cluster.environment", config.clusterEnvironment());
+        setIfPositive("oak.cluster.session.timeout.minutes", config.sessionTimeoutMinutes());
+        setIfPositive("oak.cluster.media.driver.timeout.ms", config.mediaDriverTimeoutMs());
+        setIfPositive("aeron.socket.so_sndbuf", config.socketSendBufferBytes());
+        setIfPositive("aeron.socket.so_rcvbuf", config.socketReceiveBufferBytes());
+        setIfPositive("oak.cluster.publication.term.buffer.length.bytes", config.publicationTermBufferLengthBytes());
+        setIfPositive("oak.cluster.term.length.bytes", config.clusterTermLengthBytes());
+        setIfPositive("oak.cluster.heartbeat.maxAgeMs", config.heartbeatMaxAgeMs());
+        setIfPositive("oak.cluster.reachability.cacheMs", config.reachabilityCacheMs());
+        setIfPositive("oak.cluster.reachability.connectTimeoutMs", config.reachabilityConnectTimeoutMs());
+        setIfPositive("oak.cluster.reachability.readTimeoutMs", config.reachabilityReadTimeoutMs());
+        setIfPositive("oak.cluster.reconnect.maxAttempts", config.reconnectMaxAttempts());
+        setIfNotBlank("oak.health.peerProbeMode", config.peerProbeMode());
+        if (config.deleteAeronDirsOnStartup()) {
+            System.setProperty("aeron.delete.dirs.on.startup", "true");
+        }
+    }
+
+    private static void setIfNotBlank(String key, String value) {
+        if (value != null && !value.trim().isEmpty()) {
+            System.setProperty(key, value.trim());
+        }
+    }
+
+    private static void setIfPositive(String key, int value) {
+        if (value > 0) {
+            System.setProperty(key, Integer.toString(value));
+        }
+    }
+
+    private static void setIfPositive(String key, long value) {
+        if (value > 0) {
+            System.setProperty(key, Long.toString(value));
         }
     }
 }
