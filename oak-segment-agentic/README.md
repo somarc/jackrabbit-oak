@@ -27,14 +27,14 @@ This module provides an optional LLM-powered chat interface that helps developer
 
 Download and install Ollama from https://ollama.ai
 
-### 2. Pull Models (All Apache 2.0 Licensed)
+### 2. Pull Models
 
 ```bash
-# Required: Code specialist model (fast responses)
-ollama pull qwen2.5-coder:7b
-
-# Recommended: Reasoning model (complex queries)
+# Required: Default fast model
 ollama pull qwen3:8b
+
+# Recommended: Balanced reasoning model (complex queries)
+ollama pull devstral:24b
 
 # Required: Embedding model for vector RAG
 ollama pull nomic-embed-text
@@ -314,18 +314,18 @@ The LLM service automatically selects the best model based on query complexity:
 
 | Query Type | Model | Reason |
 |------------|-------|--------|
-| Simple questions | `qwen2.5-coder:7b` | Fast responses |
-| "How does X work?" | `qwen3:8b` | Better reasoning |
-| "Explain..." | `qwen3:8b` | Better explanations |
-| "Why..." | `qwen3:8b` | Better reasoning |
-| Agent-to-agent | `qwen3:8b` | More accurate data synthesis |
-| Long queries (>200 chars) | `qwen3:8b` | Complex context handling |
+| Simple questions | `qwen3:8b` | Fast responses |
+| "How does X work?" | `devstral:24b` | Better reasoning |
+| "Explain..." | `devstral:24b` | Better explanations |
+| "Why..." | `devstral:24b` | Better reasoning |
+| Agent-to-agent | `devstral:24b` | More accurate data synthesis |
+| Long queries (>200 chars) | `devstral:24b` | Complex context handling |
 
 ### Configuration
 
 ```bash
 # Set default model
-java -jar oak-segment-consensus.jar -Dollama.model=qwen2.5-coder:7b
+java -jar oak-segment-consensus.jar -Dollama.model=qwen3:8b
 
 # Set Ollama URL (for Docker)
 java -jar oak-segment-consensus.jar -Dollama.url=http://host.docker.internal:11434
@@ -407,14 +407,14 @@ The cluster has 3 members: node-0, node-1, and node-2.
 All nodes are healthy and responding. Node-0 has been the leader for the last 2 minutes.
 ```
 
-## Apache 2.0 Licensed Models
+## Recommended Local Models
 
-All recommended models are Apache 2.0 licensed for compatibility with Apache projects:
+Recommended local models for this module:
 
 | Model | Size | Purpose | License |
 |-------|------|---------|---------|
-| `qwen2.5-coder:7b` | 4.7 GB | Code specialist (fast) | Apache 2.0 |
-| `qwen3:8b` | 5.2 GB | Reasoning + code | Apache 2.0 |
+| `qwen3:8b` | 5.2 GB | Fast/default chat + code | See upstream model card |
+| `devstral:24b` | 14 GB | Complex reasoning + synthesis | See upstream model card |
 | `nomic-embed-text` | 274 MB | Vector embeddings | Apache 2.0 |
 
 ## Future Enhancements

@@ -38,15 +38,15 @@ import java.io.IOException;
  * Example setup:
  * <pre>
  *   # Install Ollama: https://ollama.ai
- *   ollama pull qwen2.5-coder:7b   # Code specialist (Apache 2.0)
- *   ollama pull qwen3:8b           # Reasoning + code (Apache 2.0)
- *   ollama pull nomic-embed-text   # Embeddings for RAG (Apache 2.0)
+ *   ollama pull qwen3:8b           # Fast/default model
+ *   ollama pull devstral:24b       # Balanced model for complex reasoning
+ *   ollama pull nomic-embed-text   # Embeddings for RAG
  * </pre>
  * 
  * <p>Supports dynamic model selection based on query complexity:
  * <ul>
- *   <li>Fast model (qwen2.5-coder:7b): Quick responses for simple queries</li>
- *   <li>Balanced model (qwen3:8b): Complex reasoning and explanations</li>
+ *   <li>Fast model (qwen3:8b): Quick responses for simple queries</li>
+ *   <li>Balanced model (devstral:24b): Complex reasoning and explanations</li>
  * </ul>
  * 
  * @since 1.89
@@ -54,11 +54,11 @@ import java.io.IOException;
 public class OllamaLLMService implements LLMService {
     private static final Logger log = LoggerFactory.getLogger(OllamaLLMService.class);
     
-    /** Fast model for quick responses - Apache 2.0 licensed (used as default) */
-    public static final String MODEL_FAST = "qwen2.5-coder:7b";
+    /** Fast model for quick responses (used as default) */
+    public static final String MODEL_FAST = "qwen3:8b";
     
-    /** Balanced model for complex reasoning - Apache 2.0 licensed */
-    private static final String MODEL_BALANCED = "qwen3:8b";
+    /** Balanced model for complex reasoning */
+    private static final String MODEL_BALANCED = "devstral:24b";
     
     private final String ollamaUrl;
     private final String defaultModelName;
@@ -116,7 +116,7 @@ public class OllamaLLMService implements LLMService {
             return model;
         }
         
-        return "qwen2.5-coder:7b"; // Default model (Apache 2.0 licensed, optimized for code)
+        return MODEL_FAST; // Default model
     }
     
     public OllamaLLMService(String ollamaUrl, String modelName) {
@@ -216,7 +216,7 @@ public class OllamaLLMService implements LLMService {
     /**
      * Check if balanced model is available.
      * 
-     * @return true if qwen3:8b is available
+     * @return true if balanced model is available
      */
     public boolean isBalancedModelAvailable() {
         return balancedModelAvailable;
@@ -340,4 +340,3 @@ public class OllamaLLMService implements LLMService {
         }
     }
 }
-
