@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,8 +28,10 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Handler for Aeron Cluster-specific API endpoints.
@@ -211,6 +214,26 @@ public class AeronApiHandler {
         
         // Write JSON response
         writeJsonResponse(response, state);
+    }
+
+    /**
+     * Handle GET /v1/aeron/validator-identities - Returns validator identity map across cluster members.
+     *
+     * Response includes per-validator:
+     * - memberId, nodeId, url, role, status
+     * - walletAddress, publicKey (when known)
+     */
+    public void handleValidatorIdentities(HttpServletResponse response) throws IOException {
+        Map<String, Object> data = getValidatorIdentitiesData();
+        if (data == null) {
+            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                "Aeron Cluster consensus not configured");
+            return;
+        }
+
+        response.setContentType("application/json");
+        response.setStatus(HttpServletResponse.SC_OK);
+        writeJsonResponse(response, data);
     }
     
     /**
@@ -509,6 +532,167 @@ public class AeronApiHandler {
                 break; // Found self, no need to continue
             }
         }
+    }
+
+    /**
+     * Build authoritative validator identity list by querying each validator's local cluster-state.
+     */
+    public Map<String, Object> getValidatorIdentitiesData() {
+        if (context.aeronConsensusEngine == null) {
+            return null;
+        }
+
+        Set<String> validatorUrls = new LinkedHashSet<>();
+        if (context.selfUrl != null && !context.selfUrl.isEmpty()) {
+            validatorUrls.add(context.selfUrl);
+        }
+        List<String> followers = context.aeronConsensusEngine.getAllFollowers();
+        if (followers != null) {
+            for (String follower : followers) {
+                if (follower != null && !follower.isEmpty()) {
+                    validatorUrls.add(follower);
+                }
+            }
+        }
+
+        List<Map<String, Object>> validators = new ArrayList<>();
+        for (String validatorUrl : validatorUrls) {
+            validators.add(fetchValidatorIdentity(validatorUrl));
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("validators", validators);
+        payload.put("totalValidators", validators.size());
+        payload.put("knownWallets", validators.stream()
+            .filter(v -> v.get("walletAddress") != null && !String.valueOf(v.get("walletAddress")).isEmpty())
+            .count());
+        payload.put("timestamp", System.currentTimeMillis());
+        return payload;
+    }
+
+    private Map<String, Object> fetchValidatorIdentity(String validatorUrl) {
+        Map<String, Object> identity = new HashMap<>();
+        identity.put("url", validatorUrl);
+        identity.put("nodeId", getNodeIdFromUrl(validatorUrl));
+        identity.put("memberId", -1);
+        identity.put("role", "UNKNOWN");
+        identity.put("status", "UNKNOWN");
+        identity.put("walletAddress", null);
+        identity.put("publicKey", null);
+
+        if (validatorUrl == null || validatorUrl.isEmpty()) {
+            return identity;
+        }
+
+        // Self identity is available locally and avoids an HTTP round-trip.
+        if (isSameUrlByPort(validatorUrl, context.selfUrl)) {
+            int memberId = context.aeronConsensusEngine.getNativeClusterState() != null
+                ? parseIntSafely(context.aeronConsensusEngine.getNativeClusterState().get("memberId"), -1)
+                : -1;
+            identity.put("memberId", memberId);
+            identity.put("role", context.aeronConsensusEngine.isLeader() ? "LEADER" : "FOLLOWER");
+            identity.put("status", "ACTIVE");
+            identity.put("walletAddress", context.aeronConsensusEngine.getWalletAddress());
+            identity.put("publicKey", context.aeronConsensusEngine.getPublicKeyHex());
+            if (memberId >= 0) {
+                identity.put("nodeId", memberId);
+            }
+            return identity;
+        }
+
+        try {
+            String queryUrl = resolveUrlToIP(validatorUrl);
+            java.net.URL apiUrl = new java.net.URL(queryUrl + "/v1/aeron/cluster-state");
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(1500);
+            conn.setReadTimeout(2000);
+
+            int code = conn.getResponseCode();
+            if (code == 200) {
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(conn.getInputStream())
+                );
+                String response = reader.lines().collect(java.util.stream.Collectors.joining());
+                reader.close();
+
+                int memberId = parseIntSafely(JsonParser.extractField(response, "memberId"), -1);
+                if (memberId >= 0) {
+                    identity.put("memberId", memberId);
+                    identity.put("nodeId", memberId);
+                }
+
+                String role = JsonParser.extractField(response, "role");
+                if (role != null && !role.isEmpty()) {
+                    identity.put("role", role.toUpperCase());
+                }
+
+                String status = JsonParser.extractField(response, "status");
+                if (status != null && !status.isEmpty()) {
+                    identity.put("status", status.toUpperCase());
+                } else {
+                    identity.put("status", "ACTIVE");
+                }
+
+                String validatorIdentity = JsonParser.extractObject(response, "validatorIdentity");
+                String walletAddress = null;
+                String publicKey = null;
+                if (validatorIdentity != null) {
+                    walletAddress = JsonParser.extractField(validatorIdentity, "walletAddress");
+                    publicKey = JsonParser.extractField(validatorIdentity, "publicKey");
+                }
+                if (walletAddress == null || walletAddress.isEmpty()) {
+                    walletAddress = JsonParser.extractField(response, "walletAddress");
+                }
+                if (publicKey == null || publicKey.isEmpty()) {
+                    publicKey = JsonParser.extractField(response, "publicKey");
+                }
+                identity.put("walletAddress", walletAddress);
+                identity.put("publicKey", publicKey);
+            }
+        } catch (Exception e) {
+            log.debug("Failed to fetch validator identity from {}: {}", validatorUrl, e.getMessage());
+        }
+
+        return identity;
+    }
+
+    private int parseIntSafely(Object value, int fallback) {
+        if (value == null) return fallback;
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    private boolean isSameUrlByPort(String url1, String url2) {
+        if (url1 == null || url2 == null) {
+            return false;
+        }
+        try {
+            int port1 = extractPort(url1);
+            int port2 = extractPort(url2);
+            return port1 == port2 && port1 != -1;
+        } catch (Exception e) {
+            return url1.equals(url2);
+        }
+    }
+
+    private int extractPort(String url) {
+        try {
+            int colonIndex = url.lastIndexOf(':');
+            if (colonIndex > 0) {
+                String portStr = url.substring(colonIndex + 1);
+                if (portStr.endsWith("/")) {
+                    portStr = portStr.substring(0, portStr.length() - 1);
+                }
+                return Integer.parseInt(portStr);
+            }
+        } catch (Exception e) {
+            // Ignore parsing errors
+        }
+        return -1;
     }
     
     /**

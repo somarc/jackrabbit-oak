@@ -626,6 +626,12 @@ public class RequestRouter {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/aeron/validator-identities".equals(path) && "GET".equals(method)) {
+                aeronApiHandler.handleValidatorIdentities(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             if ("/v1/aeron/raft-metrics".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleRaftMetrics(response);
