@@ -18,11 +18,14 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * API handler for blockchain configuration endpoint.
@@ -45,59 +48,31 @@ public class BlockchainConfigApiHandler {
      */
     public void handle(HttpServletResponse response) throws IOException {
         BlockchainConfig config = BlockchainConfig.getInstance();
-        
-        // Build JSON manually (no JSON library dependency in project)
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
-        
-        // Core config
-        json.append("  \"mode\": \"").append(config.getMode().getKey()).append("\",\n");
-        json.append("  \"network\": \"").append(getNetworkName(config.getMode())).append("\",\n");
-        json.append("  \"chainId\": ").append(getChainId(config.getMode())).append(",\n");
-        json.append("  \"contractAddress\": \"").append(escapeJson(config.getContractAddress())).append("\",\n");
-        
-        String rpcUrl = config.getRpcUrl();
-        if (rpcUrl != null && !rpcUrl.isEmpty()) {
-            json.append("  \"rpcUrl\": \"").append(escapeJson(rpcUrl)).append("\",\n");
-        } else {
-            json.append("  \"rpcUrl\": \"\",\n");
-        }
-        
-        // Client helper info
-        json.append("  \"requiresMetaMask\": ").append(config.getMode() != BlockchainConfig.Mode.MOCK).append(",\n");
-        json.append("  \"useTestnet\": ").append(config.getMode() == BlockchainConfig.Mode.SEPOLIA).append(",\n");
-        json.append("  \"displayName\": \"").append(getDisplayName(config.getMode())).append("\",\n");
-        json.append("  \"badgeColor\": \"").append(getBadgeColor(config.getMode())).append("\",\n");
-        
-        // Validator info
+
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("mode", config.getMode().getKey());
+        json.put("network", getNetworkName(config.getMode()));
+        json.put("chainId", getChainId(config.getMode()));
+        json.put("contractAddress", config.getContractAddress());
+        json.put("rpcUrl", config.getRpcUrl() != null ? config.getRpcUrl() : "");
+        json.put("requiresMetaMask", config.getMode() != BlockchainConfig.Mode.MOCK);
+        json.put("useTestnet", config.getMode() == BlockchainConfig.Mode.SEPOLIA);
+        json.put("displayName", getDisplayName(config.getMode()));
+        json.put("badgeColor", getBadgeColor(config.getMode()));
         if (context.selfUrl != null) {
-            json.append("  \"validatorUrl\": \"").append(escapeJson(context.selfUrl)).append("\",\n");
+            json.put("validatorUrl", context.selfUrl);
         }
-        
-        // Tier pricing (could be made configurable later)
-        json.append("  \"tiers\": {\n");
-        json.append("    \"STANDARD\": {\n");
-        json.append("      \"tier\": 0,\n");
-        json.append("      \"maxDelay\": \"13 min\",\n");
-        json.append("      \"estimatedCost\": \"~0.001 ETH\"\n");
-        json.append("    },\n");
-        json.append("    \"EXPRESS\": {\n");
-        json.append("      \"tier\": 1,\n");
-        json.append("      \"maxDelay\": \"6.5 min\",\n");
-        json.append("      \"estimatedCost\": \"~0.002 ETH\"\n");
-        json.append("    },\n");
-        json.append("    \"PRIORITY\": {\n");
-        json.append("      \"tier\": 2,\n");
-        json.append("      \"maxDelay\": \"45 sec\",\n");
-        json.append("      \"estimatedCost\": \"~0.01 ETH\"\n");
-        json.append("    }\n");
-        json.append("  }\n");
-        json.append("}");
-        
+
+        Map<String, Object> tiers = new LinkedHashMap<>();
+        tiers.put("STANDARD", buildTier(0, "13 min", "~0.001 ETH"));
+        tiers.put("EXPRESS", buildTier(1, "6.5 min", "~0.002 ETH"));
+        tiers.put("PRIORITY", buildTier(2, "45 sec", "~0.01 ETH"));
+        json.put("tiers", tiers);
+
         // Send response
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType("application/json");
-        response.getWriter().write(json.toString());
+        response.getWriter().write(JsonOutputUtil.toJson(json));
         
         log.debug("Served blockchain config: mode={}", config.getMode());
     }
@@ -137,18 +112,11 @@ public class BlockchainConfigApiHandler {
         }
     }
     
-    /**
-     * Escape JSON string (minimal - handles quotes and backslashes).
-     */
-    private String escapeJson(String str) {
-        if (str == null) {
-            return "";
-        }
-        return str.replace("\\", "\\\\")
-                  .replace("\"", "\\\"")
-                  .replace("\n", "\\n")
-                  .replace("\r", "\\r")
-                  .replace("\t", "\\t");
+    private Map<String, Object> buildTier(int tier, String maxDelay, String estimatedCost) {
+        Map<String, Object> t = new LinkedHashMap<>();
+        t.put("tier", tier);
+        t.put("maxDelay", maxDelay);
+        t.put("estimatedCost", estimatedCost);
+        return t;
     }
 }
-

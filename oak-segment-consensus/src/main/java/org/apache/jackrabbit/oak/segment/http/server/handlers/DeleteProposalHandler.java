@@ -22,12 +22,15 @@ import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Handler for delete proposals (`/v1/propose-delete`).
@@ -242,21 +245,29 @@ public class DeleteProposalHandler {
             // Return 202 Accepted (queued for processing)
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_ACCEPTED);
-            String resultJson = "{" +
-                "\"proposalId\":\"" + proposalId + "\"," +
-                "\"type\":\"DELETE\"," +
-                "\"state\":\"PENDING\"," +
-                "\"message\":\"Delete proposal queued, waiting for Ethereum confirmation\"," +
-                "\"ethereumTxHash\":\"" + ethereumTxHash + "\"," +
-                "\"tier\":\"" + tier + "\"," +
-                "\"timeoutTimestamp\":" + (System.currentTimeMillis() + 300_000) + "," +
-                "\"wallet\":\"" + wallet + "\"," +
-                "\"contentPath\":\"" + contentPath.replace("\"", "\\\"") + "\"," +
-                "\"gcDebtIncurred\":\"" + gcDebtIncurred + "\"," +
-                "\"totalDebt\":\"" + totalDebt + "\"," +
-                "\"pendingDebt\":\"" + pendingDebt + "\"," +
-                "\"writesBlocked\":" + writesBlocked + "}";
-            response.getWriter().write(resultJson);
+            Map<String, Object> links = new LinkedHashMap<>();
+            links.put("self", "/v1/ops/operations/" + proposalId);
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("contractVersion", "ops.v1");
+            payload.put("status", "accepted");
+            payload.put("operationId", proposalId);
+            payload.put("receivedAtMs", System.currentTimeMillis());
+            payload.put("ackState", "ACCEPTED");
+            payload.put("links", links);
+            payload.put("proposalId", proposalId);
+            payload.put("type", "DELETE");
+            payload.put("state", "PENDING");
+            payload.put("message", "Delete proposal queued, waiting for Ethereum confirmation");
+            payload.put("ethereumTxHash", ethereumTxHash);
+            payload.put("tier", String.valueOf(tier));
+            payload.put("timeoutTimestamp", System.currentTimeMillis() + 300_000);
+            payload.put("wallet", wallet);
+            payload.put("contentPath", contentPath);
+            payload.put("gcDebtIncurred", gcDebtIncurred.toString());
+            payload.put("totalDebt", totalDebt.toString());
+            payload.put("pendingDebt", pendingDebt.toString());
+            payload.put("writesBlocked", writesBlocked);
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             log.info("✅ DELETE proposal {} queued successfully (tier: {}, path: {})", proposalId, tier, contentPath);
 
         } catch (Exception e) {
@@ -393,4 +404,5 @@ public class DeleteProposalHandler {
             return org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
         }
     }
+
 }

@@ -20,12 +20,15 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Handler for GC cost estimation (`/v1/gc/estimate`).
@@ -66,29 +69,18 @@ public class GcCostHandler {
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_OK);
 
-            StringBuilder json = new StringBuilder("{");
-            json.append("\"reclaimableSegmentCount\":").append(estimate.getReclaimableSegmentCount()).append(",");
-            json.append("\"reclaimableSizeBytes\":").append(estimate.getReclaimableSizeBytes()).append(",");
-            json.append("\"reclaimableSizeMB\":").append(estimate.getReclaimableSizeMB()).append(",");
-            json.append("\"reclaimablePercentage\":").append(String.format("%.2f", estimate.getReclaimablePercentage())).append(",");
-            json.append("\"totalSegmentCount\":").append(estimate.getTotalSegmentCount()).append(",");
-            json.append("\"totalSizeBytes\":").append(estimate.getTotalSizeBytes()).append(",");
-            json.append("\"totalSizeMB\":").append(estimate.getTotalSizeMB()).append(",");
-            json.append("\"estimatedCostUSDC\":\"").append(estimate.getEstimatedCostUSDC()).append("\",");
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("reclaimableSegmentCount", estimate.getReclaimableSegmentCount());
+            payload.put("reclaimableSizeBytes", estimate.getReclaimableSizeBytes());
+            payload.put("reclaimableSizeMB", estimate.getReclaimableSizeMB());
+            payload.put("reclaimablePercentage", String.format("%.2f", estimate.getReclaimablePercentage()));
+            payload.put("totalSegmentCount", estimate.getTotalSegmentCount());
+            payload.put("totalSizeBytes", estimate.getTotalSizeBytes());
+            payload.put("totalSizeMB", estimate.getTotalSizeMB());
+            payload.put("estimatedCostUSDC", estimate.getEstimatedCostUSDC().toString());
+            payload.put("reclaimableByTarFile", estimate.getReclaimableByTarFile());
 
-            // Reclaimable by TAR file
-            json.append("\"reclaimableByTarFile\":{");
-            boolean first = true;
-            for (java.util.Map.Entry<String, Long> entry : estimate.getReclaimableByTarFile().entrySet()) {
-                if (!first) json.append(",");
-                first = false;
-                json.append("\"").append(FormatUtils.escapeJson(entry.getKey())).append("\":").append(entry.getValue());
-            }
-            json.append("}");
-
-            json.append("}");
-
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
 
         } catch (IllegalArgumentException e) {
             // Invalid revision format

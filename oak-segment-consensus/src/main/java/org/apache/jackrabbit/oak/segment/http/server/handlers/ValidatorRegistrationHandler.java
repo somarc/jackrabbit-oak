@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,7 +29,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -254,18 +258,24 @@ public class ValidatorRegistrationHandler {
             log.info("📝 Validator registration pending approval: {}", walletAddress);
             
             response.setContentType("application/json");
-            response.getWriter().write(String.format(
-                "{\"success\":true,\"status\":\"pending\",\"walletAddress\":\"%s\",\"message\":\"Registration pending approval\"}",
-                walletAddress));
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("success", true);
+            payload.put("status", "pending");
+            payload.put("walletAddress", walletAddress);
+            payload.put("message", "Registration pending approval");
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
         } else {
             // Auto-approve
             credentials.put(walletAddress, credential);
             log.info("✅ Validator registered: {} ({})", walletAddress, credential.displayName);
             
             response.setContentType("application/json");
-            response.getWriter().write(String.format(
-                "{\"success\":true,\"status\":\"approved\",\"walletAddress\":\"%s\",\"message\":\"Registration complete\"}",
-                walletAddress));
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("success", true);
+            payload.put("status", "approved");
+            payload.put("walletAddress", walletAddress);
+            payload.put("message", "Registration complete");
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
         }
     }
     
@@ -297,9 +307,11 @@ public class ValidatorRegistrationHandler {
         log.info("✅ Validator registration approved: {}", walletAddress);
         
         response.setContentType("application/json");
-        response.getWriter().write(String.format(
-            "{\"success\":true,\"walletAddress\":\"%s\",\"message\":\"Registration approved\"}",
-            walletAddress));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("success", true);
+        payload.put("walletAddress", walletAddress);
+        payload.put("message", "Registration approved");
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
     
     /**
@@ -321,59 +333,47 @@ public class ValidatorRegistrationHandler {
         log.info("❌ Validator registration rejected: {}", walletAddress);
         
         response.setContentType("application/json");
-        response.getWriter().write(String.format(
-            "{\"success\":true,\"walletAddress\":\"%s\",\"message\":\"Registration rejected\"}",
-            walletAddress));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("success", true);
+        payload.put("walletAddress", walletAddress);
+        payload.put("message", "Registration rejected");
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
     
     /**
      * List pending registrations (admin only).
      */
     public void handleListPending(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        StringBuilder json = new StringBuilder("[");
-        boolean first = true;
-        
+        List<Map<String, Object>> pendingList = new ArrayList<>();
         for (PendingRegistration pending : pendingApprovals.values()) {
-            if (!first) json.append(",");
-            first = false;
-            
-            json.append(String.format(
-                "{\"walletAddress\":\"%s\",\"displayName\":\"%s\",\"requestedAt\":%d,\"requestedBy\":\"%s\"}",
-                pending.credential.walletAddress,
-                pending.credential.displayName,
-                pending.requestedAt,
-                pending.requestedBy));
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("walletAddress", pending.credential.walletAddress);
+            item.put("displayName", pending.credential.displayName);
+            item.put("requestedAt", pending.requestedAt);
+            item.put("requestedBy", pending.requestedBy);
+            pendingList.add(item);
         }
-        
-        json.append("]");
-        
+
         response.setContentType("application/json");
-        response.getWriter().write(json.toString());
+        response.getWriter().write(JsonOutputUtil.toJson(pendingList));
     }
     
     /**
      * List registered validators.
      */
     public void handleListValidators(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        StringBuilder json = new StringBuilder("[");
-        boolean first = true;
-        
+        List<Map<String, Object>> validators = new ArrayList<>();
         for (ValidatorCredential cred : credentials.values()) {
-            if (!first) json.append(",");
-            first = false;
-            
-            json.append(String.format(
-                "{\"walletAddress\":\"%s\",\"displayName\":\"%s\",\"registeredAt\":%d,\"approved\":%b}",
-                cred.walletAddress,
-                cred.displayName,
-                cred.registeredAt,
-                cred.approved));
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("walletAddress", cred.walletAddress);
+            item.put("displayName", cred.displayName);
+            item.put("registeredAt", cred.registeredAt);
+            item.put("approved", cred.approved);
+            validators.add(item);
         }
-        
-        json.append("]");
-        
+
         response.setContentType("application/json");
-        response.getWriter().write(json.toString());
+        response.getWriter().write(JsonOutputUtil.toJson(validators));
     }
     
     /**

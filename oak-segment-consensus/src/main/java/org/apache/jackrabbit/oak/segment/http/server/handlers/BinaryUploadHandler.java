@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSession;
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager;
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadStatus;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,6 +28,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * HTTP handler for lazy binary uploads (ADR 020).
@@ -116,15 +119,11 @@ public class BinaryUploadHandler {
             // Create session
             UploadSession session = sessionManager.createSession(walletAddress, filesize, mimeType, contentHash);
             
-            // Build JSON response using StringBuilder (consistent with rest of codebase)
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"intentToken\":\"").append(escapeJson(session.getIntentToken())).append("\",");
-            json.append("\"expirySeconds\":900,");
-            json.append("\"message\":\"Upload binary when you receive confirmation notification\"");
-            json.append("}");
-            
-            sendJson(response, 200, json.toString());
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("intentToken", session.getIntentToken());
+            payload.put("expirySeconds", 900);
+            payload.put("message", "Upload binary when you receive confirmation notification");
+            sendJson(response, 200, JsonOutputUtil.toJson(payload));
             
             log.info("📎 Declared intent: wallet={}, token={}, filesize={}", 
                 walletAddress, session.getIntentToken(), filesize);
@@ -159,23 +158,18 @@ public class BinaryUploadHandler {
                 return;
             }
             
-            // Build JSON response
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"status\":\"").append(session.getStatus().name()).append("\"");
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("status", session.getStatus().name());
             
             if (session.getStatus() == UploadStatus.READY_FOR_UPLOAD) {
-                json.append(",\"epochNumber\":").append(session.getEpochNumber());
-                json.append(",\"uploadDeadline\":").append(session.getUploadDeadline());
+                payload.put("epochNumber", session.getEpochNumber());
+                payload.put("uploadDeadline", session.getUploadDeadline());
             }
             
             if (session.getStatus() == UploadStatus.COMPLETED) {
-                json.append(",\"cid\":\"").append(escapeJson(session.getCid())).append("\"");
+                payload.put("cid", session.getCid());
             }
-            
-            json.append("}");
-            
-            sendJson(response, 200, json.toString());
+            sendJson(response, 200, JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Failed to handle check-intent", e);
@@ -244,14 +238,10 @@ public class BinaryUploadHandler {
                 return;
             }
             
-            // Build JSON response
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"status\":\"complete\",");
-            json.append("\"cid\":\"").append(escapeJson(cid)).append("\"");
-            json.append("}");
-            
-            sendJson(response, 200, json.toString());
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("status", "complete");
+            payload.put("cid", cid);
+            sendJson(response, 200, JsonOutputUtil.toJson(payload));
             
             log.info("✅ Upload complete: intentToken={}, cid={}", intentToken, cid);
             
@@ -290,17 +280,4 @@ public class BinaryUploadHandler {
         ApiErrorUtil.sendJsonError(response, statusCode, message);
     }
     
-    /**
-     * Escape JSON string (basic implementation).
-     */
-    private String escapeJson(String s) {
-        if (s == null) {
-            return "";
-        }
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
 }

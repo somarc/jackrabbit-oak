@@ -19,12 +19,17 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Handler for wallet stats and content endpoints.
@@ -48,17 +53,15 @@ public class WalletQueryHandler {
 
         try {
             response.setContentType("application/json");
-            StringBuilder json = new StringBuilder();
-
+            Object payload;
             if (wallet != null && !wallet.isEmpty()) {
                 // Single wallet stats
-                json.append(queryWalletNode(wallet));
+                payload = queryWalletNode(wallet);
             } else {
                 // All wallets (top 100 by contentCount)
-                json.append(queryTopWallets());
+                payload = queryTopWallets();
             }
-
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
 
         } catch (Exception e) {
             log.error("Failed to query wallet stats", e);
@@ -81,8 +84,7 @@ public class WalletQueryHandler {
 
         try {
             response.setContentType("application/json");
-            String json = queryWalletContent(wallet);
-            response.getWriter().write(json);
+            response.getWriter().write(JsonOutputUtil.toJson(queryWalletContent(wallet)));
 
         } catch (Exception e) {
             log.error("Failed to query wallet content", e);
@@ -94,7 +96,7 @@ public class WalletQueryHandler {
     /**
      * Query a single wallet node and return its metadata.
      */
-    private String queryWalletNode(String walletAddress) {
+    private Map<String, Object> queryWalletNode(String walletAddress) {
         try {
             // Build wallet path
             String[] levels = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.getShardLevels(walletAddress);
@@ -109,48 +111,48 @@ public class WalletQueryHandler {
                 .getChildNode(walletAddress);
 
             if (!walletNode.exists()) {
-                return "{\"error\":\"Wallet not found\"}";
+                Map<String, Object> error = new LinkedHashMap<>();
+                error.put("error", "Wallet not found");
+                return error;
             }
 
-            // Build JSON
-            StringBuilder json = new StringBuilder("{");
-            json.append("\"wallet\":\"").append(FormatUtils.escapeJson(walletAddress)).append("\",");
-            json.append("\"path\":\"").append(FormatUtils.escapeJson(walletPath)).append("\",");
+            Map<String, Object> json = new LinkedHashMap<>();
+            json.put("wallet", walletAddress);
+            json.put("path", walletPath);
 
             if (walletNode.hasProperty("nodeType")) {
-                json.append("\"nodeType\":\"").append(FormatUtils.escapeJson(walletNode.getProperty("nodeType").getValue(org.apache.jackrabbit.oak.api.Type.STRING))).append("\",");
+                json.put("nodeType", walletNode.getProperty("nodeType").getValue(org.apache.jackrabbit.oak.api.Type.STRING));
             }
             if (walletNode.hasProperty("walletCreated")) {
-                json.append("\"walletCreated\":").append(walletNode.getProperty("walletCreated").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+                json.put("walletCreated", walletNode.getProperty("walletCreated").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
             }
             if (walletNode.hasProperty("lastWrite")) {
-                json.append("\"lastWrite\":").append(walletNode.getProperty("lastWrite").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+                json.put("lastWrite", walletNode.getProperty("lastWrite").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
             }
             if (walletNode.hasProperty("contentCount")) {
-                json.append("\"contentCount\":").append(walletNode.getProperty("contentCount").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+                json.put("contentCount", walletNode.getProperty("contentCount").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
             }
             if (walletNode.hasProperty("totalWrites")) {
-                json.append("\"totalWrites\":").append(walletNode.getProperty("totalWrites").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+                json.put("totalWrites", walletNode.getProperty("totalWrites").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
             }
             if (walletNode.hasProperty("description")) {
-                json.append("\"description\":\"").append(FormatUtils.escapeJson(walletNode.getProperty("description").getValue(org.apache.jackrabbit.oak.api.Type.STRING))).append("\"");
+                json.put("description", walletNode.getProperty("description").getValue(org.apache.jackrabbit.oak.api.Type.STRING));
             }
-
-            json.append("}");
-            return json.toString();
+            return json;
 
         } catch (Exception e) {
             log.error("Failed to query wallet node: {}", walletAddress, e);
-            return "{\"error\":\"" + FormatUtils.escapeJson(e.getMessage()) + "\"}";
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("error", e.getMessage());
+            return error;
         }
     }
 
     /**
      * Query top wallets by content count.
      */
-    private String queryTopWallets() {
-        StringBuilder json = new StringBuilder("{\"wallets\":[");
-        boolean first = true;
+    private Map<String, Object> queryTopWallets() {
+        List<Map<String, Object>> wallets = new ArrayList<>();
 
         try {
             // Traverse /oak-chain tree and collect wallet metadata
@@ -170,22 +172,19 @@ public class WalletQueryHandler {
                                 if (walletName.startsWith("0x")) {
                                     org.apache.jackrabbit.oak.spi.state.NodeState walletNode = wallet.getNodeState();
 
-                                    if (!first) json.append(",");
-                                    first = false;
-
-                                    json.append("{");
-                                    json.append("\"wallet\":\"").append(FormatUtils.escapeJson(walletName)).append("\",");
+                                    Map<String, Object> walletJson = new LinkedHashMap<>();
+                                    walletJson.put("wallet", walletName);
 
                                     if (walletNode.hasProperty("contentCount")) {
-                                        json.append("\"contentCount\":").append(walletNode.getProperty("contentCount").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+                                        walletJson.put("contentCount", walletNode.getProperty("contentCount").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
                                     }
                                     if (walletNode.hasProperty("totalWrites")) {
-                                        json.append("\"totalWrites\":").append(walletNode.getProperty("totalWrites").getValue(org.apache.jackrabbit.oak.api.Type.LONG)).append(",");
+                                        walletJson.put("totalWrites", walletNode.getProperty("totalWrites").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
                                     }
                                     if (walletNode.hasProperty("lastWrite")) {
-                                        json.append("\"lastWrite\":").append(walletNode.getProperty("lastWrite").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
+                                        walletJson.put("lastWrite", walletNode.getProperty("lastWrite").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
                                     }
-                                    json.append("}");
+                                    wallets.add(walletJson);
                                 }
                             }
                         }
@@ -197,16 +196,16 @@ public class WalletQueryHandler {
             log.error("Failed to query top wallets", e);
         }
 
-        json.append("]}");
-        return json.toString();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("wallets", wallets);
+        return out;
     }
 
     /**
      * Query content items for a wallet.
      */
-    private String queryWalletContent(String walletAddress) {
-        StringBuilder json = new StringBuilder("{\"content\":[");
-        boolean first = true;
+    private Map<String, Object> queryWalletContent(String walletAddress) {
+        List<Map<String, Object>> content = new ArrayList<>();
 
         try {
             // Build wallet path
@@ -226,22 +225,19 @@ public class WalletQueryHandler {
                 for (org.apache.jackrabbit.oak.spi.state.ChildNodeEntry entry : contentNode.getChildNodeEntries()) {
                     org.apache.jackrabbit.oak.spi.state.NodeState item = entry.getNodeState();
 
-                    if (!first) json.append(",");
-                    first = false;
-
-                    json.append("{");
-                    json.append("\"name\":\"").append(FormatUtils.escapeJson(entry.getName())).append("\"");
+                    Map<String, Object> itemJson = new LinkedHashMap<>();
+                    itemJson.put("name", entry.getName());
 
                     if (item.hasProperty("contentType")) {
-                        json.append(",\"contentType\":\"").append(FormatUtils.escapeJson(item.getProperty("contentType").getValue(org.apache.jackrabbit.oak.api.Type.STRING))).append("\"");
+                        itemJson.put("contentType", item.getProperty("contentType").getValue(org.apache.jackrabbit.oak.api.Type.STRING));
                     }
                     if (item.hasProperty("timestamp")) {
-                        json.append(",\"timestamp\":").append(item.getProperty("timestamp").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
+                        itemJson.put("timestamp", item.getProperty("timestamp").getValue(org.apache.jackrabbit.oak.api.Type.LONG));
                     }
                     if (item.hasProperty("message")) {
-                        json.append(",\"message\":\"").append(FormatUtils.escapeJson(item.getProperty("message").getValue(org.apache.jackrabbit.oak.api.Type.STRING))).append("\"");
+                        itemJson.put("message", item.getProperty("message").getValue(org.apache.jackrabbit.oak.api.Type.STRING));
                     }
-                    json.append("}");
+                    content.add(itemJson);
                 }
             }
 
@@ -249,7 +245,8 @@ public class WalletQueryHandler {
             log.error("Failed to query wallet content: {}", walletAddress, e);
         }
 
-        json.append("]}");
-        return json.toString();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("content", content);
+        return out;
     }
 }

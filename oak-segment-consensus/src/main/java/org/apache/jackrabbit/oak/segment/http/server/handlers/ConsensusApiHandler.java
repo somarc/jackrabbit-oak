@@ -279,6 +279,14 @@ public class ConsensusApiHandler {
     public void handleGetProposalStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
         proposalQueryHandler.handleGetProposalStatus(request, response);
     }
+
+    /**
+     * Get ops.v1 operation status (adapter over proposal status).
+     * GET /v1/ops/operations/{operationId}
+     */
+    public void handleGetOperationStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        proposalQueryHandler.handleGetOperationStatus(request, response);
+    }
     
     /**
      * Get pending proposals count.
@@ -290,6 +298,14 @@ public class ConsensusApiHandler {
 
     public void handleGetQueueStats(HttpServletResponse response) throws IOException {
         proposalQueryHandler.handleGetQueueStats(response);
+    }
+
+    /**
+     * Get ops.v1 queue snapshot with freshness/degraded metadata.
+     * GET /v1/ops/snapshots/queue
+     */
+    public void handleGetOpsQueueSnapshot(HttpServletResponse response) throws IOException {
+        proposalQueryHandler.handleGetOpsQueueSnapshot(response);
     }
     
     /**

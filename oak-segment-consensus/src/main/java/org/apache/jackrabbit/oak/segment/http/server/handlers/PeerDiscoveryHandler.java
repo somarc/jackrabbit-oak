@@ -30,8 +30,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.Set;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 
 /**
  * Handler for peer discovery endpoints (`/v1/peers`).
@@ -113,24 +113,17 @@ public class PeerDiscoveryHandler {
             // OFFLINE = missed 2 full epochs (2 x leaderTermSeconds)
             final long offlineThresholdMs = leaderTermSeconds * 2 * 1000L; // 2 epochs
             
-            StringBuilder json = new StringBuilder();
-            json.append("[\n");
+            List<Map<String, Object>> peers = new ArrayList<>();
             
             // Use Set to track processed URLs to avoid duplicates
             Set<String> processedUrls = new HashSet<>();
             
-            boolean first = true;
             for (String validatorUrl : allValidatorUrls) {
                 // Skip if we've already processed this URL
                 if (processedUrls.contains(validatorUrl)) {
                     continue;
                 }
                 processedUrls.add(validatorUrl);
-                
-                if (!first) {
-                    json.append(",\n");
-                }
-                first = false;
                 
                 // Get registration if it exists (find by URL, not ID)
                 ValidatorRegistration reg = null;
@@ -200,11 +193,11 @@ public class PeerDiscoveryHandler {
                     validatorId = generateDeterministicAddress(validatorUrl);
                 }
                 
-                json.append("  {");
-                json.append("\"validatorId\":\"").append(validatorId.replace("\"", "\\\"")).append("\",");
-                json.append("\"validatorUrl\":\"").append(validatorUrl.replace("\"", "\\\"")).append("\",");
-                json.append("\"lastSeen\":").append(lastSeen).append(",");
-                json.append("\"status\":\"").append(status).append("\"");
+                Map<String, Object> peer = new java.util.LinkedHashMap<>();
+                peer.put("validatorId", validatorId);
+                peer.put("validatorUrl", validatorUrl);
+                peer.put("lastSeen", lastSeen);
+                peer.put("status", status);
                 
                 // Add epoch information for probation status (Aeron mode)
                 if ("PROBATION".equals(status) && context.aeronConsensusEngine != null) {
@@ -220,19 +213,17 @@ public class PeerDiscoveryHandler {
                         int currentEpoch = context.aeronConsensusEngine.getCurrentEpoch();
                         int eligibleEpoch = joinEpoch + 1; // Must wait 1 full epoch
                         
-                        json.append(",");
-                        json.append("\"joinEpoch\":").append(joinEpoch).append(",");
-                        json.append("\"eligibleEpoch\":").append(eligibleEpoch).append(",");
-                        json.append("\"currentEpoch\":").append(currentEpoch).append(",");
-                        json.append("\"secondsRemaining\":").append((probationPeriod - timeSinceJoin) / 1000L);
+                        peer.put("joinEpoch", joinEpoch);
+                        peer.put("eligibleEpoch", eligibleEpoch);
+                        peer.put("currentEpoch", currentEpoch);
+                        peer.put("secondsRemaining", (probationPeriod - timeSinceJoin) / 1000L);
                     }
                 }
-                
-                json.append("}");
+
+                peers.add(peer);
             }
-            
-            json.append("\n]");
-            response.getWriter().write(json.toString());
+
+            response.getWriter().write(JsonOutputUtil.toJson(peers));
             
             log.debug("Served peer list: {} total validators", allValidatorUrls.size());
             
@@ -277,4 +268,3 @@ public class PeerDiscoveryHandler {
         }
     }
 }
-

@@ -46,7 +46,10 @@ Read content, explore node tree, binary operations.
 Health checks, Prometheus metrics, performance monitoring.
 
 ### [Control Plane Contract](control-plane-dashboard-contract.md)
-API/CLI-first contract for external dashboard derivation (ADR 063/064 groundwork).
+API/CLI-first `ops.v1` contract for external dashboard derivation, including async operation lifecycle and SSE event schema (ADR 063/064/066/067).
+
+### [Control Plane Checklist](control-plane-dashboard-contract-checklist.md)
+Implementation mapping of `ops.v1` contract requirements to current handlers/endpoints with `implemented/partial/missing` status.
 
 ### [Segment Transfer](segments.md)
 Journal, manifest, segment fetching (for Sling authors).

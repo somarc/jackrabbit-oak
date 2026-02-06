@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * <ul>
  *   <li>Thread-safe client management</li>
  *   <li>Event buffering for late-joiners (catchup via 'since' param)</li>
- *   <li>Keep-alive heartbeats every 30 seconds</li>
+ *   <li>Keep-alive heartbeats every 15 seconds</li>
  *   <li>Automatic cleanup of dead connections</li>
  * </ul>
  */
@@ -47,7 +47,7 @@ public class EventBroadcaster {
     private static final Logger log = LoggerFactory.getLogger(EventBroadcaster.class);
 
     private static final int MAX_EVENT_BUFFER = 1000;
-    private static final int KEEP_ALIVE_INTERVAL_SECONDS = 30;
+    private static final int KEEP_ALIVE_INTERVAL_SECONDS = 15;
     private static final int MAX_CLIENTS = 100;
 
     private final Set<SSEClient> clients = ConcurrentHashMap.newKeySet();
@@ -301,4 +301,3 @@ public class EventBroadcaster {
         log.info("📡 EventBroadcaster shutdown");
     }
 }
-

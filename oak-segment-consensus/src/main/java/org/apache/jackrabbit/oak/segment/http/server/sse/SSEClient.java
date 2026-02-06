@@ -35,6 +35,8 @@ public class SSEClient {
     private final Set<String> organizations;
     private final String pathPrefix;
     private final Long since;
+    private final boolean opsV1Mode;
+    private final String sourceNode;
     private final long connectedAt;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -47,6 +49,20 @@ public class SSEClient {
         String pathPrefix,
         Long since
     ) {
+        this(asyncContext, writer, types, wallets, organizations, pathPrefix, since, false, null);
+    }
+
+    public SSEClient(
+        AsyncContext asyncContext,
+        PrintWriter writer,
+        Set<String> types,
+        Set<String> wallets,
+        Set<String> organizations,
+        String pathPrefix,
+        Long since,
+        boolean opsV1Mode,
+        String sourceNode
+    ) {
         this.asyncContext = asyncContext;
         this.writer = writer;
         this.types = types;
@@ -54,6 +70,8 @@ public class SSEClient {
         this.organizations = organizations;
         this.pathPrefix = pathPrefix;
         this.since = since;
+        this.opsV1Mode = opsV1Mode;
+        this.sourceNode = sourceNode != null ? sourceNode : "unknown";
         this.connectedAt = System.currentTimeMillis();
     }
 
@@ -106,7 +124,11 @@ public class SSEClient {
         }
 
         try {
-            writer.write(event.toSSE());
+            if (opsV1Mode) {
+                writer.write(toOpsV1SSE(event));
+            } else {
+                writer.write(event.toSSE());
+            }
             writer.flush();
             
             if (writer.checkError()) {
@@ -179,5 +201,85 @@ public class SSEClient {
     public Set<String> getTypes() {
         return types;
     }
-}
 
+    private String toOpsV1SSE(ContentEvent event) {
+        String eventType = mapOpsEventType(event);
+        StringBuilder sse = new StringBuilder();
+        sse.append("event: ").append(eventType).append("\n");
+        sse.append("id: ").append(event.getId()).append("\n");
+        sse.append("data: ").append(toOpsV1Json(event, eventType)).append("\n\n");
+        return sse.toString();
+    }
+
+    private String toOpsV1Json(ContentEvent event, String eventType) {
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"contractVersion\":\"ops.v1\",");
+        json.append("\"eventId\":\"").append(escapeJson(event.getId())).append("\",");
+        json.append("\"eventType\":\"").append(escapeJson(eventType)).append("\",");
+        json.append("\"sourceNode\":\"").append(escapeJson(sourceNode)).append("\",");
+        json.append("\"timestampMs\":").append(event.getTimestamp()).append(",");
+        json.append("\"data\":{");
+        json.append("\"legacyType\":\"").append(escapeJson(event.getType())).append("\"");
+        if (event.getAction() != null) {
+            json.append(",\"legacyAction\":\"").append(escapeJson(event.getAction())).append("\"");
+        }
+        if (event.getPath() != null) {
+            json.append(",\"path\":\"").append(escapeJson(event.getPath())).append("\"");
+        }
+        if (event.getWallet() != null) {
+            json.append(",\"wallet\":\"").append(escapeJson(event.getWallet())).append("\"");
+        }
+        if (event.getOrganization() != null) {
+            json.append(",\"organization\":\"").append(escapeJson(event.getOrganization())).append("\"");
+        }
+        if (event.getMessage() != null) {
+            json.append(",\"message\":\"").append(escapeJson(event.getMessage())).append("\"");
+        }
+        if (event.getIpfsCid() != null) {
+            json.append(",\"ipfsCid\":\"").append(escapeJson(event.getIpfsCid())).append("\"");
+        }
+        if (event.getSignature() != null) {
+            json.append(",\"signature\":\"").append(escapeJson(event.getSignature())).append("\"");
+        }
+        if (event.getSize() != null) {
+            json.append(",\"size\":").append(event.getSize());
+        }
+        if (event.getContentType() != null) {
+            json.append(",\"contentType\":\"").append(escapeJson(event.getContentType())).append("\"");
+        }
+        json.append("}}");
+        return json.toString();
+    }
+
+    private String mapOpsEventType(ContentEvent event) {
+        String type = event.getType();
+        String action = event.getAction();
+
+        if ("consensus".equals(type) && "leader_change".equals(action)) {
+            return "cluster.leader.changed";
+        }
+        if ("consensus".equals(type) && "commit".equals(action)) {
+            return "durability.ack.updated";
+        }
+        if ("content".equals(type) || "binary".equals(type) || "delete".equals(type)) {
+            return "proposal.state.changed";
+        }
+        if ("wallet".equals(type)) {
+            return "proposal.queue.updated";
+        }
+        return "health.status.changed";
+    }
+
+    private String escapeJson(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t");
+    }
+}

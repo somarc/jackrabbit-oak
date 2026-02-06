@@ -19,8 +19,9 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
-import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,6 +29,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -64,24 +67,17 @@ public class FragmentationApiHandler {
             }
             
             Map<String, FragmentationTracker.EntityFragmentationMetrics> allMetrics = tracker.getAllMetrics();
-            
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"totalEntities\": ").append(allMetrics.size()).append(",\n");
-            json.append("  \"entities\": [\n");
-            
-            boolean first = true;
+
+            List<Map<String, Object>> entities = new ArrayList<>();
             for (FragmentationTracker.EntityFragmentationMetrics metrics : allMetrics.values()) {
-                if (!first) json.append(",\n");
-                first = false;
-                appendMetricsJson(json, metrics, tracker);
+                entities.add(metricsToMap(metrics, tracker));
             }
-            
-            json.append("\n  ]\n");
-            json.append("}\n");
-            
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("totalEntities", allMetrics.size());
+            payload.put("entities", entities);
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error getting fragmentation metrics", e);
@@ -107,12 +103,9 @@ public class FragmentationApiHandler {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "No metrics found for wallet: " + walletAddress);
                 return;
             }
-            
-            StringBuilder json = new StringBuilder();
-            appendMetricsJson(json, metrics, tracker);
-            
+
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(metricsToMap(metrics, tracker)));
             
         } catch (Exception e) {
             log.error("Error getting entity fragmentation metrics", e);
@@ -144,24 +137,17 @@ public class FragmentationApiHandler {
             }
             
             List<FragmentationTracker.EntityFragmentationMetrics> topEntities = tracker.getTopFragmentedEntities(limit);
-            
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"limit\": ").append(limit).append(",\n");
-            json.append("  \"entities\": [\n");
-            
-            boolean first = true;
+
+            List<Map<String, Object>> entities = new ArrayList<>();
             for (FragmentationTracker.EntityFragmentationMetrics metrics : topEntities) {
-                if (!first) json.append(",\n");
-                first = false;
-                appendMetricsJson(json, metrics, tracker);
+                entities.add(metricsToMap(metrics, tracker));
             }
-            
-            json.append("\n  ]\n");
-            json.append("}\n");
-            
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("limit", limit);
+            payload.put("entities", entities);
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error getting top fragmented entities", e);
@@ -188,19 +174,16 @@ public class FragmentationApiHandler {
             // Get last GC execution
             List<org.apache.jackrabbit.oak.segment.consensus.gc.GCExecutionResult> history = gcManager.getGCHistory(1);
             org.apache.jackrabbit.oak.segment.consensus.gc.GCExecutionResult lastGC = history.isEmpty() ? null : history.get(0);
-            
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"gcEnabled\": true,\n");
-            json.append("  \"pendingProposals\": ").append(pending.size()).append(",\n");
-            json.append("  \"lastGcRun\": ").append(lastGC != null ? lastGC.timestamp : "null").append(",\n");
-            json.append("  \"lastGcReclaimedMB\": ").append(lastGC != null ? lastGC.actualReclaimedSizeMB : "null").append(",\n");
-            json.append("  \"lastGcCostUSDC\": ").append(lastGC != null ? "\"" + lastGC.actualCostUSDC.toString() + "\"" : "null").append(",\n");
-            json.append("  \"gcConsensusRequired\": true\n");
-            json.append("}\n");
-            
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("gcEnabled", true);
+            payload.put("pendingProposals", pending.size());
+            payload.put("lastGcRun", lastGC != null ? lastGC.timestamp : null);
+            payload.put("lastGcReclaimedMB", lastGC != null ? lastGC.actualReclaimedSizeMB : null);
+            payload.put("lastGcCostUSDC", lastGC != null && lastGC.actualCostUSDC != null ? lastGC.actualCostUSDC.toString() : null);
+            payload.put("gcConsensusRequired", true);
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error getting GC status", e);
@@ -222,23 +205,16 @@ public class FragmentationApiHandler {
             }
             
             List<org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal> proposals = gcManager.getPendingProposals();
-            
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"proposals\": [\n");
-            
-            boolean first = true;
+
+            List<Map<String, Object>> serialized = new ArrayList<>();
             for (org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal : proposals) {
-                if (!first) json.append(",\n");
-                first = false;
-                appendProposalJson(json, proposal);
+                serialized.add(proposalToMap(proposal));
             }
-            
-            json.append("\n  ]\n");
-            json.append("}\n");
-            
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("proposals", serialized);
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error getting compaction proposals", e);
@@ -375,14 +351,9 @@ public class FragmentationApiHandler {
                 log.debug("Aeron consensus engine not available - GC proposal created locally only");
             }
             
-            // Return proposal
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            appendProposalJson(json, proposal);
-            json.append("\n}\n");
-            
+            Map<String, Object> payload = proposalToMap(proposal);
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error proposing GC", e);
@@ -471,24 +442,20 @@ public class FragmentationApiHandler {
             // Execute GC
             org.apache.jackrabbit.oak.segment.consensus.gc.GCExecutionResult result = gcManager.executeGC(proposalId, executorId);
             
-            // Return execution result
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"proposalId\": \"").append(FormatUtils.escapeJson(result.proposalId)).append("\",\n");
-            json.append("  \"executorId\": ").append(result.executorId).append(",\n");
-            json.append("  \"success\": ").append(result.success).append(",\n");
-            json.append("  \"timestamp\": ").append(result.timestamp).append(",\n");
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("proposalId", result.proposalId);
+            payload.put("executorId", result.executorId);
+            payload.put("success", result.success);
+            payload.put("timestamp", result.timestamp);
             if (result.success) {
-                json.append("  \"filesRemoved\": ").append(result.filesRemoved != null ? result.filesRemoved.size() : 0).append(",\n");
-                json.append("  \"actualReclaimedSizeMB\": ").append(result.actualReclaimedSizeMB).append(",\n");
-                json.append("  \"actualCostUSDC\": \"").append(result.actualCostUSDC != null ? result.actualCostUSDC.toString() : "0").append("\"\n");
+                payload.put("filesRemoved", result.filesRemoved != null ? result.filesRemoved.size() : 0);
+                payload.put("actualReclaimedSizeMB", result.actualReclaimedSizeMB);
+                payload.put("actualCostUSDC", result.actualCostUSDC != null ? result.actualCostUSDC.toString() : "0");
             } else {
-                json.append("  \"errorMessage\": \"").append(FormatUtils.escapeJson(result.errorMessage != null ? result.errorMessage : "Unknown error")).append("\"\n");
+                payload.put("errorMessage", result.errorMessage != null ? result.errorMessage : "Unknown error");
             }
-            json.append("}\n");
-            
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (IllegalStateException e) {
             // Proposal not approved or already executed
@@ -503,42 +470,6 @@ public class FragmentationApiHandler {
     }
     
     /**
-     * Append proposal JSON.
-     */
-    private void appendProposalJson(StringBuilder json, org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal) {
-        json.append("    {\n");
-        json.append("      \"proposalId\": \"").append(FormatUtils.escapeJson(proposal.proposalId)).append("\",\n");
-        json.append("      \"proposerWallet\": \"").append(FormatUtils.escapeJson(proposal.proposerWallet)).append("\",\n");
-        json.append("      \"targetRevision\": ").append(proposal.targetRevision != null ? "\"" + FormatUtils.escapeJson(proposal.targetRevision) + "\"" : "null").append(",\n");
-        json.append("      \"state\": \"").append(proposal.state.toString()).append("\",\n");
-        json.append("      \"estimatedReclaimableSizeMB\": ").append(proposal.estimatedReclaimableSizeMB).append(",\n");
-        json.append("      \"estimatedCostUSDC\": \"").append(proposal.estimatedCostUSDC.toString()).append("\",\n");
-        json.append("      \"fragmentationOverheadMB\": ").append(proposal.fragmentationOverheadMB).append(",\n");
-        json.append("      \"fragmentationCostUSDC\": \"").append(proposal.fragmentationCostUSDC.toString()).append("\",\n");
-        json.append("      \"createdAt\": ").append(proposal.createdAt).append(",\n");
-        json.append("      \"expiresAt\": ").append(proposal.expiresAt).append(",\n");
-        json.append("      \"votes\": {\n");
-        
-        boolean firstVote = true;
-        for (java.util.Map.Entry<Integer, org.apache.jackrabbit.oak.segment.consensus.gc.GCVote> entry : proposal.votes.entrySet()) {
-            if (!firstVote) json.append(",\n");
-            firstVote = false;
-            org.apache.jackrabbit.oak.segment.consensus.gc.GCVote vote = entry.getValue();
-            json.append("        \"").append(entry.getKey()).append("\": {\n");
-            json.append("          \"vote\": \"").append(vote.approve ? "APPROVE" : "REJECT").append("\",\n");
-            json.append("          \"reason\": \"").append(FormatUtils.escapeJson(vote.reason != null ? vote.reason : "")).append("\",\n");
-            json.append("          \"timestamp\": ").append(vote.timestamp).append("\n");
-            json.append("        }");
-        }
-        
-        json.append("\n      },\n");
-        json.append("      \"approveVotes\": ").append(proposal.getApproveVoteCount()).append(",\n");
-        json.append("      \"rejectVotes\": ").append(proposal.getRejectVoteCount()).append(",\n");
-        json.append("      \"totalVotes\": ").append(proposal.getTotalVoteCount()).append("\n");
-        json.append("    }");
-    }
-    
-    /**
      * Get GC Proposal Manager from context.
      */
     private GCProposalManager getGCProposalManager() {
@@ -547,39 +478,6 @@ public class FragmentationApiHandler {
             return null;
         }
         return context.gcProposalManager;
-    }
-    
-    /**
-     * Append metrics JSON for a single entity.
-     */
-    private void appendMetricsJson(StringBuilder json, FragmentationTracker.EntityFragmentationMetrics metrics, FragmentationTracker tracker) {
-        BigInteger tax = tracker.calculateFragmentationTax(metrics.walletAddress);
-        
-        json.append("    {\n");
-        json.append("      \"walletAddress\": \"").append(FormatUtils.escapeJson(metrics.walletAddress)).append("\",\n");
-        json.append("      \"tarFilesCreated\": ").append(metrics.tarFilesCreated).append(",\n");
-        json.append("      \"totalBytesWritten\": ").append(metrics.totalBytesWritten).append(",\n");
-        json.append("      \"totalBytesWrittenFormatted\": \"").append(FormatUtils.formatBytes(metrics.totalBytesWritten)).append("\",\n");
-        json.append("      \"averageTarFileSize\": ").append(metrics.averageTarFileSize).append(",\n");
-        json.append("      \"averageTarFileSizeFormatted\": \"").append(FormatUtils.formatBytes(metrics.averageTarFileSize)).append("\",\n");
-        json.append("      \"packingEfficiency\": ").append(String.format("%.2f", metrics.packingEfficiency)).append(",\n");
-        json.append("      \"smallTarFileCount\": ").append(metrics.smallTarFileCount).append(",\n");
-        json.append("      \"fragmentationScore\": ").append(metrics.fragmentationScore).append(",\n");
-        json.append("      \"fragmentationTax\": \"").append(tax.toString()).append("\",\n");
-        json.append("      \"fragmentationTaxFormatted\": \"").append(formatWeiToEth(tax)).append(" ETH\",\n");
-        json.append("      \"lastWriteTimestamp\": ").append(metrics.lastWriteTimestamp).append(",\n");
-        json.append("      \"tarFiles\": [\n");
-        
-        List<String> tarFiles = tracker.getTarFilesForEntity(metrics.walletAddress);
-        boolean first = true;
-        for (String tarFile : tarFiles) {
-            if (!first) json.append(",\n");
-            first = false;
-            json.append("        \"").append(FormatUtils.escapeJson(tarFile)).append("\"");
-        }
-        
-        json.append("\n      ]\n");
-        json.append("    }");
     }
     
     /**
@@ -627,23 +525,18 @@ public class FragmentationApiHandler {
             
             org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
                 context.gcAccountManager.getAccount(walletAddress);
-            
-            // Build JSON response
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"walletAddress\": \"").append(account.walletAddress).append("\",\n");
-            json.append("  \"totalDebt\": \"").append(account.totalDebt).append("\",\n");
-            json.append("  \"pendingDebt\": \"").append(account.getPendingDebt()).append("\",\n");
-            json.append("  \"executedDebt\": \"").append(account.executedDebt).append("\",\n");
-            json.append("  \"debtLimit\": \"").append(account.debtLimit).append("\",\n");
-            json.append("  \"writesBlocked\": ").append(account.writesBlocked).append(",\n");
-            json.append("  \"lastDeleteTime\": ").append(account.lastDeleteTime).append(",\n");
-            json.append("  \"deleteCount\": ").append(account.deletes.size()).append(",\n");
-            json.append("  \"paymentCount\": ").append(account.payments.size()).append("\n");
-            json.append("}\n");
-            
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("walletAddress", account.walletAddress);
+            payload.put("totalDebt", account.totalDebt.toString());
+            payload.put("pendingDebt", account.getPendingDebt().toString());
+            payload.put("executedDebt", account.executedDebt.toString());
+            payload.put("debtLimit", account.debtLimit.toString());
+            payload.put("writesBlocked", account.writesBlocked);
+            payload.put("lastDeleteTime", account.lastDeleteTime);
+            payload.put("deleteCount", account.deletes.size());
+            payload.put("paymentCount", account.payments.size());
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error getting GC account", e);
@@ -683,25 +576,17 @@ public class FragmentationApiHandler {
             // Get updated account
             org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
                 context.gcAccountManager.getAccount(walletAddress);
-            
-            // Build response
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"success\": true,\n");
-            json.append("  \"amountPaid\": \"").append(amount).append("\",\n");
-            json.append("  \"remainingDebt\": \"").append(account.executedDebt).append("\",\n");
-            json.append("  \"writesBlocked\": ").append(account.writesBlocked).append(",\n");
-            json.append("  \"message\": \"Payment recorded. ");
-            if (account.writesBlocked) {
-                json.append("Debt still exceeds limit - pay more to resume writes.");
-            } else {
-                json.append("Writes resumed.");
-            }
-            json.append("\"\n");
-            json.append("}\n");
-            
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("success", true);
+            payload.put("amountPaid", amount.toString());
+            payload.put("remainingDebt", account.executedDebt.toString());
+            payload.put("writesBlocked", account.writesBlocked);
+            payload.put("message", account.writesBlocked
+                ? "Payment recorded. Debt still exceeds limit - pay more to resume writes."
+                : "Payment recorded. Writes resumed.");
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error recording payment", e);
@@ -740,17 +625,13 @@ public class FragmentationApiHandler {
             // Get updated account
             org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
                 context.gcAccountManager.getAccount(walletAddress);
-            
-            // Build response
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"success\": true,\n");
-            json.append("  \"debtLimit\": \"").append(account.debtLimit).append("\",\n");
-            json.append("  \"writesBlocked\": ").append(account.writesBlocked).append("\n");
-            json.append("}\n");
-            
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("success", true);
+            payload.put("debtLimit", account.debtLimit.toString());
+            payload.put("writesBlocked", account.writesBlocked);
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error setting debt limit", e);
@@ -782,25 +663,17 @@ public class FragmentationApiHandler {
             
             // Convert pending to executed
             account.convertPendingToExecuted(pending);
-            
-            // Build response
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"success\": true,\n");
-            json.append("  \"converted\": \"").append(pending).append("\",\n");
-            json.append("  \"executedDebt\": \"").append(account.executedDebt).append("\",\n");
-            json.append("  \"writesBlocked\": ").append(account.writesBlocked).append(",\n");
-            json.append("  \"message\": \"Pending debt converted to executed. ");
-            if (account.writesBlocked) {
-                json.append("Writes now BLOCKED - pay to resume.");
-            } else {
-                json.append("Debt under limit.");
-            }
-            json.append("\"\n");
-            json.append("}\n");
-            
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("success", true);
+            payload.put("converted", pending.toString());
+            payload.put("executedDebt", account.executedDebt.toString());
+            payload.put("writesBlocked", account.writesBlocked);
+            payload.put("message", account.writesBlocked
+                ? "Pending debt converted to executed. Writes now BLOCKED - pay to resume."
+                : "Pending debt converted to executed. Debt under limit.");
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error executing pending debt", e);
@@ -831,26 +704,19 @@ public class FragmentationApiHandler {
                 context.gcAccountManager.getBlockedAccounts();
             java.util.List<org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount> withExecutedDebt = 
                 context.gcAccountManager.getAccountsWithExecutedDebt();
-            
-            // Build response
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"success\": true,\n");
-            json.append("  \"message\": \"GC cycle executed - pending debt converted to executed\",\n");
-            json.append("  \"entitiesWithExecutedDebt\": ").append(withExecutedDebt.size()).append(",\n");
-            json.append("  \"entitiesBlocked\": ").append(blocked.size());
-            if (!blocked.isEmpty()) {
-                json.append(",\n  \"blockedWallets\": [");
-                for (int i = 0; i < blocked.size(); i++) {
-                    if (i > 0) json.append(", ");
-                    json.append("\"").append(blocked.get(i).walletAddress).append("\"");
-                }
-                json.append("]");
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("success", true);
+            payload.put("message", "GC cycle executed - pending debt converted to executed");
+            payload.put("entitiesWithExecutedDebt", withExecutedDebt.size());
+            payload.put("entitiesBlocked", blocked.size());
+            List<String> blockedWallets = new ArrayList<>();
+            for (org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account : blocked) {
+                blockedWallets.add(account.walletAddress);
             }
-            json.append("\n}\n");
-            
+            payload.put("blockedWallets", blockedWallets);
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(json.toString());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
             log.info("🧹 Manual GC triggered - {} entities with executed debt, {} blocked", 
                      withExecutedDebt.size(), blocked.size());
@@ -860,5 +726,55 @@ public class FragmentationApiHandler {
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
-}
 
+    private Map<String, Object> proposalToMap(org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("proposalId", proposal.proposalId);
+        payload.put("proposerWallet", proposal.proposerWallet);
+        payload.put("targetRevision", proposal.targetRevision);
+        payload.put("state", proposal.state.toString());
+        payload.put("estimatedReclaimableSizeMB", proposal.estimatedReclaimableSizeMB);
+        payload.put("estimatedCostUSDC", proposal.estimatedCostUSDC != null ? proposal.estimatedCostUSDC.toString() : "0");
+        payload.put("fragmentationOverheadMB", proposal.fragmentationOverheadMB);
+        payload.put("fragmentationCostUSDC", proposal.fragmentationCostUSDC != null ? proposal.fragmentationCostUSDC.toString() : "0");
+        payload.put("createdAt", proposal.createdAt);
+        payload.put("expiresAt", proposal.expiresAt);
+
+        Map<String, Object> votes = new LinkedHashMap<>();
+        for (Map.Entry<Integer, org.apache.jackrabbit.oak.segment.consensus.gc.GCVote> entry : proposal.votes.entrySet()) {
+            org.apache.jackrabbit.oak.segment.consensus.gc.GCVote vote = entry.getValue();
+            Map<String, Object> votePayload = new LinkedHashMap<>();
+            votePayload.put("vote", vote.approve ? "APPROVE" : "REJECT");
+            votePayload.put("reason", vote.reason != null ? vote.reason : "");
+            votePayload.put("timestamp", vote.timestamp);
+            votes.put(String.valueOf(entry.getKey()), votePayload);
+        }
+        payload.put("votes", votes);
+        payload.put("approveVotes", proposal.getApproveVoteCount());
+        payload.put("rejectVotes", proposal.getRejectVoteCount());
+        payload.put("totalVotes", proposal.getTotalVoteCount());
+        return payload;
+    }
+
+    private Map<String, Object> metricsToMap(FragmentationTracker.EntityFragmentationMetrics metrics,
+                                             FragmentationTracker tracker) {
+        BigInteger tax = tracker.calculateFragmentationTax(metrics.walletAddress);
+        List<String> tarFiles = tracker.getTarFilesForEntity(metrics.walletAddress);
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("walletAddress", metrics.walletAddress);
+        payload.put("tarFilesCreated", metrics.tarFilesCreated);
+        payload.put("totalBytesWritten", metrics.totalBytesWritten);
+        payload.put("totalBytesWrittenFormatted", FormatUtils.formatBytes(metrics.totalBytesWritten));
+        payload.put("averageTarFileSize", metrics.averageTarFileSize);
+        payload.put("averageTarFileSizeFormatted", FormatUtils.formatBytes(metrics.averageTarFileSize));
+        payload.put("packingEfficiency", String.format("%.2f", metrics.packingEfficiency));
+        payload.put("smallTarFileCount", metrics.smallTarFileCount);
+        payload.put("fragmentationScore", metrics.fragmentationScore);
+        payload.put("fragmentationTax", tax.toString());
+        payload.put("fragmentationTaxFormatted", formatWeiToEth(tax) + " ETH");
+        payload.put("lastWriteTimestamp", metrics.lastWriteTimestamp);
+        payload.put("tarFiles", tarFiles);
+        return payload;
+    }
+}

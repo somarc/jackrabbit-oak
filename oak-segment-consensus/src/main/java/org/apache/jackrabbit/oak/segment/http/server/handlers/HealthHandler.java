@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +30,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -38,6 +40,7 @@ import java.util.Map;
  */
 public class HealthHandler {
     private static final Logger log = LoggerFactory.getLogger(HealthHandler.class);
+    private static final long OPS_HEALTH_SNAPSHOT_TTL_MS = 1000L;
     
     private final FileStore fileStore;
     private final NodeStore nodeStore;
@@ -45,6 +48,9 @@ public class HealthHandler {
     private final ServerContext context;
     private final Map<String, ?> registeredClients;
     private final Map<String, ?> registeredValidators;
+    private final Object opsHealthSnapshotLock = new Object();
+    private volatile Map<String, Object> cachedOpsHealthSnapshotData;
+    private volatile long cachedOpsHealthSnapshotSourceTimestampMs;
     
     public HealthHandler(
             FileStore fileStore,
@@ -85,56 +91,48 @@ public class HealthHandler {
         
         // Return 503 if cluster unhealthy, 200 otherwise
         response.setStatus(isClusterHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-        
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
-        json.append("  \"success\": ").append(isClusterHealthy).append(",\n");
-        json.append("  \"status\": \"").append(isClusterHealthy ? "UP" : "UNHEALTHY").append("\",\n");
-        json.append("  \"timestamp\": ").append(System.currentTimeMillis()).append(",\n");
-        
-        // ADR 028: Include unhealthy reason if applicable
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("success", isClusterHealthy);
+        payload.put("status", isClusterHealthy ? "UP" : "UNHEALTHY");
+        payload.put("timestamp", System.currentTimeMillis());
         if (!isClusterHealthy && unhealthyReason != null) {
-            json.append("  \"unhealthyReason\": \"").append(unhealthyReason).append("\",\n");
+            payload.put("unhealthyReason", unhealthyReason);
         }
-        
-        json.append("  \"store\": \"").append(storeDirectory).append("\"");
-        
-        // Add BlobStore type for dashboard status checks
+        payload.put("store", String.valueOf(storeDirectory));
+
         if (context != null && context.blobStoreType != null) {
-            json.append(",\n  \"blobStoreType\": \"").append(context.blobStoreType).append("\"");
-            json.append(",\n  \"blobStoreActive\": ").append(context.blobStore != null);
+            payload.put("blobStoreType", context.blobStoreType);
+            payload.put("blobStoreActive", context.blobStore != null);
         }
-        
-        // Add committedHead vs latestHead if Aeron engine is available
+
         if (context != null && context.aeronConsensusEngine != null) {
-            // ADR 028: Add cluster health status
-            json.append(",\n  \"clusterHealthy\": ").append(isClusterHealthy);
-            json.append(",\n  \"reachableCount\": ").append(context.aeronConsensusEngine.getReachableValidatorCount());
-            json.append(",\n  \"totalMembers\": ").append(context.aeronConsensusEngine.getTotalMemberCount());
-            json.append(",\n  \"quorumSize\": ").append(context.aeronConsensusEngine.getQuorumSize());
-            json.append(",\n  \"currentRole\": \"").append(context.aeronConsensusEngine.getCurrentRole().name()).append("\"");
-            
+            payload.put("clusterHealthy", isClusterHealthy);
+            payload.put("reachableCount", context.aeronConsensusEngine.getReachableValidatorCount());
+            payload.put("totalMembers", context.aeronConsensusEngine.getTotalMemberCount());
+            payload.put("quorumSize", context.aeronConsensusEngine.getQuorumSize());
+            payload.put("currentRole", context.aeronConsensusEngine.getCurrentRole().name());
+
             String committedHead = context.aeronConsensusEngine.getCommittedHead();
             String latestHead = context.aeronConsensusEngine.getLatestHead();
             int latestEpochSeen = context.aeronConsensusEngine.getLatestEpochSeen();
             int committedEpoch = context.aeronConsensusEngine.getLastCommittedEpoch();
-            
+
             if (committedHead != null && !committedHead.isEmpty()) {
-                json.append(",\n  \"committedHead\": \"").append(committedHead).append("\"");
+                payload.put("committedHead", committedHead);
             }
             if (latestHead != null && !latestHead.isEmpty()) {
-                json.append(",\n  \"latestHead\": \"").append(latestHead).append("\"");
+                payload.put("latestHead", latestHead);
             }
             if (latestEpochSeen >= 0) {
-                json.append(",\n  \"latestEpochSeen\": ").append(latestEpochSeen);
+                payload.put("latestEpochSeen", latestEpochSeen);
             }
             if (committedEpoch >= 0) {
-                json.append(",\n  \"committedEpoch\": ").append(committedEpoch);
+                payload.put("committedEpoch", committedEpoch);
             }
         }
-        
-        json.append("\n}");
-        response.getWriter().write(json.toString());
+
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
     
     /**
@@ -142,295 +140,209 @@ public class HealthHandler {
      */
     public void handleDeepHealth(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        
         boolean allHealthy = true;
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
-        json.append("  \"success\": ").append(allHealthy).append(",\n");
-        
-        // 1. Check FileStore health
-        json.append("  \"fileStore\": {\n");
+        Map<String, Object> payload = new HashMap<>();
+
+        Map<String, Object> fileStoreHealth = new HashMap<>();
         try {
             if (fileStore != null) {
                 String headId = fileStore.getHead().getRecordId().toString10();
-
+                fileStoreHealth.put("status", "UP");
+                fileStoreHealth.put("head", headId.substring(0, Math.min(16, headId.length())) + "...");
                 AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
-                String committedHead = null;
-                String latestHead = null;
-                int latestEpochSeen = -1;
-                int committedEpoch = -1;
-                boolean hasCommittedHead = false;
-                boolean hasLatestHead = false;
-                boolean hasLatestEpoch = false;
-                boolean hasCommittedEpoch = false;
                 if (aeronEngine != null) {
-                    committedHead = aeronEngine.getCommittedHead();
-                    latestHead = aeronEngine.getLatestHead();
-                    latestEpochSeen = aeronEngine.getLatestEpochSeen();
-                    committedEpoch = aeronEngine.getLastCommittedEpoch();
-                    hasCommittedHead = committedHead != null && !committedHead.isEmpty();
-                    hasLatestHead = latestHead != null && !latestHead.isEmpty();
-                    hasLatestEpoch = latestEpochSeen >= 0;
-                    hasCommittedEpoch = committedEpoch >= 0;
-                }
-                boolean hasFinalityFields = hasCommittedHead || hasLatestHead || hasLatestEpoch || hasCommittedEpoch;
-
-                json.append("    \"status\": \"UP\",\n");
-                json.append("    \"head\": \"").append(headId.substring(0, Math.min(16, headId.length()))).append("...\"");
-                if (hasFinalityFields) {
-                    json.append(",\n");
-                } else {
-                    json.append("\n");
-                }
-
-                // FINALITY-AWARE HEAD TRACKING: committedHead vs latestHead and epoch markers
-                if (hasCommittedHead) {
-                    json.append("    \"committedHead\": \"").append(committedHead).append("\"");
-                    if (hasLatestHead || hasLatestEpoch || hasCommittedEpoch) {
-                        json.append(",\n");
-                    } else {
-                        json.append("\n");
+                    if (aeronEngine.getCommittedHead() != null && !aeronEngine.getCommittedHead().isEmpty()) {
+                        fileStoreHealth.put("committedHead", aeronEngine.getCommittedHead());
                     }
-                }
-                if (hasLatestHead) {
-                    json.append("    \"latestHead\": \"").append(latestHead).append("\"");
-                    if (hasLatestEpoch || hasCommittedEpoch) {
-                        json.append(",\n");
-                    } else {
-                        json.append("\n");
+                    if (aeronEngine.getLatestHead() != null && !aeronEngine.getLatestHead().isEmpty()) {
+                        fileStoreHealth.put("latestHead", aeronEngine.getLatestHead());
                     }
-                }
-                if (hasLatestEpoch) {
-                    json.append("    \"latestEpochSeen\": ").append(latestEpochSeen);
-                    if (hasCommittedEpoch) {
-                        json.append(",\n");
-                    } else {
-                        json.append("\n");
+                    if (aeronEngine.getLatestEpochSeen() >= 0) {
+                        fileStoreHealth.put("latestEpochSeen", aeronEngine.getLatestEpochSeen());
                     }
-                }
-                if (hasCommittedEpoch) {
-                    json.append("    \"committedEpoch\": ").append(committedEpoch).append("\n");
+                    if (aeronEngine.getLastCommittedEpoch() >= 0) {
+                        fileStoreHealth.put("committedEpoch", aeronEngine.getLastCommittedEpoch());
+                    }
                 }
             } else {
-                json.append("    \"status\": \"DOWN\",\n");
-                json.append("    \"error\": \"FileStore not initialized\"\n");
+                fileStoreHealth.put("status", "DOWN");
+                fileStoreHealth.put("error", "FileStore not initialized");
                 allHealthy = false;
             }
         } catch (Exception e) {
-            json.append("    \"status\": \"DOWN\",\n");
-            json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+            fileStoreHealth.put("status", "DOWN");
+            fileStoreHealth.put("error", e.getMessage());
             allHealthy = false;
         }
-        json.append("  },\n");
+        payload.put("fileStore", fileStoreHealth);
 
-        // 2.5. Check cluster health
-        json.append("  \"cluster\": {\n");
+        Map<String, Object> cluster = new HashMap<>();
         try {
             AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
             if (aeronEngine != null) {
                 boolean clusterHealthy = aeronEngine.isClusterHealthy();
-                json.append("    \"status\": \"").append(clusterHealthy ? "UP" : "UNHEALTHY").append("\",\n");
-                json.append("    \"reachableCount\": ").append(aeronEngine.getReachableValidatorCount()).append(",\n");
-                json.append("    \"totalMembers\": ").append(aeronEngine.getTotalMemberCount()).append(",\n");
-                json.append("    \"quorumSize\": ").append(aeronEngine.getQuorumSize()).append(",\n");
-                json.append("    \"currentRole\": \"").append(aeronEngine.getCurrentRole().name()).append("\",\n");
-                json.append("    \"heartbeatAgeMs\": ").append(aeronEngine.getHeartbeatAgeMs());
-                String reason = aeronEngine.getUnhealthyReason();
-                if (reason != null) {
-                    json.append(",\n    \"unhealthyReason\": \"").append(reason).append("\"\n");
-                } else {
-                    json.append("\n");
+                cluster.put("status", clusterHealthy ? "UP" : "UNHEALTHY");
+                cluster.put("reachableCount", aeronEngine.getReachableValidatorCount());
+                cluster.put("totalMembers", aeronEngine.getTotalMemberCount());
+                cluster.put("quorumSize", aeronEngine.getQuorumSize());
+                cluster.put("currentRole", aeronEngine.getCurrentRole().name());
+                cluster.put("heartbeatAgeMs", aeronEngine.getHeartbeatAgeMs());
+                if (!clusterHealthy && aeronEngine.getUnhealthyReason() != null) {
+                    cluster.put("unhealthyReason", aeronEngine.getUnhealthyReason());
                 }
                 if (!clusterHealthy) {
                     allHealthy = false;
                 }
             } else {
-                json.append("    \"status\": \"UNKNOWN\",\n");
-                json.append("    \"error\": \"Aeron consensus engine not initialized\"\n");
+                cluster.put("status", "UNKNOWN");
+                cluster.put("error", "Aeron consensus engine not initialized");
                 allHealthy = false;
             }
         } catch (Exception e) {
-            json.append("    \"status\": \"DOWN\",\n");
-            json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+            cluster.put("status", "DOWN");
+            cluster.put("error", e.getMessage());
             allHealthy = false;
         }
-        json.append("  },\n");
-        
-        // 2. Check NodeStore health
-        json.append("  \"nodeStore\": {\n");
+        payload.put("cluster", cluster);
+
+        Map<String, Object> nodeStoreHealth = new HashMap<>();
         try {
             if (nodeStore != null) {
-                org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
-                json.append("    \"status\": \"UP\",\n");
-                json.append("    \"rootExists\": ").append(root != null).append("\n");
+                nodeStoreHealth.put("status", "UP");
+                nodeStoreHealth.put("rootExists", nodeStore.getRoot() != null);
             } else {
-                json.append("    \"status\": \"DOWN\",\n");
-                json.append("    \"error\": \"NodeStore not initialized\"\n");
+                nodeStoreHealth.put("status", "DOWN");
+                nodeStoreHealth.put("error", "NodeStore not initialized");
                 allHealthy = false;
             }
         } catch (Exception e) {
-            json.append("    \"status\": \"DOWN\",\n");
-            json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+            nodeStoreHealth.put("status", "DOWN");
+            nodeStoreHealth.put("error", e.getMessage());
             allHealthy = false;
         }
-        json.append("  },\n");
-        
-        // 3. Check disk space
-        json.append("  \"diskSpace\": {\n");
+        payload.put("nodeStore", nodeStoreHealth);
+
+        Map<String, Object> diskSpace = new HashMap<>();
         try {
             java.nio.file.FileStore fs = Files.getFileStore(storeDirectory);
             long totalSpace = fs.getTotalSpace();
             long usableSpace = fs.getUsableSpace();
             double usagePercent = ((totalSpace - usableSpace) * 100.0) / totalSpace;
-            
-            boolean diskHealthy = usagePercent < 90.0;  // Alert if > 90% full
-            json.append("    \"status\": \"").append(diskHealthy ? "UP" : "WARN").append("\",\n");
-            json.append("    \"totalGb\": ").append(String.format("%.2f", totalSpace / (1024.0 * 1024.0 * 1024.0))).append(",\n");
-            json.append("    \"usableGb\": ").append(String.format("%.2f", usableSpace / (1024.0 * 1024.0 * 1024.0))).append(",\n");
-            json.append("    \"usagePercent\": ").append(String.format("%.1f", usagePercent)).append("\n");
-            
+            boolean diskHealthy = usagePercent < 90.0;
+            diskSpace.put("status", diskHealthy ? "UP" : "WARN");
+            diskSpace.put("totalGb", String.format("%.2f", totalSpace / (1024.0 * 1024.0 * 1024.0)));
+            diskSpace.put("usableGb", String.format("%.2f", usableSpace / (1024.0 * 1024.0 * 1024.0)));
+            diskSpace.put("usagePercent", String.format("%.1f", usagePercent));
             if (!diskHealthy) {
                 allHealthy = false;
             }
         } catch (Exception e) {
-            json.append("    \"status\": \"DOWN\",\n");
-            json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+            diskSpace.put("status", "DOWN");
+            diskSpace.put("error", e.getMessage());
             allHealthy = false;
         }
-        json.append("  },\n");
-        
-        // 4. Check MediaDriver health (if Aeron Cluster is configured)
+        payload.put("diskSpace", diskSpace);
+
         AeronClusterLauncher aeronLauncher = (context != null) ? context.aeronClusterLauncher : null;
         if (aeronLauncher != null) {
-            json.append("  \"mediaDriver\": {\n");
+            Map<String, Object> mediaDriver = new HashMap<>();
             try {
                 CrashHandler crashHandler = aeronLauncher.getCrashHandler();
-                org.apache.jackrabbit.oak.segment.consensus.aeron.MediaDriverHealthMonitor healthMonitor = 
-                    aeronLauncher.getHealthMonitor();
-                
+                org.apache.jackrabbit.oak.segment.consensus.aeron.MediaDriverHealthMonitor healthMonitor = aeronLauncher.getHealthMonitor();
                 boolean mediaDriverHealthy = true;
-                
-                // Check crash handler
                 if (crashHandler != null) {
-                    String crashState = crashHandler.getState();
-                    boolean hasCrashed = crashHandler.hasCrashed();
-                    boolean shouldBootstrap = crashHandler.shouldForceBootstrap();
-                    
-                    json.append("    \"crashState\": \"").append(crashState).append("\",\n");
-                    json.append("    \"hasCrashed\": ").append(hasCrashed).append(",\n");
-                    json.append("    \"forceBootstrap\": ").append(shouldBootstrap).append(",\n");
-                    
-                    if (hasCrashed) {
+                    mediaDriver.put("crashState", crashHandler.getState());
+                    mediaDriver.put("hasCrashed", crashHandler.hasCrashed());
+                    mediaDriver.put("forceBootstrap", crashHandler.shouldForceBootstrap());
+                    if (crashHandler.hasCrashed()) {
                         mediaDriverHealthy = false;
                     }
                 } else {
-                    json.append("    \"crashHandler\": \"not_initialized\",\n");
+                    mediaDriver.put("crashHandler", "not_initialized");
                 }
-                
-                // Check health monitor (if available)
                 if (healthMonitor != null) {
-                    boolean monitorHealthy = healthMonitor.isHealthy();
-                    String monitorStatus = healthMonitor.getHealthStatus();
-                    long errorCount = healthMonitor.getErrorCount();
-                    long timeoutCount = healthMonitor.getTimeoutCount();
-                    long backpressureCount = healthMonitor.getBackpressureCount();
-                    long freeSpaceMB = healthMonitor.getFreeSpaceMB();
-                    
-                    json.append("    \"status\": \"").append(monitorHealthy ? "UP" : "DEGRADED").append("\",\n");
-                    json.append("    \"healthStatus\": \"").append(monitorStatus).append("\",\n");
-                    json.append("    \"errorCount\": ").append(errorCount).append(",\n");
-                    json.append("    \"timeoutCount\": ").append(timeoutCount).append(",\n");
-                    json.append("    \"backpressureCount\": ").append(backpressureCount).append(",\n");
-                    json.append("    \"freeSpaceMB\": ").append(freeSpaceMB).append("\n");
-                    
-                    if (!monitorHealthy) {
+                    mediaDriver.put("status", healthMonitor.isHealthy() ? "UP" : "DEGRADED");
+                    mediaDriver.put("healthStatus", healthMonitor.getHealthStatus());
+                    mediaDriver.put("errorCount", healthMonitor.getErrorCount());
+                    mediaDriver.put("timeoutCount", healthMonitor.getTimeoutCount());
+                    mediaDriver.put("backpressureCount", healthMonitor.getBackpressureCount());
+                    mediaDriver.put("freeSpaceMB", healthMonitor.getFreeSpaceMB());
+                    if (!healthMonitor.isHealthy()) {
                         mediaDriverHealthy = false;
                     }
                 } else {
-                    json.append("    \"status\": \"UP\",\n");
-                    json.append("    \"healthMonitor\": \"not_initialized\"\n");
+                    mediaDriver.put("status", "UP");
+                    mediaDriver.put("healthMonitor", "not_initialized");
                 }
-                
                 if (!mediaDriverHealthy) {
                     allHealthy = false;
                 }
             } catch (Exception e) {
-                json.append("    \"status\": \"DOWN\",\n");
-                json.append("    \"error\": \"").append(e.getMessage().replace("\"", "\\\"")).append("\"\n");
+                mediaDriver.put("status", "DOWN");
+                mediaDriver.put("error", e.getMessage());
                 allHealthy = false;
             }
-            json.append("  },\n");
+            payload.put("mediaDriver", mediaDriver);
         }
-        
-        // 5. Check consensus engine (Aeron Cluster only)
-        // Use context fields directly (volatile) to get current state, not constructor snapshot
+
         AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
-        
         if (aeronEngine != null) {
-            json.append("  \"consensus\": {\n");
+            Map<String, Object> consensus = new HashMap<>();
             try {
-                json.append("    \"status\": \"UP\",\n");
-                json.append("    \"mode\": \"aeron-cluster\",\n");
-                json.append("    \"role\": \"").append(aeronEngine.getCurrentRole()).append("\",\n");
-                json.append("    \"isLeader\": ").append(aeronEngine.isLeader()).append(",\n");
-                json.append("    \"epoch\": ").append(aeronEngine.getCurrentEpoch()).append(",\n");
-                json.append("    \"term\": ").append(aeronEngine.getCurrentTerm()).append(",\n");
-                json.append("    \"reachableValidators\": ").append(aeronEngine.getReachableValidatorCount()).append(",\n");
-                json.append("    \"currentLeader\": \"").append(aeronEngine.getCurrentLeader() != null ? aeronEngine.getCurrentLeader() : "none").append("\"\n");
+                consensus.put("status", "UP");
+                consensus.put("mode", "aeron-cluster");
+                consensus.put("role", aeronEngine.getCurrentRole().toString());
+                consensus.put("isLeader", aeronEngine.isLeader());
+                consensus.put("epoch", aeronEngine.getCurrentEpoch());
+                consensus.put("term", aeronEngine.getCurrentTerm());
+                consensus.put("reachableValidators", aeronEngine.getReachableValidatorCount());
+                consensus.put("currentLeader", aeronEngine.getCurrentLeader() != null ? aeronEngine.getCurrentLeader() : "none");
             } catch (Exception e) {
-                json.append("    \"status\": \"DOWN\",\n");
-                json.append("    \"error\": \"").append(e.getMessage()).append("\"\n");
+                consensus.put("status", "DOWN");
+                consensus.put("error", e.getMessage());
                 allHealthy = false;
             }
-            json.append("  },\n");
+            payload.put("consensus", consensus);
         }
-        
-        // 6. Check connected clients
-        json.append("  \"clients\": {\n");
-        json.append("    \"status\": \"UP\",\n");
-        json.append("    \"registeredClients\": ").append(registeredClients.size()).append(",\n");
-        json.append("    \"registeredValidators\": ").append(registeredValidators.size()).append("\n");
-        json.append("  },\n");
-        
-        // 7. BlobStore health
-        json.append("  \"blobStore\": {\n");
+
+        Map<String, Object> clients = new HashMap<>();
+        clients.put("status", "UP");
+        clients.put("registeredClients", registeredClients.size());
+        clients.put("registeredValidators", registeredValidators.size());
+        payload.put("clients", clients);
+
+        Map<String, Object> blobStore = new HashMap<>();
         if (context != null && context.blobStoreType != null) {
             String blobStoreType = context.blobStoreType;
-            json.append("    \"type\": \"").append(blobStoreType).append("\",\n");
-            
+            blobStore.put("type", blobStoreType);
             if (context.blobStore != null) {
-                json.append("    \"status\": \"UP\",\n");
-                
-                // Check if IPFS and add gateway info
+                blobStore.put("status", "UP");
                 if ("ipfs".equalsIgnoreCase(blobStoreType)) {
-                    json.append("    \"cidMappingAvailable\": ").append(context.cidMappingService != null).append(",\n");
-                    json.append("    \"ipfsGateway\": \"http://127.0.0.1:8080/ipfs/\"\n");
+                    blobStore.put("cidMappingAvailable", context.cidMappingService != null);
+                    blobStore.put("ipfsGateway", "http://127.0.0.1:8080/ipfs/");
                 } else {
-                    json.append("    \"note\": \"").append(blobStoreType).append(" storage configured\"\n");
+                    blobStore.put("note", blobStoreType + " storage configured");
                 }
             } else {
-                json.append("    \"status\": \"DEGRADED\",\n");
-                json.append("    \"error\": \"BlobStore not initialized\"\n");
+                blobStore.put("status", "DEGRADED");
+                blobStore.put("error", "BlobStore not initialized");
             }
         } else {
-            json.append("    \"type\": \"default\",\n");
-            json.append("    \"status\": \"UP\",\n");
-            json.append("    \"note\": \"FileDataStore (embedded)\"\n");
+            blobStore.put("type", "default");
+            blobStore.put("status", "UP");
+            blobStore.put("note", "FileDataStore (embedded)");
         }
-        json.append("  },\n");
-        
-        // 8. Overall health
-        json.append("  \"overall\": {\n");
-        json.append("    \"status\": \"").append(allHealthy ? "UP" : "DEGRADED").append("\",\n");
-        json.append("    \"timestamp\": \"").append(new java.util.Date()).append("\"\n");
-        json.append("  },\n");
-        json.append("  \"timestamp\": ").append(System.currentTimeMillis()).append("\n");
-        
-        json.append("}\n");
-        
-        // Return 200 if healthy, 503 if degraded
+        payload.put("blobStore", blobStore);
+
+        Map<String, Object> overall = new HashMap<>();
+        overall.put("status", allHealthy ? "UP" : "DEGRADED");
+        overall.put("timestamp", new java.util.Date().toString());
+        payload.put("overall", overall);
+        payload.put("timestamp", System.currentTimeMillis());
+        payload.put("success", allHealthy);
+
         response.setStatus(allHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-        response.getWriter().write(json.toString());
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
     
     /**
@@ -443,8 +355,12 @@ public class HealthHandler {
         
         if (context == null || context.aeronConsensusEngine == null) {
             response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-            response.getWriter().write("{\"success\":false,\"status\":\"UNAVAILABLE\",\"reason\":\"cluster_not_initialized\",\"timestamp\":" +
-                System.currentTimeMillis() + "}");
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("success", false);
+            payload.put("status", "UNAVAILABLE");
+            payload.put("reason", "cluster_not_initialized");
+            payload.put("timestamp", System.currentTimeMillis());
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             return;
         }
         
@@ -453,22 +369,143 @@ public class HealthHandler {
         
         response.setStatus(healthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
         
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
-        json.append("  \"success\": ").append(healthy).append(",\n");
-        json.append("  \"status\": \"").append(healthy ? "UP" : "UNHEALTHY").append("\",\n");
-        json.append("  \"timestamp\": ").append(System.currentTimeMillis()).append(",\n");
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("success", healthy);
+        payload.put("status", healthy ? "UP" : "UNHEALTHY");
+        payload.put("timestamp", System.currentTimeMillis());
         if (!healthy && reason != null) {
-            json.append("  \"unhealthyReason\": \"").append(reason).append("\",\n");
+            payload.put("unhealthyReason", reason);
         }
-        json.append("  \"reachableCount\": ").append(context.aeronConsensusEngine.getReachableValidatorCount()).append(",\n");
-        json.append("  \"totalMembers\": ").append(context.aeronConsensusEngine.getTotalMemberCount()).append(",\n");
-        json.append("  \"quorumSize\": ").append(context.aeronConsensusEngine.getQuorumSize()).append(",\n");
-        json.append("  \"hasQuorum\": ").append(context.aeronConsensusEngine.hasQuorum()).append(",\n");
-        json.append("  \"lastHeartbeatTime\": ").append(context.aeronConsensusEngine.getLastHeartbeatTime()).append(",\n");
-        json.append("  \"heartbeatAgeMs\": ").append(context.aeronConsensusEngine.getHeartbeatAgeMs()).append(",\n");
-        json.append("  \"leaderUrl\": \"").append(context.aeronConsensusEngine.getCurrentLeader()).append("\"\n");
-        json.append("}");
-        response.getWriter().write(json.toString());
+        payload.put("reachableCount", context.aeronConsensusEngine.getReachableValidatorCount());
+        payload.put("totalMembers", context.aeronConsensusEngine.getTotalMemberCount());
+        payload.put("quorumSize", context.aeronConsensusEngine.getQuorumSize());
+        payload.put("hasQuorum", context.aeronConsensusEngine.hasQuorum());
+        payload.put("lastHeartbeatTime", context.aeronConsensusEngine.getLastHeartbeatTime());
+        payload.put("heartbeatAgeMs", context.aeronConsensusEngine.getHeartbeatAgeMs());
+        payload.put("leaderUrl", context.aeronConsensusEngine.getCurrentLeader());
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
+
+    /**
+     * Handle lightweight ops.v1 health snapshot endpoint.
+     * GET /v1/ops/snapshots/health
+     */
+    public void handleGetOpsHealthSnapshot(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        long servedAtMs = System.currentTimeMillis();
+
+        try {
+            Map<String, Object> data;
+            long sourceTimestampMs;
+            boolean fromCache = false;
+
+            synchronized (opsHealthSnapshotLock) {
+                long now = System.currentTimeMillis();
+                boolean cacheValid = cachedOpsHealthSnapshotData != null
+                    && cachedOpsHealthSnapshotSourceTimestampMs > 0
+                    && (now - cachedOpsHealthSnapshotSourceTimestampMs) <= OPS_HEALTH_SNAPSHOT_TTL_MS;
+
+                if (cacheValid) {
+                    data = cachedOpsHealthSnapshotData;
+                    sourceTimestampMs = cachedOpsHealthSnapshotSourceTimestampMs;
+                    fromCache = true;
+                } else {
+                    data = buildOpsHealthData();
+                    sourceTimestampMs = now;
+                    cachedOpsHealthSnapshotData = data;
+                    cachedOpsHealthSnapshotSourceTimestampMs = sourceTimestampMs;
+                }
+            }
+
+            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(buildOpsEnvelope(
+                data, sourceTimestampMs, servedAtMs, stalenessMs, false, null, fromCache));
+        } catch (Exception e) {
+            log.warn("Error building ops health snapshot, attempting stale fallback: {}", e.getMessage());
+            if (cachedOpsHealthSnapshotData != null && cachedOpsHealthSnapshotSourceTimestampMs > 0) {
+                long stalenessMs = Math.max(0L, servedAtMs - cachedOpsHealthSnapshotSourceTimestampMs);
+                response.setStatus(HttpServletResponse.SC_OK);
+                response.getWriter().write(buildOpsEnvelope(
+                    cachedOpsHealthSnapshotData,
+                    cachedOpsHealthSnapshotSourceTimestampMs,
+                    servedAtMs,
+                    stalenessMs,
+                    true,
+                    "STALE_CACHE_FALLBACK",
+                    true));
+                return;
+            }
+
+            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("contractVersion", "ops.v1");
+            payload.put("degraded", true);
+            payload.put("degradedReason", "UPSTREAM_UNAVAILABLE");
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
+        }
+    }
+
+    private Map<String, Object> buildOpsHealthData() {
+        boolean clusterHealthy = true;
+        String unhealthyReason = null;
+        int reachableCount = -1;
+        int totalMembers = -1;
+        int quorumSize = -1;
+        String currentRole = "UNKNOWN";
+        String leaderUrl = null;
+
+        if (context != null && context.aeronConsensusEngine != null) {
+            clusterHealthy = context.aeronConsensusEngine.isClusterHealthy();
+            if (!clusterHealthy) {
+                unhealthyReason = context.aeronConsensusEngine.getUnhealthyReason();
+            }
+            reachableCount = context.aeronConsensusEngine.getReachableValidatorCount();
+            totalMembers = context.aeronConsensusEngine.getTotalMemberCount();
+            quorumSize = context.aeronConsensusEngine.getQuorumSize();
+            currentRole = context.aeronConsensusEngine.getCurrentRole().name();
+            leaderUrl = context.aeronConsensusEngine.getCurrentLeader();
+        }
+
+        boolean blobStoreActive = context != null && context.blobStore != null;
+        String blobStoreType = context != null ? context.blobStoreType : null;
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("status", clusterHealthy ? "UP" : "UNHEALTHY");
+        payload.put("clusterHealthy", clusterHealthy);
+        payload.put("unhealthyReason", unhealthyReason);
+        payload.put("blobStoreType", blobStoreType);
+        payload.put("blobStoreActive", blobStoreActive);
+        payload.put("reachableCount", reachableCount);
+        payload.put("totalMembers", totalMembers);
+        payload.put("quorumSize", quorumSize);
+        payload.put("currentRole", currentRole);
+        payload.put("leaderUrl", leaderUrl);
+        payload.put("registeredClients", registeredClients != null ? registeredClients.size() : 0);
+        payload.put("registeredValidators", registeredValidators != null ? registeredValidators.size() : 0);
+        return payload;
+    }
+
+    private String buildOpsEnvelope(Object data,
+                                    long sourceTimestampMs,
+                                    long servedAtMs,
+                                    long stalenessMs,
+                                    boolean degraded,
+                                    String degradedReason,
+                                    boolean cacheHit) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("contractVersion", "ops.v1");
+        payload.put("sourceTimestampMs", sourceTimestampMs);
+        payload.put("servedAtMs", servedAtMs);
+        payload.put("stalenessMs", stalenessMs);
+        payload.put("degraded", degraded);
+        payload.put("degradedReason", degradedReason);
+        Map<String, Object> cache = new HashMap<>();
+        cache.put("hit", cacheHit);
+        cache.put("ttlMs", OPS_HEALTH_SNAPSHOT_TTL_MS);
+        payload.put("cache", cache);
+        payload.put("data", data);
+        return JsonOutputUtil.toJson(payload);
+    }
+
 }

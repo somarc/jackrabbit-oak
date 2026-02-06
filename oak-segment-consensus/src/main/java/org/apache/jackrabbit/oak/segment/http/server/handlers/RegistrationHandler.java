@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,6 +28,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
 /**
@@ -153,10 +156,12 @@ public class RegistrationHandler {
             // Return success
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(String.format(
-                "{\"success\":true,\"clientId\":\"%s\",\"walletAddress\":\"%s\",\"message\":\"Client registered\"}",
-                clientId, walletAddress
-            ));
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("success", true);
+            result.put("clientId", clientId);
+            result.put("walletAddress", walletAddress);
+            result.put("message", "Client registered");
+            response.getWriter().write(JsonOutputUtil.toJson(result));
             
         } catch (Exception e) {
             log.error("Failed to register client", e);
@@ -215,7 +220,10 @@ public class RegistrationHandler {
             if (validatorUrl.equals(context.selfUrl)) {
                 response.setContentType("application/json");
                 response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write("{\"success\":true,\"message\":\"Self-registration ignored\"}");
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", true);
+                result.put("message", "Self-registration ignored");
+                response.getWriter().write(JsonOutputUtil.toJson(result));
                 return;
             }
             
@@ -239,7 +247,11 @@ public class RegistrationHandler {
             // Return success
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write("{\"success\":true,\"validatorId\":\"" + validatorId + "\",\"message\":\"Validator registered\"}");
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("success", true);
+            result.put("validatorId", validatorId);
+            result.put("message", "Validator registered");
+            response.getWriter().write(JsonOutputUtil.toJson(result));
             
         } catch (Exception e) {
             log.error("Failed to register validator", e);
@@ -256,9 +268,14 @@ public class RegistrationHandler {
         // Aeron Cluster handles heartbeats internally - this endpoint is deprecated
         response.setContentType("application/json");
         response.setStatus(HttpServletResponse.SC_GONE);
-        response.getWriter().write(String.format(
-            "{\"success\":false,\"error\":{\"code\":\"ENDPOINT_DEPRECATED\",\"message\":\"This endpoint is deprecated\",\"details\":\"Aeron Cluster handles heartbeats internally via Raft consensus\"},\"timestamp\":%d}",
-            System.currentTimeMillis()
-        ));
+        Map<String, Object> error = new LinkedHashMap<>();
+        error.put("code", "ENDPOINT_DEPRECATED");
+        error.put("message", "This endpoint is deprecated");
+        error.put("details", "Aeron Cluster handles heartbeats internally via Raft consensus");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("success", false);
+        payload.put("error", error);
+        payload.put("timestamp", System.currentTimeMillis());
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
 }

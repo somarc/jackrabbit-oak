@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,6 +32,7 @@ import java.io.IOException;
 import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -66,71 +68,66 @@ public class MetricsHandler {
     public void handleMetrics(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
         response.setStatus(HttpServletResponse.SC_OK);
-        
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
-        json.append("  \"success\": true,\n");
-        json.append("  \"status\": \"UP\",\n");
-        json.append("  \"timestamp\": ").append(System.currentTimeMillis()).append(",\n");
-        json.append("  \"consensus\": ");
-        if (aeronConsensusEngine != null) {
-            String role = aeronConsensusEngine.getCurrentRole().name();
-            int reachable = aeronConsensusEngine.getReachableValidatorCount();
-            int total = aeronConsensusEngine.getTotalMemberCount();
-            int quorum = aeronConsensusEngine.getQuorumSize();
-            long heartbeatAgeMs = aeronConsensusEngine.getHeartbeatAgeMs();
-            String unhealthyReason = aeronConsensusEngine.getUnhealthyReason();
-            json.append("{\n");
-            json.append("    \"role\": \"").append(role).append("\",\n");
-            json.append("    \"isLeader\": ").append(aeronConsensusEngine.isLeader()).append(",\n");
-            json.append("    \"currentEpoch\": ").append(aeronConsensusEngine.getCurrentEpoch()).append(",\n");
-            json.append("    \"currentTerm\": ").append(aeronConsensusEngine.getCurrentTerm()).append(",\n");
-            json.append("    \"reachableValidators\": ").append(reachable).append(",\n");
-            json.append("    \"totalMembers\": ").append(total).append(",\n");
-            json.append("    \"quorumSize\": ").append(quorum).append(",\n");
-            json.append("    \"heartbeatAgeMs\": ").append(heartbeatAgeMs).append(",\n");
-            json.append("    \"healthy\": ").append(aeronConsensusEngine.isClusterHealthy());
-            if (unhealthyReason != null) {
-                json.append(",\n    \"unhealthyReason\": \"").append(unhealthyReason).append("\"\n");
-            } else {
-                json.append("\n");
-            }
-            json.append("  }");
-        } else {
-            json.append("null");
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("success", true);
+        payload.put("status", "UP");
+        payload.put("timestamp", System.currentTimeMillis());
+        payload.put("consensus", buildConsensusMetrics());
+        payload.put("replication", buildReplicationMetrics());
+
+        Map<String, Object> validator = new LinkedHashMap<>();
+        validator.put("registeredClients", registeredClients.size());
+        validator.put("registeredValidators", registeredValidators.size());
+        validator.put("storePath", storeDirectory != null ? storeDirectory.toString() : "");
+        payload.put("validator", validator);
+
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
+    }
+
+    private Map<String, Object> buildConsensusMetrics() {
+        if (aeronConsensusEngine == null) {
+            return null;
         }
-        json.append(",\n  \"replication\": ");
-        if (aeronConsensusEngine != null) {
-            java.util.Map<String, Object> status = aeronConsensusEngine.getReplicationLagStatus();
-            if (status == null) {
-                json.append("null");
-            } else {
-                json.append("{\n");
-                json.append("    \"role\": \"").append(status.get("role")).append("\",\n");
-                json.append("    \"myLogPosition\": ").append(status.get("myLogPosition")).append(",\n");
-                json.append("    \"leaderLogPosition\": ").append(status.get("leaderLogPosition")).append(",\n");
-                json.append("    \"replicationLag\": ").append(status.get("replicationLag")).append(",\n");
-                json.append("    \"lagThreshold\": ").append(status.get("lagThreshold")).append(",\n");
-                json.append("    \"healthy\": ").append(status.get("healthy"));
-                Object reason = status.get("reason");
-                if (reason != null) {
-                    json.append(",\n    \"reason\": \"").append(reason).append("\"\n");
-                } else {
-                    json.append("\n");
-                }
-                json.append("  }");
-            }
-        } else {
-            json.append("null");
+
+        Map<String, Object> consensus = new LinkedHashMap<>();
+        consensus.put("role", aeronConsensusEngine.getCurrentRole().name());
+        consensus.put("isLeader", aeronConsensusEngine.isLeader());
+        consensus.put("currentEpoch", aeronConsensusEngine.getCurrentEpoch());
+        consensus.put("currentTerm", aeronConsensusEngine.getCurrentTerm());
+        consensus.put("reachableValidators", aeronConsensusEngine.getReachableValidatorCount());
+        consensus.put("totalMembers", aeronConsensusEngine.getTotalMemberCount());
+        consensus.put("quorumSize", aeronConsensusEngine.getQuorumSize());
+        consensus.put("heartbeatAgeMs", aeronConsensusEngine.getHeartbeatAgeMs());
+        consensus.put("healthy", aeronConsensusEngine.isClusterHealthy());
+        String unhealthyReason = aeronConsensusEngine.getUnhealthyReason();
+        if (unhealthyReason != null) {
+            consensus.put("unhealthyReason", unhealthyReason);
         }
-        json.append(",\n  \"validator\": {\n");
-        json.append("    \"registeredClients\": ").append(registeredClients.size()).append(",\n");
-        json.append("    \"registeredValidators\": ").append(registeredValidators.size()).append(",\n");
-        json.append("    \"storePath\": \"").append(storeDirectory != null ? storeDirectory.toString() : "").append("\"\n");
-        json.append("  }\n");
-        json.append("}\n");
-        
-        response.getWriter().write(json.toString());
+        return consensus;
+    }
+
+    private Map<String, Object> buildReplicationMetrics() {
+        if (aeronConsensusEngine == null) {
+            return null;
+        }
+
+        Map<String, Object> status = aeronConsensusEngine.getReplicationLagStatus();
+        if (status == null) {
+            return null;
+        }
+
+        Map<String, Object> replication = new LinkedHashMap<>();
+        replication.put("role", status.get("role"));
+        replication.put("myLogPosition", status.get("myLogPosition"));
+        replication.put("leaderLogPosition", status.get("leaderLogPosition"));
+        replication.put("replicationLag", status.get("replicationLag"));
+        replication.put("lagThreshold", status.get("lagThreshold"));
+        replication.put("healthy", status.get("healthy"));
+        if (status.get("reason") != null) {
+            replication.put("reason", status.get("reason"));
+        }
+        return replication;
     }
     
     /**

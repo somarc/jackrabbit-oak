@@ -17,6 +17,8 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.sse.ContentEvent;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
 import org.apache.jackrabbit.oak.segment.http.server.sse.SSEClient;
@@ -30,7 +32,9 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -66,12 +70,17 @@ public class EventStreamHandler {
      * GET /v1/events/stream
      */
     public void handleEventStream(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        handleEventStreamInternal(request, response, false);
+    }
+
+    private void handleEventStreamInternal(HttpServletRequest request, HttpServletResponse response, boolean opsV1Mode) throws IOException {
         // Parse filter parameters
         Set<String> types = parseSet(request.getParameter("types"));
         Set<String> wallets = parseSet(request.getParameter("wallets"));
         Set<String> organizations = parseSet(request.getParameter("organizations"));
         String pathPrefix = request.getParameter("path");
         Long since = parseLong(request.getParameter("since"));
+        String lastEventId = request.getHeader("Last-Event-ID");
 
         // Set up SSE response
         response.setContentType("text/event-stream");
@@ -83,7 +92,7 @@ public class EventStreamHandler {
         // CORS headers for EDS
         response.setHeader("Access-Control-Allow-Origin", "*");
         response.setHeader("Access-Control-Allow-Methods", "GET");
-        response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        response.setHeader("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID");
 
         // Start async context for long-lived connection
         AsyncContext asyncContext = request.startAsync();
@@ -105,7 +114,9 @@ public class EventStreamHandler {
             wallets,
             organizations,
             pathPrefix,
-            since
+            since,
+            opsV1Mode,
+            context != null ? context.selfUrl : "unknown"
         );
 
         // Register client with broadcaster
@@ -129,18 +140,10 @@ public class EventStreamHandler {
         }
 
         // Send recent events if 'since' not specified (initial load)
-        if (since == null) {
-            List<ContentEvent> recentEvents = broadcaster.getRecentEvents(50);
-            for (ContentEvent event : recentEvents) {
-                if (client.matches(event)) {
-                    try {
-                        client.send(event);
-                    } catch (Exception e) {
-                        log.debug("Failed to send recent event to client", e);
-                        broadcaster.removeClient(client);
-                        return;
-                    }
-                }
+        if (since == null || (lastEventId != null && !lastEventId.isEmpty())) {
+            if (!sendRecentEvents(client, since, lastEventId)) {
+                broadcaster.removeClient(client);
+                return;
             }
         }
 
@@ -172,6 +175,14 @@ public class EventStreamHandler {
     }
 
     /**
+     * Handle ops.v1 SSE stream path (currently an alias to ADR-036 stream payload).
+     * GET /v1/ops/events/stream
+     */
+    public void handleOpsEventStream(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        handleEventStreamInternal(request, response, true);
+    }
+
+    /**
      * Handle recent events request.
      * GET /v1/events/recent
      */
@@ -198,32 +209,13 @@ public class EventStreamHandler {
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Access-Control-Allow-Origin", "*");
 
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
-        json.append("  \"events\": [\n");
-
-        for (int i = 0; i < filteredEvents.size(); i++) {
-            ContentEvent event = filteredEvents.get(i);
-            json.append("    ").append(event.toJson());
-            if (i < filteredEvents.size() - 1) {
-                json.append(",");
-            }
-            json.append("\n");
-        }
-
-        json.append("  ],\n");
-        json.append("  \"count\": ").append(filteredEvents.size()).append(",\n");
-        json.append("  \"hasMore\": ").append(events.size() > filteredEvents.size()).append(",\n");
-        
-        if (!filteredEvents.isEmpty()) {
-            json.append("  \"lastId\": \"").append(filteredEvents.get(filteredEvents.size() - 1).getId()).append("\"\n");
-        } else {
-            json.append("  \"lastId\": null\n");
-        }
-        
-        json.append("}\n");
-
-        response.getWriter().write(json.toString());
+        List<Map<String, Object>> eventPayloads = filteredEvents.stream().map(this::toEventMap).collect(Collectors.toList());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("events", eventPayloads);
+        payload.put("count", filteredEvents.size());
+        payload.put("hasMore", events.size() > filteredEvents.size());
+        payload.put("lastId", filteredEvents.isEmpty() ? null : filteredEvents.get(filteredEvents.size() - 1).getId());
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
 
     /**
@@ -239,12 +231,11 @@ public class EventStreamHandler {
         int bufferSize = broadcaster.getBufferSize();
         long totalEvents = broadcaster.getTotalEventsBroadcast();
 
-        String json = String.format(
-            "{\"connectedClients\":%d,\"eventBufferSize\":%d,\"totalEventsBroadcast\":%d}",
-            clientCount, bufferSize, totalEvents
-        );
-
-        response.getWriter().write(json);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("connectedClients", clientCount);
+        payload.put("eventBufferSize", bufferSize);
+        payload.put("totalEventsBroadcast", totalEvents);
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
 
     // Helper methods
@@ -277,5 +268,92 @@ public class EventStreamHandler {
             return defaultValue;
         }
     }
-}
 
+    private boolean sendRecentEvents(SSEClient client, Long since, String lastEventId) {
+        List<ContentEvent> recentEvents = broadcaster.getRecentEvents(50);
+        boolean foundLast = lastEventId == null || lastEventId.isEmpty();
+        boolean sentAny = false;
+
+        for (ContentEvent event : recentEvents) {
+            if (since != null && event.getTimestamp() <= since) {
+                continue;
+            }
+            if (!foundLast) {
+                if (event.getId().equals(lastEventId)) {
+                    foundLast = true;
+                }
+                continue;
+            }
+            if (client.matches(event)) {
+                try {
+                    client.send(event);
+                    sentAny = true;
+                } catch (Exception e) {
+                    log.debug("Failed to send recent event to client", e);
+                    return false;
+                }
+            }
+        }
+
+        // Fallback for numeric event ids if marker was not found in current buffer window.
+        if (!foundLast && !sentAny) {
+            Long lastNumeric = parseLong(lastEventId);
+            if (lastNumeric != null) {
+                for (ContentEvent event : recentEvents) {
+                    Long eventNumeric = parseLong(event.getId());
+                    if (eventNumeric == null || eventNumeric <= lastNumeric) {
+                        continue;
+                    }
+                    if (since != null && event.getTimestamp() <= since) {
+                        continue;
+                    }
+                    if (client.matches(event)) {
+                        try {
+                            client.send(event);
+                        } catch (Exception e) {
+                            log.debug("Failed to send recent event to client during numeric replay", e);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private Map<String, Object> toEventMap(ContentEvent event) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", event.getId());
+        m.put("type", event.getType());
+        if (event.getAction() != null) {
+            m.put("action", event.getAction());
+        }
+        if (event.getPath() != null) {
+            m.put("path", event.getPath());
+        }
+        if (event.getWallet() != null) {
+            m.put("wallet", event.getWallet());
+        }
+        if (event.getOrganization() != null) {
+            m.put("organization", event.getOrganization());
+        }
+        m.put("timestamp", event.getTimestamp());
+        if (event.getMessage() != null) {
+            m.put("message", event.getMessage());
+        }
+        if (event.getIpfsCid() != null) {
+            m.put("ipfsCid", event.getIpfsCid());
+        }
+        if (event.getSignature() != null) {
+            m.put("signature", event.getSignature());
+        }
+        if (event.getSize() != null) {
+            m.put("size", event.getSize());
+        }
+        if (event.getContentType() != null) {
+            m.put("contentType", event.getContentType());
+        }
+        return m;
+    }
+}

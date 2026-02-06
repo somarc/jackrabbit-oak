@@ -23,12 +23,15 @@ import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Handler for write proposals (`/v1/propose-write`).
@@ -304,32 +307,21 @@ public class WriteProposalHandler {
                     response.setContentType("application/json");
                     response.setStatus(402); // 402 Payment Required
 
-                    String errorJson = String.format(
-                        "{\"success\":false," +
-                        "\"error\":\"Writes blocked due to unpaid GC debt. Please pay debt to resume.\"," +
-                        "\"code\":\"write_blocked_gc_debt\"," +
-                        "\"status\":402," +
-                        "\"timestamp\":%d," +
-                        "\"wallet\":\"%s\"," +
-                        "\"totalDebt\":\"%s\"," +
-                        "\"executedDebt\":\"%s\"," +
-                        "\"pendingDebt\":\"%s\"," +
-                        "\"debtLimit\":\"%s\"," +
-                        "\"amountOverLimit\":\"%s\"," +
-                        "\"paymentUrl\":\"/v1/gc/account/%s/pay\"," +
-                        "\"statusUrl\":\"/v1/gc/account/%s\"}",
-                        System.currentTimeMillis(),
-                        normalizedWallet,
-                        account.totalDebt.toString(),
-                        account.executedDebt.toString(),
-                        account.getPendingDebt().toString(),
-                        account.debtLimit.toString(),
-                        account.totalDebt.subtract(account.debtLimit).toString(),
-                        normalizedWallet,
-                        normalizedWallet
-                    );
-
-                    response.getWriter().write(errorJson);
+                    Map<String, Object> errorPayload = new LinkedHashMap<>();
+                    errorPayload.put("success", false);
+                    errorPayload.put("error", "Writes blocked due to unpaid GC debt. Please pay debt to resume.");
+                    errorPayload.put("code", "write_blocked_gc_debt");
+                    errorPayload.put("status", 402);
+                    errorPayload.put("timestamp", System.currentTimeMillis());
+                    errorPayload.put("wallet", normalizedWallet);
+                    errorPayload.put("totalDebt", account.totalDebt.toString());
+                    errorPayload.put("executedDebt", account.executedDebt.toString());
+                    errorPayload.put("pendingDebt", account.getPendingDebt().toString());
+                    errorPayload.put("debtLimit", account.debtLimit.toString());
+                    errorPayload.put("amountOverLimit", account.totalDebt.subtract(account.debtLimit).toString());
+                    errorPayload.put("paymentUrl", "/v1/gc/account/" + normalizedWallet + "/pay");
+                    errorPayload.put("statusUrl", "/v1/gc/account/" + normalizedWallet);
+                    response.getWriter().write(JsonOutputUtil.toJson(errorPayload));
 
                     log.info("💳 PAYMENT REQUIRED: Rejected write from {} (debt: ${})",
                              normalizedWallet, account.totalDebt);
@@ -582,17 +574,17 @@ public class WriteProposalHandler {
                 String currentHead = context.fileStore != null
                     ? context.fileStore.getHead().getRecordId().toString()
                     : "unknown";
-                String resultJson = "{" +
-                    "\"success\":true," +
-                    "\"proposalId\":\"" + proposalId + "\"," +
-                    "\"wallet\":\"" + wallet + "\"," +
-                    "\"contentId\":\"" + contentId + "\"," +
-                    "\"storagePath\":\"" + fullPath + "\"," +
-                    "\"newHead\":\"" + currentHead + "\"," +
-                    "\"message\":\"" + message + "\"," +
-                    "\"contentType\":\"" + contentType + "\"," +
-                    "\"mode\":\"immediate\"}";
-                response.getWriter().write(resultJson);
+                Map<String, Object> resultPayload = new LinkedHashMap<>();
+                resultPayload.put("success", true);
+                resultPayload.put("proposalId", proposalId);
+                resultPayload.put("wallet", wallet);
+                resultPayload.put("contentId", contentId);
+                resultPayload.put("storagePath", fullPath);
+                resultPayload.put("newHead", currentHead);
+                resultPayload.put("message", message);
+                resultPayload.put("contentType", contentType);
+                resultPayload.put("mode", "immediate");
+                response.getWriter().write(JsonOutputUtil.toJson(resultPayload));
                 return;
             }
 
@@ -699,16 +691,24 @@ public class WriteProposalHandler {
             // Return queued status (202 Accepted)
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_ACCEPTED);
-            String resultJson = "{" +
-                "\"proposalId\":\"" + proposalId + "\"," +
-                "\"state\":\"PENDING\"," +
-                "\"message\":\"Proposal queued, waiting for Ethereum confirmation\"," +
-                "\"ethereumTxHash\":\"" + ethereumTxHash + "\"," +
-                "\"timeoutTimestamp\":" + (System.currentTimeMillis() + 300_000) + "," +
-                "\"wallet\":\"" + wallet + "\"," +
-                "\"storagePath\":\"" + fullPath + "\"," +
-                "\"contentType\":\"" + contentType + "\"}";
-            response.getWriter().write(resultJson);
+            Map<String, Object> links = new LinkedHashMap<>();
+            links.put("self", "/v1/ops/operations/" + proposalId);
+            Map<String, Object> resultPayload = new LinkedHashMap<>();
+            resultPayload.put("contractVersion", "ops.v1");
+            resultPayload.put("status", "accepted");
+            resultPayload.put("operationId", proposalId);
+            resultPayload.put("receivedAtMs", System.currentTimeMillis());
+            resultPayload.put("ackState", "ACCEPTED");
+            resultPayload.put("links", links);
+            resultPayload.put("proposalId", proposalId);
+            resultPayload.put("state", "PENDING");
+            resultPayload.put("message", "Proposal queued, waiting for Ethereum confirmation");
+            resultPayload.put("ethereumTxHash", ethereumTxHash);
+            resultPayload.put("timeoutTimestamp", System.currentTimeMillis() + 300_000);
+            resultPayload.put("wallet", wallet);
+            resultPayload.put("storagePath", fullPath);
+            resultPayload.put("contentType", contentType);
+            response.getWriter().write(JsonOutputUtil.toJson(resultPayload));
             log.debug("✅ Proposal {} queued successfully", proposalId);
 
         } catch (Exception e) {
@@ -716,4 +716,5 @@ public class WriteProposalHandler {
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Test write failed: " + e.getMessage());
         }
     }
+
 }

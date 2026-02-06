@@ -18,6 +18,8 @@ package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.segment.http.server.handlers.*;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
 import org.eclipse.jetty.server.Request;
 import org.slf4j.Logger;
@@ -26,6 +28,8 @@ import org.slf4j.LoggerFactory;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Central request router that delegates HTTP requests to appropriate handlers.
@@ -213,6 +217,12 @@ public class RequestRouter {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/ops/snapshots/health".equals(path) && "GET".equals(method)) {
+                healthHandler.handleGetOpsHealthSnapshot(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             // Rate limiting check (skip for health endpoints above)
             if (!rateLimiter.allowRequest(request, response)) {
@@ -347,6 +357,12 @@ public class RequestRouter {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // SSE Event Streaming API (ADR 036)
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            if ("/v1/ops/events/stream".equals(path) && "GET".equals(method)) {
+                eventStreamHandler.handleOpsEventStream(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
             if ("/v1/events/stream".equals(path) && "GET".equals(method)) {
                 eventStreamHandler.handleEventStream(request, response);
                 baseRequest.setHandled(true);
@@ -485,8 +501,8 @@ public class RequestRouter {
                     committedHead = latestHead;
                 }
                 
-                json.append("  \"latestHead\": \"").append(latestHead).append("\",\n");
-                json.append("  \"committedHead\": \"").append(committedHead).append("\"");
+                json.append("  \"latestHead\": \"").append(FormatUtils.escapeJson(latestHead)).append("\",\n");
+                json.append("  \"committedHead\": \"").append(FormatUtils.escapeJson(committedHead)).append("\"");
                 
                 if (latestEpochSeen >= 0) {
                     json.append(",\n  \"latestEpochSeen\": ").append(latestEpochSeen);
@@ -535,6 +551,30 @@ public class RequestRouter {
             }
             
             // Proposal Queue Status
+            if (path.startsWith("/v1/ops/operations/") && "GET".equals(method)) {
+                consensusApiHandler.handleGetOperationStatus(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if ("/v1/ops/snapshots/queue".equals(path) && "GET".equals(method)) {
+                consensusApiHandler.handleGetOpsQueueSnapshot(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if ("/v1/ops/snapshots/cluster".equals(path) && "GET".equals(method)) {
+                aeronApiHandler.handleGetOpsClusterSnapshot(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if ("/v1/ops/snapshots/replication".equals(path) && "GET".equals(method)) {
+                aeronApiHandler.handleGetOpsReplicationSnapshot(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
             if (path.startsWith("/v1/proposals/") && path.endsWith("/status") && "GET".equals(method)) {
                 consensusApiHandler.handleGetProposalStatus(request, response);
                 baseRequest.setHandled(true);
@@ -830,9 +870,12 @@ public class RequestRouter {
                 boolean success = beaconClient.advanceMockEpoch(epochs);
                 if (success) {
                     response.setContentType("application/json");
-                    response.getWriter().write("{\"success\":true,\"advanced\":" + epochs + 
-                        ",\"currentEpoch\":" + beaconClient.getCachedCurrentEpoch() + 
-                        ",\"finalizedEpoch\":" + beaconClient.getCachedFinalizedEpoch() + "}");
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("success", true);
+                    payload.put("advanced", epochs);
+                    payload.put("currentEpoch", beaconClient.getCachedCurrentEpoch());
+                    payload.put("finalizedEpoch", beaconClient.getCachedFinalizedEpoch());
+                    response.getWriter().write(JsonOutputUtil.toJson(payload));
                     return;
                 }
             }
@@ -880,9 +923,12 @@ public class RequestRouter {
                 boolean success = beaconClient.setMockEpochOffset(offset);
                 if (success) {
                     response.setContentType("application/json");
-                    response.getWriter().write("{\"success\":true,\"offset\":" + offset + 
-                        ",\"currentEpoch\":" + beaconClient.getCachedCurrentEpoch() + 
-                        ",\"finalizedEpoch\":" + beaconClient.getCachedFinalizedEpoch() + "}");
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("success", true);
+                    payload.put("offset", offset);
+                    payload.put("currentEpoch", beaconClient.getCachedCurrentEpoch());
+                    payload.put("finalizedEpoch", beaconClient.getCachedFinalizedEpoch());
+                    response.getWriter().write(JsonOutputUtil.toJson(payload));
                     return;
                 }
             }
@@ -904,7 +950,7 @@ public class RequestRouter {
         
         StringBuilder json = new StringBuilder();
         json.append("{");
-        json.append("\"mode\":\"").append(config.getMode()).append("\",");
+        json.append("\"mode\":\"").append(FormatUtils.escapeJson(config.getMode().toString())).append("\",");
         
         if (context.proposalQueueManager != null && context.proposalQueueManager.getEpochQueue() != null) {
             org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient = 

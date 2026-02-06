@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +26,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
@@ -85,15 +88,12 @@ public class CidApiHandler {
             return;
         }
 
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"oakBlobId\":\"").append(escapeJson(oakBlobId)).append("\",");
-        json.append("\"ipfsCid\":\"").append(escapeJson(cid.get())).append("\",");
-        json.append("\"gatewayUrl\":\"https://ipfs.io/ipfs/").append(escapeJson(cid.get())).append("\",");
-        json.append("\"localUrl\":\"http://localhost:8099/ipfs/").append(escapeJson(cid.get())).append("\"");
-        json.append("}");
-
-        sendJson(response, 200, json.toString());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("oakBlobId", oakBlobId);
+        payload.put("ipfsCid", cid.get());
+        payload.put("gatewayUrl", "https://ipfs.io/ipfs/" + cid.get());
+        payload.put("localUrl", "http://localhost:8099/ipfs/" + cid.get());
+        sendJson(response, 200, JsonOutputUtil.toJson(payload));
     }
 
     /**
@@ -120,13 +120,10 @@ public class CidApiHandler {
             return;
         }
 
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\",");
-        json.append("\"oakBlobId\":\"").append(escapeJson(oakBlobId.get())).append("\"");
-        json.append("}");
-
-        sendJson(response, 200, json.toString());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ipfsCid", ipfsCid);
+        payload.put("oakBlobId", oakBlobId.get());
+        sendJson(response, 200, JsonOutputUtil.toJson(payload));
     }
 
     /**
@@ -191,16 +188,4 @@ public class CidApiHandler {
         ApiErrorUtil.sendJsonError(response, statusCode, message);
     }
 
-    /**
-     * Escape JSON special characters.
-     */
-    private String escapeJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
 }
-

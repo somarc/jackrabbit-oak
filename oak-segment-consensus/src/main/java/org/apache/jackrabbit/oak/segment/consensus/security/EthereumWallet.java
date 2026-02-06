@@ -33,6 +33,7 @@ import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.security.Security;
 import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Arrays;
@@ -58,6 +59,7 @@ import java.util.Properties;
  */
 public class EthereumWallet {
     private static final Logger log = LoggerFactory.getLogger(EthereumWallet.class);
+    private static final String BC_PROVIDER = "BC";
     
     private final File keystoreFile;
     private final KeyPair keyPair;
@@ -98,12 +100,26 @@ public class EthereumWallet {
      * Generate a new secp256k1 key pair (Ethereum standard).
      */
     private KeyPair generateKeyPair() throws Exception {
+        // Prefer Bouncy Castle for reliable secp256k1 support.
+        if (ensureBouncyCastleProvider()) {
+            try {
+                KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC", BC_PROVIDER);
+                ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256k1");
+                keyGen.initialize(ecSpec, new SecureRandom());
+                KeyPair kp = keyGen.generateKeyPair();
+                log.info("✅ Generated new secp256k1 key pair (provider={})", BC_PROVIDER);
+                return kp;
+            } catch (Exception e) {
+                log.warn("⚠️  {} provider could not generate secp256k1 key pair, trying default provider", BC_PROVIDER);
+            }
+        }
+
         try {
             KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC");
             ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256k1");
             keyGen.initialize(ecSpec, new SecureRandom());
             KeyPair kp = keyGen.generateKeyPair();
-            log.info("✅ Generated new secp256k1 key pair");
+            log.info("✅ Generated new secp256k1 key pair (provider=default)");
             return kp;
         } catch (Exception e) {
             // Fallback to secp256r1 if secp256k1 is not available
@@ -112,6 +128,24 @@ public class EthereumWallet {
             ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256r1");
             keyGen.initialize(ecSpec, new SecureRandom());
             return keyGen.generateKeyPair();
+        }
+    }
+
+    private boolean ensureBouncyCastleProvider() {
+        if (Security.getProvider(BC_PROVIDER) != null) {
+            return true;
+        }
+        try {
+            Class<?> bcProviderClass = Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider");
+            java.security.Provider bcProvider = (java.security.Provider) bcProviderClass
+                .getDeclaredConstructor()
+                .newInstance();
+            Security.addProvider(bcProvider);
+            log.info("✅ Bouncy Castle provider registered (provider={})", BC_PROVIDER);
+            return true;
+        } catch (Exception e) {
+            log.warn("⚠️  Bouncy Castle provider unavailable, continuing with default JCA provider");
+            return false;
         }
     }
     
@@ -135,7 +169,7 @@ public class EthereumWallet {
         keystoreFile.getParentFile().mkdirs();
         
         try (FileOutputStream fos = new FileOutputStream(keystoreFile)) {
-            props.store(fos, "Ethereum Cluster Wallet (ADR 046) - KEEP SECURE! One wallet per cluster.");
+            props.store(fos, "Ethereum Validator Wallet - KEEP SECURE! This file identifies this validator.");
         }
         
         // Set restrictive permissions (owner only)
@@ -145,8 +179,8 @@ public class EthereumWallet {
         keystoreFile.setWritable(true, true);
         
         log.info("✅ Keystore saved to {}", keystoreFile.getAbsolutePath());
-        log.info("💎 Cluster wallet address: {}", address);
-        log.warn("🔐 IMPORTANT: Back up this file! Loss = permanent cluster identity loss");
+        log.info("🔑 Validator wallet address: {}", address);
+        log.warn("🔐 IMPORTANT: Back up this file! Loss = permanent validator identity loss");
     }
     
     /**
@@ -294,4 +328,3 @@ public class EthereumWallet {
         return data;
     }
 }
-

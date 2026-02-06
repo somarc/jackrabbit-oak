@@ -133,7 +133,16 @@ public final class AeronClusterBootstrapper {
         java.util.List<String> allUrls = new java.util.ArrayList<>();
         allUrls.add(selfUrl);
         allUrls.addAll(peerUrls);
-        java.util.Collections.sort(allUrls);
+        // Sort by port first so mapping stays stable across localhost vs 127.0.0.1 host formatting.
+        // Fallback to full URL comparison for deterministic ordering when ports are equal.
+        java.util.Collections.sort(allUrls, (a, b) -> {
+            int portA = extractPort(a);
+            int portB = extractPort(b);
+            if (portA != portB) {
+                return Integer.compare(portA, portB);
+            }
+            return a.compareTo(b);
+        });
         for (int i = 0; i < allUrls.size(); i++) {
             nodeIdToUrl.put(i, allUrls.get(i));
         }
@@ -357,6 +366,14 @@ public final class AeronClusterBootstrapper {
         } else if (changeCount > 3) {
             System.out.println("   ⚠️  WARNING: " + changeCount + " leadership changes detected");
             System.out.println("              This may indicate network instability");
+        }
+    }
+
+    private static int extractPort(String url) {
+        try {
+            return new URL(url).getPort();
+        } catch (Exception e) {
+            return -1;
         }
     }
 }

@@ -17,10 +17,12 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
-import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Handler for consensus status (`/v1/consensus/status`).
@@ -40,7 +42,7 @@ public class ConsensusStatusHandler {
         response.setContentType("application/json");
         response.setStatus(HttpServletResponse.SC_OK);
 
-        java.util.Map<String, Object> status = new java.util.HashMap<>();
+        Map<String, Object> status = new LinkedHashMap<>();
 
         // Check for Aeron Cluster consensus first (newest, preferred)
         if (context.aeronConsensusEngine != null) {
@@ -67,39 +69,8 @@ public class ConsensusStatusHandler {
             status.put("currentRole", "STANDALONE");
         }
 
-        // Convert to JSON manually (no Gson dependency)
-        // CRITICAL: Omit null values - null means discovery failed, not that there's no leader
-        StringBuilder json = new StringBuilder("{");
-        boolean first = true;
-        for (java.util.Map.Entry<String, Object> entry : status.entrySet()) {
-            Object value = entry.getValue();
-            // Skip null values - they indicate discovery failure, not absence of data
-            if (value == null) {
-                continue;
-            }
-            if (!first) json.append(",");
-            first = false;
-            json.append("\"").append(entry.getKey()).append("\":");
-            if (value instanceof String) {
-                json.append("\"").append(FormatUtils.escapeJson((String) value)).append("\"");
-            } else if (value instanceof java.util.List) {
-                json.append("[");
-                boolean listFirst = true;
-                for (Object item : (java.util.List<?>) value) {
-                    if (!listFirst) json.append(",");
-                    listFirst = false;
-                    if (item instanceof String) {
-                        json.append("\"").append(FormatUtils.escapeJson((String) item)).append("\"");
-                    } else {
-                        json.append(item);
-                    }
-                }
-                json.append("]");
-            } else {
-                json.append(value);
-            }
-        }
-        json.append("}");
-        response.getWriter().write(json.toString());
+        // CRITICAL: Omit null values - null means discovery failed, not that there's no leader.
+        status.values().removeIf(v -> v == null);
+        response.getWriter().write(JsonOutputUtil.toJson(status));
     }
 }

@@ -34,6 +34,14 @@ Propose a write transaction. Requires wallet signature and Ethereum payment veri
 **202 Accepted** (proposal queued)
 ```json
 {
+  "contractVersion": "ops.v1",
+  "status": "accepted",
+  "operationId": "uuid-123",
+  "receivedAtMs": 1733421234000,
+  "ackState": "ACCEPTED",
+  "links": {
+    "self": "/v1/ops/operations/uuid-123"
+  },
   "proposalId": "uuid-123",
   "state": "PENDING",
   "message": "Proposal queued, waiting for Ethereum confirmation",
@@ -106,6 +114,14 @@ Propose a delete transaction. Requires wallet signature and path ownership verif
 **202 Accepted**
 ```json
 {
+  "contractVersion": "ops.v1",
+  "status": "accepted",
+  "operationId": "uuid-456",
+  "receivedAtMs": 1733421234000,
+  "ackState": "ACCEPTED",
+  "links": {
+    "self": "/v1/ops/operations/uuid-456"
+  },
   "proposalId": "uuid-456",
   "type": "DELETE",
   "state": "PENDING",
@@ -213,6 +229,237 @@ Get status of a specific proposal.
 
 ```bash
 curl http://localhost:8090/v1/proposals/uuid-123/status
+```
+
+---
+
+## GET /v1/ops/operations/{id}
+
+Get `ops.v1` operation status (adapter over proposal status).
+
+### Response
+
+```json
+{
+  "contractVersion": "ops.v1",
+  "timestampMs": 1733421245000,
+  "operationId": "uuid-123",
+  "proposalId": "uuid-123",
+  "state": "PROCESSING",
+  "type": "WRITE_PROPOSAL",
+  "correlationId": "uuid-123",
+  "queue": {
+    "name": "proposal-queue",
+    "position": null
+  },
+  "startedAtMs": null,
+  "updatedAtMs": 1733421245000,
+  "completedAtMs": null,
+  "deadlineMs": 1733421534000,
+  "sourceState": "VERIFIED",
+  "durabilityState": "PENDING",
+  "durabilityTimestamp": 1733421240000,
+  "durabilityError": null,
+  "rejectionReason": null,
+  "ethereumTxHash": "0xabcd...",
+  "confirmedBlock": 12345678,
+  "error": null
+}
+```
+
+Notes:
+- This is currently an adapter endpoint; `operationId` maps to existing `proposalId`.
+- Lifecycle state is derived from proposal + durability states.
+
+### Example
+
+```bash
+curl http://localhost:8090/v1/ops/operations/uuid-123
+```
+
+---
+
+## GET /v1/ops/events/stream
+
+Open `ops.v1` SSE stream for live control-plane updates.
+
+### Headers
+
+- `Last-Event-ID` (optional) - resume from recent in-memory buffer window
+
+### SSE payload shape
+
+Each event uses `ops.v1` envelope:
+
+```json
+{
+  "contractVersion": "ops.v1",
+  "eventId": "1733421245000",
+  "eventType": "proposal.state.changed",
+  "sourceNode": "http://localhost:8090",
+  "timestampMs": 1733421245000,
+  "data": {
+    "legacyType": "content",
+    "legacyAction": "write",
+    "path": "/oak-chain/.../content/page-1733421234000",
+    "wallet": "0xdd870fa1b7c4700f2bd7f44238821c26f7392148"
+  }
+}
+```
+
+Notes:
+- Event taxonomy is currently mapped from existing ADR-036 events.
+- Legacy stream remains available at `GET /v1/events/stream`.
+
+### Example
+
+```bash
+curl -N http://localhost:8090/v1/ops/events/stream
+```
+
+---
+
+## GET /v1/ops/snapshots/queue
+
+Get queue snapshot with `ops.v1` freshness/degraded metadata and short TTL cache.
+
+### Response
+
+```json
+{
+  "contractVersion": "ops.v1",
+  "sourceTimestampMs": 1733421245000,
+  "servedAtMs": 1733421245100,
+  "stalenessMs": 100,
+  "degraded": false,
+  "degradedReason": null,
+  "cache": {
+    "hit": true,
+    "ttlMs": 1000
+  },
+  "data": {
+    "pendingCount": 42,
+    "mempoolDepth": 10746
+  }
+}
+```
+
+Notes:
+- On upstream computation failure, endpoint may return stale cached data with:
+  - `degraded=true`
+  - `degradedReason=STALE_CACHE_FALLBACK`
+
+### Example
+
+```bash
+curl http://localhost:8090/v1/ops/snapshots/queue
+```
+
+---
+
+## GET /v1/ops/snapshots/cluster
+
+Get cluster snapshot with `ops.v1` freshness/degraded metadata and short TTL cache.
+
+### Response
+
+```json
+{
+  "contractVersion": "ops.v1",
+  "sourceTimestampMs": 1733421245000,
+  "servedAtMs": 1733421245100,
+  "stalenessMs": 100,
+  "degraded": false,
+  "degradedReason": null,
+  "cache": {
+    "hit": true,
+    "ttlMs": 1000
+  },
+  "data": {
+    "role": "LEADER",
+    "clusterMemberCount": 3,
+    "reachableCount": 3
+  }
+}
+```
+
+### Example
+
+```bash
+curl http://localhost:8090/v1/ops/snapshots/cluster
+```
+
+---
+
+## GET /v1/ops/snapshots/replication
+
+Get replication-lag snapshot with `ops.v1` freshness/degraded metadata and short TTL cache.
+
+### Response
+
+```json
+{
+  "contractVersion": "ops.v1",
+  "sourceTimestampMs": 1733421245000,
+  "servedAtMs": 1733421245100,
+  "stalenessMs": 100,
+  "degraded": false,
+  "degradedReason": null,
+  "cache": {
+    "hit": true,
+    "ttlMs": 1000
+  },
+  "data": {
+    "role": "FOLLOWER",
+    "replicationLag": 5,
+    "healthy": true
+  }
+}
+```
+
+### Example
+
+```bash
+curl http://localhost:8090/v1/ops/snapshots/replication
+```
+
+---
+
+## GET /v1/ops/snapshots/health
+
+Get lightweight health snapshot with `ops.v1` freshness/degraded metadata and short TTL cache.
+
+### Response
+
+```json
+{
+  "contractVersion": "ops.v1",
+  "sourceTimestampMs": 1733421245000,
+  "servedAtMs": 1733421245100,
+  "stalenessMs": 100,
+  "degraded": false,
+  "degradedReason": null,
+  "cache": {
+    "hit": true,
+    "ttlMs": 1000
+  },
+  "data": {
+    "status": "UP",
+    "clusterHealthy": true,
+    "blobStoreType": "ipfs",
+    "blobStoreActive": true,
+    "reachableCount": 3,
+    "totalMembers": 3,
+    "quorumSize": 2,
+    "currentRole": "LEADER"
+  }
+}
+```
+
+### Example
+
+```bash
+curl http://localhost:8090/v1/ops/snapshots/health
 ```
 
 ---

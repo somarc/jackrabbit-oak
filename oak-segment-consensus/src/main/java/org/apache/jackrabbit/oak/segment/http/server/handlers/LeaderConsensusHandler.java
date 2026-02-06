@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +26,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
 /**
@@ -152,10 +155,11 @@ public class LeaderConsensusHandler {
             // Return success
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(String.format(
-                "{\"success\":true,\"message\":\"HEAD replicated\",\"segmentCount\":%d}",
-                segmentCount
-            ));
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("success", true);
+            result.put("message", "HEAD replicated");
+            result.put("segmentCount", segmentCount);
+            response.getWriter().write(JsonOutputUtil.toJson(result));
             
         } catch (Exception e) {
             log.error("❌ Failed to process follower HEAD update", e);
@@ -207,4 +211,3 @@ public class LeaderConsensusHandler {
     }
     
 }
-

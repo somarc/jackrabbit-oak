@@ -2491,7 +2491,11 @@ public class AeronConsensusEngine implements ClusteredService {
         Cluster.Role role = cluster.role();
         state.put("role", role.name());
         state.put("isLeader", role == Cluster.Role.LEADER);
-        state.put("memberId", cluster.memberId());
+        int selfMemberId = cluster.memberId();
+        if (selfMemberId < 0) {
+            selfMemberId = findNodeIdByUrl(selfUrl);
+        }
+        state.put("memberId", selfMemberId);
         state.put("clusterTime", cluster.time());
         state.put("logPosition", cluster.logPosition());
         
@@ -2502,19 +2506,11 @@ public class AeronConsensusEngine implements ClusteredService {
         
         // Build members list and discover leader
         java.util.List<java.util.Map<String, Object>> members = new java.util.ArrayList<>();
-        String leaderUrl = null;
-        
-        // Discover leader (for all nodes, not just self)
-        if (role == Cluster.Role.LEADER) {
-            leaderUrl = selfUrl;
-        } else {
-            // For followers, discover leader from Aeron Cluster state
-            leaderUrl = discoverLeaderFromAeronClusterState();
-        }
-        
+        String leaderUrl = getCurrentLeader();
+
         // Add self to members list
         java.util.Map<String, Object> selfInfo = new java.util.HashMap<>();
-        selfInfo.put("memberId", cluster.memberId());
+        selfInfo.put("memberId", selfMemberId);
         selfInfo.put("url", selfUrl);
         selfInfo.put("role", role.name());
         selfInfo.put("status", "ACTIVE");
@@ -2558,6 +2554,18 @@ public class AeronConsensusEngine implements ClusteredService {
         state.put("currentLeader", leaderUrl);
         
         return state;
+    }
+
+    private int findNodeIdByUrl(String url) {
+        if (url == null || nodeIdToUrl == null) {
+            return -1;
+        }
+        for (java.util.Map.Entry<Integer, String> entry : nodeIdToUrl.entrySet()) {
+            if (isSameUrlByPort(entry.getValue(), url)) {
+                return entry.getKey();
+            }
+        }
+        return -1;
     }
     
     /**
