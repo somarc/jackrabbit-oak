@@ -153,51 +153,63 @@ public class HealthHandler {
         try {
             if (fileStore != null) {
                 String headId = fileStore.getHead().getRecordId().toString10();
-                json.append("    \"status\": \"UP\",\n");
-                json.append("    \"head\": \"").append(headId.substring(0, Math.min(16, headId.length()))).append("...\"\n");
-                
-                // 🔄 FINALITY-AWARE HEAD TRACKING: Expose committedHead vs latestHead
-                // committedHead: HEAD that has reached finality (epoch N-2) - immutable, safe
-                // latestHead: Current HEAD including pending writes (epoch N, N+1) - may change
+
                 AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
+                String committedHead = null;
+                String latestHead = null;
+                int latestEpochSeen = -1;
+                int committedEpoch = -1;
+                boolean hasCommittedHead = false;
+                boolean hasLatestHead = false;
+                boolean hasLatestEpoch = false;
+                boolean hasCommittedEpoch = false;
                 if (aeronEngine != null) {
-                    String committedHead = aeronEngine.getCommittedHead();
-                    String latestHead = aeronEngine.getLatestHead();
-                    int latestEpochSeen = aeronEngine.getLatestEpochSeen();
-                    int committedEpoch = aeronEngine.getLastCommittedEpoch();
-                    
-                    boolean hasCommittedHead = committedHead != null && !committedHead.isEmpty();
-                    boolean hasLatestHead = latestHead != null && !latestHead.isEmpty();
-                    boolean hasLatestEpoch = latestEpochSeen >= 0;
-                    boolean hasCommittedEpoch = committedEpoch >= 0;
-                    
-                    if (hasCommittedHead) {
-                        json.append("    \"committedHead\": \"").append(committedHead).append("\"");
-                        if (hasLatestHead || hasLatestEpoch || hasCommittedEpoch) {
-                            json.append(",\n");
-                        } else {
-                            json.append("\n");
-                        }
+                    committedHead = aeronEngine.getCommittedHead();
+                    latestHead = aeronEngine.getLatestHead();
+                    latestEpochSeen = aeronEngine.getLatestEpochSeen();
+                    committedEpoch = aeronEngine.getLastCommittedEpoch();
+                    hasCommittedHead = committedHead != null && !committedHead.isEmpty();
+                    hasLatestHead = latestHead != null && !latestHead.isEmpty();
+                    hasLatestEpoch = latestEpochSeen >= 0;
+                    hasCommittedEpoch = committedEpoch >= 0;
+                }
+                boolean hasFinalityFields = hasCommittedHead || hasLatestHead || hasLatestEpoch || hasCommittedEpoch;
+
+                json.append("    \"status\": \"UP\",\n");
+                json.append("    \"head\": \"").append(headId.substring(0, Math.min(16, headId.length()))).append("...\"");
+                if (hasFinalityFields) {
+                    json.append(",\n");
+                } else {
+                    json.append("\n");
+                }
+
+                // FINALITY-AWARE HEAD TRACKING: committedHead vs latestHead and epoch markers
+                if (hasCommittedHead) {
+                    json.append("    \"committedHead\": \"").append(committedHead).append("\"");
+                    if (hasLatestHead || hasLatestEpoch || hasCommittedEpoch) {
+                        json.append(",\n");
+                    } else {
+                        json.append("\n");
                     }
-                    if (hasLatestHead) {
-                        json.append("    \"latestHead\": \"").append(latestHead).append("\"");
-                        if (hasLatestEpoch || hasCommittedEpoch) {
-                            json.append(",\n");
-                        } else {
-                            json.append("\n");
-                        }
+                }
+                if (hasLatestHead) {
+                    json.append("    \"latestHead\": \"").append(latestHead).append("\"");
+                    if (hasLatestEpoch || hasCommittedEpoch) {
+                        json.append(",\n");
+                    } else {
+                        json.append("\n");
                     }
-                    if (hasLatestEpoch) {
-                        json.append("    \"latestEpochSeen\": ").append(latestEpochSeen);
-                        if (hasCommittedEpoch) {
-                            json.append(",\n");
-                        } else {
-                            json.append("\n");
-                        }
-                    }
+                }
+                if (hasLatestEpoch) {
+                    json.append("    \"latestEpochSeen\": ").append(latestEpochSeen);
                     if (hasCommittedEpoch) {
-                        json.append("    \"committedEpoch\": ").append(committedEpoch).append("\n");
+                        json.append(",\n");
+                    } else {
+                        json.append("\n");
                     }
+                }
+                if (hasCommittedEpoch) {
+                    json.append("    \"committedEpoch\": ").append(committedEpoch).append("\n");
                 }
             } else {
                 json.append("    \"status\": \"DOWN\",\n");
