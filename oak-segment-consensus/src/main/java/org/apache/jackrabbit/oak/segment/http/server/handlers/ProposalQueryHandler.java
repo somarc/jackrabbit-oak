@@ -206,6 +206,28 @@ public class ProposalQueryHandler {
     }
 
     /**
+     * Get epoch-resident proposal flow with priority lanes.
+     * GET /v1/proposals/epochs
+     */
+    public void handleGetProposalEpochs(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+
+        try {
+            if (context.proposalQueueManager == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
+                return;
+            }
+
+            Map<String, Object> flow = context.proposalQueueManager.getProposalEpochFlowStats();
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(JsonOutputUtil.toJson(flow));
+        } catch (Exception e) {
+            log.error("Error getting proposal epoch flow", e);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+        }
+    }
+
+    /**
      * Get ops.v1 queue snapshot with freshness/degraded metadata.
      * GET /v1/ops/snapshots/queue
      */

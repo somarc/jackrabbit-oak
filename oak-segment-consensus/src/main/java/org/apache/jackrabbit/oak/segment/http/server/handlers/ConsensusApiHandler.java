@@ -301,6 +301,14 @@ public class ConsensusApiHandler {
     }
 
     /**
+     * Get epoch-resident proposal flow with priority lanes.
+     * GET /v1/proposals/epochs
+     */
+    public void handleGetProposalEpochs(HttpServletResponse response) throws IOException {
+        proposalQueryHandler.handleGetProposalEpochs(response);
+    }
+
+    /**
      * Get ops.v1 queue snapshot with freshness/degraded metadata.
      * GET /v1/ops/snapshots/queue
      */

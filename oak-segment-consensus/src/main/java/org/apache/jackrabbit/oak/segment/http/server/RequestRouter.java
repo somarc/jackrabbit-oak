@@ -592,6 +592,12 @@ public class RequestRouter {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/proposals/epochs".equals(path) && "GET".equals(method)) {
+                consensusApiHandler.handleGetProposalEpochs(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             // Registration
             if ("/v1/register-client".equals(path) && ("POST".equals(method) || "PUT".equals(method))) {

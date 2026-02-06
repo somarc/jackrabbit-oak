@@ -131,6 +131,10 @@ public class ProposalQueueManagerOptimized {
     private final java.util.concurrent.atomic.AtomicLong totalRejectedCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong totalVerifiedCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong totalFinalizedCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> finalizedByEpochAndTier =
+        new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> rejectedByEpochAndTier =
+        new ConcurrentHashMap<>();
     private final long processedRetentionMs;
     private volatile long lastProcessedCleanup = 0L;
 
@@ -466,6 +470,149 @@ public class ProposalQueueManagerOptimized {
         stats.put("persistenceAsyncEnabled", isAsyncPersistenceEnabled());
         
         return stats;
+    }
+
+    /**
+     * Build epoch-resident proposal flow stats with priority lanes.
+     * This is the upstream source of truth for /v1/proposals/epochs.
+     */
+    public java.util.Map<String, Object> getProposalEpochFlowStats() {
+        long currentEpoch = epochQueue.getCurrentEpoch();
+        long finalizedEpoch = epochQueue.getFinalizedEpoch();
+        long nextEpoch = Math.max(finalizedEpoch + 1, currentEpoch);
+
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("currentEpoch", currentEpoch);
+        payload.put("finalizedEpoch", finalizedEpoch);
+        payload.put("pendingEpochs", epochQueue.getAllPendingEpochs().size());
+        payload.put("epochsUntilFinality", Math.max(0L, currentEpoch - finalizedEpoch));
+        payload.put("source", "upstream-epoch-counters");
+        payload.put("note", "Epoch counters are authoritative for unverified/verified residency and finalized/rejected per epoch-tier.");
+
+        java.util.List<java.util.Map<String, Object>> blocks = new java.util.ArrayList<>();
+        blocks.add(buildEpochFlowBlock("Finalized", "finalized", finalizedEpoch));
+        blocks.add(buildEpochFlowBlock("Next to be Finalized", "next", nextEpoch));
+        blocks.add(buildEpochFlowBlock("Current", "current", currentEpoch));
+        payload.put("blocks", blocks);
+
+        java.util.Map<String, Object> aeronLoad = new java.util.LinkedHashMap<>();
+        aeronLoad.put("priorityProposalsSent", priorityProposalsSent.get());
+        aeronLoad.put("batchedProposalsSent", batchedProposalsSent.get());
+        aeronLoad.put("backpressurePending", backpressureManager.getPendingCount());
+        aeronLoad.put("backpressureMax", backpressureManager.getMaxPendingMessages());
+        payload.put("aeronLoad", aeronLoad);
+
+        return payload;
+    }
+
+    private java.util.Map<String, Object> buildEpochFlowBlock(String label, String status, long epoch) {
+        java.util.Map<String, Object> block = new java.util.LinkedHashMap<>();
+        block.put("label", label);
+        block.put("status", status);
+        block.put("epoch", epoch);
+
+        java.util.Map<String, java.util.Map<String, Long>> byPriority = collectEpochPriorityStateCounts(epoch);
+        block.put("byPriority", byPriority);
+
+        java.util.Map<String, Object> totals = new java.util.LinkedHashMap<>();
+        totals.put("unverified", byPriority.values().stream().mapToLong(v -> v.getOrDefault("unverified", 0L)).sum());
+        totals.put("verified", byPriority.values().stream().mapToLong(v -> v.getOrDefault("verified", 0L)).sum());
+        totals.put("finalized", byPriority.values().stream().mapToLong(v -> v.getOrDefault("finalized", 0L)).sum());
+        totals.put("rejected", byPriority.values().stream().mapToLong(v -> v.getOrDefault("rejected", 0L)).sum());
+        block.put("totals", totals);
+
+        long flowToNext = ((Number) totals.get("verified")).longValue() + ((Number) totals.get("unverified")).longValue();
+        block.put("flowToNext", flowToNext);
+        return block;
+    }
+
+    private java.util.Map<String, java.util.Map<String, Long>> collectEpochPriorityStateCounts(long epoch) {
+        java.util.Map<String, java.util.Map<String, Long>> byPriority = new java.util.LinkedHashMap<>();
+        byPriority.put("standard", emptyStateMap());
+        byPriority.put("express", emptyStateMap());
+        byPriority.put("priority", emptyStateMap());
+
+        for (QueuedProposal proposal : allProposals.values()) {
+            if (proposal == null || proposal.getEpoch() != epoch) {
+                continue;
+            }
+            String tier = normalizeTierKey(proposal.getTier());
+            java.util.Map<String, Long> counters = byPriority.computeIfAbsent(tier, k -> emptyStateMap());
+            ProposalState state = proposal.getState();
+            if (state == ProposalState.PENDING) {
+                counters.put("unverified", counters.get("unverified") + 1L);
+            } else if (state == ProposalState.VERIFIED || state == ProposalState.CONFIRMED) {
+                counters.put("verified", counters.get("verified") + 1L);
+            }
+        }
+
+        for (String tier : byPriority.keySet()) {
+            long finalized = getTerminalCounter(finalizedByEpochAndTier, epoch, tier);
+            long rejected = getTerminalCounter(rejectedByEpochAndTier, epoch, tier);
+            java.util.Map<String, Long> counters = byPriority.get(tier);
+            counters.put("finalized", counters.get("finalized") + finalized);
+            counters.put("rejected", counters.get("rejected") + rejected);
+        }
+
+        return byPriority;
+    }
+
+    private java.util.Map<String, Long> emptyStateMap() {
+        java.util.Map<String, Long> map = new java.util.LinkedHashMap<>();
+        map.put("unverified", 0L);
+        map.put("verified", 0L);
+        map.put("finalized", 0L);
+        map.put("rejected", 0L);
+        return map;
+    }
+
+    private String normalizeTierKey(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+        if (tier == null) {
+            return "standard";
+        }
+        switch (tier) {
+            case PRIORITY:
+                return "priority";
+            case EXPRESS:
+                return "express";
+            case STANDARD:
+            default:
+                return "standard";
+        }
+    }
+
+    private void incrementTerminalCounter(
+            ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
+            long epoch,
+            String tier) {
+        store.computeIfAbsent(epoch, k -> new ConcurrentHashMap<>())
+            .computeIfAbsent(tier, k -> new java.util.concurrent.atomic.AtomicLong(0))
+            .incrementAndGet();
+    }
+
+    private long getTerminalCounter(
+            ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
+            long epoch,
+            String tier) {
+        ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong> byTier = store.get(epoch);
+        if (byTier == null) {
+            return 0L;
+        }
+        java.util.concurrent.atomic.AtomicLong counter = byTier.get(tier);
+        return counter == null ? 0L : counter.get();
+    }
+
+    private void recordTerminalState(QueuedProposal proposal, ProposalState terminalState) {
+        if (proposal == null) {
+            return;
+        }
+        long epoch = proposal.getEpoch();
+        String tier = normalizeTierKey(proposal.getTier());
+        if (terminalState == ProposalState.PROCESSED) {
+            incrementTerminalCounter(finalizedByEpochAndTier, epoch, tier);
+        } else if (terminalState == ProposalState.REJECTED) {
+            incrementTerminalCounter(rejectedByEpochAndTier, epoch, tier);
+        }
     }
     
     private ProposalPersistenceStore createPersistenceStore(String persistenceDir) {
@@ -1020,6 +1167,7 @@ public class ProposalQueueManagerOptimized {
                         for (QueuedProposal queued : batch) {
                             queued.setState(ProposalState.PROCESSED);
                             totalFinalizedCount.incrementAndGet();
+                            recordTerminalState(queued, ProposalState.PROCESSED);
                             
                             // Track for backpressure management (one per proposal)
                             backpressureManager.incrementSent();
@@ -1066,6 +1214,7 @@ public class ProposalQueueManagerOptimized {
                             proposal.setRejectionReason("Exceeded max retry count (" + maxRetryCount + 
                                 ") after Aeron send failures: " + e.getMessage());
                             totalRejectedCount.incrementAndGet();
+                            recordTerminalState(proposal, ProposalState.REJECTED);
                         }
                         persistProposals();
                     } else {
@@ -1396,6 +1545,7 @@ public class ProposalQueueManagerOptimized {
                             proposal.setState(ProposalState.PROCESSED);
                             allProposals.remove(proposal.getProposalId());
                             totalFinalizedCount.incrementAndGet();
+                            recordTerminalState(proposal, ProposalState.PROCESSED);
                             long priorityPersistStartNs = System.nanoTime();
                             persistProposals();
                             long priorityPersistNanos = System.nanoTime() - priorityPersistStartNs;
@@ -1465,6 +1615,7 @@ public class ProposalQueueManagerOptimized {
             
             // Track rejection persistently (survives proposal removal)
             totalRejectedCount.incrementAndGet();
+            recordTerminalState(proposal, ProposalState.REJECTED);
             persistProposals();
             
             log.warn("❌ REJECTED proposal {}: {} (total rejected: {})", 
