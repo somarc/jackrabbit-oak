@@ -96,7 +96,7 @@ public class WriteProposalHandler {
             boolean isMultipart = requestContentType != null && requestContentType.toLowerCase().startsWith("multipart/");
 
             if (isMultipart) {
-                log.info("📦 Processing MULTIPART form data upload");
+                log.debug("📦 Processing MULTIPART form data upload");
 
                 // Parse multipart request
                 java.util.Collection<javax.servlet.http.Part> parts = request.getParts();
@@ -112,7 +112,7 @@ public class WriteProposalHandler {
                         try (java.io.InputStream is = part.getInputStream()) {
                             binaryBytes = is.readAllBytes();
                         }
-                        log.info("📎 Received file: {} ({} bytes, {})", fileName, binaryBytes.length, mimeType);
+                        log.debug("📎 Received file: {} ({} bytes, {})", fileName, binaryBytes.length, mimeType);
 
                     } else {
                         // This is a form field
@@ -182,7 +182,7 @@ public class WriteProposalHandler {
                 return;
             }
             if (organization != null && !organization.isEmpty()) {
-                log.info("🏢 Organization: {} (wallet: {})", organization, normalizedWallet.substring(0, 10) + "...");
+                log.debug("🏢 Organization: {} (wallet: {})", organization, normalizedWallet.substring(0, 10) + "...");
             }
 
             // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
@@ -482,13 +482,13 @@ public class WriteProposalHandler {
             // 📦 EAGER BINARY UPLOAD: If binary bytes are available, upload to BlobStore
             if (binaryBytes != null && binaryBytes.length > 0 && context.blobStore != null) {
                 try {
-                    log.info("📦 Uploading binary to BlobStore ({} bytes, {})", binaryBytes.length, mimeType);
+                    log.debug("📦 Uploading binary to BlobStore ({} bytes, {})", binaryBytes.length, mimeType);
 
                     // Upload to BlobStore (IPFS or other configured store)
                     java.io.InputStream binaryStream = new java.io.ByteArrayInputStream(binaryBytes);
                     blobId = context.blobStore.writeBlob(binaryStream);
 
-                    log.info("✅ Binary uploaded to BlobStore: {} ({} bytes, mime: {})",
+                    log.debug("✅ Binary uploaded to BlobStore: {} ({} bytes, mime: {})",
                         blobId, binaryBytes.length, mimeType != null ? mimeType : "unknown");
 
                     // Register CID mapping if IPFS and CidMappingService is available
@@ -505,7 +505,7 @@ public class WriteProposalHandler {
                                     String derivedIpfsCid = ipfsDataStore.getCID(blobId);
                                     if (derivedIpfsCid != null) {
                                         context.cidMappingService.registerMapping(blobId, derivedIpfsCid);
-                                        log.info("📎 Registered CID mapping: {} → {}", blobId, derivedIpfsCid);
+                                        log.debug("📎 Registered CID mapping: {} → {}", blobId, derivedIpfsCid);
                                     }
                                 }
                             }
@@ -673,16 +673,16 @@ public class WriteProposalHandler {
             if (blobId != null && !blobId.isEmpty()) {
                 queuedProposal.setBlobId(blobId);
                 queuedProposal.setMimeType(mimeType != null ? mimeType : "application/octet-stream");
-                log.info("📎 Binary blob attached to proposal {}: blobId={}, mimeType={}",
+                log.debug("📎 Binary blob attached to proposal {}: blobId={}, mimeType={}",
                     proposalId, blobId, mimeType);
             } else {
-                log.info("📝 Text-only proposal {} (no binary)", proposalId);
+                log.debug("📝 Text-only proposal {} (no binary)", proposalId);
             }
 
             // ADR 016: Set IPFS CID from client-side upload
             if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 queuedProposal.setIpfsCid(ipfsCid);
-                log.info("🔗 IPFS CID attached to proposal {}: ipfsCid={}", proposalId, ipfsCid);
+                log.debug("🔗 IPFS CID attached to proposal {}: ipfsCid={}", proposalId, ipfsCid);
             }
 
             // Track API acceptance (proposal successfully queued)

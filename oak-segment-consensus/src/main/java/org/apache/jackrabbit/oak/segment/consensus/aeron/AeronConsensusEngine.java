@@ -1499,7 +1499,7 @@ public class AeronConsensusEngine implements ClusteredService {
                     false
                 );
                 if (sent) {
-                    log.info("✅ Write with binary sent through AeronCluster.offer() - blobId={}", blobId);
+                    log.debug("✅ Write with binary sent through AeronCluster.offer() - blobId={}", blobId);
                 }
                 return sent;
             } catch (Exception e) {
@@ -1767,10 +1767,8 @@ public class AeronConsensusEngine implements ClusteredService {
                         ingressTimestamps.offer(System.nanoTime());
                         performanceMetrics.recordMessageIngressed();
                         log.debug("🔍DEBUG_BATCH [11]: Tracked ingress timestamp and metrics");
-                        // 🚦 BACKPRESSURE: Do NOT increment here - ProposalQueueManagerOptimized
-                        // already calls incrementSent() for each proposal before calling this method
-                        // (see ProposalQueueManagerOptimized line 507)
-                        // Double-counting would cause false backpressure!
+                        // 🚦 BACKPRESSURE: Count each proposal in the batch once on successful ingress.
+                        backpressureManager.incrementSent(proposals.size());
                     },
                     false
                 );
@@ -2048,7 +2046,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 () -> {
                     ingressTimestamps.offer(System.nanoTime());
                     performanceMetrics.recordMessageIngressed();
-                    backpressureManager.incrementSent();
+                    // Transaction control messages are not proposal writes; do not affect write backpressure.
                 },
                 false
             );

@@ -39,6 +39,13 @@ public final class ProposalQueueTuningService {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromConfig(config);
         ProposalQueueTuningRegistry.set(tuning);
         log.info("ProposalQueueTuningService activated");
+        log.info("QUEUE_TUNING_SOURCE source=osgi-config-admin persistence_enabled={} max_message_batch={} finalization_chunk_size={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={}",
+            tuning.isPersistenceEnabled(),
+            tuning.getMaxMessageBatch(),
+            tuning.getFinalizationChunkSize(),
+            tuning.getMaxPendingMessages(),
+            tuning.getBackpressureTimeoutMs(),
+            tuning.getCounterRotationIntervalMs());
         log.info("  maxMessageBatch: {}", tuning.getMaxMessageBatch());
         log.info("  finalizationChunkSize: {}", tuning.getFinalizationChunkSize());
         log.info("  maxRetryCount: {}", tuning.getMaxRetryCount());
@@ -46,11 +53,13 @@ public final class ProposalQueueTuningService {
         log.info("  confirmationTimeoutMs: {}", tuning.getConfirmationTimeoutMs());
         log.info("  restoreTimeoutMs: {}", tuning.getRestoreTimeoutMs());
         log.info("  processedRetentionMs: {}", tuning.getProcessedRetentionMs());
+        log.info("  persistenceEnabled: {}", tuning.isPersistenceEnabled());
         log.info("  persistenceFlushIntervalMs: {}", tuning.getPersistenceFlushIntervalMs());
         log.info("  persistenceFlushBatch: {}", tuning.getPersistenceFlushBatch());
         log.info("  maxPendingMessages: {}", tuning.getMaxPendingMessages());
         log.info("  backpressureTimeoutMs: {}", tuning.getBackpressureTimeoutMs());
         log.info("  backpressureParkNanos: {}", tuning.getBackpressureParkNanos());
+        log.info("  counterRotationIntervalMs: {}", tuning.getCounterRotationIntervalMs());
     }
 
     @Modified

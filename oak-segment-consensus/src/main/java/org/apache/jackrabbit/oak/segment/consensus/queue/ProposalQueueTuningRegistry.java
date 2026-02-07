@@ -16,11 +16,16 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class ProposalQueueTuningRegistry {
 
+    private static final Logger log = LoggerFactory.getLogger(ProposalQueueTuningRegistry.class);
     private static final AtomicReference<ProposalQueueTuning> OVERRIDE = new AtomicReference<>();
+    private static final AtomicBoolean FALLBACK_WARNED = new AtomicBoolean(false);
 
     private ProposalQueueTuningRegistry() {
         // utility
@@ -31,7 +36,17 @@ final class ProposalQueueTuningRegistry {
         if (tuning != null) {
             return tuning;
         }
-        return ProposalQueueTuning.fromSystemProperties();
+        ProposalQueueTuning fallback = ProposalQueueTuning.fromSystemProperties();
+        if (FALLBACK_WARNED.compareAndSet(false, true)) {
+            log.warn("QUEUE_TUNING_SOURCE source=system-properties persistence_enabled={} max_message_batch={} finalization_chunk_size={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={}",
+                fallback.isPersistenceEnabled(),
+                fallback.getMaxMessageBatch(),
+                fallback.getFinalizationChunkSize(),
+                fallback.getMaxPendingMessages(),
+                fallback.getBackpressureTimeoutMs(),
+                fallback.getCounterRotationIntervalMs());
+        }
+        return fallback;
     }
 
     static void set(ProposalQueueTuning tuning) {

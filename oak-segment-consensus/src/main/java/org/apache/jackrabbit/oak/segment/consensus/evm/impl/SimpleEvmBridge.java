@@ -197,13 +197,13 @@ public class SimpleEvmBridge implements EvmBridge {
     @Override
     public void start() {
         running = true;
-        System.out.println("EVM Bridge started on " + networkName + " (contract: " + contractAddress + ")");
+        log.info("EVM Bridge started on {} (contract: {})", networkName, contractAddress);
     }
     
     @Override
     public void stop() {
         running = false;
-        System.out.println("EVM Bridge stopped");
+        log.info("EVM Bridge stopped");
     }
     
     // ========== POC Helper Methods ==========
@@ -217,7 +217,7 @@ public class SimpleEvmBridge implements EvmBridge {
      */
     public void simulatePayment(@NotNull PaymentProof payment) {
         payments.put(payment.getProposalId(), payment);
-        System.out.println("Detected payment: " + payment);
+        log.debug("Detected payment: {}", payment);
     }
     
     /**
@@ -230,7 +230,7 @@ public class SimpleEvmBridge implements EvmBridge {
      */
     public void registerWallet(@NotNull String ethereumAddress, @NotNull String walletUuid) {
         addressToWalletMapping.put(ethereumAddress.toLowerCase(), walletUuid);
-        System.out.println("Registered wallet mapping: " + ethereumAddress + " -> " + walletUuid);
+        log.debug("Registered wallet mapping: {} -> {}", ethereumAddress, walletUuid);
     }
     
     /**
@@ -249,4 +249,3 @@ public class SimpleEvmBridge implements EvmBridge {
         return running;
     }
 }
-

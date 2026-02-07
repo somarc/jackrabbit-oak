@@ -26,8 +26,10 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.math.BigInteger;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.Assert.*;
 
@@ -394,5 +396,302 @@ public class ProposalQueueIntegrationTest {
         
         // Verify retry limit is configured
         assertEquals("Max retry limit should be 5", 5, stats.get("maxRetryLimit"));
+    }
+
+    @Test
+    public void testStandardBurstBuildsDebtThenDrainsAfterEpochAdvance() throws InterruptedException {
+        final int proposalCount = 40;
+        final CountDownLatch finalizedLatch = new CountDownLatch(proposalCount);
+        final String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+
+        RaftAppendCallback callback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                finalizedLatch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature, String blobId, String mimeType) {
+                finalizedLatch.countDown();
+            }
+
+            @Override
+            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                // No-op for this test
+            }
+
+            @Override
+            public int appendProposalBatch(java.util.List<QueuedProposal> batch) {
+                for (int i = 0; i < batch.size(); i++) {
+                    finalizedLatch.countDown();
+                }
+                return batch.size();
+            }
+        };
+
+        BackpressureManager bp = new BackpressureManager();
+        ProposalQueueManagerOptimized testQueue = new ProposalQueueManagerOptimized(
+            bridge, callback, bp, beaconClient);
+        testQueue.start();
+
+        try {
+            // Keep mock epoch stable while we create burst load.
+            assertTrue("Should be able to control mock epoch", beaconClient.setMockEpochOffset(0));
+
+            for (int i = 0; i < proposalCount; i++) {
+                String proposalId = "standard-burst-" + i;
+                String txHash = "0xstd" + i;
+                String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/burst-" + i;
+                testQueue.queueProposal(
+                    proposalId,
+                    txHash,
+                    walletAddress,
+                    path,
+                    "page",
+                    "standard-" + i,
+                    "0xsig...",
+                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+                    null
+                );
+                bridge.simulateWriteAuthorizedEvent(
+                    proposalId,
+                    walletAddress,
+                    "0xdef456...",
+                    BigInteger.valueOf(500_000),
+                    20000L + i,
+                    txHash
+                );
+            }
+
+            assertTrue("Burst proposals should become verified",
+                waitForCondition(() -> longStat(testQueue.getQueueStats(), "totalVerifiedCount") >= proposalCount,
+                    15_000, 100));
+
+            Map<String, Object> preAdvance = testQueue.getQueueStats();
+            long preVerified = longStat(preAdvance, "totalVerifiedCount");
+            long preFinalized = longStat(preAdvance, "totalFinalizedCount");
+            long preGap = preVerified - preFinalized;
+
+            assertTrue("Invariant: verified count must be >= finalized count", preVerified >= preFinalized);
+            assertTrue("Standard burst should create temporary finalization debt before epoch advance", preGap > 0);
+
+            // Move finalized epoch forward to trigger drain of pending finalized work.
+            assertTrue("Mock epoch advance should succeed", beaconClient.advanceMockEpoch(3));
+
+            assertTrue("Finalization should drain after epoch advance",
+                finalizedLatch.await(20, TimeUnit.SECONDS));
+
+            Map<String, Object> postAdvance = testQueue.getQueueStats();
+            long postVerified = longStat(postAdvance, "totalVerifiedCount");
+            long postFinalized = longStat(postAdvance, "totalFinalizedCount");
+            long postGap = postVerified - postFinalized;
+
+            assertTrue("Invariant: verified count must remain >= finalized count", postVerified >= postFinalized);
+            assertTrue("Finalization debt should reduce after advancing epochs", postGap < preGap);
+            assertTrue("Backpressure pending should never be negative",
+                longStat(postAdvance, "backpressurePendingCount") >= 0);
+        } finally {
+            testQueue.stop();
+        }
+    }
+
+    @Test
+    public void testStandardBurstDrainRateTurnsNegativeAfterEpochAdvance() throws InterruptedException {
+        final int proposalCount = 80;
+        final String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+
+        BackpressureManager bp = new BackpressureManager();
+        ProposalQueueManagerOptimized testQueue = new ProposalQueueManagerOptimized(
+            bridge, new NoopRaftAppendCallback(), bp, beaconClient);
+        testQueue.start();
+
+        try {
+            assertTrue("Should be able to control mock epoch", beaconClient.setMockEpochOffset(0));
+
+            for (int i = 0; i < proposalCount; i++) {
+                String proposalId = "standard-slope-" + i;
+                String txHash = "0xslope" + i;
+                String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/slope-" + i;
+                testQueue.queueProposal(
+                    proposalId,
+                    txHash,
+                    walletAddress,
+                    path,
+                    "page",
+                    "slope-" + i,
+                    "0xsig...",
+                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+                    null
+                );
+                bridge.simulateWriteAuthorizedEvent(
+                    proposalId,
+                    walletAddress,
+                    "0xdef456...",
+                    BigInteger.valueOf(500_000),
+                    30000L + i,
+                    txHash
+                );
+            }
+
+            assertTrue("Burst proposals should become verified",
+                waitForCondition(() -> longStat(testQueue.getQueueStats(), "totalVerifiedCount") >= proposalCount,
+                    20_000, 100));
+
+            long preGap = queueGap(testQueue.getQueueStats());
+            assertTrue("Burst should create measurable finalization debt", preGap >= 20);
+
+            assertTrue("Mock epoch advance should succeed", beaconClient.advanceMockEpoch(3));
+
+            // Bounded drain-rate SLA: gap slope must turn negative within 12s.
+            long firstGap = queueGap(testQueue.getQueueStats());
+            long firstTs = System.currentTimeMillis();
+            long minObservedGap = firstGap;
+            long lastGap = firstGap;
+            long lastTs = firstTs;
+
+            long deadline = firstTs + 12_000;
+            while (System.currentTimeMillis() < deadline) {
+                Thread.sleep(500);
+                long gap = queueGap(testQueue.getQueueStats());
+                long now = System.currentTimeMillis();
+                minObservedGap = Math.min(minObservedGap, gap);
+                lastGap = gap;
+                lastTs = now;
+            }
+
+            double slopePerSec = ((double) (lastGap - firstGap)) / ((lastTs - firstTs) / 1000.0);
+            assertTrue("Gap must show a negative drain slope after epoch advance, slope=" + slopePerSec,
+                slopePerSec < -0.1d);
+            assertTrue("Gap should improve by at least 10 proposals in SLA window",
+                (firstGap - minObservedGap) >= 10);
+        } finally {
+            testQueue.stop();
+        }
+    }
+
+    @Test
+    public void testBackpressurePendingNormalizesToZeroWhenQueueIdle() {
+        BackpressureManager bp = new BackpressureManager();
+        ProposalQueueManagerOptimized testQueue = new ProposalQueueManagerOptimized(
+            bridge, new NoopRaftAppendCallback(), bp, beaconClient);
+        testQueue.start();
+
+        try {
+            // Simulate tiny sent/acked residual drift while queue has no work.
+            bp.incrementSent(2);
+
+            Map<String, Object> stats = testQueue.getQueueStats();
+            assertEquals("Queue should be empty for idle normalization check", 0L, longStat(stats, "batchQueueSize"));
+            assertEquals("Dashboard-facing backpressure pending should normalize to zero when idle", 0L,
+                longStat(stats, "backpressurePendingCount"));
+            assertEquals("Raw backpressure pending should still expose underlying counter drift", 2L,
+                longStat(stats, "backpressurePendingRawCount"));
+            assertFalse("Backpressure should not be active for tiny idle residual", (Boolean) stats.get("backpressureActive"));
+        } finally {
+            testQueue.stop();
+        }
+    }
+
+    @Test
+    public void testQueueStatsExposeCurrentAndLifetimeCounters() throws InterruptedException {
+        BackpressureManager bp = new BackpressureManager();
+        ProposalQueueManagerOptimized testQueue = new ProposalQueueManagerOptimized(
+            bridge, new NoopRaftAppendCallback(), bp, beaconClient);
+        testQueue.start();
+
+        try {
+            assertTrue("Should be able to control mock epoch", beaconClient.setMockEpochOffset(0));
+
+            String proposalId = "counter-contract-1";
+            String txHash = "0xcounter1";
+            String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+            String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/counter-1";
+
+            testQueue.queueProposal(
+                proposalId,
+                txHash,
+                walletAddress,
+                path,
+                "page",
+                "counter-1",
+                "0xsig...",
+                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+                null
+            );
+            bridge.simulateWriteAuthorizedEvent(
+                proposalId,
+                walletAddress,
+                "0xdef456...",
+                BigInteger.valueOf(500_000),
+                40000L,
+                txHash
+            );
+
+            assertTrue("Proposal should become verified",
+                waitForCondition(() -> longStat(testQueue.getQueueStats(), "totalVerifiedCount") >= 1L, 10_000, 100));
+
+            Map<String, Object> stats = testQueue.getQueueStats();
+            assertTrue("Counter window start should be present",
+                longStat(stats, "counterWindowStartMs") > 0);
+            assertTrue("Counter rotation interval should be present",
+                longStat(stats, "counterRotationIntervalMs") >= 0);
+            assertTrue("Current verified should be <= lifetime verified",
+                longStat(stats, "totalVerifiedCount") <= longStat(stats, "totalVerifiedCountLifetime"));
+            assertTrue("Current finalized should be <= lifetime finalized",
+                longStat(stats, "totalFinalizedCount") <= longStat(stats, "totalFinalizedCountLifetime"));
+            assertTrue("Current sent should be <= lifetime sent",
+                longStat(stats, "totalProposalsSent") <= longStat(stats, "totalProposalsSentLifetime"));
+        } finally {
+            testQueue.stop();
+        }
+    }
+
+    private static long longStat(Map<String, Object> stats, String key) {
+        Object value = stats.get(key);
+        assertNotNull("Missing stat: " + key, value);
+        assertTrue("Stat is not numeric: " + key, value instanceof Number);
+        return ((Number) value).longValue();
+    }
+
+    private static long queueGap(Map<String, Object> stats) {
+        return longStat(stats, "totalVerifiedCount") - longStat(stats, "totalFinalizedCount");
+    }
+
+    private static final class NoopRaftAppendCallback implements RaftAppendCallback {
+        @Override
+        public void appendProposal(String walletAddress, String path, String contentType, String message,
+                                   String signature) {
+            // No-op
+        }
+
+        @Override
+        public void appendProposal(String walletAddress, String path, String contentType, String message,
+                                   String signature, String blobId, String mimeType) {
+            // No-op
+        }
+
+        @Override
+        public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            // No-op
+        }
+
+        @Override
+        public int appendProposalBatch(java.util.List<QueuedProposal> batch) {
+            return batch.size();
+        }
+    }
+
+    private static boolean waitForCondition(BooleanSupplier condition, long timeoutMs, long sleepMs)
+        throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (condition.getAsBoolean()) {
+                return true;
+            }
+            Thread.sleep(sleepMs);
+        }
+        return condition.getAsBoolean();
     }
 }

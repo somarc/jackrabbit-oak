@@ -24,11 +24,13 @@ final class ProposalQueueTuning {
     static final int DEFAULT_FINALIZATION_CHUNK_SIZE = 3;
     static final int DEFAULT_VERIFIER_THREADS = 1;
     static final long DEFAULT_PROCESSED_RETENTION_MS = 10 * 60 * 1000L;
+    static final boolean DEFAULT_PERSISTENCE_ENABLED = true;
     static final long DEFAULT_PERSISTENCE_FLUSH_INTERVAL_MS = 250L;
     static final int DEFAULT_PERSISTENCE_FLUSH_BATCH = 100;
     static final long DEFAULT_MAX_PENDING_MESSAGES = 10_000L;
     static final long DEFAULT_BACKPRESSURE_TIMEOUT_MS = 30_000L;
     static final long DEFAULT_BACKPRESSURE_PARK_NANOS = 1_000_000L;
+    static final long DEFAULT_COUNTER_ROTATION_INTERVAL_MS = 24L * 60L * 60L * 1000L;
 
     private final long confirmationTimeoutMs;
     private final long restoreTimeoutMs;
@@ -37,11 +39,13 @@ final class ProposalQueueTuning {
     private final int finalizationChunkSize;
     private final int verifierThreads;
     private final long processedRetentionMs;
+    private final boolean persistenceEnabled;
     private final long persistenceFlushIntervalMs;
     private final int persistenceFlushBatch;
     private final long maxPendingMessages;
     private final long backpressureTimeoutMs;
     private final long backpressureParkNanos;
+    private final long counterRotationIntervalMs;
 
     private ProposalQueueTuning(long confirmationTimeoutMs,
                                 long restoreTimeoutMs,
@@ -50,11 +54,13 @@ final class ProposalQueueTuning {
                                 int finalizationChunkSize,
                                 int verifierThreads,
                                 long processedRetentionMs,
+                                boolean persistenceEnabled,
                                 long persistenceFlushIntervalMs,
                                 int persistenceFlushBatch,
                                 long maxPendingMessages,
                                 long backpressureTimeoutMs,
-                                long backpressureParkNanos) {
+                                long backpressureParkNanos,
+                                long counterRotationIntervalMs) {
         this.confirmationTimeoutMs = confirmationTimeoutMs;
         this.restoreTimeoutMs = restoreTimeoutMs;
         this.maxMessageBatch = maxMessageBatch;
@@ -62,11 +68,13 @@ final class ProposalQueueTuning {
         this.finalizationChunkSize = finalizationChunkSize;
         this.verifierThreads = verifierThreads;
         this.processedRetentionMs = processedRetentionMs;
+        this.persistenceEnabled = persistenceEnabled;
         this.persistenceFlushIntervalMs = persistenceFlushIntervalMs;
         this.persistenceFlushBatch = persistenceFlushBatch;
         this.maxPendingMessages = maxPendingMessages;
         this.backpressureTimeoutMs = backpressureTimeoutMs;
         this.backpressureParkNanos = backpressureParkNanos;
+        this.counterRotationIntervalMs = counterRotationIntervalMs;
     }
 
     static ProposalQueueTuning fromSystemProperties() {
@@ -81,11 +89,19 @@ final class ProposalQueueTuning {
         int maxMessageBatch = readIntProp("oak.proposal.batch.max", DEFAULT_MAX_MESSAGE_BATCH, 1);
         int maxRetryCount = readIntProp("oak.proposal.max.retry.count", DEFAULT_MAX_RETRY_COUNT, 1);
         int finalizationChunkSize = readIntProp("oak.proposal.finalization.chunk.size", DEFAULT_FINALIZATION_CHUNK_SIZE, 1);
-        int verifierThreads = readIntProp("oak.proposal.verifier.threads", DEFAULT_VERIFIER_THREADS, 1);
+        int verifierThreads = readIntProp(
+            "oak.proposal.verifier.threads",
+            defaultVerifierThreads(),
+            1
+        );
         long processedRetentionMs = Long.getLong(
             "oak.proposal.processed.retention.ms",
             DEFAULT_PROCESSED_RETENTION_MS
         );
+        boolean persistenceEnabled = Boolean.parseBoolean(System.getProperty(
+            "oak.proposal.persistence.enabled",
+            String.valueOf(DEFAULT_PERSISTENCE_ENABLED)
+        ));
         long persistenceFlushIntervalMs = Long.getLong(
             "oak.proposal.persistence.flush.ms",
             DEFAULT_PERSISTENCE_FLUSH_INTERVAL_MS
@@ -107,6 +123,10 @@ final class ProposalQueueTuning {
             "oak.consensus.backpressure.park.nanos",
             DEFAULT_BACKPRESSURE_PARK_NANOS
         );
+        long counterRotationIntervalMs = Long.getLong(
+            "oak.proposal.counter.rotation.ms",
+            DEFAULT_COUNTER_ROTATION_INTERVAL_MS
+        );
         return new ProposalQueueTuning(
             confirmationTimeoutMs,
             restoreTimeoutMs,
@@ -115,32 +135,41 @@ final class ProposalQueueTuning {
             finalizationChunkSize,
             verifierThreads,
             processedRetentionMs,
+            persistenceEnabled,
             persistenceFlushIntervalMs,
             persistenceFlushBatch,
             maxPendingMessages,
             backpressureTimeoutMs,
-            backpressureParkNanos
+            backpressureParkNanos,
+            counterRotationIntervalMs
         );
     }
 
     static ProposalQueueTuning fromConfig(ProposalQueueTuningConfig config) {
-        long confirmationTimeoutMs = config.confirmation_timeout_ms();
+        long confirmationTimeoutMs = Math.max(1L, config.confirmation_timeout_ms());
         long restoreTimeoutMs = config.restore_timeout_ms() > 0
             ? config.restore_timeout_ms()
             : confirmationTimeoutMs;
+        restoreTimeoutMs = Math.max(1L, restoreTimeoutMs);
+        int configuredVerifierThreads = config.verifier_threads();
+        int effectiveVerifierThreads = configuredVerifierThreads == DEFAULT_VERIFIER_THREADS
+            ? defaultVerifierThreads()
+            : configuredVerifierThreads;
         return new ProposalQueueTuning(
             confirmationTimeoutMs,
             restoreTimeoutMs,
-            config.max_message_batch(),
+            clampInt(config.max_message_batch(), 1),
             config.max_retry_count(),
-            config.finalization_chunk_size(),
-            config.verifier_threads(),
+            clampInt(config.finalization_chunk_size(), 1),
+            effectiveVerifierThreads,
             config.processed_retention_ms(),
+            config.persistence_enabled(),
             config.persistence_flush_interval_ms(),
             config.persistence_flush_batch(),
-            config.max_pending_messages(),
-            config.backpressure_timeout_ms(),
-            config.backpressure_park_nanos()
+            clampLong(config.max_pending_messages(), 1L),
+            clampLong(config.backpressure_timeout_ms(), 1L),
+            config.backpressure_park_nanos(),
+            clampLong(config.counter_rotation_interval_ms(), 0L)
         );
     }
 
@@ -172,6 +201,10 @@ final class ProposalQueueTuning {
         return processedRetentionMs;
     }
 
+    boolean isPersistenceEnabled() {
+        return persistenceEnabled;
+    }
+
     long getPersistenceFlushIntervalMs() {
         return persistenceFlushIntervalMs;
     }
@@ -192,11 +225,32 @@ final class ProposalQueueTuning {
         return backpressureParkNanos;
     }
 
+    long getCounterRotationIntervalMs() {
+        return counterRotationIntervalMs;
+    }
+
     private static int readIntProp(String key, int defaultValue, int minValue) {
         int value = Integer.getInteger(key, defaultValue);
+        return clampInt(value, minValue);
+    }
+
+    private static int clampInt(int value, int minValue) {
         if (value < minValue) {
             return minValue;
         }
         return value;
+    }
+
+    private static long clampLong(long value, long minValue) {
+        if (value < minValue) {
+            return minValue;
+        }
+        return value;
+    }
+
+    private static int defaultVerifierThreads() {
+        int cores = Runtime.getRuntime().availableProcessors();
+        int recommended = Math.max(DEFAULT_VERIFIER_THREADS, Math.min(4, Math.max(1, cores / 2)));
+        return recommended;
     }
 }

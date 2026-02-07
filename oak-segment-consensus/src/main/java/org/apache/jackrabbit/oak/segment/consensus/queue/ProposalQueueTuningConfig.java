@@ -68,6 +68,12 @@ public @interface ProposalQueueTuningConfig {
     long processed_retention_ms() default ProposalQueueTuning.DEFAULT_PROCESSED_RETENTION_MS;
 
     @AttributeDefinition(
+        name = "Persistence Enabled",
+        description = "Enable proposal queue durability file persistence."
+    )
+    boolean persistence_enabled() default true;
+
+    @AttributeDefinition(
         name = "Persistence Flush Interval (ms)",
         description = "Async persistence flush interval. 0 disables interval-based flush."
     )
@@ -96,4 +102,10 @@ public @interface ProposalQueueTuningConfig {
         description = "Park duration (ns) while waiting under backpressure."
     )
     long backpressure_park_nanos() default ProposalQueueTuning.DEFAULT_BACKPRESSURE_PARK_NANOS;
+
+    @AttributeDefinition(
+        name = "Counter Rotation Interval (ms)",
+        description = "Rotate high-volume API counters into persisted lifetime buckets at this interval. Set 0 to disable rotation."
+    )
+    long counter_rotation_interval_ms() default ProposalQueueTuning.DEFAULT_COUNTER_ROTATION_INTERVAL_MS;
 }

@@ -100,6 +100,7 @@ public class ProposalQueueManagerOptimized {
     private final ConcurrentLinkedQueue<List<QueuedProposal>> batchQueue = new ConcurrentLinkedQueue<>(); // Batches ready to send
     private final ConcurrentHashMap<String, QueuedProposal> allProposals = new ConcurrentHashMap<>();
     private final ProposalPersistenceStore persistenceStore;
+    private final QueueCounterStateStore counterStateStore;
     private final Object persistenceLock = new Object();
     private final long persistenceFlushIntervalMs;
     private final int persistenceFlushBatch;
@@ -131,6 +132,14 @@ public class ProposalQueueManagerOptimized {
     private final java.util.concurrent.atomic.AtomicLong totalRejectedCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong totalVerifiedCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong totalFinalizedCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong lifetimeRejectedBase = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong lifetimeVerifiedBase = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong lifetimeFinalizedBase = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong lifetimePrioritySentBase = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong lifetimeBatchedSentBase = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong counterWindowStartMs =
+        new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
+    private final long counterRotationIntervalMs;
     private final ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> finalizedByEpochAndTier =
         new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> rejectedByEpochAndTier =
@@ -215,8 +224,9 @@ public class ProposalQueueManagerOptimized {
         this.raftAppendCallback = raftAppendCallback;
         this.backpressureManager = backpressureManager;
         this.epochQueue = new EpochBasedBatchQueue(beaconClient);
-        this.persistenceStore = createPersistenceStore(persistenceDir);
         ProposalQueueTuning resolved = tuning != null ? tuning : ProposalQueueTuningRegistry.get();
+        this.persistenceStore = createPersistenceStore(persistenceDir, resolved);
+        this.counterStateStore = createCounterStateStore(persistenceDir);
         this.confirmationTimeoutMs = resolved.getConfirmationTimeoutMs();
         this.restoreTimeoutMs = resolved.getRestoreTimeoutMs();
         this.maxMessageBatch = resolved.getMaxMessageBatch();
@@ -226,6 +236,8 @@ public class ProposalQueueManagerOptimized {
         this.processedRetentionMs = resolved.getProcessedRetentionMs();
         this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
         this.persistenceFlushBatch = resolved.getPersistenceFlushBatch();
+        this.counterRotationIntervalMs = resolved.getCounterRotationIntervalMs();
+        restoreCounterState();
     }
     
     /**
@@ -266,7 +278,8 @@ public class ProposalQueueManagerOptimized {
         evmVerifierAgents = new AgentRunner[verifierThreads];
         for (int i = 0; i < verifierThreads; i++) {
             evmVerifierAgents[i] = new AgentRunner(
-                new SleepingMillisIdleStrategy(10), // 10ms idle
+                // Lower idle delay cuts verifier queue wait under load.
+                new SleepingMillisIdleStrategy(1),
                 throwable -> log.error("Error in EVM verifier agent", throwable),
                 null,
                 new EvmVerifierAgent()
@@ -303,7 +316,7 @@ public class ProposalQueueManagerOptimized {
         
         log.info("✅ ProposalQueueManager started (tri-agent + epoch batching)");
         log.info("   - Aeron Sender Agent: BackoffIdleStrategy (ultra-low latency)");
-        log.info("   - EVM Verifier Agents: {} thread(s), SleepingIdleStrategy (10ms idle, 3-checkpoint security)", 
+        log.info("   - EVM Verifier Agents: {} thread(s), SleepingIdleStrategy (1ms idle, 3-checkpoint security)",
             evmVerifierAgents.length);
         log.info("   - Epoch Finalizer Agent: SleepingIdleStrategy (1s idle, wallet batching)");
         log.info("   - Max batch size: {}", maxMessageBatch);
@@ -315,6 +328,11 @@ public class ProposalQueueManagerOptimized {
             } else {
                 log.info("   - Proposal persistence: synchronous (per-change)");
             }
+        }
+        if (counterRotationIntervalMs > 0) {
+            log.info("   - Counter rotation: {}ms (bounded window counters + lifetime totals)", counterRotationIntervalMs);
+        } else {
+            log.info("   - Counter rotation: disabled");
         }
     }
     
@@ -330,6 +348,8 @@ public class ProposalQueueManagerOptimized {
      */
     public java.util.Map<String, Object> getQueueStats() {
         java.util.Map<String, Object> stats = new java.util.HashMap<>();
+        long nowMs = System.currentTimeMillis();
+        rotateCountersIfNeeded(nowMs);
         
         // Queue sizes
         stats.put("unverifiedQueueSize", unverifiedQueue.size());
@@ -350,12 +370,12 @@ public class ProposalQueueManagerOptimized {
         long processed = 0;
         long mempoolAgeTotalMs = 0;
         long mempoolOldestMs = 0;
-        long nowMs = System.currentTimeMillis();
+        long nowForAgeMs = System.currentTimeMillis();
         for (QueuedProposal proposal : allProposals.values()) {
             ProposalState state = proposal.getState();
             if (state == ProposalState.PENDING) {
                 pending++;
-                long ageMs = nowMs - proposal.getTimestamp();
+                long ageMs = nowForAgeMs - proposal.getTimestamp();
                 mempoolAgeTotalMs += ageMs;
                 if (ageMs > mempoolOldestMs) {
                     mempoolOldestMs = ageMs;
@@ -377,10 +397,25 @@ public class ProposalQueueManagerOptimized {
         stats.put("mempoolAvgAgeMs", pending == 0 ? 0 : mempoolAgeTotalMs / pending);
         stats.put("mempoolOldestMs", mempoolOldestMs);
         
-        // Persistent counters (survive proposal removal from allProposals)
-        stats.put("totalRejectedCount", totalRejectedCount.get());
-        stats.put("totalVerifiedCount", totalVerifiedCount.get());
-        stats.put("totalFinalizedCount", totalFinalizedCount.get());
+        // Rotating counters: bounded current window + persisted lifetime totals
+        long rejectedCurrent = totalRejectedCount.get();
+        long verifiedCurrent = totalVerifiedCount.get();
+        long finalizedCurrent = totalFinalizedCount.get();
+        long priorityCurrent = priorityProposalsSent.get();
+        long batchedCurrent = batchedProposalsSent.get();
+        long rejectedLifetime = lifetimeRejectedBase.get() + rejectedCurrent;
+        long verifiedLifetime = lifetimeVerifiedBase.get() + verifiedCurrent;
+        long finalizedLifetime = lifetimeFinalizedBase.get() + finalizedCurrent;
+        long priorityLifetime = lifetimePrioritySentBase.get() + priorityCurrent;
+        long batchedLifetime = lifetimeBatchedSentBase.get() + batchedCurrent;
+        stats.put("counterWindowStartMs", counterWindowStartMs.get());
+        stats.put("counterRotationIntervalMs", counterRotationIntervalMs);
+        stats.put("totalRejectedCount", rejectedCurrent);
+        stats.put("totalVerifiedCount", verifiedCurrent);
+        stats.put("totalFinalizedCount", finalizedCurrent);
+        stats.put("totalRejectedCountLifetime", rejectedLifetime);
+        stats.put("totalVerifiedCountLifetime", verifiedLifetime);
+        stats.put("totalFinalizedCountLifetime", finalizedLifetime);
         
         // Count proposals by type (WRITE vs DELETE)
         long writeProposals = allProposals.values().stream()
@@ -414,17 +449,42 @@ public class ProposalQueueManagerOptimized {
         stats.put("proposalsByEpochAndTier", proposalsByEpochAndTier);
         
         // Backpressure stats
-        long backpressurePending = backpressureManager.getPendingCount();
+        long backpressurePendingRaw = backpressureManager.getPendingCount();
         long backpressureMax = backpressureManager.getMaxPendingMessages();
-        stats.put("backpressureActive", backpressurePending >= backpressureMax);
+        boolean backpressureActive = backpressureManager.isBackpressureActive();
+        boolean queueIdle = batchQueue.isEmpty()
+            && unverifiedQueue.isEmpty()
+            && pending == 0
+            && verified == 0
+            && persistencePendingChanges.get() == 0;
+        long backpressurePending = (!backpressureActive && queueIdle && backpressurePendingRaw <= 2)
+            ? 0
+            : backpressurePendingRaw;
+        stats.put("backpressureActive", backpressureActive);
         stats.put("backpressurePendingCount", backpressurePending);
+        stats.put("backpressurePendingRawCount", backpressurePendingRaw);
         stats.put("backpressureMaxPending", backpressureMax);
-        stats.put("backpressureStats", backpressureManager.getStats());
+        if (backpressurePending != backpressurePendingRaw) {
+            stats.put("backpressureStats", String.format(
+                "BackpressureManager[sent=%d, acked=%d, pending=%d, rawPending=%d, max=%d, active=%s]",
+                backpressureManager.getSentCount(),
+                backpressureManager.getAcknowledgedCount(),
+                backpressurePending,
+                backpressurePendingRaw,
+                backpressureMax,
+                backpressureActive
+            ));
+        } else {
+            stats.put("backpressureStats", backpressureManager.getStats());
+        }
         
-        // Tier routing stats
-        stats.put("priorityProposalsSent", priorityProposalsSent.get());
-        stats.put("batchedProposalsSent", batchedProposalsSent.get());
-        stats.put("totalProposalsSent", priorityProposalsSent.get() + batchedProposalsSent.get());
+        // Tier routing stats (current window + lifetime)
+        stats.put("priorityProposalsSent", priorityCurrent);
+        stats.put("batchedProposalsSent", batchedCurrent);
+        stats.put("totalProposalsSent", priorityCurrent + batchedCurrent);
+        stats.put("priorityProposalsSentLifetime", priorityLifetime);
+        stats.put("batchedProposalsSentLifetime", batchedLifetime);
+        stats.put("totalProposalsSentLifetime", priorityLifetime + batchedLifetime);
         
         // Retry stats
         long proposalsWithRetries = allProposals.values().stream()
@@ -615,7 +675,27 @@ public class ProposalQueueManagerOptimized {
         }
     }
     
-    private ProposalPersistenceStore createPersistenceStore(String persistenceDir) {
+    private ProposalPersistenceStore createPersistenceStore(String persistenceDir, ProposalQueueTuning tuning) {
+        if (tuning != null && !tuning.isPersistenceEnabled()) {
+            log.info("Proposal queue persistence disabled via tuning (persistence_enabled=false)");
+            return null;
+        }
+        String resolved = resolvePersistenceDirectory(persistenceDir);
+        if (resolved == null || resolved.isEmpty()) {
+            return null;
+        }
+        return new ProposalPersistenceStore(java.nio.file.Path.of(resolved));
+    }
+
+    private QueueCounterStateStore createCounterStateStore(String persistenceDir) {
+        String resolved = resolvePersistenceDirectory(persistenceDir);
+        if (resolved == null || resolved.isEmpty()) {
+            return null;
+        }
+        return new QueueCounterStateStore(java.nio.file.Path.of(resolved));
+    }
+
+    private String resolvePersistenceDirectory(String persistenceDir) {
         String resolved = persistenceDir;
         if (resolved == null || resolved.isEmpty()) {
             resolved = System.getProperty("oak.proposal.persistence.dir");
@@ -623,10 +703,80 @@ public class ProposalQueueManagerOptimized {
         if (resolved == null || resolved.isEmpty()) {
             resolved = System.getenv("OAK_PROPOSAL_PERSISTENCE_DIR");
         }
-        if (resolved == null || resolved.isEmpty()) {
-            return null;
+        return resolved;
+    }
+
+    private void restoreCounterState() {
+        if (counterStateStore == null) {
+            return;
         }
-        return new ProposalPersistenceStore(java.nio.file.Path.of(resolved));
+        java.util.Map<String, Long> state = counterStateStore.load();
+        if (state.isEmpty()) {
+            return;
+        }
+        totalRejectedCount.set(state.getOrDefault("current.rejected", 0L));
+        totalVerifiedCount.set(state.getOrDefault("current.verified", 0L));
+        totalFinalizedCount.set(state.getOrDefault("current.finalized", 0L));
+        priorityProposalsSent.set(state.getOrDefault("current.prioritySent", 0L));
+        batchedProposalsSent.set(state.getOrDefault("current.batchedSent", 0L));
+        lifetimeRejectedBase.set(state.getOrDefault("lifetime.rejected", 0L));
+        lifetimeVerifiedBase.set(state.getOrDefault("lifetime.verified", 0L));
+        lifetimeFinalizedBase.set(state.getOrDefault("lifetime.finalized", 0L));
+        lifetimePrioritySentBase.set(state.getOrDefault("lifetime.prioritySent", 0L));
+        lifetimeBatchedSentBase.set(state.getOrDefault("lifetime.batchedSent", 0L));
+        counterWindowStartMs.set(state.getOrDefault("window.start.ms", System.currentTimeMillis()));
+    }
+
+    private void persistCounterState() {
+        if (counterStateStore == null) {
+            return;
+        }
+        java.util.Map<String, Long> state = new java.util.HashMap<>();
+        state.put("current.rejected", totalRejectedCount.get());
+        state.put("current.verified", totalVerifiedCount.get());
+        state.put("current.finalized", totalFinalizedCount.get());
+        state.put("current.prioritySent", priorityProposalsSent.get());
+        state.put("current.batchedSent", batchedProposalsSent.get());
+        state.put("lifetime.rejected", lifetimeRejectedBase.get());
+        state.put("lifetime.verified", lifetimeVerifiedBase.get());
+        state.put("lifetime.finalized", lifetimeFinalizedBase.get());
+        state.put("lifetime.prioritySent", lifetimePrioritySentBase.get());
+        state.put("lifetime.batchedSent", lifetimeBatchedSentBase.get());
+        state.put("window.start.ms", counterWindowStartMs.get());
+        counterStateStore.save(state);
+    }
+
+    private void rotateCountersIfNeeded(long nowMs) {
+        if (counterRotationIntervalMs <= 0L) {
+            return;
+        }
+        long windowStart = counterWindowStartMs.get();
+        if ((nowMs - windowStart) < counterRotationIntervalMs) {
+            return;
+        }
+        synchronized (this) {
+            windowStart = counterWindowStartMs.get();
+            if ((nowMs - windowStart) < counterRotationIntervalMs) {
+                return;
+            }
+
+            long verified = totalVerifiedCount.getAndSet(0L);
+            long finalized = totalFinalizedCount.getAndSet(0L);
+            long rejected = totalRejectedCount.getAndSet(0L);
+            long prioritySent = priorityProposalsSent.getAndSet(0L);
+            long batchedSent = batchedProposalsSent.getAndSet(0L);
+
+            lifetimeVerifiedBase.addAndGet(verified);
+            lifetimeFinalizedBase.addAndGet(finalized);
+            lifetimeRejectedBase.addAndGet(rejected);
+            lifetimePrioritySentBase.addAndGet(prioritySent);
+            lifetimeBatchedSentBase.addAndGet(batchedSent);
+            counterWindowStartMs.set(nowMs);
+            persistCounterState();
+
+            log.info("🔁 Rotated proposal counters windowMs={} verified={} finalized={} rejected={} prioritySent={} batchedSent={}",
+                counterRotationIntervalMs, verified, finalized, rejected, prioritySent, batchedSent);
+        }
     }
     
     private void restorePersistedProposals() {
@@ -769,6 +919,7 @@ public class ProposalQueueManagerOptimized {
             }
             flushPersistedProposals();
         }
+        persistCounterState();
         
         log.info("✅ ProposalQueueManager stopped");
     }
@@ -1169,8 +1320,6 @@ public class ProposalQueueManagerOptimized {
                             totalFinalizedCount.incrementAndGet();
                             recordTerminalState(queued, ProposalState.PROCESSED);
                             
-                            // Track for backpressure management (one per proposal)
-                            backpressureManager.incrementSent();
                             batchedProposalsSent.incrementAndGet();
                             workCount++;
                         }
@@ -1552,9 +1701,6 @@ public class ProposalQueueManagerOptimized {
                             verifierPersistNanos.addAndGet(priorityPersistNanos);
                             verifierLastPersistMs.set(priorityPersistNanos / 1_000_000L);
                             
-                            // Track for backpressure
-                            backpressureManager.incrementSent();
-                            
                             logRateLimitedInfo(lastPriorityLogMs, prioritySuppressed,
                                 "✅ Priority proposal {} sent to Aeron (tx: {}, block: {}, latency: ~30s)",
                                 proposal.getProposalId(),
@@ -1738,7 +1884,7 @@ public class ProposalQueueManagerOptimized {
             
             // DEBUG: Log finalization check every ~10 seconds
             if (finalizableEpochs.isEmpty() && System.currentTimeMillis() % 10000 < 1000) {
-                log.info("🔍 Epoch finalization check: {} finalizable epochs, pending={}, finalized={}, current={}",
+                log.debug("🔍 Epoch finalization check: {} finalizable epochs, pending={}, finalized={}, current={}",
                     finalizableEpochs.size(),
                     pendingProposals,
                     epochQueue.getFinalizedEpoch(),

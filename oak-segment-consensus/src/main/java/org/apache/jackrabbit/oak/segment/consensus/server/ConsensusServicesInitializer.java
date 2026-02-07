@@ -58,13 +58,13 @@ final class ConsensusServicesInitializer {
             @Override
             public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
                 if (aeronEngine == null) {
-                    System.err.println("❌ aeronEngine is NULL in appendProposal!");
+                    log.error("❌ aeronEngine is NULL in appendProposal!");
                     return;
                 }
-                System.out.println("📤 appendProposal() called - forwarding to Aeron (role: " + aeronEngine.getCurrentRole() + ")");
+                log.debug("📤 appendProposal() called - forwarding to Aeron (role: {})", aeronEngine.getCurrentRole());
                 boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
                 if (!success) {
-                    System.err.println("❌ sendWriteThroughIngress() returned false!");
+                    log.error("❌ sendWriteThroughIngress() returned false!");
                 }
             }
 
@@ -72,13 +72,13 @@ final class ConsensusServicesInitializer {
             public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
                                              String message, String signature) {
                 if (aeronEngine == null) {
-                    System.err.println("❌ aeronEngine is NULL in appendProposalWithId!");
+                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
                     return;
                 }
                 boolean success = aeronEngine.sendWriteThroughIngressWithId(
                     walletAddress, path, contentType, message, signature, null, proposalId);
                 if (!success) {
-                    System.err.println("❌ sendWriteThroughIngress() returned false!");
+                    log.error("❌ sendWriteThroughIngress() returned false!");
                 }
             }
 
@@ -86,13 +86,13 @@ final class ConsensusServicesInitializer {
             public void appendProposal(String walletAddress, String path, String contentType, String message,
                                        String signature, String blobId, String mimeType) {
                 if (aeronEngine == null) {
-                    System.err.println("❌ aeronEngine is NULL in appendProposal!");
+                    log.error("❌ aeronEngine is NULL in appendProposal!");
                     return;
                 }
-                System.out.println("📤 appendProposal() with binary - blobId=" + blobId + " (role: " + aeronEngine.getCurrentRole() + ")");
+                log.debug("📤 appendProposal() with binary - blobId={} (role: {})", blobId, aeronEngine.getCurrentRole());
                 boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature, blobId, mimeType);
                 if (!success) {
-                    System.err.println("❌ sendWriteThroughIngress() with binary returned false!");
+                    log.error("❌ sendWriteThroughIngress() with binary returned false!");
                 }
             }
 
@@ -100,13 +100,13 @@ final class ConsensusServicesInitializer {
             public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
                                              String message, String signature, String blobId, String mimeType, String ipfsCid) {
                 if (aeronEngine == null) {
-                    System.err.println("❌ aeronEngine is NULL in appendProposalWithId!");
+                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
                     return;
                 }
                 boolean success = aeronEngine.sendWriteThroughIngress(
                     walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid, proposalId);
                 if (!success) {
-                    System.err.println("❌ sendWriteThroughIngress() with binary returned false!");
+                    log.error("❌ sendWriteThroughIngress() with binary returned false!");
                 }
             }
 
