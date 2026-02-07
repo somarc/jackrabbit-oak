@@ -1,0 +1,60 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.jackrabbit.oak.segment.consensus.queue;
+
+import org.junit.After;
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+public class ProposalQueueTuningTest {
+
+    @After
+    public void clearProps() {
+        System.clearProperty("oak.proposal.persistence.enabled");
+        System.clearProperty("oak.proposal.persistence.flush.ms");
+        System.clearProperty("oak.proposal.persistence.flush.batch");
+    }
+
+    @Test
+    public void testPersistenceDefaultsFromSystemProperties() {
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertTrue("Persistence should default to enabled", tuning.isPersistenceEnabled());
+        assertEquals("Default flush interval should match constant",
+            ProposalQueueTuning.DEFAULT_PERSISTENCE_FLUSH_INTERVAL_MS,
+            tuning.getPersistenceFlushIntervalMs());
+        assertEquals("Default flush batch should match constant",
+            ProposalQueueTuning.DEFAULT_PERSISTENCE_FLUSH_BATCH,
+            tuning.getPersistenceFlushBatch());
+    }
+
+    @Test
+    public void testPersistenceOverridesFromSystemProperties() {
+        System.setProperty("oak.proposal.persistence.enabled", "false");
+        System.setProperty("oak.proposal.persistence.flush.ms", "750");
+        System.setProperty("oak.proposal.persistence.flush.batch", "400");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertFalse("Persistence flag should be configurable", tuning.isPersistenceEnabled());
+        assertEquals("Flush interval override should apply", 750L, tuning.getPersistenceFlushIntervalMs());
+        assertEquals("Flush batch override should apply", 400, tuning.getPersistenceFlushBatch());
+    }
+}

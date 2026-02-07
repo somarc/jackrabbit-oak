@@ -240,9 +240,11 @@ public class CrashHandler {
         try {
             if (Files.exists(basePath)) {
                 java.util.List<Path> markers = new java.util.ArrayList<>();
-                Files.list(basePath)
-                    .filter(p -> p.getFileName().toString().startsWith(CRASH_MARKER_PREFIX))
-                    .forEach(markers::add);
+                try (java.util.stream.Stream<Path> markerStream = Files.list(basePath)) {
+                    markerStream
+                        .filter(p -> p.getFileName().toString().startsWith(CRASH_MARKER_PREFIX))
+                        .forEach(markers::add);
+                }
                 
                 for (Path p : markers) {
                     String name = p.getFileName().toString();
@@ -311,16 +313,18 @@ public class CrashHandler {
     private void deleteCrashMarker() {
         try {
             if (Files.exists(baseDir.toPath())) {
-                Files.list(baseDir.toPath())
-                    .filter(p -> p.getFileName().toString().startsWith(CRASH_MARKER_PREFIX))
-                    .forEach(p -> {
-                        try {
-                            Files.delete(p);
-                            log.info("Deleted crash marker: {}", p.getFileName());
-                        } catch (IOException e) {
-                            log.warn("Failed to delete crash marker: {}", p, e);
-                        }
-                    });
+                try (java.util.stream.Stream<Path> markerStream = Files.list(baseDir.toPath())) {
+                    markerStream
+                        .filter(p -> p.getFileName().toString().startsWith(CRASH_MARKER_PREFIX))
+                        .forEach(p -> {
+                            try {
+                                Files.delete(p);
+                                log.info("Deleted crash marker: {}", p.getFileName());
+                            } catch (IOException e) {
+                                log.warn("Failed to delete crash marker: {}", p, e);
+                            }
+                        });
+                }
             }
         } catch (IOException e) {
             log.warn("Failed to delete crash markers", e);
@@ -369,4 +373,3 @@ public class CrashHandler {
         shutdownScheduled.set(true);
     }
 }
-

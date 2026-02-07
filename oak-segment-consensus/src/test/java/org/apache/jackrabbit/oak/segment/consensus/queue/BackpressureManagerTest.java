@@ -72,4 +72,28 @@ public class BackpressureManagerTest {
         assertTrue(stats.contains("acked=0"));
         assertTrue(stats.contains("pending=1"));
     }
+
+    @Test
+    public void testBulkIncrementSent() {
+        BackpressureManager manager = new BackpressureManager();
+
+        manager.incrementSent(5);
+        manager.incrementAcknowledged(2);
+
+        assertEquals(5, manager.getSentCount());
+        assertEquals(2, manager.getAcknowledgedCount());
+        assertEquals(3, manager.getPendingCount());
+    }
+
+    @Test
+    public void testAcknowledgedIsClampedToSent() {
+        BackpressureManager manager = new BackpressureManager();
+
+        manager.incrementSent(3);
+        manager.incrementAcknowledged(10);
+
+        assertEquals(3, manager.getSentCount());
+        assertEquals(3, manager.getAcknowledgedCount());
+        assertEquals(0, manager.getPendingCount());
+    }
 }

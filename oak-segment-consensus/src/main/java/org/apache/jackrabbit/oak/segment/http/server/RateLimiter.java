@@ -69,12 +69,18 @@ public class RateLimiter {
     public static final String PROP_BURST_SIZE = "rate.limit.burst.size";
     public static final String PROP_GLOBAL_RPS = "rate.limit.global.rps";
     public static final String PROP_WRITE_RPS = "rate.limit.write.rps";
+    public static final String PROP_WARN_LOGGING_ENABLED = "rate.limit.warn.logging.enabled";
+    public static final String PROP_WARN_LOG_INTERVAL_MS = "rate.limit.warn.log.interval.ms";
+    public static final String PROP_WARN_LOG_SAMPLE_SIZE = "rate.limit.warn.log.sample.size";
     
     // Default values
     private static final int DEFAULT_REQUESTS_PER_SECOND = 100;
     private static final int DEFAULT_BURST_SIZE = 200;
     private static final int DEFAULT_GLOBAL_RPS = 1000;
     private static final int DEFAULT_WRITE_RPS = 10;
+    private static final boolean DEFAULT_WARN_LOGGING_ENABLED = true;
+    private static final long DEFAULT_WARN_LOG_INTERVAL_MS = 30_000L;
+    private static final int DEFAULT_WARN_LOG_SAMPLE_SIZE = 250;
     
     // HTTP headers
     private static final String HEADER_RATE_LIMIT = "X-RateLimit-Limit";
@@ -88,6 +94,9 @@ public class RateLimiter {
     private final int burstSize;
     private final int globalRps;
     private final int writeRps;
+    private final boolean warnLoggingEnabled;
+    private final long warnLogIntervalMs;
+    private final int warnLogSampleSize;
     
     // Token buckets per client (IP or wallet)
     private final Map<String, TokenBucket> clientBuckets = new ConcurrentHashMap<>();
@@ -97,6 +106,8 @@ public class RateLimiter {
     // Metrics
     private final AtomicLong totalRequests = new AtomicLong(0);
     private final AtomicLong throttledRequests = new AtomicLong(0);
+    private final AtomicLong throttledSinceLastWarn = new AtomicLong(0);
+    private final AtomicLong lastWarnLogMs = new AtomicLong(System.currentTimeMillis());
     
     // Cleanup scheduler
     private final ScheduledExecutorService cleanupScheduler;
@@ -110,6 +121,12 @@ public class RateLimiter {
         this.burstSize = Integer.getInteger(PROP_BURST_SIZE, DEFAULT_BURST_SIZE);
         this.globalRps = Integer.getInteger(PROP_GLOBAL_RPS, DEFAULT_GLOBAL_RPS);
         this.writeRps = Integer.getInteger(PROP_WRITE_RPS, DEFAULT_WRITE_RPS);
+        this.warnLoggingEnabled = Boolean.parseBoolean(
+            System.getProperty(PROP_WARN_LOGGING_ENABLED, String.valueOf(DEFAULT_WARN_LOGGING_ENABLED)));
+        this.warnLogIntervalMs = Math.max(1L,
+            Long.getLong(PROP_WARN_LOG_INTERVAL_MS, DEFAULT_WARN_LOG_INTERVAL_MS));
+        this.warnLogSampleSize = Math.max(1,
+            Integer.getInteger(PROP_WARN_LOG_SAMPLE_SIZE, DEFAULT_WARN_LOG_SAMPLE_SIZE));
         
         this.globalBucket = new TokenBucket(globalRps, globalRps * 2);
         
@@ -121,8 +138,9 @@ public class RateLimiter {
         });
         this.cleanupScheduler.scheduleAtFixedRate(this::cleanupStaleBuckets, 1, 1, TimeUnit.MINUTES);
         
-        log.info("Rate limiter initialized: enabled={}, rps={}, burst={}, globalRps={}, writeRps={}",
-            enabled, requestsPerSecond, burstSize, globalRps, writeRps);
+        log.info("Rate limiter initialized: enabled={}, rps={}, burst={}, globalRps={}, writeRps={}, warnLoggingEnabled={}, warnLogIntervalMs={}, warnLogSampleSize={}",
+            enabled, requestsPerSecond, burstSize, globalRps, writeRps,
+            warnLoggingEnabled, warnLogIntervalMs, warnLogSampleSize);
     }
     
     /**
@@ -134,6 +152,9 @@ public class RateLimiter {
         this.burstSize = burstSize;
         this.globalRps = globalRps;
         this.writeRps = writeRps;
+        this.warnLoggingEnabled = DEFAULT_WARN_LOGGING_ENABLED;
+        this.warnLogIntervalMs = DEFAULT_WARN_LOG_INTERVAL_MS;
+        this.warnLogSampleSize = DEFAULT_WARN_LOG_SAMPLE_SIZE;
         
         this.globalBucket = new TokenBucket(globalRps, globalRps * 2);
         
@@ -167,7 +188,7 @@ public class RateLimiter {
         if (!globalBucket.tryConsume()) {
             throttledRequests.incrementAndGet();
             setRateLimitHeaders(response, globalBucket, "global");
-            log.warn("Global rate limit exceeded");
+            maybeLogThrottled("global");
             return false;
         }
         
@@ -178,7 +199,7 @@ public class RateLimiter {
         if (!clientBucket.tryConsume()) {
             throttledRequests.incrementAndGet();
             setRateLimitHeaders(response, clientBucket, clientId);
-            log.warn("Rate limit exceeded for client: {}", clientId);
+            maybeLogThrottled("client=" + clientId);
             return false;
         }
         
@@ -192,7 +213,7 @@ public class RateLimiter {
                 if (!walletBucket.tryConsume()) {
                     throttledRequests.incrementAndGet();
                     setRateLimitHeaders(response, walletBucket, walletAddress);
-                    log.warn("Write rate limit exceeded for wallet: {}", walletAddress);
+                    maybeLogThrottled("wallet=" + walletAddress);
                     return false;
                 }
             }
@@ -291,6 +312,25 @@ public class RateLimiter {
         
         log.debug("Cleaned up stale rate limit buckets. Active: {} clients, {} wallets",
             clientBuckets.size(), walletWriteBuckets.size());
+    }
+
+    private void maybeLogThrottled(String sample) {
+        if (!warnLoggingEnabled) {
+            return;
+        }
+        long count = throttledSinceLastWarn.incrementAndGet();
+        long now = System.currentTimeMillis();
+        long last = lastWarnLogMs.get();
+        if (count < warnLogSampleSize && (now - last) < warnLogIntervalMs) {
+            return;
+        }
+        if (!lastWarnLogMs.compareAndSet(last, now)) {
+            return;
+        }
+        long throttled = throttledSinceLastWarn.getAndSet(0);
+        long windowMs = Math.max(1L, now - last);
+        log.warn("Rate limiting active: throttled={} windowMs={} sample={} totalRequests={} throttledRequests={}",
+            throttled, windowMs, sample, totalRequests.get(), throttledRequests.get());
     }
     
     /**

@@ -39,6 +39,9 @@ Client → Validator → Aeron Ingress → Leader → Raft Replication → All N
 
 ## Component Architecture
 
+### [ADR-001: Operations Readiness Gate and Operator Opus](ADR-001-operations-readiness-and-operator-opus.md)
+Formal decision to require OSGi-first tuning, evidence-gated load testing, and operator-grade documentation before readiness claims.
+
 ### [Aeron Consensus Engine](aeron-consensus.md)
 Core Raft implementation, message replication, leader election.
 

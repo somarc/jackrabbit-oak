@@ -99,7 +99,18 @@ public class BackpressureManager {
      * Called by ProposalQueueManager after offering message to Aeron.
      */
     public void incrementSent() {
-        sentCount.incrementAndGet();
+        incrementSent(1);
+    }
+
+    /**
+     * Increment sent message counter by N.
+     * Non-positive deltas are ignored.
+     */
+    public void incrementSent(long delta) {
+        if (delta <= 0) {
+            return;
+        }
+        sentCount.addAndGet(delta);
     }
     
     /**
@@ -107,7 +118,22 @@ public class BackpressureManager {
      * Called by AeronConsensusEngine after write applied via snapshot.
      */
     public void incrementAcknowledged() {
-        acknowledgedCount.incrementAndGet();
+        incrementAcknowledged(1);
+    }
+
+    /**
+     * Increment acknowledged message counter by N.
+     * Clamps to sentCount so pending never goes negative.
+     */
+    public void incrementAcknowledged(long delta) {
+        if (delta <= 0) {
+            return;
+        }
+        acknowledgedCount.updateAndGet(current -> {
+            long target = current + delta;
+            long sent = sentCount.get();
+            return Math.min(target, sent);
+        });
     }
     
     /**
@@ -116,7 +142,7 @@ public class BackpressureManager {
      * @return Sent messages minus acknowledged messages
      */
     public long getPendingCount() {
-        return sentCount.get() - acknowledgedCount.get();
+        return Math.max(0L, sentCount.get() - acknowledgedCount.get());
     }
     
     /**

@@ -66,6 +66,7 @@ System design and flow:
 - Aeron Raft consensus
 - Proposal flow diagrams
 - Component architecture
+- ADR-001 operations readiness and operator opus
 
 ### Development (`development/`)
 How to extend:

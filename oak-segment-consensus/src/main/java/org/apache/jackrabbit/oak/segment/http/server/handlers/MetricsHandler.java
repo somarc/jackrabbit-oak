@@ -172,21 +172,27 @@ public class MetricsHandler {
         try {
             // Count TAR files directly in storeDirectory (Oak's segment files are here)
             if (Files.exists(storeDirectory)) {
-                long segmentCount = Files.list(storeDirectory)
-                    .filter(p -> p.toString().endsWith(".tar"))
-                    .count();
+                long segmentCount;
+                try (java.util.stream.Stream<java.nio.file.Path> segmentFiles = Files.list(storeDirectory)) {
+                    segmentCount = segmentFiles
+                        .filter(p -> p.toString().endsWith(".tar"))
+                        .count();
+                }
                 ConsensusMetrics.segmentsStoredTotal.set(segmentCount);
                 
-                long diskUsage = Files.walk(storeDirectory)
-                    .filter(Files::isRegularFile)
-                    .mapToLong(p -> {
-                        try {
-                            return Files.size(p);
-                        } catch (IOException e) {
-                            return 0;
-                        }
-                    })
-                    .sum();
+                long diskUsage;
+                try (java.util.stream.Stream<java.nio.file.Path> storeFiles = Files.walk(storeDirectory)) {
+                    diskUsage = storeFiles
+                        .filter(Files::isRegularFile)
+                        .mapToLong(p -> {
+                            try {
+                                return Files.size(p);
+                            } catch (IOException e) {
+                                return 0;
+                            }
+                        })
+                        .sum();
+                }
                 ConsensusMetrics.segmentsDiskUsageBytes.set(diskUsage);
             }
         } catch (IOException e) {

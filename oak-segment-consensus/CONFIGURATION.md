@@ -300,6 +300,7 @@ max_retry_count=5
 finalization_chunk_size=3
 verifier_threads=1
 processed_retention_ms=600000
+persistence_enabled=true
 persistence_flush_interval_ms=250
 persistence_flush_batch=100
 max_pending_messages=10000
@@ -318,11 +319,50 @@ backpressure_park_nanos=1000000
 | `finalization_chunk_size` | 3 | Max proposals per chunk when finalizing an epoch (WAN-safe). | `oak.proposal.finalization.chunk.size` |
 | `verifier_threads` | 1 | Number of EVM verifier agent threads. | `oak.proposal.verifier.threads` |
 | `processed_retention_ms` | 600000 | Retention window for processed proposals (metrics visibility). | `oak.proposal.processed.retention.ms` |
+| `persistence_enabled` | true | Enable proposal queue durability persistence (`queued-proposals.bin`). | `oak.proposal.persistence.enabled` |
 | `persistence_flush_interval_ms` | 250 | Async persistence flush interval (0 disables). | `oak.proposal.persistence.flush.ms` |
 | `persistence_flush_batch` | 100 | Flush after N pending changes (0 disables). | `oak.proposal.persistence.flush.batch` |
 | `max_pending_messages` | 10000 | Pending (unacked) message cap before backpressure applies. | `oak.consensus.max.pending.messages` |
 | `backpressure_timeout_ms` | 30000 | Time to wait for pending to drain before failing. | `oak.consensus.backpressure.timeout.ms` |
 | `backpressure_park_nanos` | 1000000 | Park duration (ns) while waiting under backpressure. | `oak.consensus.backpressure.park.nanos` |
+
+---
+
+## 5. HTTP Rate-Limiter Log Volume Tuning (OSGi File-Based)
+
+To avoid per-request WARN storms under sustained 429 load, the HTTP rate limiter
+supports aggregated WARN summaries with OSGi-backed tuning.
+
+**PID:** `org.apache.jackrabbit.oak.segment.http.server.RateLimiterTuningService`
+
+**Default file location (inside the bundle):**
+`src/main/resources/OSGI-INF/config/org.apache.jackrabbit.oak.segment.http.server.RateLimiterTuningService.cfg`
+
+### Example OSGi Config
+
+```properties
+enabled=true
+requests_per_second=100
+burst_size=200
+global_rps=1000
+write_rps=10
+warn_logging_enabled=true
+warn_log_interval_ms=30000
+warn_log_sample_size=250
+```
+
+### Tuning Reference
+
+| OSGi Key | Default | Description | System Property (non-OSGi) |
+|---|---:|---|---|
+| `enabled` | true | Enable HTTP rate limiting. | `rate.limit.enabled` |
+| `requests_per_second` | 100 | Per-client request rate. | `rate.limit.requests.per.second` |
+| `burst_size` | 200 | Per-client burst capacity. | `rate.limit.burst.size` |
+| `global_rps` | 1000 | Global request rate limit. | `rate.limit.global.rps` |
+| `write_rps` | 10 | Per-wallet write request rate. | `rate.limit.write.rps` |
+| `warn_logging_enabled` | true | Enable throttling WARN summaries. | `rate.limit.warn.logging.enabled` |
+| `warn_log_interval_ms` | 30000 | Minimum interval between WARN summaries. | `rate.limit.warn.log.interval.ms` |
+| `warn_log_sample_size` | 250 | Emit a WARN when this many throttles accumulate first. | `rate.limit.warn.log.sample.size` |
 
 ### FileStore Flush Batching (Determinism-safe)
 

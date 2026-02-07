@@ -225,11 +225,15 @@ public class GlobalStoreServer {
             directoryIsEmpty = true; // Directory doesn't exist = empty
         }
         
-        // Check if bootstrap is needed (empty directory + peers exist)
-        // CRITICAL: Only mark for bootstrap if we've VERIFIED peers are reachable
-        // This prevents getting stuck if peers are configured but not actually available
+        // Check if standby bootstrap is needed before FileStore build.
+        // NOTE: In Aeron mode, standby bootstrap is disabled by default to avoid
+        // deadlocks where peers are healthy on HTTP but standby sync port is not serving yet.
+        // Explicit opt-in is required via: -Dconsensus.aeron.standby.bootstrap.enabled=true
         boolean needsBootstrapBeforeBuild = false;
         boolean hasVerifiedReachablePeers = false;
+        boolean standbyBootstrapEnabled = Boolean.parseBoolean(
+            System.getProperty("consensus.aeron.standby.bootstrap.enabled", "false")
+        );
         String verifiedBootstrapPrimaryHost = "";
         int verifiedBootstrapPrimaryPort = 0;
         
@@ -300,9 +304,9 @@ public class GlobalStoreServer {
                 }
             }
             
-            // Only mark for bootstrap if we've VERIFIED a peer is reachable
-            needsBootstrapBeforeBuild = hasVerifiedReachablePeers;
-            
+            // Only mark for bootstrap if we've VERIFIED a peer is reachable AND explicit opt-in is enabled.
+            needsBootstrapBeforeBuild = hasVerifiedReachablePeers && standbyBootstrapEnabled;
+
             if (needsBootstrapBeforeBuild) {
                 System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 System.out.println("⚠️  CRITICAL: Empty store directory detected");
@@ -310,6 +314,12 @@ public class GlobalStoreServer {
                 System.out.println("   This ensures all validators start with same genesis HEAD");
                 System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 System.out.println("   Bootstrap primary: " + verifiedBootstrapPrimaryHost + ":" + verifiedBootstrapPrimaryPort);
+            } else if (hasVerifiedReachablePeers) {
+                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                System.out.println("ℹ️  Empty store directory with reachable peers detected");
+                System.out.println("   Aeron standby bootstrap disabled (default)");
+                System.out.println("   Starting Aeron cluster directly; consensus leader will create canonical genesis");
+                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             } else if (directoryIsEmpty) {
                 System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 System.out.println("⚠️  Empty store directory detected, but no reachable peers");
