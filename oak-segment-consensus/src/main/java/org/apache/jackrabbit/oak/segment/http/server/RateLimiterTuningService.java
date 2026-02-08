@@ -37,6 +37,7 @@ public final class RateLimiterTuningService {
     @Activate
     protected void activate(RateLimiterTuningConfig config) {
         applyConfig(config);
+        RateLimiterTuningSourceRegistry.markOsgiSource();
         log.info("RATE_LIMIT_TUNING_SOURCE source=osgi-config-admin enabled={} rps={} burst={} globalRps={} writeRps={} warnLoggingEnabled={} warnLogIntervalMs={} warnLogSampleSize={}",
             config.enabled(),
             config.requests_per_second(),

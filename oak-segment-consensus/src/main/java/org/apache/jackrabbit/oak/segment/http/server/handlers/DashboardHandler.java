@@ -124,6 +124,7 @@ public class DashboardHandler {
         html.append("<a class='link' href='/api-browser'><strong>API Browser</strong><div class='muted'>Interactive endpoint catalog and tester.</div></a>");
         html.append("<a class='link' href='/v1/consensus/status'><strong>/v1/consensus/status</strong><div class='muted'>Consensus status and leader context.</div></a>");
         html.append("<a class='link' href='/v1/proposals/queue/stats'><strong>/v1/proposals/queue/stats</strong><div class='muted'>Queue/finality/backpressure counters.</div></a>");
+        html.append("<a class='link' href='/v1/config/osgi'><strong>/v1/config/osgi</strong><div class='muted'>Effective OSGi tuning values.</div></a>");
         html.append("<a class='link' href='/v1/explorer/summary'><strong>/v1/explorer/summary</strong><div class='muted'>Explorer contract for external blockscan UI.</div></a>");
         html.append("<a class='link' href='/health'><strong>/health</strong><div class='muted'>Shallow health.</div></a>");
         html.append("<a class='link' href='/health/deep'><strong>/health/deep</strong><div class='muted'>Deep dependency health.</div></a>");
@@ -145,6 +146,9 @@ public class DashboardHandler {
 
         List<Map<String, Object>> endpoints = new ArrayList<>();
         addIndexEntry(endpoints, "GET", "/v1/index", "Live API discovery index", "Discovery");
+        addIndexEntry(endpoints, "GET", "/v1/config/osgi", "Effective OSGi config values", "Configuration");
+        addIndexEntry(endpoints, "GET", "/v1/config/osgi/schema", "OSGi config metadata schema", "Configuration");
+        addIndexEntry(endpoints, "GET", "/v1/config/osgi/sources", "OSGi config source map", "Configuration");
         addIndexEntry(endpoints, "GET", "/health", "Shallow health", "Health");
         addIndexEntry(endpoints, "GET", "/health/deep", "Deep health", "Health");
         addIndexEntry(endpoints, "GET", "/api/metrics", "Consensus and replication metrics", "Health");

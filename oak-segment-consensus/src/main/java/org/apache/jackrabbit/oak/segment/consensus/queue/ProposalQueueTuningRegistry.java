@@ -26,6 +26,7 @@ final class ProposalQueueTuningRegistry {
     private static final Logger log = LoggerFactory.getLogger(ProposalQueueTuningRegistry.class);
     private static final AtomicReference<ProposalQueueTuning> OVERRIDE = new AtomicReference<>();
     private static final AtomicBoolean FALLBACK_WARNED = new AtomicBoolean(false);
+    private static final AtomicReference<String> SOURCE = new AtomicReference<>("system-properties");
 
     private ProposalQueueTuningRegistry() {
         // utility
@@ -52,6 +53,11 @@ final class ProposalQueueTuningRegistry {
     static void set(ProposalQueueTuning tuning) {
         if (tuning != null) {
             OVERRIDE.set(tuning);
+            SOURCE.set("osgi-config-admin");
         }
+    }
+
+    static String getSource() {
+        return SOURCE.get();
     }
 }

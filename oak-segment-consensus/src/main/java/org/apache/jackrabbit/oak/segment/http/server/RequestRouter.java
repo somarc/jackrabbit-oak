@@ -56,6 +56,7 @@ public class RequestRouter {
     private final BinaryUploadHandler binaryUploadHandler;
     private final CidApiHandler cidApiHandler;
     private final EventStreamHandler eventStreamHandler;
+    private final OsgiConfigApiHandler osgiConfigApiHandler;
     private final EventBroadcaster eventBroadcaster;
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
@@ -120,6 +121,7 @@ public class RequestRouter {
         // SSE Event Broadcaster and Handler (ADR 036)
         this.eventBroadcaster = new EventBroadcaster();
         this.eventStreamHandler = new EventStreamHandler(context, eventBroadcaster);
+        this.osgiConfigApiHandler = new OsgiConfigApiHandler();
         context.setEventBroadcaster(eventBroadcaster); // Make available to other components
         
         // Chat handler will be initialized lazily on first use (after selfUrl is set)
@@ -275,6 +277,24 @@ public class RequestRouter {
 
             if ("/v1/index".equals(path) && "GET".equals(method)) {
                 dashboardHandler.handleApiIndex(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if ("/v1/config/osgi".equals(path) && "GET".equals(method)) {
+                osgiConfigApiHandler.handleEffectiveConfig(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if ("/v1/config/osgi/schema".equals(path) && "GET".equals(method)) {
+                osgiConfigApiHandler.handleConfigSchema(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if ("/v1/config/osgi/sources".equals(path) && "GET".equals(method)) {
+                osgiConfigApiHandler.handleConfigSources(response);
                 baseRequest.setHandled(true);
                 return;
             }
