@@ -149,6 +149,7 @@ public class OsgiConfigApiHandler {
             row.put("risk", meta.get("risk"));
             row.put("reloadMode", meta.get("reloadMode"));
             row.put("changed", !looselyEqual(currentValue, defaultValue));
+            row.put("justification", justificationFor(key, currentValue, defaultValue));
 
             if (Boolean.TRUE.equals(row.get("changed"))) {
                 changed.add(row);
@@ -806,6 +807,30 @@ public class OsgiConfigApiHandler {
             }
         }
         return count;
+    }
+
+    private static String justificationFor(String key, Object currentValue, Object defaultValue) {
+        if ("proposalQueueTuning.verifier_threads".equals(key)
+            && !looselyEqual(currentValue, defaultValue)) {
+            return "Raised to reduce verifier queue pressure and mempool buildup during sustained load.";
+        }
+        if ("proposalQueueTuning.finalization_chunk_size".equals(key)
+            && !looselyEqual(currentValue, defaultValue)) {
+            return "Adjusted to increase per-cycle finalization throughput under backlog.";
+        }
+        if ("proposalQueueTuning.max_message_batch".equals(key)
+            && !looselyEqual(currentValue, defaultValue)) {
+            return "Adjusted to tune Aeron sender batching and reduce queue drain latency.";
+        }
+        if ("proposalQueueTuning.persistence_flush_batch".equals(key)
+            && !looselyEqual(currentValue, defaultValue)) {
+            return "Adjusted to amortize flush I/O under write pressure.";
+        }
+        if ("proposalQueueTuning.persistence_flush_interval_ms".equals(key)
+            && !looselyEqual(currentValue, defaultValue)) {
+            return "Adjusted to balance durability latency against flush overhead.";
+        }
+        return null;
     }
 
     private static int readInt(String key, int defaultValue) {
