@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterTuningIntrospection;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueTuningIntrospection;
 import org.apache.jackrabbit.oak.segment.http.server.RateLimiter;
 import org.apache.jackrabbit.oak.segment.http.server.RateLimiterTuningIntrospection;
@@ -68,6 +69,7 @@ public class OsgiConfigApiHandler {
 
     private Map<String, Object> buildComponents() {
         Map<String, Object> components = new LinkedHashMap<>();
+        components.put("aeronClusterTuning", AeronClusterTuningIntrospection.effectiveValues());
         components.put("proposalQueueTuning", ProposalQueueTuningIntrospection.effectiveValues());
         components.put("rateLimiterTuning", RateLimiterTuningIntrospection.effectiveValues());
         return components;
@@ -75,6 +77,7 @@ public class OsgiConfigApiHandler {
 
     private Map<String, Object> buildSourcesMap() {
         Map<String, Object> sources = new LinkedHashMap<>();
+        sources.put("aeronClusterTuning", AeronClusterTuningIntrospection.source());
         sources.put("proposalQueueTuning", ProposalQueueTuningIntrospection.source());
         sources.put("rateLimiterTuning", RateLimiterTuningIntrospection.source());
         return sources;
@@ -82,6 +85,47 @@ public class OsgiConfigApiHandler {
 
     private List<Map<String, Object>> buildSchema() {
         List<Map<String, Object>> schema = new ArrayList<>();
+
+        schema.add(schemaEntry(
+            "aeronClusterTuning.cluster_environment",
+            "string",
+            "",
+            "startup-only",
+            "guarded",
+            "Environment profile for Aeron timeout defaults",
+            "oak.cluster.environment"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.session_timeout_minutes",
+            "int",
+            0,
+            "startup-only",
+            "expert-only",
+            "Aeron session timeout override",
+            "oak.cluster.session.timeout.minutes"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.media_driver_timeout_ms",
+            "int",
+            0,
+            "startup-only",
+            "expert-only",
+            "MediaDriver timeout override",
+            "oak.cluster.media.driver.timeout.ms"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.cluster_term_length_bytes",
+            "int",
+            0,
+            "startup-only",
+            "expert-only",
+            "Aeron cluster term length",
+            "oak.cluster.term.length.bytes"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.peer_probe_mode",
+            "string",
+            "",
+            "startup-only",
+            "guarded",
+            "Peer probe mode for health checks",
+            "oak.health.peerProbeMode"));
 
         schema.add(schemaEntry(
             "proposalQueueTuning.max_message_batch",

@@ -54,12 +54,14 @@ public class AeronClusterService {
     @Activate
     protected void activate(AeronClusterConfig config) {
         this.config = config;
+        AeronClusterTuningSourceRegistry.markOsgiSource();
         logConfiguration("Activated");
     }
 
     @Modified
     protected void modified(AeronClusterConfig config) {
         this.config = config;
+        AeronClusterTuningSourceRegistry.markOsgiSource();
         logConfiguration("Modified");
     }
 
