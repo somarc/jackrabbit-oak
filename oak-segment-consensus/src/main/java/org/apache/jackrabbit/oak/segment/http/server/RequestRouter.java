@@ -298,6 +298,12 @@ public class RequestRouter {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/config/osgi/coverage".equals(path) && "GET".equals(method)) {
+                osgiConfigApiHandler.handleCoverage(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             if ("/chat".equals(path) && "GET".equals(method)) {
                 dashboardHandler.handleChatUI(response);

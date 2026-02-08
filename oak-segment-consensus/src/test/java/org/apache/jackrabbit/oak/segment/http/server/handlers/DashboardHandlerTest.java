@@ -58,6 +58,7 @@ public class DashboardHandlerTest {
         assertTrue(json.contains("\"contractVersion\":\"index.v1\""));
         assertTrue(json.contains("\"count\":"));
         assertTrue(json.contains("\"path\":\"/v1/index\""));
+        assertTrue(json.contains("\"path\":\"/v1/config/osgi/coverage\""));
         assertTrue(json.contains("\"path\":\"/v1/proposals/queue/stats\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/summary\""));
         assertTrue(json.contains("\"path\":\"/v1/consensus/status\""));
