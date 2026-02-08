@@ -143,6 +143,51 @@ public class GCProposalManager {
         
         return proposal;
     }
+
+    /**
+     * Apply a GC proposal that was replicated through consensus.
+     *
+     * <p>Used by Aeron message callbacks so every validator materializes the same
+     * proposal ID and estimate values in local manager state.</p>
+     */
+    public GCProposal applyReplicatedProposal(String proposalId,
+                                              String proposerWallet,
+                                              String targetRevision,
+                                              long estimatedReclaimableSizeMB,
+                                              String estimatedCostUSDC) {
+        if (proposalId == null || proposalId.isEmpty()) {
+            throw new IllegalArgumentException("proposalId is required");
+        }
+        if (proposerWallet == null || proposerWallet.isEmpty()) {
+            throw new IllegalArgumentException("proposerWallet is required");
+        }
+
+        GCProposal existing = proposals.get(proposalId);
+        if (existing != null) {
+            return existing;
+        }
+
+        GCProposal proposal = new GCProposal();
+        proposal.proposalId = proposalId;
+        proposal.proposerWallet = proposerWallet;
+        proposal.targetRevision = "HEAD".equals(targetRevision) ? null : targetRevision;
+        proposal.estimatedReclaimableSizeMB = Math.max(estimatedReclaimableSizeMB, 0L);
+        try {
+            proposal.estimatedCostUSDC = new BigDecimal(
+                estimatedCostUSDC != null && !estimatedCostUSDC.isEmpty() ? estimatedCostUSDC : "0");
+        } catch (Exception e) {
+            log.warn("Invalid estimatedCostUSDC on replicated proposal {}: {}", proposalId, estimatedCostUSDC);
+            proposal.estimatedCostUSDC = BigDecimal.ZERO;
+        }
+        proposal.fragmentationOverheadMB = 0L;
+        proposal.fragmentationCostUSDC = BigDecimal.ZERO;
+        proposal.state = GCProposal.GCProposalState.PENDING;
+
+        proposals.put(proposalId, proposal);
+        log.info("✅ Applied replicated GC proposal: {} (wallet={}, reclaimableMB={}, costUSDC={})",
+            proposalId, proposerWallet, proposal.estimatedReclaimableSizeMB, proposal.estimatedCostUSDC);
+        return proposal;
+    }
     
     /**
      * Vote on a GC proposal.
@@ -531,4 +576,3 @@ public class GCProposalManager {
         }
     }
 }
-

@@ -52,8 +52,10 @@ public class BeaconChainClient {
     // Epoch duration is 6.4 minutes on all networks
     private static final long EPOCH_DURATION_MS = 384000L; // 32 slots × 12 seconds
     
-    // Mock mode: faster epochs for testing (30 seconds per epoch)
-    private static final long MOCK_EPOCH_DURATION_MS = 30_000L;
+    // Mock mode: configurable epoch duration (default 300 seconds)
+    private static final String ENV_MOCK_EPOCH_DURATION_SECONDS = "OAK_MOCK_EPOCH_DURATION_SECONDS";
+    private static final String PROP_MOCK_EPOCH_DURATION_SECONDS = "oak.mock.epoch.duration.seconds";
+    private static final long DEFAULT_MOCK_EPOCH_DURATION_MS = 300_000L;
     
     // Poll intervals
     private static final long REAL_POLL_INTERVAL_MS = 60_000L;  // 1 minute for real chains
@@ -71,6 +73,7 @@ public class BeaconChainClient {
     
     // Mock mode state
     private final long mockStartTime;
+    private final long mockEpochDurationMs;
     private volatile long mockEpochOffset = 0; // Can be set via API for testing
     
     // Background polling thread
@@ -92,6 +95,7 @@ public class BeaconChainClient {
         BlockchainConfig config = BlockchainConfig.getInstance();
         this.networkMode = config.getMode();
         this.mockStartTime = System.currentTimeMillis();
+        this.mockEpochDurationMs = resolveMockEpochDurationMs();
         
         // Select API URL based on mode
         switch (networkMode) {
@@ -113,7 +117,7 @@ public class BeaconChainClient {
         log.info("   Mode: {}", networkMode);
         
         if (networkMode == BlockchainConfig.Mode.MOCK) {
-            log.info("   📝 MOCK MODE - Synthetic epochs (30s/epoch)");
+            log.info("   📝 MOCK MODE - Synthetic epochs ({}s/epoch)", mockEpochDurationMs / 1000);
             log.info("   📝 Use /api/mock/set-epoch to control epoch");
         } else {
             log.info("   API: {}", apiBaseUrl);
@@ -201,7 +205,7 @@ public class BeaconChainClient {
      */
     private void updateMockEpochs() {
         long elapsed = System.currentTimeMillis() - mockStartTime;
-        long baseEpoch = elapsed / MOCK_EPOCH_DURATION_MS;
+        long baseEpoch = elapsed / mockEpochDurationMs;
         
         // Start at epoch 1000 so it looks realistic, plus any manual offset
         long currentEpoch = 1000 + baseEpoch + mockEpochOffset;
@@ -472,10 +476,33 @@ public class BeaconChainClient {
         
         if (networkMode == BlockchainConfig.Mode.MOCK) {
             health.put("mockEpochOffset", mockEpochOffset);
-            health.put("mockEpochDurationMs", MOCK_EPOCH_DURATION_MS);
+            health.put("mockEpochDurationMs", mockEpochDurationMs);
         }
         
         return health;
+    }
+
+    private long resolveMockEpochDurationMs() {
+        long defaultSeconds = DEFAULT_MOCK_EPOCH_DURATION_MS / 1000L;
+        String envValue = System.getenv(ENV_MOCK_EPOCH_DURATION_SECONDS);
+        String propValue = System.getProperty(PROP_MOCK_EPOCH_DURATION_SECONDS);
+        String raw = (envValue != null && !envValue.trim().isEmpty()) ? envValue : propValue;
+        if (raw == null || raw.trim().isEmpty()) {
+            return DEFAULT_MOCK_EPOCH_DURATION_MS;
+        }
+        try {
+            long seconds = Long.parseLong(raw.trim());
+            if (seconds <= 0) {
+                log.warn("Invalid mock epoch duration seconds ({}={}) - using default {}s",
+                    ENV_MOCK_EPOCH_DURATION_SECONDS, raw, defaultSeconds);
+                return DEFAULT_MOCK_EPOCH_DURATION_MS;
+            }
+            return seconds * 1000L;
+        } catch (NumberFormatException e) {
+            log.warn("Failed to parse mock epoch duration seconds (raw='{}') - using default {}s",
+                raw, defaultSeconds);
+            return DEFAULT_MOCK_EPOCH_DURATION_MS;
+        }
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

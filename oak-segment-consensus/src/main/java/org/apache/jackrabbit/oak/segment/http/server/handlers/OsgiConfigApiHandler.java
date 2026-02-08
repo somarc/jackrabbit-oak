@@ -350,6 +350,14 @@ public class OsgiConfigApiHandler {
             "Max proposals finalized per chunk",
             "oak.proposal.finalization.chunk.size"));
         schema.add(schemaEntry(
+            "proposalQueueTuning.finalization_chunk_delay_ms",
+            "long",
+            0L,
+            "runtime-readable",
+            "guarded",
+            "Optional delay between finalized chunks; 0 disables pacing",
+            "oak.proposal.finalization.chunk.delay.ms"));
+        schema.add(schemaEntry(
             "proposalQueueTuning.max_pending_messages",
             "long",
             10000,
@@ -817,6 +825,10 @@ public class OsgiConfigApiHandler {
         if ("proposalQueueTuning.finalization_chunk_size".equals(key)
             && !looselyEqual(currentValue, defaultValue)) {
             return "Adjusted to increase per-cycle finalization throughput under backlog.";
+        }
+        if ("proposalQueueTuning.finalization_chunk_delay_ms".equals(key)
+            && !looselyEqual(currentValue, defaultValue)) {
+            return "Adjusted to control optional pacing between finalization chunks.";
         }
         if ("proposalQueueTuning.max_message_batch".equals(key)
             && !looselyEqual(currentValue, defaultValue)) {

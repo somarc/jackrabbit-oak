@@ -56,6 +56,12 @@ public @interface ProposalQueueTuningConfig {
     int finalization_chunk_size() default ProposalQueueTuning.DEFAULT_FINALIZATION_CHUNK_SIZE;
 
     @AttributeDefinition(
+        name = "Finalization Chunk Delay (ms)",
+        description = "Optional delay between finalized chunks. Set 0 to disable artificial pacing."
+    )
+    long finalization_chunk_delay_ms() default ProposalQueueTuning.DEFAULT_FINALIZATION_CHUNK_DELAY_MS;
+
+    @AttributeDefinition(
         name = "Verifier Threads",
         description = "Number of EVM verifier agent threads."
     )

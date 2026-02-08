@@ -93,6 +93,7 @@ public class ProposalQueueManagerOptimized {
     // Keeps batches safely under 1376-byte limit for global distributed deployment
     // See: Blockchain-AEM/06-test-results/2025-11-21-BATCH-UDP-MTU-LIMIT.md
     private final int finalizationChunkSize;
+    private final long finalizationChunkDelayMs;
     
     // Queues
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
@@ -232,6 +233,7 @@ public class ProposalQueueManagerOptimized {
         this.maxMessageBatch = resolved.getMaxMessageBatch();
         this.maxRetryCount = resolved.getMaxRetryCount();
         this.finalizationChunkSize = resolved.getFinalizationChunkSize();
+        this.finalizationChunkDelayMs = resolved.getFinalizationChunkDelayMs();
         this.verifierThreads = resolved.getVerifierThreads();
         this.processedRetentionMs = resolved.getProcessedRetentionMs();
         this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
@@ -1931,11 +1933,10 @@ public class ProposalQueueManagerOptimized {
                                     chunk.size(),
                                     chunk.get(0).getWalletAddress());
                                 
-                                // Small delay to let Aeron process chunks smoothly
-                                // Prevents all chunks hitting backpressure simultaneously
-                                if (endIdx < batch.size()) {
+                                // Optional pacing between chunks for environments that want smoother drains.
+                                if (finalizationChunkDelayMs > 0 && endIdx < batch.size()) {
                                     try {
-                                        Thread.sleep(50); // 50ms between chunks
+                                        Thread.sleep(finalizationChunkDelayMs);
                                     } catch (InterruptedException e) {
                                         Thread.currentThread().interrupt();
                                         break;

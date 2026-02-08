@@ -35,6 +35,7 @@ public final class ProposalQueueTuningIntrospection {
         values.put("max_message_batch", tuning.getMaxMessageBatch());
         values.put("max_retry_count", tuning.getMaxRetryCount());
         values.put("finalization_chunk_size", tuning.getFinalizationChunkSize());
+        values.put("finalization_chunk_delay_ms", tuning.getFinalizationChunkDelayMs());
         values.put("verifier_threads", tuning.getVerifierThreads());
         values.put("processed_retention_ms", tuning.getProcessedRetentionMs());
         values.put("persistence_enabled", tuning.isPersistenceEnabled());

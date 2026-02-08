@@ -39,15 +39,17 @@ public final class ProposalQueueTuningService {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromConfig(config);
         ProposalQueueTuningRegistry.set(tuning);
         log.info("ProposalQueueTuningService activated");
-        log.info("QUEUE_TUNING_SOURCE source=osgi-config-admin persistence_enabled={} max_message_batch={} finalization_chunk_size={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={}",
+        log.info("QUEUE_TUNING_SOURCE source=osgi-config-admin persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={}",
             tuning.isPersistenceEnabled(),
             tuning.getMaxMessageBatch(),
             tuning.getFinalizationChunkSize(),
+            tuning.getFinalizationChunkDelayMs(),
             tuning.getMaxPendingMessages(),
             tuning.getBackpressureTimeoutMs(),
             tuning.getCounterRotationIntervalMs());
         log.info("  maxMessageBatch: {}", tuning.getMaxMessageBatch());
         log.info("  finalizationChunkSize: {}", tuning.getFinalizationChunkSize());
+        log.info("  finalizationChunkDelayMs: {}", tuning.getFinalizationChunkDelayMs());
         log.info("  maxRetryCount: {}", tuning.getMaxRetryCount());
         log.info("  verifierThreads: {}", tuning.getVerifierThreads());
         log.info("  confirmationTimeoutMs: {}", tuning.getConfirmationTimeoutMs());

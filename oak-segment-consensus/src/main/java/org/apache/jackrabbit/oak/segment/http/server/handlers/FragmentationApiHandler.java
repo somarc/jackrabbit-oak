@@ -468,6 +468,133 @@ public class FragmentationApiHandler {
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
         }
     }
+
+    /**
+     * Handle POST /v1/gc/vote - Cast a vote on a GC proposal.
+     *
+     * <p>Request Body (JSON):</p>
+     * <pre>
+     * {
+     *   "proposalId": "uuid-here",      // Required
+     *   "validatorId": 0,               // Optional, defaults to current node ID
+     *   "approve": true,                // Optional, defaults to true
+     *   "reason": "approve from e2e"    // Optional
+     * }
+     * </pre>
+     */
+    public void handleVoteGC(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+
+        try {
+            GCProposalManager gcManager = getGCProposalManager();
+            if (gcManager == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
+                return;
+            }
+
+            String proposalId = null;
+            Integer validatorId = null;
+            Boolean approve = null;
+            String reason = null;
+
+            String contentType = request.getContentType();
+            if (contentType != null && contentType.contains("application/json")) {
+                try {
+                    java.io.BufferedReader reader = request.getReader();
+                    StringBuilder body = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        body.append(line);
+                    }
+                    String jsonBody = body.toString();
+                    if (!jsonBody.isEmpty()) {
+                        proposalId = extractJsonStringField(jsonBody, "proposalId");
+                        validatorId = extractJsonIntField(jsonBody, "validatorId");
+                        approve = extractJsonBooleanField(jsonBody, "approve");
+                        reason = extractJsonStringField(jsonBody, "reason");
+                    }
+                } catch (Exception e) {
+                    log.debug("Failed to parse JSON vote body, falling back to query params", e);
+                }
+            }
+
+            if (proposalId == null || proposalId.isEmpty()) {
+                proposalId = request.getParameter("proposalId");
+            }
+            if (validatorId == null) {
+                String validatorIdParam = request.getParameter("validatorId");
+                if (validatorIdParam != null && !validatorIdParam.isEmpty()) {
+                    try {
+                        validatorId = Integer.parseInt(validatorIdParam);
+                    } catch (NumberFormatException ignored) {
+                        // Fallback below
+                    }
+                }
+            }
+            if (approve == null) {
+                String approveParam = request.getParameter("approve");
+                if (approveParam != null && !approveParam.isEmpty()) {
+                    approve = Boolean.parseBoolean(approveParam);
+                }
+            }
+            if (reason == null || reason.isEmpty()) {
+                reason = request.getParameter("reason");
+            }
+
+            if (proposalId == null || proposalId.isEmpty()) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "proposalId parameter required. Provide as JSON body or query parameter.");
+                return;
+            }
+
+            int resolvedValidatorId = validatorId != null ? validatorId : 0;
+            if (validatorId == null && context.aeronConsensusEngine != null && context.aeronConsensusEngine.getCluster() != null) {
+                resolvedValidatorId = context.aeronConsensusEngine.getCluster().memberId();
+            }
+            boolean resolvedApprove = approve != null ? approve : true;
+            String resolvedReason = reason != null ? reason : "";
+
+            boolean replicated = false;
+            boolean replicationAttempted = false;
+            if (context.aeronConsensusEngine != null && context.aeronConsensusEngine.getCluster() != null) {
+                replicationAttempted = true;
+                replicated = context.aeronConsensusEngine.sendGCVoteThroughIngress(
+                    proposalId,
+                    resolvedValidatorId,
+                    resolvedApprove,
+                    resolvedReason
+                );
+            }
+
+            // Apply locally only when replication is unavailable/failed.
+            // When replicated=true, MessageDispatcher callback applies the vote once.
+            if (!replicated) {
+                gcManager.voteOnProposal(proposalId, resolvedValidatorId, resolvedApprove, resolvedReason);
+            } else {
+                log.debug("GC vote {} for validator {} applied via Aeron replication", proposalId, resolvedValidatorId);
+            }
+
+            org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal = gcManager.getProposal(proposalId);
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("success", true);
+            payload.put("proposalId", proposalId);
+            payload.put("validatorId", resolvedValidatorId);
+            payload.put("approve", resolvedApprove);
+            payload.put("reason", resolvedReason);
+            payload.put("replicated", replicated);
+            payload.put("replicationAttempted", replicationAttempted);
+            if (proposal != null) {
+                payload.put("proposal", proposalToMap(proposal));
+            }
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
+
+        } catch (Exception e) {
+            log.error("Error voting on GC proposal", e);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
+        }
+    }
     
     /**
      * Get GC Proposal Manager from context.
@@ -494,6 +621,60 @@ public class FragmentationApiHandler {
             return eth.toString();
         }
         return eth.toString() + "." + remainder.toString().substring(0, Math.min(6, remainder.toString().length()));
+    }
+
+    private String extractJsonStringField(String json, String field) {
+        String pattern = "\"" + field + "\"";
+        int fieldStart = json.indexOf(pattern);
+        if (fieldStart < 0) return null;
+        int colon = json.indexOf(":", fieldStart);
+        if (colon < 0) return null;
+        int quoteStart = json.indexOf("\"", colon);
+        if (quoteStart < 0) return null;
+        int quoteEnd = json.indexOf("\"", quoteStart + 1);
+        if (quoteEnd <= quoteStart) return null;
+        return json.substring(quoteStart + 1, quoteEnd);
+    }
+
+    private Integer extractJsonIntField(String json, String field) {
+        String pattern = "\"" + field + "\"";
+        int fieldStart = json.indexOf(pattern);
+        if (fieldStart < 0) return null;
+        int colon = json.indexOf(":", fieldStart);
+        if (colon < 0) return null;
+        int idx = colon + 1;
+        while (idx < json.length() && Character.isWhitespace(json.charAt(idx))) {
+            idx++;
+        }
+        int end = idx;
+        while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) {
+            end++;
+        }
+        if (end <= idx) return null;
+        try {
+            return Integer.parseInt(json.substring(idx, end));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Boolean extractJsonBooleanField(String json, String field) {
+        String pattern = "\"" + field + "\"";
+        int fieldStart = json.indexOf(pattern);
+        if (fieldStart < 0) return null;
+        int colon = json.indexOf(":", fieldStart);
+        if (colon < 0) return null;
+        int idx = colon + 1;
+        while (idx < json.length() && Character.isWhitespace(json.charAt(idx))) {
+            idx++;
+        }
+        if (json.regionMatches(idx, "true", 0, 4)) {
+            return true;
+        }
+        if (json.regionMatches(idx, "false", 0, 5)) {
+            return false;
+        }
+        return null;
     }
     
     /**

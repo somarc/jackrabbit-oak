@@ -785,6 +785,12 @@ public class RequestRouter {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/gc/vote".equals(path) && "POST".equals(method)) {
+                fragmentationApiHandler.handleVoteGC(request, response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             // GC Account Management
             if (path != null && path.startsWith("/v1/gc/account/")) {

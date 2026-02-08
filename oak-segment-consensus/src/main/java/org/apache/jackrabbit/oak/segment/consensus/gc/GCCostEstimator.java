@@ -22,9 +22,12 @@ import org.apache.jackrabbit.oak.segment.file.tar.TarFiles;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 /**
@@ -105,18 +108,21 @@ public class GCCostEstimator {
                 reclaimableSegments.size(),
                 allSegments.isEmpty() ? 0.0 : (reclaimableSegments.size() * 100.0 / allSegments.size()));
             
-            // 5. Calculate sizes
-            long totalSizeBytes = calculateTotalSize();
-            long reclaimableSizeBytes = calculateReclaimableSize(reclaimableSegments);
+            // 5. Calculate sizes from actual TAR files (fallback to count-based when unavailable)
+            Map<String, Set<UUID>> tarIndices = tarFiles.getIndices();
+            Map<String, Long> tarFileSizes = getTarFileSizes(tarIndices);
+            long totalSizeBytes = calculateTotalSize(tarIndices, tarFileSizes);
+            Map<String, Long> reclaimableByTarFile = calculateReclaimableByFile(
+                reclaimableSegments, tarIndices, tarFileSizes
+            );
+            long reclaimableSizeBytes = reclaimableByTarFile.values().stream()
+                .mapToLong(Long::longValue)
+                .sum();
             
             // 6. Estimate cost
             BigDecimal reclaimableSizeMB = BigDecimal.valueOf(reclaimableSizeBytes)
                 .divide(BigDecimal.valueOf(1024 * 1024), 2, RoundingMode.HALF_UP);
             BigDecimal estimatedCostUSDC = reclaimableSizeMB.multiply(usdcPerMB);
-            
-            // 7. Group by TAR file
-            log.debug("Calculating reclaimable size by TAR file...");
-            Map<String, Long> reclaimableByTarFile = calculateReclaimableByFile(reclaimableSegments);
             
             long elapsed = System.currentTimeMillis() - startTime;
             log.info("GC cost estimation complete in {} ms: {} MB reclaimable, {} USDC estimated",
@@ -256,15 +262,17 @@ public class GCCostEstimator {
      * @return Total size in bytes
      * @throws IOException if size calculation fails
      */
-    private long calculateTotalSize() throws IOException {
-        // Approximate: 256 KB per segment (average)
-        // Full implementation would iterate TAR files and sum actual segment sizes
-        Map<String, Set<UUID>> indices = tarFiles.getIndices();
+    private long calculateTotalSize(Map<String, Set<UUID>> indices, Map<String, Long> tarFileSizes) {
+        if (!tarFileSizes.isEmpty()) {
+            return tarFileSizes.values().stream().mapToLong(Long::longValue).sum();
+        }
+
+        // Fallback: approximate from segment counts.
         long totalSegments = 0;
         for (Set<UUID> segments : indices.values()) {
             totalSegments += segments.size();
         }
-        return totalSegments * 256L * 1024L; // Approximate: 256 KB per segment
+        return totalSegments * 256L * 1024L;
     }
     
     /**
@@ -276,22 +284,10 @@ public class GCCostEstimator {
      * @param reclaimableSegments Set of reclaimable segment UUIDs
      * @return Total reclaimable size in bytes
      */
-    private long calculateReclaimableSize(Set<UUID> reclaimableSegments) {
-        // Approximate: 256 KB per segment (average)
-        // Full implementation would look up actual segment sizes from TAR indices
-        return reclaimableSegments.size() * 256L * 1024L;
-    }
-    
-    /**
-     * Group reclaimable segments by TAR file.
-     * 
-     * @param reclaimableSegments Set of reclaimable segment UUIDs
-     * @return Map of TAR file name to reclaimable size in bytes
-     * @throws IOException if TAR file enumeration fails
-     */
-    private Map<String, Long> calculateReclaimableByFile(Set<UUID> reclaimableSegments) throws IOException {
+    private Map<String, Long> calculateReclaimableByFile(Set<UUID> reclaimableSegments,
+                                                         Map<String, Set<UUID>> indices,
+                                                         Map<String, Long> tarFileSizes) throws IOException {
         Map<String, Long> byFile = new HashMap<>();
-        Map<String, Set<UUID>> indices = tarFiles.getIndices();
         
         for (Map.Entry<String, Set<UUID>> entry : indices.entrySet()) {
             String fileName = entry.getKey();
@@ -302,12 +298,56 @@ public class GCCostEstimator {
                 .count();
             
             if (reclaimableInFile > 0) {
-                // Approximate: 256 KB per segment
-                byFile.put(fileName, reclaimableInFile * 256L * 1024L);
+                long estimatedBytes;
+                Long fileSize = tarFileSizes.get(fileName);
+                if (fileSize != null && fileSize > 0 && !fileSegments.isEmpty()) {
+                    // Estimate reclaimable bytes proportionally within the actual TAR size.
+                    double ratio = reclaimableInFile / (double) fileSegments.size();
+                    estimatedBytes = Math.max(1L, Math.round(fileSize * ratio));
+                } else {
+                    // Fallback: 256 KB per segment.
+                    estimatedBytes = reclaimableInFile * 256L * 1024L;
+                }
+                byFile.put(fileName, estimatedBytes);
             }
         }
         
         return byFile;
+    }
+
+    private Map<String, Long> getTarFileSizes(Map<String, Set<UUID>> indices) {
+        Map<String, Long> sizes = new HashMap<>();
+        Path storeDir = resolveStoreDirectory();
+        if (storeDir == null) {
+            return sizes;
+        }
+
+        for (String fileName : indices.keySet()) {
+            try {
+                Path filePath = storeDir.resolve(fileName);
+                if (Files.isRegularFile(filePath)) {
+                    sizes.put(fileName, Files.size(filePath));
+                }
+            } catch (IOException e) {
+                log.debug("Unable to read TAR file size for {}", fileName, e);
+            }
+        }
+        return sizes;
+    }
+
+    private Path resolveStoreDirectory() {
+        try {
+            java.lang.reflect.Field directoryField =
+                org.apache.jackrabbit.oak.segment.file.AbstractFileStore.class.getDeclaredField("directory");
+            directoryField.setAccessible(true);
+            File directory = (File) directoryField.get(fileStore);
+            if (directory != null) {
+                return directory.toPath();
+            }
+        } catch (Exception e) {
+            log.debug("Unable to resolve FileStore directory via reflection", e);
+        }
+        return null;
     }
     
     /**
@@ -331,4 +371,3 @@ public class GCCostEstimator {
         return usdcPerMB;
     }
 }
-

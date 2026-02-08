@@ -658,7 +658,8 @@ public class GlobalStoreServer {
                 httpServer.getContext().periodicGCJob = periodicGCJob;
                 
                 System.out.println("✅ Periodic GC Job started");
-                System.out.println("   - Interval: 5 minutes");
+                System.out.println("   - Interval: " + periodicGCJob.getIntervalSeconds() + "s");
+                System.out.println("   - Initial delay: " + periodicGCJob.getInitialDelaySeconds() + "s");
                 System.out.println("   - Action: Converts pending debt → executed debt");
                 System.out.println("   - Blocks writes when executed debt > limit");
                 

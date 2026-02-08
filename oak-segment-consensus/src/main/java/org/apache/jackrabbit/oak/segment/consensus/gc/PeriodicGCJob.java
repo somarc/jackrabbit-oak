@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.gc;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +30,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Periodic Garbage Collection job for GC Account Tax Model.
  * 
- * <p>Runs every 5 minutes to:
+ * <p>Runs once per configured epoch duration to:
  * <ul>
  *   <li>Convert pending GC debt to executed debt (simulates actual GC)</li>
  *   <li>Block writes for entities over debt limit</li>
@@ -49,13 +50,15 @@ public class PeriodicGCJob {
     
     private static final Logger log = LoggerFactory.getLogger(PeriodicGCJob.class);
     
-    /** GC interval in minutes (5 minutes for MVP) */
-    private static final long GC_INTERVAL_MINUTES = 5;
-    
-    /** Initial delay before first GC run (1 minute) */
-    private static final long INITIAL_DELAY_MINUTES = 1;
+    private static final long ETHEREUM_EPOCH_SECONDS = 384L; // 32 slots × 12s
+    private static final long DEFAULT_MOCK_EPOCH_SECONDS = 300L;
+    private static final String ENV_MOCK_EPOCH_DURATION_SECONDS = "OAK_MOCK_EPOCH_DURATION_SECONDS";
+    private static final String PROP_MOCK_EPOCH_DURATION_SECONDS = "oak.mock.epoch.duration.seconds";
     
     private final GCAccountManager gcAccountManager;
+    private final BlockchainConfig.Mode mode;
+    private final long intervalSeconds;
+    private final long initialDelaySeconds;
     private ScheduledExecutorService executor;
     private volatile boolean running = false;
     
@@ -81,6 +84,9 @@ public class PeriodicGCJob {
      */
     public PeriodicGCJob(GCAccountManager gcAccountManager) {
         this.gcAccountManager = gcAccountManager;
+        this.mode = BlockchainConfig.getInstance().getMode();
+        this.intervalSeconds = resolveIntervalSeconds();
+        this.initialDelaySeconds = intervalSeconds;
     }
     
     /**
@@ -100,16 +106,17 @@ public class PeriodicGCJob {
         
         executor.scheduleAtFixedRate(
             this::executeGCCycle,
-            INITIAL_DELAY_MINUTES,
-            GC_INTERVAL_MINUTES,
-            TimeUnit.MINUTES
+            initialDelaySeconds,
+            intervalSeconds,
+            TimeUnit.SECONDS
         );
         
         running = true;
         
         log.info("🔄 Periodic GC job started");
-        log.info("   - Interval: {} minutes", GC_INTERVAL_MINUTES);
-        log.info("   - Initial delay: {} minutes", INITIAL_DELAY_MINUTES);
+        log.info("   - Mode: {}", mode);
+        log.info("   - Interval: {}", formatDuration(intervalSeconds));
+        log.info("   - Initial delay: {}", formatDuration(initialDelaySeconds));
         log.info("   - Action: Convert pending debt → executed debt");
     }
     
@@ -215,7 +222,7 @@ public class PeriodicGCJob {
             log.info("   - Entities BLOCKED: {}", blocked);
             log.info("   - Total debt executed: ${}", totalDebtExecuted);
             log.info("   - Duration: {}ms", duration);
-            log.info("   - Next run in: {} minutes", GC_INTERVAL_MINUTES);
+            log.info("   - Next run in: {}", formatDuration(intervalSeconds));
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             
             // Log currently blocked entities
@@ -278,5 +285,44 @@ public class PeriodicGCJob {
     public boolean isRunning() {
         return running;
     }
-}
 
+    public long getIntervalSeconds() {
+        return intervalSeconds;
+    }
+
+    public long getInitialDelaySeconds() {
+        return initialDelaySeconds;
+    }
+
+    private long resolveIntervalSeconds() {
+        if (mode != BlockchainConfig.Mode.MOCK) {
+            return ETHEREUM_EPOCH_SECONDS;
+        }
+        String envValue = System.getenv(ENV_MOCK_EPOCH_DURATION_SECONDS);
+        String propValue = System.getProperty(PROP_MOCK_EPOCH_DURATION_SECONDS);
+        String raw = (envValue != null && !envValue.trim().isEmpty()) ? envValue : propValue;
+        if (raw == null || raw.trim().isEmpty()) {
+            return DEFAULT_MOCK_EPOCH_SECONDS;
+        }
+        try {
+            long seconds = Long.parseLong(raw.trim());
+            if (seconds <= 0) {
+                log.warn("Invalid mock epoch duration ({}={}) - using {}s",
+                    ENV_MOCK_EPOCH_DURATION_SECONDS, raw, DEFAULT_MOCK_EPOCH_SECONDS);
+                return DEFAULT_MOCK_EPOCH_SECONDS;
+            }
+            return seconds;
+        } catch (NumberFormatException e) {
+            log.warn("Failed to parse mock epoch duration seconds (raw='{}') - using {}s",
+                raw, DEFAULT_MOCK_EPOCH_SECONDS);
+            return DEFAULT_MOCK_EPOCH_SECONDS;
+        }
+    }
+
+    private String formatDuration(long seconds) {
+        if (seconds % 60 == 0) {
+            return (seconds / 60) + " minutes";
+        }
+        return seconds + " seconds";
+    }
+}

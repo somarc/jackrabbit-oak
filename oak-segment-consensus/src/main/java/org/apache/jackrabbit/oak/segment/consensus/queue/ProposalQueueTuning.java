@@ -22,6 +22,7 @@ final class ProposalQueueTuning {
     static final int DEFAULT_MAX_MESSAGE_BATCH = 10;
     static final int DEFAULT_MAX_RETRY_COUNT = 5;
     static final int DEFAULT_FINALIZATION_CHUNK_SIZE = 3;
+    static final long DEFAULT_FINALIZATION_CHUNK_DELAY_MS = 0L;
     static final int DEFAULT_VERIFIER_THREADS = 1;
     static final long DEFAULT_PROCESSED_RETENTION_MS = 10 * 60 * 1000L;
     static final boolean DEFAULT_PERSISTENCE_ENABLED = true;
@@ -37,6 +38,7 @@ final class ProposalQueueTuning {
     private final int maxMessageBatch;
     private final int maxRetryCount;
     private final int finalizationChunkSize;
+    private final long finalizationChunkDelayMs;
     private final int verifierThreads;
     private final long processedRetentionMs;
     private final boolean persistenceEnabled;
@@ -52,6 +54,7 @@ final class ProposalQueueTuning {
                                 int maxMessageBatch,
                                 int maxRetryCount,
                                 int finalizationChunkSize,
+                                long finalizationChunkDelayMs,
                                 int verifierThreads,
                                 long processedRetentionMs,
                                 boolean persistenceEnabled,
@@ -66,6 +69,7 @@ final class ProposalQueueTuning {
         this.maxMessageBatch = maxMessageBatch;
         this.maxRetryCount = maxRetryCount;
         this.finalizationChunkSize = finalizationChunkSize;
+        this.finalizationChunkDelayMs = finalizationChunkDelayMs;
         this.verifierThreads = verifierThreads;
         this.processedRetentionMs = processedRetentionMs;
         this.persistenceEnabled = persistenceEnabled;
@@ -89,6 +93,10 @@ final class ProposalQueueTuning {
         int maxMessageBatch = readIntProp("oak.proposal.batch.max", DEFAULT_MAX_MESSAGE_BATCH, 1);
         int maxRetryCount = readIntProp("oak.proposal.max.retry.count", DEFAULT_MAX_RETRY_COUNT, 1);
         int finalizationChunkSize = readIntProp("oak.proposal.finalization.chunk.size", DEFAULT_FINALIZATION_CHUNK_SIZE, 1);
+        long finalizationChunkDelayMs = Long.getLong(
+            "oak.proposal.finalization.chunk.delay.ms",
+            DEFAULT_FINALIZATION_CHUNK_DELAY_MS
+        );
         int verifierThreads = readIntProp(
             "oak.proposal.verifier.threads",
             defaultVerifierThreads(),
@@ -133,6 +141,7 @@ final class ProposalQueueTuning {
             maxMessageBatch,
             maxRetryCount,
             finalizationChunkSize,
+            clampLong(finalizationChunkDelayMs, 0L),
             verifierThreads,
             processedRetentionMs,
             persistenceEnabled,
@@ -161,6 +170,7 @@ final class ProposalQueueTuning {
             clampInt(config.max_message_batch(), 1),
             config.max_retry_count(),
             clampInt(config.finalization_chunk_size(), 1),
+            clampLong(config.finalization_chunk_delay_ms(), 0L),
             effectiveVerifierThreads,
             config.processed_retention_ms(),
             config.persistence_enabled(),
@@ -191,6 +201,10 @@ final class ProposalQueueTuning {
 
     int getFinalizationChunkSize() {
         return finalizationChunkSize;
+    }
+
+    long getFinalizationChunkDelayMs() {
+        return finalizationChunkDelayMs;
     }
 
     int getVerifierThreads() {
