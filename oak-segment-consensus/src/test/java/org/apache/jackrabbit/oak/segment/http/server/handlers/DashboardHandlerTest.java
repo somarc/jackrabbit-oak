@@ -53,9 +53,15 @@ public class DashboardHandlerTest {
         verify(response).setContentType("application/json; charset=UTF-8");
         String json = body.toString();
         assertTrue(json.contains("\"contractVersion\":\"index.v1\""));
+        assertTrue(json.contains("\"count\":"));
         assertTrue(json.contains("\"path\":\"/v1/index\""));
         assertTrue(json.contains("\"path\":\"/v1/proposals/queue/stats\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/summary\""));
+        assertTrue(json.contains("\"path\":\"/v1/consensus/status\""));
+        assertTrue(json.contains("\"path\":\"/v1/aeron/cluster-state\""));
+        assertTrue(json.contains("\"path\":\"/v1/events/stats\""));
+        assertTrue(json.contains("\"path\":\"/v1/gc/status\""));
+        assertTrue(json.contains("\"path\":\"/metrics\""));
     }
 
     @Test

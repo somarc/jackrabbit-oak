@@ -60,6 +60,7 @@ public class RequestRouter {
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
     private final RateLimiter rateLimiter;
+    private final boolean browserUiEnabled;
     
     private final ServerContext context;
 
@@ -67,6 +68,7 @@ public class RequestRouter {
         this.context = context;
         this.authValidator = new AuthTokenValidator();
         this.rateLimiter = new RateLimiter();
+        this.browserUiEnabled = Boolean.parseBoolean(System.getProperty("oak.http.browser.ui.enabled", "false"));
         
         // Initialize all handlers
         this.healthHandler = new HealthHandler(
@@ -247,6 +249,16 @@ public class RequestRouter {
                     baseRequest.setHandled(true);
                     return;
                 }
+            }
+
+            if (isBrowserUiRoute(path) && !browserUiEnabled) {
+                ApiErrorUtil.sendJsonError(
+                    response,
+                    HttpServletResponse.SC_GONE,
+                    "Browser UI routes are disabled. Use API surface (/v1/index). Set -Doak.http.browser.ui.enabled=true to enable."
+                );
+                baseRequest.setHandled(true);
+                return;
             }
             
             if ("/explorer".equals(path) && "GET".equals(method)) {
@@ -858,6 +870,15 @@ public class RequestRouter {
             || path.startsWith("/journal.log")
             || path.startsWith("/manifest")
             || path.startsWith("/segments/");
+    }
+
+    private boolean isBrowserUiRoute(String path) {
+        if (path == null) {
+            return false;
+        }
+        return "/explorer".equals(path)
+            || "/api-browser".equals(path)
+            || "/chat".equals(path);
     }
     
     /**
