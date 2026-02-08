@@ -802,13 +802,15 @@ public class ProposalQueueManagerOptimized {
             proposal.setRejectionReason(null);
             proposal.overrideTimeoutTimestamp(System.currentTimeMillis() + restoreTimeoutMs);
             allProposals.put(proposal.getProposalId(), proposal);
-            unverifiedQueue.offer(proposal);
-            restored++;
             
+            // Register wallet mapping BEFORE enqueue to avoid verifier race in mock mode.
             if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
                 ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
                     .registerProposalWallet(proposal.getProposalId(), proposal.getWalletAddress());
             }
+
+            unverifiedQueue.offer(proposal);
+            restored++;
         }
         if (restored > 0 || skippedTerminal > 0) {
             log.info("🔁 Restored {} persisted proposals into unverified queue (skipped terminal: {})",
@@ -1052,15 +1054,17 @@ public class ProposalQueueManagerOptimized {
         proposal.setIntentToken(intentToken); // Set intent token for lazy binary upload (ADR 020)
         proposal.setDurabilityState(DurabilityState.PENDING, null, null);
         
-        // Add to tracking map and unverified queue
+        // Add to tracking map.
         allProposals.put(proposalId, proposal);
-        unverifiedQueue.offer(proposal);
         
-        // Register wallet for mock mode (allows mock payment simulation with correct from address)
+        // Register wallet BEFORE enqueue for mock mode to avoid verifier race.
         if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
             ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
                 .registerProposalWallet(proposalId, walletAddress);
         }
+
+        // Queue after mapping is available to verifier.
+        unverifiedQueue.offer(proposal);
         
         log.debug("📥 Queued proposal {} for EVM verification in epoch {} (tier: {}, queue size: {})", 
             proposalId, epoch, tier, unverifiedQueue.size());
@@ -1135,15 +1139,17 @@ public class ProposalQueueManagerOptimized {
         proposal.setTier(tier);
         proposal.setDurabilityState(DurabilityState.PENDING, null, null);
         
-        // Add to tracking map and unverified queue
+        // Add to tracking map.
         allProposals.put(proposalId, proposal);
-        unverifiedQueue.offer(proposal);
         
-        // Register wallet for mock mode (allows mock payment simulation with correct from address)
+        // Register wallet BEFORE enqueue for mock mode to avoid verifier race.
         if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
             ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
                 .registerProposalWallet(proposalId, walletAddress);
         }
+
+        // Queue after mapping is available to verifier.
+        unverifiedQueue.offer(proposal);
         
         log.info("🗑️  Queued DELETE proposal {} for EVM verification in epoch {} (tier: {}, path: {}, queue size: {})", 
             proposalId, targetEpoch, tier, path, unverifiedQueue.size());
