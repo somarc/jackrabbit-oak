@@ -83,10 +83,16 @@ public class DashboardHandler {
         }
 
         final String role = safeString(clusterState.get("role"), "UNKNOWN").toUpperCase();
-        final String nodeId = String.valueOf(asInt(clusterState.get("memberId"), -1));
-        final String leaderNode = String.valueOf(asInt(clusterState.get("leaderNodeId"), -1));
-        final String term = String.valueOf(asLong(clusterState.get("leadershipTerm"), 0L));
-        final String members = String.valueOf(asInt(clusterState.get("memberCount"), 0));
+        final int nodeIdInt = asInt(clusterState.get("memberId"), -1);
+        final String nodeId = nodeIdInt >= 0 ? String.valueOf(nodeIdInt) : "UNKNOWN";
+        final int leaderNodeInt = resolveLeaderNodeId(clusterState, role, nodeIdInt);
+        final String leaderNode = leaderNodeInt >= 0 ? String.valueOf(leaderNodeInt) : "UNKNOWN";
+        final long termValue = asLong(clusterState.get("leadershipTerm"),
+            asLong(clusterState.get("leadershipTermId"), 0L));
+        final String term = String.valueOf(termValue);
+        final int membersValue = asInt(clusterState.get("memberCount"),
+            asInt(clusterState.get("clusterMemberCount"), 0));
+        final String members = String.valueOf(membersValue);
 
         StringBuilder html = new StringBuilder();
         html.append("<!doctype html><html><head><meta charset='utf-8'>");
@@ -338,6 +344,41 @@ public class DashboardHandler {
 
     private String safeUrl(String url) {
         return url != null ? url : "-";
+    }
+
+    private int resolveLeaderNodeId(Map<String, Object> clusterState, String role, int nodeId) {
+        int leaderNode = asInt(clusterState.get("leaderNodeId"),
+            asInt(clusterState.get("leaderMemberId"), -1));
+        if (leaderNode >= 0) {
+            return leaderNode;
+        }
+        if ("LEADER".equalsIgnoreCase(role) && nodeId >= 0) {
+            return nodeId;
+        }
+        String leaderUrl = safeString(clusterState.get("currentLeader"), null);
+        if (leaderUrl != null) {
+            int fromUrl = nodeIdFromValidatorUrl(leaderUrl);
+            if (fromUrl >= 0) {
+                return fromUrl;
+            }
+        }
+        return -1;
+    }
+
+    private int nodeIdFromValidatorUrl(String url) {
+        if (url == null || url.isEmpty()) {
+            return -1;
+        }
+        try {
+            URL parsed = new URL(url);
+            int port = parsed.getPort();
+            if (port >= 8090 && (port - 8090) % 2 == 0) {
+                return (port - 8090) / 2;
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+        return -1;
     }
 
     private String describeNode(String url, int memberId) {

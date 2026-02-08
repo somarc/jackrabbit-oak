@@ -35,11 +35,11 @@ import static org.mockito.Mockito.when;
 public class RequestRouterTest {
 
     @Test
-    public void testApiBrowserDisabledByDefaultInHeadlessMode() throws Exception {
+    public void testApiBrowserDisabledWhenHeadlessToggleIsFalse() throws Exception {
         String previous = System.getProperty("oak.http.browser.ui.enabled");
         String previousRateLimit = System.getProperty("rate.limit.enabled");
         try {
-            System.clearProperty("oak.http.browser.ui.enabled");
+            System.setProperty("oak.http.browser.ui.enabled", "false");
             System.setProperty("rate.limit.enabled", "false");
 
             ServerContext context = new ServerContext(

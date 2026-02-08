@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
@@ -30,6 +31,8 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import java.util.HashMap;
+import java.util.Map;
 
 public class DashboardHandlerTest {
 
@@ -87,5 +90,36 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("/api-browser"));
         assertTrue(html.contains("/v1/proposals/queue/stats"));
         assertTrue(html.contains("legacy in-process dashboard is retired"));
+    }
+
+    @Test
+    public void testHandleDashboardUsesMemberIdWhenLeaderNodeIdMissing() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        ServerContext context = new ServerContext(
+            mock(FileStore.class),
+            mock(NodeStore.class),
+            Paths.get("/tmp/store"),
+            "http://localhost:8090"
+        );
+
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        Map<String, Object> nativeState = new HashMap<>();
+        nativeState.put("role", "LEADER");
+        nativeState.put("memberId", 0);
+        nativeState.put("clusterMemberCount", 3);
+        nativeState.put("leadershipTermId", 1L);
+        when(engine.getNativeClusterState()).thenReturn(nativeState);
+        when(engine.getReachableValidatorCount()).thenReturn(3);
+        when(engine.getLastHeartbeatTime()).thenReturn(System.currentTimeMillis());
+        context.aeronConsensusEngine = engine;
+
+        DashboardHandler handler = new DashboardHandler(context);
+        handler.handleDashboard(response);
+
+        String html = body.toString();
+        assertTrue(html.contains("<div class='k'>Leader</div><div class='v'>0</div>"));
     }
 }

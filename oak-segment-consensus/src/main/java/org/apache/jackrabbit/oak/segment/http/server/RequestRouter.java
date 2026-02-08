@@ -68,7 +68,7 @@ public class RequestRouter {
         this.context = context;
         this.authValidator = new AuthTokenValidator();
         this.rateLimiter = new RateLimiter();
-        this.browserUiEnabled = Boolean.parseBoolean(System.getProperty("oak.http.browser.ui.enabled", "false"));
+        this.browserUiEnabled = Boolean.parseBoolean(System.getProperty("oak.http.browser.ui.enabled", "true"));
         
         // Initialize all handlers
         this.healthHandler = new HealthHandler(
