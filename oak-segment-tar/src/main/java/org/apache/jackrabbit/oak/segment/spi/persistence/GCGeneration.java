@@ -15,18 +15,16 @@
  * limitations under the License.
  *
  */
-package org.apache.jackrabbit.oak.segment.file.tar;
+package org.apache.jackrabbit.oak.segment.spi.persistence;
 
 import static java.util.Objects.requireNonNull;
 
 import java.lang.ref.WeakReference;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.apache.jackrabbit.oak.segment.spi.persistence.SegmentArchiveEntry;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -59,7 +57,7 @@ public final class GCGeneration {
 
     public static final GCGeneration NULL = new GCGeneration(0, 0, false);
 
-    private static final Set<WeakReference<GCGeneration>> gcGenerations = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private static final Set<WeakReference<GCGeneration>> gcGenerations = ConcurrentHashMap.newKeySet();
 
     public static GCGeneration newGCGeneration(int generation, int fullGeneration, boolean isCompacted) {
         Iterator<WeakReference<GCGeneration>> iterator = gcGenerations.iterator();

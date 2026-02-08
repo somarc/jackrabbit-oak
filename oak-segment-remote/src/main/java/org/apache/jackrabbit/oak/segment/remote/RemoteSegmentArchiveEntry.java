@@ -16,7 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.remote;
 
-import org.apache.jackrabbit.oak.segment.file.tar.GCGeneration;
+import org.apache.jackrabbit.oak.segment.spi.persistence.GCGeneration;
 import org.apache.jackrabbit.oak.segment.spi.persistence.SegmentArchiveEntry;
 
 import java.util.UUID;
