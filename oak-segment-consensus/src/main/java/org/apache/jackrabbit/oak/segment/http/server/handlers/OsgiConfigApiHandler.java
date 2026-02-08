@@ -253,16 +253,16 @@ public class OsgiConfigApiHandler {
             "oak.health.peerProbeMode"));
         schema.add(schemaEntry(
             "aeronClusterTuning.socket_send_buffer_bytes",
-            "int",
-            0,
+            "string",
+            "auto",
             "startup-only",
             "guarded",
             "Aeron socket send buffer size",
             "aeron.socket.so_sndbuf"));
         schema.add(schemaEntry(
             "aeronClusterTuning.socket_receive_buffer_bytes",
-            "int",
-            0,
+            "string",
+            "auto",
             "startup-only",
             "guarded",
             "Aeron socket receive buffer size",
@@ -784,6 +784,10 @@ public class OsgiConfigApiHandler {
         }
         if (a == null || b == null) {
             return false;
+        }
+        if ("auto".equals(String.valueOf(b))) {
+            // "auto" means platform-managed default, not a concrete numeric target.
+            return true;
         }
         if (a instanceof Number && b instanceof Number) {
             double da = ((Number) a).doubleValue();
