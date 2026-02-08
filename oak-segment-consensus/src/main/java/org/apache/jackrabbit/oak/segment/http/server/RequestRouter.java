@@ -304,6 +304,12 @@ public class RequestRouter {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/config/osgi/delta".equals(path) && "GET".equals(method)) {
+                osgiConfigApiHandler.handleDelta(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             if ("/chat".equals(path) && "GET".equals(method)) {
                 dashboardHandler.handleChatUI(response);

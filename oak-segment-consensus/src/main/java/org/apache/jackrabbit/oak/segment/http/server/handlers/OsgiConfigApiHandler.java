@@ -120,6 +120,64 @@ public class OsgiConfigApiHandler {
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
 
+    public void handleDelta(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType("application/json; charset=UTF-8");
+
+        List<Map<String, Object>> schema = buildSchema();
+        Map<String, Object> effective = flattenComponents(buildComponents());
+        Map<String, Map<String, Object>> schemaByKey = new LinkedHashMap<>();
+        for (Map<String, Object> entry : schema) {
+            Object rawKey = entry.get("key");
+            if (rawKey != null) {
+                schemaByKey.put(String.valueOf(rawKey), entry);
+            }
+        }
+
+        List<Map<String, Object>> changed = new ArrayList<>();
+        List<Map<String, Object>> unchanged = new ArrayList<>();
+        for (Map.Entry<String, Map<String, Object>> schemaEntry : schemaByKey.entrySet()) {
+            String key = schemaEntry.getKey();
+            Map<String, Object> meta = schemaEntry.getValue();
+            Object defaultValue = meta.get("default");
+            Object currentValue = effective.get(key);
+
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("key", key);
+            row.put("current", currentValue);
+            row.put("default", defaultValue);
+            row.put("risk", meta.get("risk"));
+            row.put("reloadMode", meta.get("reloadMode"));
+            row.put("changed", !looselyEqual(currentValue, defaultValue));
+
+            if (Boolean.TRUE.equals(row.get("changed"))) {
+                changed.add(row);
+            } else {
+                unchanged.add(row);
+            }
+        }
+
+        int expertChanged = countRisk(changed, "expert-only");
+        int guardedChanged = countRisk(changed, "guarded");
+        int safeChanged = countRisk(changed, "safe");
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("totalKeys", schemaByKey.size());
+        summary.put("changedKeys", changed.size());
+        summary.put("unchangedKeys", unchanged.size());
+        summary.put("expertOnlyChanged", expertChanged);
+        summary.put("guardedChanged", guardedChanged);
+        summary.put("safeChanged", safeChanged);
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contractVersion", "config.osgi.delta.v1");
+        payload.put("generatedAtMs", System.currentTimeMillis());
+        payload.put("summary", summary);
+        payload.put("changed", changed);
+        payload.put("unchanged", unchanged);
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
+    }
+
     private Map<String, Object> buildComponents() {
         Map<String, Object> components = new LinkedHashMap<>();
         components.put("aeronClusterTuning", AeronClusterTuningIntrospection.effectiveValues());
@@ -699,6 +757,51 @@ public class OsgiConfigApiHandler {
 
     private static boolean hasText(String value) {
         return value != null && !value.trim().isEmpty();
+    }
+
+    private static Map<String, Object> flattenComponents(Map<String, Object> components) {
+        Map<String, Object> flat = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> component : components.entrySet()) {
+            String componentName = component.getKey();
+            Object rawValue = component.getValue();
+            if (!(rawValue instanceof Map)) {
+                continue;
+            }
+            Map<?, ?> values = (Map<?, ?>) rawValue;
+            for (Map.Entry<?, ?> valueEntry : values.entrySet()) {
+                if (valueEntry.getKey() == null) {
+                    continue;
+                }
+                flat.put(componentName + "." + valueEntry.getKey(), valueEntry.getValue());
+            }
+        }
+        return flat;
+    }
+
+    private static boolean looselyEqual(Object a, Object b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        if (a instanceof Number && b instanceof Number) {
+            double da = ((Number) a).doubleValue();
+            double db = ((Number) b).doubleValue();
+            return Double.compare(da, db) == 0;
+        }
+        return String.valueOf(a).equals(String.valueOf(b));
+    }
+
+    private static int countRisk(List<Map<String, Object>> rows, String risk) {
+        int count = 0;
+        for (Map<String, Object> row : rows) {
+            Object raw = row.get("risk");
+            if (raw != null && risk.equals(String.valueOf(raw))) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static int readInt(String key, int defaultValue) {

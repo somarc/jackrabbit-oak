@@ -126,6 +126,7 @@ public class DashboardHandler {
         html.append("<a class='link' href='/v1/proposals/queue/stats'><strong>/v1/proposals/queue/stats</strong><div class='muted'>Queue/finality/backpressure counters.</div></a>");
         html.append("<a class='link' href='/v1/config/osgi'><strong>/v1/config/osgi</strong><div class='muted'>Effective OSGi tuning values.</div></a>");
         html.append("<a class='link' href='/v1/config/osgi/coverage'><strong>/v1/config/osgi/coverage</strong><div class='muted'>Read-only config coverage and gaps.</div></a>");
+        html.append("<a class='link' href='/v1/config/osgi/delta'><strong>/v1/config/osgi/delta</strong><div class='muted'>Current values vs defaults.</div></a>");
         html.append("<a class='link' href='/v1/explorer/summary'><strong>/v1/explorer/summary</strong><div class='muted'>Explorer contract for external blockscan UI.</div></a>");
         html.append("<a class='link' href='/health'><strong>/health</strong><div class='muted'>Shallow health.</div></a>");
         html.append("<a class='link' href='/health/deep'><strong>/health/deep</strong><div class='muted'>Deep dependency health.</div></a>");
@@ -151,6 +152,7 @@ public class DashboardHandler {
         addIndexEntry(endpoints, "GET", "/v1/config/osgi/schema", "OSGi config metadata schema", "Configuration");
         addIndexEntry(endpoints, "GET", "/v1/config/osgi/sources", "OSGi config source map", "Configuration");
         addIndexEntry(endpoints, "GET", "/v1/config/osgi/coverage", "OSGi config coverage and missing keys", "Configuration");
+        addIndexEntry(endpoints, "GET", "/v1/config/osgi/delta", "OSGi config values drift from defaults", "Configuration");
         addIndexEntry(endpoints, "GET", "/health", "Shallow health", "Health");
         addIndexEntry(endpoints, "GET", "/health/deep", "Deep health", "Health");
         addIndexEntry(endpoints, "GET", "/api/metrics", "Consensus and replication metrics", "Health");
