@@ -1,0 +1,85 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.jackrabbit.oak.segment.http.server.handlers;
+
+import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.junit.Test;
+
+import javax.servlet.http.HttpServletResponse;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.nio.file.Paths;
+
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+public class DashboardHandlerTest {
+
+    @Test
+    public void testHandleApiIndexIncludesCoreEndpoints() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        ServerContext context = new ServerContext(
+            mock(FileStore.class),
+            mock(NodeStore.class),
+            Paths.get("/tmp/store"),
+            "http://localhost:8090"
+        );
+        DashboardHandler handler = new DashboardHandler(context);
+
+        handler.handleApiIndex(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("application/json; charset=UTF-8");
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"index.v1\""));
+        assertTrue(json.contains("\"path\":\"/v1/index\""));
+        assertTrue(json.contains("\"path\":\"/v1/proposals/queue/stats\""));
+        assertTrue(json.contains("\"path\":\"/v1/explorer/summary\""));
+    }
+
+    @Test
+    public void testHandleDashboardRendersApiFirstLanding() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        ServerContext context = new ServerContext(
+            mock(FileStore.class),
+            mock(NodeStore.class),
+            Paths.get("/tmp/store"),
+            "http://localhost:8090"
+        );
+        DashboardHandler handler = new DashboardHandler(context);
+
+        handler.handleDashboard(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("text/html; charset=UTF-8");
+        String html = body.toString();
+        assertTrue(html.contains("Oak Control Plane Home"));
+        assertTrue(html.contains("/api-browser"));
+        assertTrue(html.contains("/v1/proposals/queue/stats"));
+        assertTrue(html.contains("legacy in-process dashboard is retired"));
+    }
+}

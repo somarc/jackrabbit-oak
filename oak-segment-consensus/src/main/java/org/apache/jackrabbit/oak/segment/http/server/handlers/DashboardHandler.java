@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.DashboardDataService;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import javax.servlet.http.HttpServletResponse;
@@ -31,7 +32,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -51,437 +54,197 @@ public class DashboardHandler {
     }
     
     /**
-     * Handle dashboard homepage with live statistics.
+     * Handle root landing page for operators.
+     *
+     * <p>This endpoint intentionally avoids rendering the legacy dashboard UI.
+     * It serves a compact API-first entry page that points operators to
+     * the API browser, health endpoints, and external dashboard.</p>
      */
     public void handleDashboard(HttpServletResponse response) throws IOException {
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType("text/html; charset=UTF-8");
+        final String appName = "Oak Segment Consensus";
+        final String version = DashboardHandler.class.getPackage() != null
+                && DashboardHandler.class.getPackage().getImplementationVersion() != null
+                ? DashboardHandler.class.getPackage().getImplementationVersion()
+                : "dev";
+        final String externalDashboardUrl = System.getProperty("oak.dashboard.external.url", "");
+        final String uptime = formatUptime(java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime());
+        final String now = formatTimestamp(System.currentTimeMillis());
 
-        // Load template from resources
-        String template = loadTemplate("/validator-dashboard-template.html");
-        
-        // Get wallet address from keystore
-        String walletAddress = getValidatorWalletAddress();
-        
-        // Get stats
-        Map<String, Object> clusterState = dataService.getAeronClusterState();
-        DashboardDataService.FileStoreStats fileStoreStats = dataService.getFileStoreStats();
-        int clientCount = context.registeredClients.size();
-        
-        // Get blockchain mode
-        BlockchainConfig config = BlockchainConfig.getInstance();
-        String modeClass, modeIcon, modeLabel, modeDetail;
-        switch (config.getMode()) {
-            case MOCK:
-                modeClass = "mode-mock";
-                modeIcon = "🎭";
-                modeLabel = "MOCK MODE";
-                modeDetail = "Instant payment simulation • No blockchain verification";
-                break;
-            case SEPOLIA:
-                modeClass = "mode-sepolia";
-                modeIcon = "🧪";
-                modeLabel = "SEPOLIA TESTNET";
-                modeDetail = "Real blockchain verification • Test ETH";
-                break;
-            case MAINNET:
-                modeClass = "mode-mainnet";
-                modeIcon = "🔴";
-                modeLabel = "ETHEREUM MAINNET";
-                modeDetail = "PRODUCTION • Real ETH";
-                break;
-            default:
-                modeClass = "mode-mock";
-                modeIcon = "❓";
-                modeLabel = "UNKNOWN MODE";
-                modeDetail = "Configuration error";
+        Map<String, Object> clusterState = Collections.emptyMap();
+        try {
+            clusterState = dataService.getAeronClusterState();
+        } catch (Exception ignored) {
+            // Keep landing page available even if cluster probing fails.
         }
-        
-        // Build compact stats bar HTML
-        StringBuilder statsItems = new StringBuilder();
-        
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // ADR 028: CLUSTER HEALTH INDICATOR (P1)
-        // Shows 🟢 Healthy, 🟡 Degraded, or 🔴 Unhealthy based on cluster state
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        String healthIcon = "🟢";
-        String healthLabel = "Healthy";
-        String healthClass = "health-green";
-        String healthTooltip = "Cluster is healthy and accepting proposals";
-        
-        if (context.aeronConsensusEngine != null) {
-            boolean isHealthy = context.aeronConsensusEngine.isClusterHealthy();
-            if (!isHealthy) {
-                String reason = context.aeronConsensusEngine.getUnhealthyReason();
-                if ("leader_election_in_progress".equals(reason)) {
-                    healthIcon = "🟡";
-                    healthLabel = "Election";
-                    healthClass = "health-yellow";
-                    healthTooltip = "Leader election in progress - proposals may be delayed";
-                } else {
-                    healthIcon = "🔴";
-                    healthLabel = "Unhealthy";
-                    healthClass = "health-red";
-                    healthTooltip = "Cluster unhealthy: " + reason + " - proposals will be rejected";
-                }
-            }
-        } else {
-            healthIcon = "🔴";
-            healthLabel = "No Engine";
-            healthClass = "health-red";
-            healthTooltip = "Consensus engine not initialized";
+        if (clusterState == null) {
+            clusterState = Collections.emptyMap();
         }
-        
-        statsItems.append("<div class='stat-item health-item' title='").append(healthTooltip).append("'>");
-        statsItems.append("<span class='stat-icon'>").append(healthIcon).append("</span>");
-        statsItems.append("<div class='stat-content'>");
-        statsItems.append("<span class='stat-label'>Health</span>");
-        statsItems.append("<span class='stat-value ").append(healthClass).append("'>").append(healthLabel).append("</span>");
-        statsItems.append("</div></div>");
-        
-        if (clusterState != null) {
-            // Role
-            String role = clusterState.get("role").toString();
-            String roleClass = role.equals("LEADER") ? "role-leader" : "role-follower";
-            statsItems.append("<div class='stat-item'>");
-            statsItems.append("<span class='stat-icon'>").append(role.equals("LEADER") ? "👑" : "🔗").append("</span>");
-            statsItems.append("<div class='stat-content'>");
-            statsItems.append("<span class='stat-label'>Role</span>");
-            statsItems.append("<span class='stat-value ").append(roleClass).append("'>").append(role.toUpperCase()).append("</span>");
-            statsItems.append("</div></div>");
-            
-            // Node ID - use Aeron memberId (0, 1, 2)
-            int cardMemberId = clusterState.containsKey("memberId") ? ((Number) clusterState.get("memberId")).intValue() : 0;
-            statsItems.append("<div class='stat-item'>");
-            statsItems.append("<span class='stat-icon'>#</span>");
-            statsItems.append("<div class='stat-content'>");
-            statsItems.append("<span class='stat-label'>Node</span>");
-            statsItems.append("<span class='stat-value'>").append(cardMemberId).append("</span>");
-            statsItems.append("</div></div>");
-            
-            // Members
-            statsItems.append("<div class='stat-item'>");
-            statsItems.append("<span class='stat-icon'>⚡</span>");
-            statsItems.append("<div class='stat-content'>");
-            statsItems.append("<span class='stat-label'>Cluster</span>");
-            statsItems.append("<span class='stat-value'>").append(clusterState.get("memberCount")).append("/3</span>");
-            statsItems.append("</div></div>");
+
+        final String role = safeString(clusterState.get("role"), "UNKNOWN").toUpperCase();
+        final String nodeId = String.valueOf(asInt(clusterState.get("memberId"), -1));
+        final String leaderNode = String.valueOf(asInt(clusterState.get("leaderNodeId"), -1));
+        final String term = String.valueOf(asLong(clusterState.get("leadershipTerm"), 0L));
+        final String members = String.valueOf(asInt(clusterState.get("memberCount"), 0));
+
+        StringBuilder html = new StringBuilder();
+        html.append("<!doctype html><html><head><meta charset='utf-8'>");
+        html.append("<meta name='viewport' content='width=device-width, initial-scale=1'>");
+        html.append("<title>").append(FormatUtils.escapeHtml(appName)).append(" Control Plane</title>");
+        html.append("<style>");
+        html.append("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0b1020;color:#e5e7eb;margin:0;padding:24px;}");
+        html.append(".wrap{max-width:960px;margin:0 auto;}h1{margin:0 0 8px 0;font-size:30px;}p{color:#9ca3af;}a{color:#93c5fd;text-decoration:none;}a:hover{text-decoration:underline;}");
+        html.append(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:18px 0;}");
+        html.append(".card{background:#111827;border:1px solid #1f2937;border-radius:10px;padding:12px;} .k{color:#9ca3af;font-size:12px;} .v{font-size:20px;font-weight:700;margin-top:4px;}");
+        html.append(".links{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin:16px 0;}");
+        html.append(".link{background:#111827;border:1px solid #1f2937;border-radius:10px;padding:10px 12px;display:block;}");
+        html.append(".muted{font-size:12px;color:#94a3b8;} .warn{margin-top:16px;padding:10px 12px;border-left:3px solid #f59e0b;background:#111827;border-radius:8px;}");
+        html.append("</style></head><body><div class='wrap'>");
+        html.append("<h1>Oak Control Plane Home</h1>");
+        html.append("<p>API-first runtime. The legacy in-process dashboard is retired from this entry point.</p>");
+        html.append("<div class='grid'>");
+        html.append("<div class='card'><div class='k'>Build</div><div class='v'>").append(FormatUtils.escapeHtml(version)).append("</div></div>");
+        html.append("<div class='card'><div class='k'>Role</div><div class='v'>").append(FormatUtils.escapeHtml(role)).append("</div></div>");
+        html.append("<div class='card'><div class='k'>Node</div><div class='v'>").append(FormatUtils.escapeHtml(nodeId)).append("</div></div>");
+        html.append("<div class='card'><div class='k'>Leader</div><div class='v'>").append(FormatUtils.escapeHtml(leaderNode)).append("</div></div>");
+        html.append("<div class='card'><div class='k'>Term</div><div class='v'>").append(FormatUtils.escapeHtml(term)).append("</div></div>");
+        html.append("<div class='card'><div class='k'>Members</div><div class='v'>").append(FormatUtils.escapeHtml(members)).append("</div></div>");
+        html.append("<div class='card'><div class='k'>Uptime</div><div class='v'>").append(FormatUtils.escapeHtml(uptime)).append("</div></div>");
+        html.append("<div class='card'><div class='k'>Updated</div><div class='v'>").append(FormatUtils.escapeHtml(now)).append("</div></div>");
+        html.append("</div>");
+        html.append("<h2>Surfaces</h2>");
+        html.append("<div class='links'>");
+        html.append("<a class='link' href='/api-browser'><strong>API Browser</strong><div class='muted'>Interactive endpoint catalog and tester.</div></a>");
+        html.append("<a class='link' href='/v1/consensus/status'><strong>/v1/consensus/status</strong><div class='muted'>Consensus status and leader context.</div></a>");
+        html.append("<a class='link' href='/v1/proposals/queue/stats'><strong>/v1/proposals/queue/stats</strong><div class='muted'>Queue/finality/backpressure counters.</div></a>");
+        html.append("<a class='link' href='/v1/explorer/summary'><strong>/v1/explorer/summary</strong><div class='muted'>Explorer contract for external blockscan UI.</div></a>");
+        html.append("<a class='link' href='/health'><strong>/health</strong><div class='muted'>Shallow health.</div></a>");
+        html.append("<a class='link' href='/health/deep'><strong>/health/deep</strong><div class='muted'>Deep dependency health.</div></a>");
+        if (externalDashboardUrl != null && !externalDashboardUrl.trim().isEmpty()) {
+            html.append("<a class='link' href='").append(FormatUtils.escapeHtml(externalDashboardUrl)).append("'><strong>External Ops Dashboard</strong><div class='muted'>Configured via -Doak.dashboard.external.url.</div></a>");
         }
-        
-        // Store size
-        String sizeFormatted = FormatUtils.formatBytes(fileStoreStats.size);
-        statsItems.append("<div class='stat-item'>");
-        statsItems.append("<span class='stat-icon'>💾</span>");
-        statsItems.append("<div class='stat-content'>");
-        statsItems.append("<span class='stat-label'>Store</span>");
-        statsItems.append("<span class='stat-value'>").append(sizeFormatted).append("</span>");
-        statsItems.append("</div></div>");
-        
-        // Segments
-        statsItems.append("<div class='stat-item'>");
-        statsItems.append("<span class='stat-icon'>📦</span>");
-        statsItems.append("<div class='stat-content'>");
-        statsItems.append("<span class='stat-label'>Segments</span>");
-        statsItems.append("<span class='stat-value'>").append(fileStoreStats.segmentCount).append("</span>");
-        statsItems.append("</div></div>");
-        
-        // Connected peers
-        statsItems.append("<div class='stat-item'>");
-        statsItems.append("<span class='stat-icon'>🖥️</span>");
-        statsItems.append("<div class='stat-content'>");
-        statsItems.append("<span class='stat-label'>Peers</span>");
-        statsItems.append("<span class='stat-value'>").append(clientCount).append("</span>");
-        statsItems.append("</div></div>");
-        
-        // Binary store
-        String blobStoreType = System.getProperty("blobstore.type", "file");
-        statsItems.append("<div class='stat-item'>");
-        statsItems.append("<span class='stat-icon'>").append(blobStoreType.equals("ipfs") ? "🌐" : "📁").append("</span>");
-        statsItems.append("<div class='stat-content'>");
-        statsItems.append("<span class='stat-label'>Binaries</span>");
-        statsItems.append("<span class='stat-value'>").append(blobStoreType.toUpperCase()).append("</span>");
-        statsItems.append("</div></div>");
-        
-        // Cluster wallet address (ADR 046: one wallet per cluster, not per node)
-        String truncatedWallet = walletAddress.length() > 20 
-            ? walletAddress.substring(0, 10) + "..." + walletAddress.substring(walletAddress.length() - 8)
-            : walletAddress;
-        statsItems.append("<div class='stat-item wallet-item'>");
-        statsItems.append("<span class='stat-icon'>💎</span>");
-        statsItems.append("<div class='stat-content'>");
-        statsItems.append("<span class='stat-label'>Cluster</span>");
-        statsItems.append("<span class='wallet-addr' onclick=\"navigator.clipboard.writeText('").append(walletAddress).append("'); this.querySelector('.copy-icon').textContent='✓'; setTimeout(() => this.querySelector('.copy-icon').textContent='📋', 1500);\" title='Cluster Wallet (ADR 046): ").append(walletAddress).append("'>");
-        statsItems.append(truncatedWallet);
-        statsItems.append("<span class='copy-icon'>📋</span>");
-        statsItems.append("</span>");
-        statsItems.append("</div></div>");
-        
-        // Mode indicator (far right)
-        statsItems.append("<div class='stat-item mode-item'>");
-        statsItems.append("<span class='stat-icon'>").append(modeIcon).append("</span>");
-        statsItems.append("<div class='stat-content'>");
-        statsItems.append("<span class='stat-label'>Mode</span>");
-        statsItems.append("<span class='stat-value ").append(modeClass).append("'>").append(modeLabel).append("</span>");
-        statsItems.append("</div></div>");
-        
-        // Build cluster visualization data
-        String node0Class = "", node1Class = "", node2Class = "";
-        String role0 = "", role1 = "", role2 = "";
-        String lineClass = "";
-        String consensusInfo = "";
-        
-        if (clusterState != null) {
-            // Get actual Aeron member ID (0, 1, 2) - NOT the URL hash!
-            int selfMemberId = 0; // Default
-            if (clusterState.containsKey("memberId")) {
-                selfMemberId = ((Number) clusterState.get("memberId")).intValue();
-            } else if (context.aeronConsensusEngine != null && context.aeronConsensusEngine.getCluster() != null) {
-                selfMemberId = context.aeronConsensusEngine.getCluster().memberId();
-            }
-            
-            int memberCount = clusterState.containsKey("memberCount") ? ((Number) clusterState.get("memberCount")).intValue() : 3;
-            
-            // Determine if THIS node is the leader from the role field
-            String selfRole = clusterState.containsKey("role") ? clusterState.get("role").toString() : "FOLLOWER";
-            boolean iAmLeader = "LEADER".equalsIgnoreCase(selfRole);
-            
-            // Build node classes
-            // IMPORTANT: We only know OUR role with certainty. Other nodes show as "follower" (unknown).
-            // We do NOT assume which node is leader if we're not - that was causing incorrect display.
-            String[] nodeClasses = new String[3];
-            String[] nodeRoles = new String[3];
-            
-            for (int i = 0; i < 3; i++) {
-                StringBuilder classes = new StringBuilder();
-                
-                if (i == selfMemberId) {
-                    // This is US - we know our role for certain
-                    classes.append("self ");
-                    if (iAmLeader) {
-                        classes.append("leader");
-                        nodeRoles[i] = "LEADER (YOU)";
-                    } else {
-                        classes.append("follower");
-                        nodeRoles[i] = "FOLLOWER (YOU)";
-                    }
-                } else {
-                    // Other nodes - we don't know their role, show as follower (neutral)
-                    // DO NOT assume who is leader - only the leader node knows for sure
-                    classes.append("follower");
-                    nodeRoles[i] = "FOLLOWER";
-                }
-                nodeClasses[i] = classes.toString().trim();
-            }
-            
-            node0Class = nodeClasses[0];
-            node1Class = nodeClasses[1];
-            node2Class = nodeClasses[2];
-            role0 = nodeRoles[0];
-            role1 = nodeRoles[1];
-            role2 = nodeRoles[2];
-            
-            // Determine line activity (all active if quorum reached)
-            lineClass = memberCount >= 2 ? "active" : "";
-            
-            // Consensus info
-            long term = clusterState.containsKey("leadershipTerm") ? ((Number) clusterState.get("leadershipTerm")).longValue() : 0;
-            long messagesReplicated = clusterState.containsKey("messagesReplicated") ? ((Number) clusterState.get("messagesReplicated")).longValue() : 0;
-            consensusInfo = String.format("Leadership Term: %d | Quorum: %d/3 | Messages Replicated: %d",
-                term, memberCount, messagesReplicated);
-        }
-        
-        // Get epoch finality data from ProposalQueueManager
-        String currentEpoch = "N/A";
-        String previousEpoch = "N/A";
-        String finalizedEpoch = "N/A";
-        String stage1Proposals = "0";
-        String stage2Proposals = "0";
-        
-        // EVM Verification Stats (queue level)
-        String unverifiedCount = "0";
-        String verifiedCount = "0";
-        String rejectedCount = "0";
-        
-        // API-level stats (before queue)
-        String apiAccepted = "0";
-        String apiRejected = "0";
-        
-        // Proposal type counts
-        String writeProposals = "0";
-        String deleteProposals = "0";
-        String totalProposals = "0";
-        String totalFinalized = "0";
-        
-        if (context.proposalQueueManager != null) {
-            try {
-                Map<String, Object> queueStats = context.proposalQueueManager.getQueueStats();
-                
-                // Epoch data
-                long currEpoch = queueStats.containsKey("currentEpoch") ? ((Number) queueStats.get("currentEpoch")).longValue() : 0;
-                long finEpoch = queueStats.containsKey("finalizedEpoch") ? ((Number) queueStats.get("finalizedEpoch")).longValue() : 0;
-                
-                currentEpoch = String.valueOf(currEpoch);
-                previousEpoch = String.valueOf(currEpoch - 1);
-                finalizedEpoch = String.valueOf(finEpoch);
-                
-                // Stage 1 = unverified queue (EVM verification in progress)
-                int unverifiedQueueSize = queueStats.containsKey("unverifiedQueueSize") ? ((Number) queueStats.get("unverifiedQueueSize")).intValue() : 0;
-                stage1Proposals = String.valueOf(unverifiedQueueSize);
-                
-                // Stage 2 = verified but waiting for finality (batch queue)
-                int batchQueueSize = queueStats.containsKey("batchQueueSize") ? ((Number) queueStats.get("batchQueueSize")).intValue() : 0;
-                long pendingVerified = queueStats.containsKey("verifiedCount") ? ((Number) queueStats.get("verifiedCount")).longValue() : 0;
-                stage2Proposals = String.valueOf(batchQueueSize + pendingVerified);
-                
-                // EVM Verification Stats - use PERSISTENT counters (survive proposal removal)
-                // Current queue stats (point-in-time)
-                long pending = queueStats.containsKey("pendingCount") ? ((Number) queueStats.get("pendingCount")).longValue() : 0;
-                
-                // Persistent counters - track ALL verified/rejected ever, not just current queue
-                long totalVerified = queueStats.containsKey("totalVerifiedCount") ? ((Number) queueStats.get("totalVerifiedCount")).longValue() : 0;
-                long totalRejected = queueStats.containsKey("totalRejectedCount") ? ((Number) queueStats.get("totalRejectedCount")).longValue() : 0;
-                
-                // Stage 1 = proposals in EVM verification (pending + unverified queue)
-                unverifiedCount = String.valueOf(pending + unverifiedQueueSize);
-                // Use persistent counters for dashboard (accumulated over time, not just current queue)
-                verifiedCount = String.valueOf(totalVerified);
-                rejectedCount = String.valueOf(totalRejected);
-                
-                // Proposal type counts
-                long writes = queueStats.containsKey("writeProposals") ? ((Number) queueStats.get("writeProposals")).longValue() : 0;
-                long deletes = queueStats.containsKey("deleteProposals") ? ((Number) queueStats.get("deleteProposals")).longValue() : 0;
-                long total = queueStats.containsKey("totalProposals") ? ((Number) queueStats.get("totalProposals")).longValue() : 0;
-                long finalized = queueStats.containsKey("totalFinalizedCount") ? ((Number) queueStats.get("totalFinalizedCount")).longValue() : 0;
-                
-                writeProposals = String.valueOf(writes);
-                deleteProposals = String.valueOf(deletes);
-                totalProposals = String.valueOf(total);
-                totalFinalized = String.valueOf(finalized);
-                
-            } catch (Exception e) {
-                // Keep defaults
-            }
-        }
-        
-        // API-level stats from ServerContext
-        apiAccepted = String.valueOf(context.apiAcceptedRequests.get());
-        apiRejected = String.valueOf(context.apiRejectedRequests.get());
-        
-        // TarMK Growth Stats
-        DashboardDataService.TarMkGrowthStats tarStats = dataService.getTarMkGrowthStats();
-        String tarFileCount = String.valueOf(tarStats.tarFileCount);
-        String segmentCount = String.valueOf(tarStats.segmentCount);
-        String tarTotalSize = FormatUtils.formatBytes(tarStats.totalSize);
-        String tarAvgSize = FormatUtils.formatBytes(tarStats.averageTarSize);
-        String tarMaxSize = FormatUtils.formatBytes(tarStats.largestTarSize);
-        String tarMinSize = FormatUtils.formatBytes(tarStats.smallestTarSize);
-        String packingEfficiency = String.format("%.1f", tarStats.packingEfficiency);
-        
-        // Packing efficiency status and colors
-        String packingStatus, packingColor, packingBorderColor;
-        if (tarStats.packingEfficiency < 10) {
-            packingStatus = "🔴 Many small TAR files (inefficient)";
-            packingColor = "#f87171";
-            packingBorderColor = "#dc2626";
-        } else if (tarStats.packingEfficiency < 50) {
-            packingStatus = "🟡 Moderate packing efficiency";
-            packingColor = "#fbbf24";
-            packingBorderColor = "#f59e0b";
-        } else {
-            packingStatus = "🟢 Good packing efficiency";
-            packingColor = "#4ade80";
-            packingBorderColor = "#22c55e";
-        }
-        
-        // Storage capacity (2 TB upper bound)
-        long maxCapacity = 2L * 1024 * 1024 * 1024 * 1024; // 2 TB
-        double storagePercent = (double) tarStats.totalSize / maxCapacity * 100.0;
-        String storagePercentStr = String.format("%.1f", storagePercent);
-        String storageStatus, storageStatusColor, storageStatusIcon;
-        double taxMultiplier;
-        if (storagePercent < 50) {
-            storageStatus = "Normal";
-            storageStatusColor = "#4ade80";
-            storageStatusIcon = "✅";
-            taxMultiplier = 1.0;
-        } else if (storagePercent < 75) {
-            storageStatus = "Elevated";
-            storageStatusColor = "#fbbf24";
-            storageStatusIcon = "⚠️";
-            taxMultiplier = 1.5;
-        } else if (storagePercent < 90) {
-            storageStatus = "High";
-            storageStatusColor = "#f97316";
-            storageStatusIcon = "🔶";
-            taxMultiplier = 2.0;
-        } else {
-            storageStatus = "Critical";
-            storageStatusColor = "#ef4444";
-            storageStatusIcon = "🚨";
-            taxMultiplier = 3.0;
-        }
-        String taxMultiplierStr = String.format("%.1f", taxMultiplier);
-        
-        // Replace placeholders in template
-        String html = template
-            .replace("{{VALIDATOR_TITLE}}", "Validator Node " + (clusterState != null && clusterState.containsKey("memberId") ? clusterState.get("memberId") : "?") + " | Blockchain AEM")
-            .replace("{{WALLET_ADDRESS}}", walletAddress)
-            .replace("{{MODE_CLASS}}", modeClass)
-            .replace("{{MODE_ICON}}", modeIcon)
-            .replace("{{MODE_LABEL}}", modeLabel)
-            .replace("{{MODE_DETAIL}}", modeDetail)
-            .replace("{{STATS_ITEMS}}", statsItems.toString())
-            // Cluster visualization
-            .replace("{{NODE_0_CLASS}}", node0Class)
-            .replace("{{NODE_1_CLASS}}", node1Class)
-            .replace("{{NODE_2_CLASS}}", node2Class)
-            .replace("{{ROLE_0}}", role0)
-            .replace("{{ROLE_1}}", role1)
-            .replace("{{ROLE_2}}", role2)
-            .replace("{{LINE_0_1}}", lineClass)
-            .replace("{{LINE_1_2}}", lineClass)
-            .replace("{{LINE_0_2}}", lineClass)
-            .replace("{{CONSENSUS_INFO}}", consensusInfo)
-            // Epoch Finality Pipeline
-            .replace("{{CURRENT_EPOCH}}", currentEpoch)
-            .replace("{{PREVIOUS_EPOCH}}", previousEpoch)
-            .replace("{{FINALIZED_EPOCH}}", finalizedEpoch)
-            .replace("{{STAGE1_PROPOSALS}}", stage1Proposals)
-            .replace("{{STAGE2_PROPOSALS}}", stage2Proposals)
-            // EVM Verification Stats
-            .replace("{{UNVERIFIED_COUNT}}", unverifiedCount)
-            .replace("{{VERIFIED_COUNT}}", verifiedCount)
-            .replace("{{REJECTED_COUNT}}", rejectedCount)
-            // Proposal counts
-            .replace("{{WRITE_PROPOSALS}}", writeProposals)
-            .replace("{{DELETE_PROPOSALS}}", deleteProposals)
-            .replace("{{TOTAL_PROPOSALS}}", totalProposals)
-            .replace("{{TOTAL_FINALIZED}}", totalFinalized)
-            // API-level stats
-            .replace("{{API_ACCEPTED}}", apiAccepted)
-            .replace("{{API_REJECTED}}", apiRejected)
-            // TarMK Growth Stats
-            .replace("{{TAR_FILE_COUNT}}", tarFileCount)
-            .replace("{{SEGMENT_COUNT}}", segmentCount)
-            .replace("{{TAR_TOTAL_SIZE}}", tarTotalSize)
-            .replace("{{TAR_AVG_SIZE}}", tarAvgSize)
-            .replace("{{TAR_MAX_SIZE}}", tarMaxSize)
-            .replace("{{TAR_MIN_SIZE}}", tarMinSize)
-            .replace("{{PACKING_EFFICIENCY}}", packingEfficiency)
-            .replace("{{PACKING_STATUS}}", packingStatus)
-            .replace("{{PACKING_COLOR}}", packingColor)
-            .replace("{{PACKING_BORDER_COLOR}}", packingBorderColor)
-            // Storage Capacity
-            .replace("{{STORAGE_PERCENT}}", storagePercentStr)
-            .replace("{{STORAGE_STATUS}}", storageStatus)
-            .replace("{{STORAGE_STATUS_COLOR}}", storageStatusColor)
-            .replace("{{STORAGE_STATUS_ICON}}", storageStatusIcon)
-            .replace("{{TAX_MULTIPLIER}}", taxMultiplierStr);
-        
-        response.getWriter().write(html);
+        html.append("</div>");
+        html.append("<div class='warn'><strong>Safety:</strong> This page is read-only. Use signed API/CLI flows for mutating operations.</div>");
+        html.append("</div></body></html>");
+        response.getWriter().write(html.toString());
+    }
+
+    /**
+     * API discovery index for tooling and API Browser dynamic catalog rendering.
+     */
+    public void handleApiIndex(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType("application/json; charset=UTF-8");
+
+        List<Map<String, Object>> endpoints = new ArrayList<>();
+        addIndexEntry(endpoints, "GET", "/v1/index", "Live API discovery index", "Discovery");
+        addIndexEntry(endpoints, "GET", "/health", "Shallow health", "Health");
+        addIndexEntry(endpoints, "GET", "/health/deep", "Deep health", "Health");
+        addIndexEntry(endpoints, "GET", "/api/metrics", "Consensus and replication metrics", "Health");
+        addIndexEntry(endpoints, "GET", "/metrics", "Prometheus metrics", "Health");
+
+        addIndexEntry(endpoints, "GET", "/v1/consensus/status", "Consensus status", "Consensus");
+        addIndexEntry(endpoints, "POST", "/v1/propose-write", "Propose signed write", "Consensus");
+        addIndexEntry(endpoints, "POST", "/v1/propose-delete", "Propose signed delete", "Consensus");
+        addIndexEntry(endpoints, "GET", "/v1/proposals/pending/count", "Pending proposal count", "Consensus");
+        addIndexEntry(endpoints, "GET", "/v1/proposals/queue/stats", "Queue and finality counters", "Consensus");
+        addIndexEntry(endpoints, "GET", "/v1/proposals/epochs", "Proposal epoch flow", "Consensus");
+        addIndexEntry(endpoints, "GET", "/v1/proposals/{id}/status", "Proposal status by id", "Consensus");
+        addIndexEntry(endpoints, "GET", "/v1/head", "Head status", "Consensus");
+
+        addIndexEntry(endpoints, "GET", "/v1/explorer/summary", "Explorer summary contract", "Explorer");
+        addIndexEntry(endpoints, "GET", "/v1/explorer/epochs", "Explorer epoch flow", "Explorer");
+        addIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail", "Explorer");
+        addIndexEntry(endpoints, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail", "Explorer");
+        addIndexEntry(endpoints, "GET", "/explorer", "Explorer UI", "Explorer");
+        addIndexEntry(endpoints, "GET", "/api/explore?path=/", "Node tree browse API", "Explorer");
+        addIndexEntry(endpoints, "GET", "/api/segments/recent", "Recent segments", "Explorer");
+        addIndexEntry(endpoints, "GET", "/api/segments/tars", "TAR file listing", "Explorer");
+        addIndexEntry(endpoints, "GET", "/api/blob/{blobId}", "Blob stream by blob id", "Explorer");
+        addIndexEntry(endpoints, "GET", "/api/cid/{oakBlobId}", "CID mapping by Oak blob id", "Explorer");
+        addIndexEntry(endpoints, "GET", "/api/cid/stats", "CID mapping stats", "Explorer");
+        addIndexEntry(endpoints, "GET", "/api/cid/reverse/{cid}", "Reverse CID lookup", "Explorer");
+
+        addIndexEntry(endpoints, "GET", "/v1/wallets/stats", "Wallet usage and counts", "Wallets");
+        addIndexEntry(endpoints, "GET", "/v1/wallets/content?wallet=0x...", "Wallet content query", "Wallets");
+        addIndexEntry(endpoints, "POST|PUT", "/v1/register-client", "Register client", "Registration");
+        addIndexEntry(endpoints, "GET", "/v1/peers", "Peer list", "Registration");
+        addIndexEntry(endpoints, "GET", "/v1/ngrok-url", "Current ngrok URL", "Registration");
+        addIndexEntry(endpoints, "GET", "/v1/blockchain/config", "Blockchain mode config", "Configuration");
+
+        addIndexEntry(endpoints, "GET", "/v1/aeron/cluster-state", "Aeron cluster state", "Aeron");
+        addIndexEntry(endpoints, "GET", "/v1/aeron/validator-identities", "Validator identity map", "Aeron");
+        addIndexEntry(endpoints, "GET", "/v1/aeron/raft-metrics", "Raft metrics", "Aeron");
+        addIndexEntry(endpoints, "GET", "/v1/aeron/node-status?nodeId=0", "Per-node status", "Aeron");
+        addIndexEntry(endpoints, "GET", "/v1/aeron/leadership-history?limit=10", "Leadership history", "Aeron");
+        addIndexEntry(endpoints, "GET", "/v1/aeron/replication-lag", "Replication lag", "Aeron");
+        addIndexEntry(endpoints, "POST", "/v1/follower/head-update", "Follower head update (internal)", "Aeron");
+
+        addIndexEntry(endpoints, "GET", "/v1/ops/snapshots/health", "Ops health snapshot", "Ops Snapshots");
+        addIndexEntry(endpoints, "GET", "/v1/ops/snapshots/cluster", "Ops cluster snapshot", "Ops Snapshots");
+        addIndexEntry(endpoints, "GET", "/v1/ops/snapshots/replication", "Ops replication snapshot", "Ops Snapshots");
+        addIndexEntry(endpoints, "GET", "/v1/ops/snapshots/queue", "Ops queue snapshot", "Ops Snapshots");
+        addIndexEntry(endpoints, "GET", "/v1/ops/operations/{operationId}", "Ops operation status", "Ops Snapshots");
+
+        addIndexEntry(endpoints, "GET", "/v1/events/recent?limit=50", "Recent events", "Events");
+        addIndexEntry(endpoints, "GET", "/v1/events/stats", "Event stats", "Events");
+        addIndexEntry(endpoints, "GET", "/v1/events/stream", "Event stream (SSE)", "Events");
+        addIndexEntry(endpoints, "GET", "/v1/ops/events/stream", "Ops event stream (SSE)", "Events");
+
+        addIndexEntry(endpoints, "GET", "/v1/gc/estimate", "GC estimate", "GC");
+        addIndexEntry(endpoints, "GET", "/v1/gc/status", "GC status", "GC");
+        addIndexEntry(endpoints, "POST", "/v1/propose-gc", "Propose GC operation", "GC");
+        addIndexEntry(endpoints, "POST", "/v1/gc/trigger", "Trigger GC check", "GC");
+        addIndexEntry(endpoints, "POST", "/v1/gc/execute", "Execute approved GC", "GC");
+        addIndexEntry(endpoints, "GET", "/v1/compaction/proposals", "Compaction proposals", "GC");
+        addIndexEntry(endpoints, "GET", "/v1/gc/account/{walletAddress}", "GC account status", "GC Accounts");
+        addIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/pay?amount=X", "GC debt payment", "GC Accounts");
+        addIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/set-limit?limit=X", "Set debt limit", "GC Accounts");
+        addIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/execute-pending", "Execute pending debt", "GC Accounts");
+
+        addIndexEntry(endpoints, "GET", "/v1/fragmentation/metrics", "All fragmentation metrics", "Fragmentation");
+        addIndexEntry(endpoints, "GET", "/v1/fragmentation/metrics/{walletAddress}", "Fragmentation by wallet", "Fragmentation");
+        addIndexEntry(endpoints, "GET", "/v1/fragmentation/top?limit=20", "Top fragmented wallets", "Fragmentation");
+
+        addIndexEntry(endpoints, "POST", "/v1/binary/declare-intent", "Declare binary upload intent", "Binary");
+        addIndexEntry(endpoints, "GET", "/v1/binary/check-intent/{token}", "Check binary intent", "Binary");
+        addIndexEntry(endpoints, "POST", "/v1/binary/complete-upload", "Complete binary upload", "Binary");
+
+        addIndexEntry(endpoints, "POST", "/api/mock/advance-epoch?epochs=1", "Advance mock epoch", "Mock");
+        addIndexEntry(endpoints, "POST", "/api/mock/set-epoch-offset?offset=0", "Set mock epoch offset", "Mock");
+        addIndexEntry(endpoints, "GET", "/api/mock/epoch-status", "Mock epoch status", "Mock");
+
+        addIndexEntry(endpoints, "POST", "/v1/chat", "Agentic chat endpoint", "LLM");
+
+        addIndexEntry(endpoints, "GET", "/api-browser", "Interactive API browser", "UI");
+        addIndexEntry(endpoints, "GET", "/chat", "Chat UI", "UI");
+        addIndexEntry(endpoints, "GET", "/dashboard", "Control-plane landing page", "UI");
+        addIndexEntry(endpoints, "GET", "/", "Control-plane landing page", "UI");
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contractVersion", "index.v1");
+        payload.put("generatedAtMs", System.currentTimeMillis());
+        payload.put("count", endpoints.size());
+        payload.put("endpoints", endpoints);
+
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
 
     // ========== Helper methods shared by dashboard handlers (explorer, api-browser, etc.) ==========
+
+    private void addIndexEntry(List<Map<String, Object>> endpoints,
+                               String method,
+                               String path,
+                               String description,
+                               String category) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("method", method);
+        item.put("path", path);
+        item.put("description", description);
+        item.put("category", category);
+        endpoints.add(item);
+    }
     
     private void appendSummaryCard(StringBuilder html, String label, String value, String caption) {
         html.append("<div class='card'>");
@@ -532,6 +295,27 @@ public class DashboardHandler {
         }
         long days = hours / 24;
         return days + "d ago";
+    }
+
+    private String formatUptime(long uptimeMs) {
+        if (uptimeMs <= 0) {
+            return "0s";
+        }
+        long totalSeconds = uptimeMs / 1000;
+        long days = totalSeconds / 86400;
+        long hours = (totalSeconds % 86400) / 3600;
+        long minutes = (totalSeconds % 3600) / 60;
+        long seconds = totalSeconds % 60;
+        if (days > 0) {
+            return String.format("%dd %dh %dm", days, hours, minutes);
+        }
+        if (hours > 0) {
+            return String.format("%dh %dm %ds", hours, minutes, seconds);
+        }
+        if (minutes > 0) {
+            return String.format("%dm %ds", minutes, seconds);
+        }
+        return String.format("%ds", seconds);
     }
 
     private long asLong(Object value, long fallback) {
@@ -1157,6 +941,14 @@ public class DashboardHandler {
         html.append("<h2>⚙️ Configuration</h2>\n");
         addApiEndpoint(html, "GET", "/v1/blockchain/config", "Get blockchain mode and network config (MOCK/SEPOLIA/MAINNET)", "blockchain_config");
         html.append("</div>\n");
+
+        html.append("<div class='category'>\n");
+        html.append("<h2>🧭 Explorer APIs (Phase 1)</h2>\n");
+        addApiEndpoint(html, "GET", "/v1/explorer/summary", "Explorer summary for external blockscan UI", "explorer_summary");
+        addApiEndpoint(html, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail by proposal ID", "explorer_proposal");
+        addApiEndpoint(html, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail + recent content", "explorer_wallet");
+        addApiEndpoint(html, "GET", "/v1/explorer/epochs", "Explorer epoch flow snapshot", "explorer_epochs");
+        html.append("</div>\n");
         
         html.append("<div class='category'>\n");
         html.append("<h2>🔄 Consensus APIs</h2>\n");
@@ -1218,6 +1010,8 @@ public class DashboardHandler {
         html.append("<div class='category'>\n");
         html.append("<h2>📋 Proposal Management</h2>\n");
         addApiEndpoint(html, "GET", "/v1/proposals/pending/count", "Get count of pending proposals (JSON)", "proposals_count");
+        addApiEndpoint(html, "GET", "/v1/proposals/queue/stats", "Get proposal queue stats (JSON)", "proposals_queue_stats");
+        addApiEndpoint(html, "GET", "/v1/proposals/epochs", "Get proposal epoch distribution and flow (JSON)", "proposals_epochs");
         addApiEndpoint(html, "GET", "/v1/proposals/{id}/status", "Get status of specific proposal (JSON)", "proposal_status");
         html.append("</div>\n");
         

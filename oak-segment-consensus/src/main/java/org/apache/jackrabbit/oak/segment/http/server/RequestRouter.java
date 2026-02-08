@@ -46,6 +46,7 @@ public class RequestRouter {
     private final FileHandler fileHandler;
     private final ExplorerApiHandler explorerApiHandler;
     private final DashboardHandler dashboardHandler;
+    private final ExplorerApiV1Handler explorerApiV1Handler;
     private final ConsensusApiHandler consensusApiHandler;
     private final RegistrationHandler registrationHandler;
     private final PeerDiscoveryHandler peerDiscoveryHandler;
@@ -95,6 +96,7 @@ public class RequestRouter {
             context.blobStore
         );
         this.dashboardHandler = new DashboardHandler(context);
+        this.explorerApiV1Handler = new ExplorerApiV1Handler(context);
         this.consensusApiHandler = new ConsensusApiHandler(context);
         this.registrationHandler = new RegistrationHandler(context);
         this.peerDiscoveryHandler = new PeerDiscoveryHandler(context);
@@ -258,6 +260,12 @@ public class RequestRouter {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/index".equals(path) && "GET".equals(method)) {
+                dashboardHandler.handleApiIndex(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             if ("/chat".equals(path) && "GET".equals(method)) {
                 dashboardHandler.handleChatUI(response);
@@ -395,6 +403,32 @@ public class RequestRouter {
             }
             
             // Consensus API
+            if ("/v1/explorer/summary".equals(path) && "GET".equals(method)) {
+                explorerApiV1Handler.handleSummary(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if ("/v1/explorer/epochs".equals(path) && "GET".equals(method)) {
+                explorerApiV1Handler.handleEpochs(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if (path.startsWith("/v1/explorer/proposals/") && "GET".equals(method)) {
+                String proposalId = path.substring("/v1/explorer/proposals/".length());
+                explorerApiV1Handler.handleProposalById(response, proposalId);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if (path.startsWith("/v1/explorer/wallets/") && "GET".equals(method)) {
+                String walletAddress = path.substring("/v1/explorer/wallets/".length());
+                explorerApiV1Handler.handleWalletByAddress(response, walletAddress);
+                baseRequest.setHandled(true);
+                return;
+            }
+
             if ("/v1/propose-write".equals(path) && "POST".equals(method)) {
                 // Phase 1: Optional shard routing logging (for demonstration)
                 // Phase 2: Will actually forward requests to correct shard
