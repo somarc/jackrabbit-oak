@@ -63,6 +63,7 @@ public class SegmentHttpServer {
     private final JoinProofFactory joinProofFactory;
     private final PeerUrlResolver peerUrlResolver;
     private final PeerJsonHttpClient peerJsonHttpClient;
+    private final PeerAnnouncementClient peerAnnouncementClient;
     
     // Keep references for backward compatibility and methods that need direct access
     private final FileStore fileStore;
@@ -106,6 +107,11 @@ public class SegmentHttpServer {
         this.joinProofFactory = new JoinProofFactory(fileStore, context, System::currentTimeMillis);
         this.peerUrlResolver = new PeerUrlResolver();
         this.peerJsonHttpClient = new PeerJsonHttpClient();
+        this.peerAnnouncementClient = new PeerAnnouncementClient(
+            peerUrlResolver::resolve,
+            peerJsonHttpClient::postJson,
+            Thread::sleep
+        );
         
         // Create server - TLS will be configured in start() if enabled
         this.server = new Server();
@@ -231,71 +237,7 @@ public class SegmentHttpServer {
             return;
         }
         
-        log.info("📡 Registering with {} peer validators (with retry logic)...", peerUrls.size());
-        
-        // Retry configuration
-        final int maxRetries = 5;
-        final int initialDelayMs = 2000; // 2 seconds
-        final int maxDelayMs = 16000;    // 16 seconds
-        
-        for (String peerUrl : peerUrls) {
-            // Skip self
-            if (peerUrl.equals(context.selfUrl)) {
-                continue;
-            }
-            
-            // Convert hostname URL to IP-based URL for reliable Docker networking
-            String peerUrlIP = peerUrlResolver.resolve(peerUrl);
-            
-            boolean registered = false;
-            for (int attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    // Build registration URL (using IP-based URL)
-                    String registrationUrl = peerUrlIP + "/v1/register-validator";
-                    
-                    // Build JSON payload
-                    String jsonPayload = String.format(
-                        "{\"validatorId\":\"%s\",\"validatorUrl\":\"%s\"}",
-                        validatorId.replace("\"", "\\\""),
-                        context.selfUrl.replace("\"", "\\\"")
-                    );
-                    
-                    int responseCode = peerJsonHttpClient.postJson(registrationUrl, jsonPayload).getResponseCode();
-                    if (responseCode == 200) {
-                        log.info("✅ Registered with peer validator: {} → {} (attempt {}/{})", peerUrl, peerUrlIP, attempt, maxRetries);
-                        registered = true;
-                        break; // Success - exit retry loop
-                    } else {
-                        log.debug("⚠️  Registration attempt {}/{} failed for {}: HTTP {}", attempt, maxRetries, peerUrlIP, responseCode);
-                    }
-                    
-                } catch (Exception e) {
-                    log.debug("⚠️  Registration attempt {}/{} failed for {}: {}", attempt, maxRetries, peerUrlIP, e.getMessage());
-                }
-                
-                // Exponential backoff: 2s, 4s, 8s, 16s, 16s
-                if (attempt < maxRetries) {
-                    int delayMs = Math.min(initialDelayMs * (1 << (attempt - 1)), maxDelayMs);
-                    try {
-                        log.debug("⏳ Retrying registration with {} in {}ms...", peerUrlIP, delayMs);
-                        Thread.sleep(delayMs);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        log.warn("⚠️  Registration retry interrupted");
-                        break;
-                    }
-                }
-            }
-            
-            if (!registered) {
-                // Note: Registration failure is non-critical - Aeron Cluster handles consensus independently
-                // This is mainly for HTTP segment transfer coordination, which can retry later
-                log.debug("⚠️  Failed to register with peer validator {} ({} → {}) after {} attempts (non-critical - Aeron Cluster handles consensus)", 
-                    peerUrl, peerUrlIP, peerUrlIP, maxRetries);
-            }
-        }
-        
-        log.info("📡 Validator peer registration complete");
+        peerAnnouncementClient.registerWithPeers(validatorId, context.selfUrl, peerUrls);
     }
     
     /**
@@ -327,64 +269,10 @@ public class SegmentHttpServer {
         org.apache.jackrabbit.oak.segment.consensus.security.JoinProof proof =
             joinProofFactory.create(validatorId, validatorUrl);
         
-        int successCount = 0;
-        int failureCount = 0;
-        
-        for (String peerUrl : peerUrls) {
-            try {
-                // Skip self
-                if (peerUrl.equals(validatorUrl)) {
-                    log.debug("   Skipping self: {}", peerUrl);
-                    continue;
-                }
-                
-                // Convert hostname URL to IP-based URL for reliable Docker networking
-                String peerUrlIP = peerUrlResolver.resolve(peerUrl);
-                
-                // Build peer-joined endpoint URL (using IP-based URL)
-                String peerJoinedUrl = peerUrlIP + "/v1/consensus/peer-joined";
-                
-                // PHASE 3: Get public key for Byzantine fault tolerance
-                // Note: Public key exchange now handled via Aeron cluster membership
-                String publicKeyHex = "";
-                
-                // Build JSON payload with proof and public key (PHASE 3)
-                String jsonPayload = String.format(
-                    "{\"validatorId\":\"%s\",\"validatorUrl\":\"%s\",\"proof\":%s,\"publicKey\":\"%s\"}",
-                    validatorId.replace("\"", "\\\""),
-                    validatorUrl.replace("\"", "\\\""),
-                    proof.toJson(),
-                    publicKeyHex
-                );
-                
-                log.info("   → Broadcasting to {} → {} (with public key)", peerUrl, peerUrlIP);
-                
-                PeerJsonHttpClient.PostResult result = peerJsonHttpClient.postJson(peerJoinedUrl, jsonPayload);
-                int responseCode = result.getResponseCode();
-                
-                if (responseCode == 200) {
-                    String response = result.getResponseBody();
-                    
-                    log.info("   ✅ Accepted by peer: {} → {}", peerUrl, peerUrlIP);
-                    log.debug("      Response: {}", response);
-                    
-                    // Note: Public key exchange now handled via Aeron cluster membership
-                    
-                    successCount++;
-                    
-                } else {
-                    log.warn("   ❌ Rejected by peer {}: HTTP {}", peerUrl, responseCode);
-                    failureCount++;
-                }
-                
-            } catch (java.net.ConnectException e) {
-                log.warn("   ⚠️  Cannot reach peer {}: {}", peerUrl, e.getMessage());
-                failureCount++;
-            } catch (Exception e) {
-                log.error("   ❌ Failed to broadcast to peer {}: {}", peerUrl, e.getMessage());
-                failureCount++;
-            }
-        }
+        PeerAnnouncementClient.BroadcastSummary summary =
+            peerAnnouncementClient.broadcastPresence(validatorId, validatorUrl, peerUrls, proof);
+        int successCount = summary.getSuccessCount();
+        int failureCount = summary.getFailureCount();
         
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         log.info("📡 BROADCAST COMPLETE: {} accepted, {} failed", successCount, failureCount);
