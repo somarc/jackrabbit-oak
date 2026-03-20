@@ -32,6 +32,7 @@ final class ProposalQueueTuning {
     static final long DEFAULT_BACKPRESSURE_TIMEOUT_MS = 30_000L;
     static final long DEFAULT_BACKPRESSURE_PARK_NANOS = 1_000_000L;
     static final long DEFAULT_COUNTER_ROTATION_INTERVAL_MS = 24L * 60L * 60L * 1000L;
+    static final String DEFAULT_RELEASE_MODE = "epoch";
 
     private final long confirmationTimeoutMs;
     private final long restoreTimeoutMs;
@@ -48,6 +49,7 @@ final class ProposalQueueTuning {
     private final long backpressureTimeoutMs;
     private final long backpressureParkNanos;
     private final long counterRotationIntervalMs;
+    private final AdaptiveReleaseMode releaseMode;
 
     private ProposalQueueTuning(long confirmationTimeoutMs,
                                 long restoreTimeoutMs,
@@ -63,7 +65,8 @@ final class ProposalQueueTuning {
                                 long maxPendingMessages,
                                 long backpressureTimeoutMs,
                                 long backpressureParkNanos,
-                                long counterRotationIntervalMs) {
+                                long counterRotationIntervalMs,
+                                AdaptiveReleaseMode releaseMode) {
         this.confirmationTimeoutMs = confirmationTimeoutMs;
         this.restoreTimeoutMs = restoreTimeoutMs;
         this.maxMessageBatch = maxMessageBatch;
@@ -79,6 +82,7 @@ final class ProposalQueueTuning {
         this.backpressureTimeoutMs = backpressureTimeoutMs;
         this.backpressureParkNanos = backpressureParkNanos;
         this.counterRotationIntervalMs = counterRotationIntervalMs;
+        this.releaseMode = releaseMode != null ? releaseMode : AdaptiveReleaseMode.EPOCH;
     }
 
     static ProposalQueueTuning fromSystemProperties() {
@@ -135,6 +139,9 @@ final class ProposalQueueTuning {
             "oak.proposal.counter.rotation.ms",
             DEFAULT_COUNTER_ROTATION_INTERVAL_MS
         );
+        AdaptiveReleaseMode releaseMode = AdaptiveReleaseMode.fromValue(
+            System.getProperty("oak.proposal.release.mode", DEFAULT_RELEASE_MODE)
+        );
         return new ProposalQueueTuning(
             confirmationTimeoutMs,
             restoreTimeoutMs,
@@ -150,7 +157,8 @@ final class ProposalQueueTuning {
             maxPendingMessages,
             backpressureTimeoutMs,
             backpressureParkNanos,
-            counterRotationIntervalMs
+            counterRotationIntervalMs,
+            releaseMode
         );
     }
 
@@ -179,7 +187,8 @@ final class ProposalQueueTuning {
             clampLong(config.max_pending_messages(), 1L),
             clampLong(config.backpressure_timeout_ms(), 1L),
             config.backpressure_park_nanos(),
-            clampLong(config.counter_rotation_interval_ms(), 0L)
+            clampLong(config.counter_rotation_interval_ms(), 0L),
+            AdaptiveReleaseMode.fromValue(config.release_mode())
         );
     }
 
@@ -241,6 +250,10 @@ final class ProposalQueueTuning {
 
     long getCounterRotationIntervalMs() {
         return counterRotationIntervalMs;
+    }
+
+    AdaptiveReleaseMode getReleaseMode() {
+        return releaseMode;
     }
 
     private static int readIntProp(String key, int defaultValue, int minValue) {

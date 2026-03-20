@@ -39,14 +39,15 @@ final class ProposalQueueTuningRegistry {
         }
         ProposalQueueTuning fallback = ProposalQueueTuning.fromSystemProperties();
         if (FALLBACK_WARNED.compareAndSet(false, true)) {
-            log.warn("QUEUE_TUNING_SOURCE source=system-properties persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={}",
+            log.warn("QUEUE_TUNING_SOURCE source=system-properties persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={} release_mode={}",
                 fallback.isPersistenceEnabled(),
                 fallback.getMaxMessageBatch(),
                 fallback.getFinalizationChunkSize(),
                 fallback.getFinalizationChunkDelayMs(),
                 fallback.getMaxPendingMessages(),
                 fallback.getBackpressureTimeoutMs(),
-                fallback.getCounterRotationIntervalMs());
+                fallback.getCounterRotationIntervalMs(),
+                fallback.getReleaseMode().configValue());
         }
         return fallback;
     }

@@ -65,28 +65,8 @@ public class EpochBasedBatchQueue {
     private static final Logger log = LoggerFactory.getLogger(EpochBasedBatchQueue.class);
     
     // Configuration: Ethereum Finality Parameters
-    private static final int FINALITY_EPOCHS = 2; // 2 epochs for STANDARD tier
+    private static final int FINALITY_EPOCHS = LegacyTierEpochSchedule.STANDARD_DELAY_EPOCHS;
     private static final int OPTIMAL_BATCH_SIZE = 25; // Proposals per batch
-    
-    /**
-     * Get finality delay (in epochs) for a given payment tier.
-     * 
-     * @param tier Payment tier
-     * @return Number of epochs to wait before finalizing
-     */
-    private static int getFinalityDelay(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
-        if (tier == null) {
-            return FINALITY_EPOCHS; // Default to STANDARD
-        }
-        
-        if (tier == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
-            return 0;  // Immediate (handled via fast-path, shouldn't reach here)
-        } else if (tier == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS) {
-            return 1;   // 1 epoch (~6.4 minutes)
-        } else {
-            return 2;  // STANDARD: 2 epochs (~12.8 minutes)
-        }
-    }
     
     // Ethereum Beacon Chain client (provides real-time epoch data)
     private final BeaconChainClient beaconClient;
@@ -247,7 +227,7 @@ public class EpochBasedBatchQueue {
                 // Find minimum finality delay required for proposals in this epoch
                 int minDelay = epochMap.values().stream()
                     .flatMap(List::stream)
-                    .mapToInt(p -> getFinalityDelay(p.getTier()))
+                    .mapToInt(p -> LegacyTierEpochSchedule.resolveFinalityDelay(p.getTier()))
                     .min()
                     .orElse(FINALITY_EPOCHS);
                 
@@ -308,7 +288,7 @@ public class EpochBasedBatchQueue {
             
             List<QueuedProposal> ready = proposals.stream()
                 .filter(p -> {
-                    int requiredDelay = getFinalityDelay(p.getTier());
+                    int requiredDelay = LegacyTierEpochSchedule.resolveFinalityDelay(p.getTier());
                     boolean isReady = currentEpoch >= (epoch + requiredDelay);
                     log.debug("🔍 DEBUG: Proposal {} tier={}, requiredDelay={}, epoch={}, currentEpoch={}, isReady={}", 
                         p.getProposalId().substring(0, 8), p.getTier(), requiredDelay, epoch, currentEpoch, isReady);
@@ -522,4 +502,3 @@ public class EpochBasedBatchQueue {
         log.info("🧹 EpochBasedBatchQueue cleared");
     }
 }
-

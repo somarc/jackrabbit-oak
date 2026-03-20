@@ -45,6 +45,7 @@ public final class ProposalQueueTuningIntrospection {
         values.put("backpressure_timeout_ms", tuning.getBackpressureTimeoutMs());
         values.put("backpressure_park_nanos", tuning.getBackpressureParkNanos());
         values.put("counter_rotation_interval_ms", tuning.getCounterRotationIntervalMs());
+        values.put("release_mode", tuning.getReleaseMode().configValue());
         return values;
     }
 

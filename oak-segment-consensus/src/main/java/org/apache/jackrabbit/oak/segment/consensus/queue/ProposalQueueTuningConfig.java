@@ -114,4 +114,10 @@ public @interface ProposalQueueTuningConfig {
         description = "Rotate high-volume API counters into persisted lifetime buckets at this interval. Set 0 to disable rotation."
     )
     long counter_rotation_interval_ms() default ProposalQueueTuning.DEFAULT_COUNTER_ROTATION_INTERVAL_MS;
+
+    @AttributeDefinition(
+        name = "Release Mode",
+        description = "Verified-to-Aeron release mode. Supported values: epoch, adaptive-shadow."
+    )
+    String release_mode() default ProposalQueueTuning.DEFAULT_RELEASE_MODE;
 }

@@ -500,6 +500,14 @@ public class OsgiConfigApiHandler {
             "guarded",
             "Counter rotation interval",
             "oak.proposal.counter.rotation.ms"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.release_mode",
+            "string",
+            "epoch",
+            "runtime-readable",
+            "guarded",
+            "Verified-to-Aeron release mode (epoch or adaptive-shadow)",
+            "oak.proposal.release.mode"));
 
         schema.add(schemaEntry(
             "rateLimiterTuning.enabled",

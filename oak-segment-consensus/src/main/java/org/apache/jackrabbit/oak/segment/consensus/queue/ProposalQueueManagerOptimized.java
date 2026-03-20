@@ -94,6 +94,8 @@ public class ProposalQueueManagerOptimized {
     // See: Blockchain-AEM/06-test-results/2025-11-21-BATCH-UDP-MTU-LIMIT.md
     private final int finalizationChunkSize;
     private final long finalizationChunkDelayMs;
+    private final AdaptiveReleaseMode releaseMode;
+    private final AdaptiveReleaseGovernor adaptiveReleaseGovernor;
     
     // Queues
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
@@ -177,6 +179,8 @@ public class ProposalQueueManagerOptimized {
     private final java.util.concurrent.atomic.AtomicLong persistenceFlushNanos = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong persistenceFlushCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong persistenceFlushLastMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private volatile String lastAdaptiveDecisionSignature =
+        AdaptiveReleaseGovernor.Decision.healthyDirect().signature();
     
     /**
      * Create optimized proposal queue manager with Ethereum epoch-based batching.
@@ -235,6 +239,8 @@ public class ProposalQueueManagerOptimized {
         this.finalizationChunkSize = resolved.getFinalizationChunkSize();
         this.finalizationChunkDelayMs = resolved.getFinalizationChunkDelayMs();
         this.verifierThreads = resolved.getVerifierThreads();
+        this.releaseMode = resolved.getReleaseMode();
+        this.adaptiveReleaseGovernor = AdaptiveReleaseGovernor.fromTuning(resolved);
         this.processedRetentionMs = resolved.getProcessedRetentionMs();
         this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
         this.persistenceFlushBatch = resolved.getPersistenceFlushBatch();
@@ -323,6 +329,7 @@ public class ProposalQueueManagerOptimized {
         log.info("   - Epoch Finalizer Agent: SleepingIdleStrategy (1s idle, wallet batching)");
         log.info("   - Max batch size: {}", maxMessageBatch);
         log.info("   - Finality: 2 epochs (~{} minutes)", (2 * 384_000) / 60000.0);
+        log.info("   - Release mode: {}", releaseMode.configValue());
         if (persistenceStore != null) {
             if (isAsyncPersistenceEnabled()) {
                 log.info("   - Proposal persistence: async (flush every {}ms or {} changes)",
@@ -360,10 +367,15 @@ public class ProposalQueueManagerOptimized {
         stats.put("totalProposals", allProposals.size());
         
         // Epoch queue stats
-        stats.put("currentEpoch", epochQueue.getCurrentEpoch());
-        stats.put("finalizedEpoch", epochQueue.getFinalizedEpoch());
-        stats.put("epochsUntilFinality", epochQueue.getCurrentEpoch() - epochQueue.getFinalizedEpoch());
+        java.util.Map<String, Object> epochStatsMap = epochQueue.getStatsMap();
+        long currentEpoch = ((Number) epochStatsMap.get("currentEpoch")).longValue();
+        long finalizedEpoch = epochQueue.getFinalizedEpoch();
+        long verifiedPackingBufferCount = getLongStat(epochStatsMap, "pendingProposals");
+        stats.put("currentEpoch", currentEpoch);
+        stats.put("finalizedEpoch", finalizedEpoch);
+        stats.put("epochsUntilFinality", currentEpoch - finalizedEpoch);
         stats.put("pendingEpochStats", epochQueue.getStats());
+        stats.put("verifiedPackingBufferCount", verifiedPackingBufferCount);
         
         // Count proposals by state + mempool age stats
         long pending = 0;
@@ -398,6 +410,9 @@ public class ProposalQueueManagerOptimized {
         stats.put("processedCount", processed);
         stats.put("mempoolAvgAgeMs", pending == 0 ? 0 : mempoolAgeTotalMs / pending);
         stats.put("mempoolOldestMs", mempoolOldestMs);
+        long releaseReadyProposalCount = countQueuedProposals(batchQueue);
+        stats.put("releaseReadyProposalCount", releaseReadyProposalCount);
+        stats.put("releaseReadyBatchCount", batchQueue.size());
         
         // Rotating counters: bounded current window + persisted lifetime totals
         long rejectedCurrent = totalRejectedCount.get();
@@ -468,8 +483,10 @@ public class ProposalQueueManagerOptimized {
         stats.put("backpressureMaxPending", backpressureMax);
         stats.put("backpressureTimeoutCount", backpressureManager.getBackpressureTimeoutCount());
         stats.put("backpressureReconciliationCount", backpressureManager.getStalePendingReconciliationCount());
-        stats.put("backpressurePendingOldestMs", backpressureManager.getPendingOldestMs(nowMs));
-        stats.put("backpressurePendingStalledMs", backpressureManager.getPendingStalledMs(nowMs));
+        long backpressurePendingOldestMs = backpressureManager.getPendingOldestMs(nowMs);
+        long backpressurePendingStalledMs = backpressureManager.getPendingStalledMs(nowMs);
+        stats.put("backpressurePendingOldestMs", backpressurePendingOldestMs);
+        stats.put("backpressurePendingStalledMs", backpressurePendingStalledMs);
         if (backpressurePending != backpressurePendingRaw) {
             stats.put("backpressureStats", String.format(
                 "BackpressureManager[sent=%d, acked=%d, pending=%d, rawPending=%d, max=%d, active=%s]",
@@ -483,6 +500,32 @@ public class ProposalQueueManagerOptimized {
         } else {
             stats.put("backpressureStats", backpressureManager.getStats());
         }
+
+        AdaptiveReleaseGovernor.SignalSnapshot adaptiveSignals = new AdaptiveReleaseGovernor.SignalSnapshot(
+            Math.max(0L, verifiedCurrent - finalizedCurrent),
+            backpressurePending,
+            backpressureMax,
+            backpressureActive,
+            backpressurePendingOldestMs,
+            backpressurePendingStalledMs,
+            verifiedPackingBufferCount,
+            batchQueue.size(),
+            releaseReadyProposalCount
+        );
+        AdaptiveReleaseGovernor.Decision adaptiveDecision = adaptiveReleaseGovernor.evaluate(adaptiveSignals);
+
+        java.util.Map<String, Object> runtimeStages = new java.util.LinkedHashMap<>();
+        runtimeStages.put("unverifiedMempoolCount", pending);
+        runtimeStages.put("verifiedPackingBufferCount", verifiedPackingBufferCount);
+        runtimeStages.put("releaseReadyProposalCount", releaseReadyProposalCount);
+        runtimeStages.put("releaseReadyBatchCount", batchQueue.size());
+        runtimeStages.put("backpressureOverflowProposalCount", 0L);
+        runtimeStages.put("backpressureOverflowSeparateBufferEnabled", false);
+        stats.put("runtimeStageCounts", runtimeStages);
+        stats.put("releaseMode", releaseMode.configValue());
+        stats.put("adaptiveReleaseGovernorState", adaptiveDecision.getState().name());
+        stats.put("adaptiveReleaseAction", adaptiveDecision.getAction().name());
+        stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.getReasonCodes());
         
         // Tier routing stats (current window + lifetime)
         stats.put("priorityProposalsSent", priorityCurrent);
@@ -536,6 +579,60 @@ public class ProposalQueueManagerOptimized {
         stats.put("persistenceAsyncEnabled", isAsyncPersistenceEnabled());
         
         return stats;
+    }
+
+    private long countQueuedProposals(ConcurrentLinkedQueue<List<QueuedProposal>> queue) {
+        long total = 0L;
+        for (List<QueuedProposal> batch : queue) {
+            if (batch != null) {
+                total += batch.size();
+            }
+        }
+        return total;
+    }
+
+    private long getLongStat(java.util.Map<String, Object> stats, String key) {
+        Object value = stats.get(key);
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        return 0L;
+    }
+
+    private AdaptiveReleaseGovernor.Decision evaluateAdaptiveReleaseDecision(long nowMs) {
+        java.util.Map<String, Object> epochStatsMap = epochQueue.getStatsMap();
+        AdaptiveReleaseGovernor.SignalSnapshot signals = new AdaptiveReleaseGovernor.SignalSnapshot(
+            Math.max(0L, totalVerifiedCount.get() - totalFinalizedCount.get()),
+            backpressureManager.getPendingCount(),
+            backpressureManager.getMaxPendingMessages(),
+            backpressureManager.isBackpressureActive(),
+            backpressureManager.getPendingOldestMs(nowMs),
+            backpressureManager.getPendingStalledMs(nowMs),
+            getLongStat(epochStatsMap, "pendingProposals"),
+            batchQueue.size(),
+            countQueuedProposals(batchQueue)
+        );
+        return adaptiveReleaseGovernor.evaluate(signals);
+    }
+
+    private void captureAdaptiveReleaseDecision(long nowMs) {
+        AdaptiveReleaseGovernor.Decision decision = evaluateAdaptiveReleaseDecision(nowMs);
+        String signature = decision.signature();
+        if (releaseMode == AdaptiveReleaseMode.ADAPTIVE_SHADOW && !signature.equals(lastAdaptiveDecisionSignature)) {
+            lastAdaptiveDecisionSignature = signature;
+            log.info("ADAPTIVE_RELEASE_SHADOW state={} action={} reasons={} gap={} packing={} releaseReady={} pending={} pendingOldestMs={} pendingStalledMs={}",
+                decision.getState(),
+                decision.getAction(),
+                decision.getReasonCodes(),
+                Math.max(0L, totalVerifiedCount.get() - totalFinalizedCount.get()),
+                getLongStat(epochQueue.getStatsMap(), "pendingProposals"),
+                countQueuedProposals(batchQueue),
+                backpressureManager.getPendingCount(),
+                backpressureManager.getPendingOldestMs(nowMs),
+                backpressureManager.getPendingStalledMs(nowMs));
+        } else if (!signature.equals(lastAdaptiveDecisionSignature)) {
+            lastAdaptiveDecisionSignature = signature;
+        }
     }
 
     /**
@@ -984,31 +1081,8 @@ public class ProposalQueueManagerOptimized {
             String signature,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
             String intentToken) {
-        // Calculate target epoch based on payment tier
         long currentEpoch = epochQueue.getCurrentEpoch();
-        long targetEpoch;
-        
-        // Map tier to target epoch based on FINALITY DELAY:
-        // 
-        // All tiers queue to currentEpoch. Delays are enforced during finalization
-        // by EpochBasedBatchQueue.getFinalityDelay():
-        //   - PRIORITY: 0 epochs (immediate via fast-path)
-        //   - EXPRESS:  1 epoch delay (~6.4 min)
-        //   - STANDARD: 2 epoch delay (~12.8 min)
-        // 
-        // Example timeline:
-        //   Epoch 100: EXPRESS & STANDARD proposals arrive → queued to epoch 100
-        //   Epoch 101: EXPRESS proposals from E100 finalize (1 transition)
-        //   Epoch 102: STANDARD proposals from E100 finalize (2 transitions)
-        if (tier == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
-            // PRIORITY bypasses epoch queue entirely (handled via priorityQueue in agents)
-            targetEpoch = currentEpoch - 2;  // Marked as "already finalized" for fast-path
-        } else {
-            // EXPRESS and STANDARD both queue to current epoch
-            // Finality delay differentiation happens in EpochBasedBatchQueue.getFinalizableEpochs()
-            targetEpoch = currentEpoch;
-        }
-        
+        long targetEpoch = LegacyTierEpochSchedule.resolveQueueEpoch(tier, currentEpoch);
         return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, targetEpoch, tier, intentToken);
     }
     
@@ -1104,25 +1178,8 @@ public class ProposalQueueManagerOptimized {
             String signature,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
         
-        // Calculate target epoch based on payment tier (same as writes)
         long currentEpoch = epochQueue.getCurrentEpoch();
-        long targetEpoch;
-        
-        switch (tier) {
-            case PRIORITY:
-                // Priority: direct ingress, no epoch wait (fastest)
-                targetEpoch = currentEpoch;
-                break;
-            case EXPRESS:
-                // Express: +1 epoch (fast)
-                targetEpoch = currentEpoch + 1;
-                break;
-            case STANDARD:
-            default:
-                // Standard: +2 epochs (economical)
-                targetEpoch = currentEpoch + 2;
-                break;
-        }
+        long targetEpoch = LegacyTierEpochSchedule.resolveQueueEpoch(tier, currentEpoch);
         
         long now = System.currentTimeMillis();
         QueuedProposal proposal = new QueuedProposal(
@@ -1885,6 +1942,7 @@ public class ProposalQueueManagerOptimized {
                 ((Number) epochStats.get("pendingProposals")).longValue() : 0L;
             
             long now = System.currentTimeMillis();
+            captureAdaptiveReleaseDecision(now);
             if (now - lastQueueDepthAlert > ALERT_INTERVAL_MS) {
                 if (pendingProposals >= QUEUE_DEPTH_CRITICAL) {
                     log.error("🚨 CRITICAL: Queue depth at {} proposals (threshold: {})! " +

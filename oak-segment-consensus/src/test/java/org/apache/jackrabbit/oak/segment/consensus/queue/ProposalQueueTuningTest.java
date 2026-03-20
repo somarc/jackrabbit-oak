@@ -30,6 +30,7 @@ public class ProposalQueueTuningTest {
         System.clearProperty("oak.proposal.persistence.enabled");
         System.clearProperty("oak.proposal.persistence.flush.ms");
         System.clearProperty("oak.proposal.persistence.flush.batch");
+        System.clearProperty("oak.proposal.release.mode");
     }
 
     @Test
@@ -56,5 +57,30 @@ public class ProposalQueueTuningTest {
         assertFalse("Persistence flag should be configurable", tuning.isPersistenceEnabled());
         assertEquals("Flush interval override should apply", 750L, tuning.getPersistenceFlushIntervalMs());
         assertEquals("Flush batch override should apply", 400, tuning.getPersistenceFlushBatch());
+    }
+
+    @Test
+    public void testReleaseModeDefaultsToEpoch() {
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertEquals(AdaptiveReleaseMode.EPOCH, tuning.getReleaseMode());
+    }
+
+    @Test
+    public void testReleaseModeOverrideParsesShadowMode() {
+        System.setProperty("oak.proposal.release.mode", "adaptive-shadow");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertEquals(AdaptiveReleaseMode.ADAPTIVE_SHADOW, tuning.getReleaseMode());
+    }
+
+    @Test
+    public void testInvalidReleaseModeFallsBackToEpoch() {
+        System.setProperty("oak.proposal.release.mode", "unknown-mode");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertEquals(AdaptiveReleaseMode.EPOCH, tuning.getReleaseMode());
     }
 }
