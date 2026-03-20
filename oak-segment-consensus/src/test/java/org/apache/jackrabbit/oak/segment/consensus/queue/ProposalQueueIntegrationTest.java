@@ -26,6 +26,8 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.math.BigInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -129,6 +131,9 @@ public class ProposalQueueIntegrationTest {
             beaconClient.stopBackgroundPolling();
         }
         System.clearProperty("oak.proposal.release.mode");
+        System.clearProperty("oak.proposal.persistence.flush.ms");
+        System.clearProperty("oak.proposal.persistence.flush.batch");
+        System.clearProperty("oak.consensus.max.pending.messages");
     }
     
     @Test
@@ -338,6 +343,136 @@ public class ProposalQueueIntegrationTest {
 
         Map<String, Object> stats = queueManager.getQueueStats();
         assertEquals("adaptive-active", stats.get("releaseMode"));
+    }
+
+    @Test
+    public void testAdaptiveActiveRestoresVerifiedProposalAfterRestart() throws Exception {
+        queueManager.stop();
+        bridge.stop();
+
+        System.setProperty("oak.proposal.release.mode", "adaptive-active");
+        System.setProperty("oak.proposal.persistence.flush.ms", "0");
+        System.setProperty("oak.proposal.persistence.flush.batch", "1");
+        System.setProperty("oak.consensus.max.pending.messages", "1");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        Path persistenceDir = Files.createTempDirectory("proposal-restore-adaptive");
+
+        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        firstBridge.start();
+        bridge = firstBridge;
+
+        BackpressureManager pressuredBackpressure = new BackpressureManager(1L, tuning.getBackpressureTimeoutMs(),
+            tuning.getBackpressureParkNanos());
+        pressuredBackpressure.incrementSent(2L);
+        queueManager = new ProposalQueueManagerOptimized(
+            firstBridge,
+            new NoopRaftAppendCallback(),
+            pressuredBackpressure,
+            beaconClient,
+            persistenceDir.toString(),
+            tuning
+        );
+        queueManager.start();
+
+        String proposalId = "restore-adaptive-standard-001";
+        String ethereumTxHash = "0xtx-restore-adaptive-001";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/page-restored";
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "Restore adaptive tier content",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            null
+        );
+
+        firstBridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(500_000),
+            12348L,
+            ethereumTxHash
+        );
+
+        assertTrue("Proposal should reach verified adaptive buffer before restart",
+            waitForCondition(() -> {
+                Map<String, Object> stats = queueManager.getQueueStats();
+                return longStat(stats, "adaptiveVerifiedPackingBufferCount") >= 1L
+                    && longStat(stats, "releaseReadyProposalCount") == 0L;
+            }, 10_000, 25));
+
+        queueManager.stop();
+        firstBridge.stop();
+
+        CountDownLatch restoredLatch = new CountDownLatch(1);
+        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        restoredBridge.start();
+        bridge = restoredBridge;
+        appendedProposalId = null;
+
+        RaftAppendCallback callback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                appendedProposalId = "captured";
+                restoredLatch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature, String blobId, String mimeType) {
+                appendProposal(walletAddress, path, contentType, message, signature);
+            }
+
+            @Override
+            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                appendedProposalId = "delete-captured";
+                restoredLatch.countDown();
+            }
+
+            @Override
+            public int appendProposalBatch(java.util.List<QueuedProposal> batch) {
+                for (QueuedProposal proposal : batch) {
+                    appendedProposalId = proposal.getProposalId();
+                }
+                for (int i = 0; i < batch.size(); i++) {
+                    restoredLatch.countDown();
+                }
+                return batch.size();
+            }
+        };
+
+        queueManager = new ProposalQueueManagerOptimized(
+            restoredBridge,
+            callback,
+            new BackpressureManager(1L, tuning.getBackpressureTimeoutMs(), tuning.getBackpressureParkNanos()),
+            beaconClient,
+            persistenceDir.toString(),
+            tuning
+        );
+        queueManager.start();
+
+        assertTrue("Restored verified proposal should drain without replaying bridge event",
+            restoredLatch.await(10, TimeUnit.SECONDS));
+        assertTrue("Restored proposal should be sent via single or batched callback",
+            "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
+        assertEquals("Restored proposal should remain tracked as processed",
+            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
     }
     
     @Test

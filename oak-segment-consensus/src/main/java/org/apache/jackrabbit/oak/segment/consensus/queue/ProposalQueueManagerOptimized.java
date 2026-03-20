@@ -701,6 +701,43 @@ public class ProposalQueueManagerOptimized {
             proposal.getWalletAddress());
     }
 
+    private void enqueueRestoredVerifiedProposal(QueuedProposal proposal, long nowMs) {
+        long verifiedTimestampMs = proposal.getVerifiedTimestampMs();
+        if (verifiedTimestampMs <= 0L) {
+            proposal.setVerifiedTimestampMs(Math.max(proposal.getTimestamp(), nowMs));
+        }
+
+        if (proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
+            queueReleaseBatch(java.util.Collections.singletonList(proposal), "restored-priority");
+            return;
+        }
+
+        Long confirmedBlock = proposal.getConfirmedBlock();
+        long confirmedBlockNumber = confirmedBlock != null ? confirmedBlock.longValue() : -1L;
+        routeVerifiedProposal(
+            proposal,
+            summarizeTxHash(proposal.getEthereumTxHash()),
+            confirmedBlockNumber
+        );
+    }
+
+    private String summarizeTxHash(String txHash) {
+        if (txHash == null || txHash.isEmpty()) {
+            return "n/a";
+        }
+        return txHash.substring(0, Math.min(10, txHash.length())) + "...";
+    }
+
+    private void registerProposalWalletMapping(QueuedProposal proposal) {
+        if (proposal == null) {
+            return;
+        }
+        if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
+            ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
+                .registerProposalWallet(proposal.getProposalId(), proposal.getWalletAddress());
+        }
+    }
+
     private int queueReleaseBatches(List<List<QueuedProposal>> batches, String sourceLabel) {
         int workCount = 0;
         for (List<QueuedProposal> batch : batches) {
@@ -1015,7 +1052,10 @@ public class ProposalQueueManagerOptimized {
         if (proposals.isEmpty()) {
             return;
         }
-        int restored = 0;
+        long nowMs = System.currentTimeMillis();
+        int restoredPending = 0;
+        int restoredVerified = 0;
+        int restoredPriorityReady = 0;
         int skippedTerminal = 0;
         for (QueuedProposal proposal : proposals) {
             if (proposal == null) {
@@ -1025,24 +1065,32 @@ public class ProposalQueueManagerOptimized {
                 skippedTerminal++;
                 continue;
             }
+            allProposals.put(proposal.getProposalId(), proposal);
+            registerProposalWalletMapping(proposal);
+
+            if (proposal.getState() == ProposalState.VERIFIED) {
+                enqueueRestoredVerifiedProposal(proposal, nowMs);
+                restoredVerified++;
+                if (proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
+                    restoredPriorityReady++;
+                }
+                continue;
+            }
+
             proposal.setState(ProposalState.PENDING);
             proposal.setConfirmedBlock(null);
             proposal.setRejectionReason(null);
-            proposal.overrideTimeoutTimestamp(System.currentTimeMillis() + restoreTimeoutMs);
-            allProposals.put(proposal.getProposalId(), proposal);
-            
-            // Register wallet mapping BEFORE enqueue to avoid verifier race in mock mode.
-            if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
-                ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
-                    .registerProposalWallet(proposal.getProposalId(), proposal.getWalletAddress());
-            }
-
+            proposal.overrideTimeoutTimestamp(nowMs + restoreTimeoutMs);
             unverifiedQueue.offer(proposal);
-            restored++;
+            restoredPending++;
         }
-        if (restored > 0 || skippedTerminal > 0) {
-            log.info("🔁 Restored {} persisted proposals into unverified queue (skipped terminal: {})",
-                restored, skippedTerminal);
+        if (restoredPending > 0 || restoredVerified > 0 || skippedTerminal > 0) {
+            log.info("🔁 Restored persisted proposals: pending={} verified={} priorityReady={} releaseMode={} skippedTerminal={}",
+                restoredPending,
+                restoredVerified,
+                restoredPriorityReady,
+                releaseMode.configValue(),
+                skippedTerminal);
         }
     }
     
@@ -1263,10 +1311,7 @@ public class ProposalQueueManagerOptimized {
         allProposals.put(proposalId, proposal);
         
         // Register wallet BEFORE enqueue for mock mode to avoid verifier race.
-        if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
-            ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
-                .registerProposalWallet(proposalId, walletAddress);
-        }
+        registerProposalWalletMapping(proposal);
 
         // Queue after mapping is available to verifier.
         unverifiedQueue.offer(proposal);
@@ -1331,10 +1376,7 @@ public class ProposalQueueManagerOptimized {
         allProposals.put(proposalId, proposal);
         
         // Register wallet BEFORE enqueue for mock mode to avoid verifier race.
-        if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
-            ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
-                .registerProposalWallet(proposalId, walletAddress);
-        }
+        registerProposalWalletMapping(proposal);
 
         // Queue after mapping is available to verifier.
         unverifiedQueue.offer(proposal);
@@ -1883,14 +1925,16 @@ public class ProposalQueueManagerOptimized {
                             // Check type: WRITE or DELETE
                             if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
                                 log.debug("🗑️  PRIORITY DELETE: Sending directly to Aeron");
-                                raftAppendCallback.appendDeleteProposal(
+                                raftAppendCallback.appendDeleteProposalWithId(
+                                    proposal.getProposalId(),
                                     proposal.getWalletAddress(),
                                     proposal.getPath(),
                                     proposal.getSignature()
                                 );
                             } else {
                                 log.debug("📝 PRIORITY WRITE: Sending directly to Aeron (ipfsCid={})", proposal.getIpfsCid());
-                                raftAppendCallback.appendProposal(
+                                raftAppendCallback.appendProposalWithId(
+                                    proposal.getProposalId(),
                                     proposal.getWalletAddress(),
                                     proposal.getPath(),
                                     proposal.getContentType(),
@@ -1926,7 +1970,7 @@ public class ProposalQueueManagerOptimized {
                         }
                     } else {
                         // EXPRESS or STANDARD: route through the active release scheduler
-                        String txHashSummary = proof.getTransactionHash().substring(0, Math.min(10, proof.getTransactionHash().length())) + "...";
+                        String txHashSummary = summarizeTxHash(proof.getTransactionHash());
                         routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());
                         workCount++;
                     }
