@@ -34,6 +34,7 @@ import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSession;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
+import org.apache.jackrabbit.oak.segment.http.server.sse.ContentEvent;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -41,6 +42,7 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.eclipse.jetty.server.Request;
 import org.junit.Test;
 
+import javax.servlet.AsyncContext;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.WriteListener;
 import javax.servlet.http.HttpServletRequest;
@@ -861,6 +863,63 @@ public class RequestRouterTest {
             verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"status\":\"complete\""));
+        });
+    }
+
+    @Test
+    public void testEventStreamRouteReplaysBufferedEvents() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            router.getEventBroadcaster().broadcast(ContentEvent.builder()
+                .id("evt-1")
+                .timestamp(100L)
+                .path("/content/doc-1")
+                .wallet("0xwallet")
+                .organization("acme")
+                .build());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/events/stream");
+            AsyncContext asyncContext = mock(AsyncContext.class);
+            when(request.startAsync()).thenReturn(asyncContext);
+            when(request.getParameter("types")).thenReturn("content");
+            when(request.getParameter("wallets")).thenReturn("0xwallet");
+            when(request.getParameter("organizations")).thenReturn("acme");
+            when(request.getParameter("path")).thenReturn("/content");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setContentType("text/event-stream");
+            assertTrue(body.toString().contains(": connected to oak-chain event stream"));
+            assertTrue(body.toString().contains("id: evt-1"));
+        });
+    }
+
+    @Test
+    public void testOpsEventStreamRouteUsesOpsEnvelope() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            router.getEventBroadcaster().broadcast(ContentEvent.builder()
+                .id("10")
+                .type(ContentEvent.EventType.CONSENSUS)
+                .action(ContentEvent.Action.LEADER_CHANGE)
+                .timestamp(100L)
+                .message("leader switched")
+                .build());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/ops/events/stream");
+            AsyncContext asyncContext = mock(AsyncContext.class);
+            when(request.startAsync()).thenReturn(asyncContext);
+            when(request.getHeader("Last-Event-ID")).thenReturn("9");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setContentType("text/event-stream");
+            assertTrue(body.toString().contains("event: cluster.leader.changed"));
+            assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
         });
     }
 
