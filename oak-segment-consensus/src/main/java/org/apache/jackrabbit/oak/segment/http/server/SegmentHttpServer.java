@@ -62,6 +62,7 @@ public class SegmentHttpServer {
     private final ServerContext context;
     private final RequestRouter router;
     private final TlsConfiguration tlsConfig;
+    private final JoinProofFactory joinProofFactory;
     
     // Keep references for backward compatibility and methods that need direct access
     private final FileStore fileStore;
@@ -102,6 +103,7 @@ public class SegmentHttpServer {
         
         // Create RequestRouter (will be updated when consensus engines are set)
         this.router = new RequestRouter(context);
+        this.joinProofFactory = new JoinProofFactory(fileStore, context, System::currentTimeMillis);
         
         // Create server - TLS will be configured in start() if enabled
         this.server = new Server();
@@ -193,202 +195,6 @@ public class SegmentHttpServer {
         selfReg.updateStatus(ValidatorRegistration.Status.READY);
         context.registeredValidators.put(validatorId, selfReg);
         log.info("✅ Self registered (local context): {} ({})", validatorId, context.selfUrl);
-    }
-    
-    /**
-     * Generate Proof-of-Readiness for joining consensus.
-     * 
-     * This cryptographically proves the validator is ready to participate in consensus.
-     * Called before broadcasting presence to the network.
-     */
-    private org.apache.jackrabbit.oak.segment.consensus.security.JoinProof generateJoinProof(
-            String validatorId, String validatorUrl) {
-        
-        org.apache.jackrabbit.oak.segment.consensus.security.JoinProof proof = 
-            new org.apache.jackrabbit.oak.segment.consensus.security.JoinProof();
-        
-        try {
-            // 1. Proof of Sync - Current HEAD
-            String currentHead = fileStore.getHead().getRecordId().toString();
-            proof.setHeadSegmentId(currentHead);
-            proof.setHeadCapturedAt(System.currentTimeMillis());
-            
-            // 2. Proof of Epoch Alignment - Current epoch (from Aeron consensus)
-            if (context.aeronConsensusEngine != null) {
-                int currentEpoch = context.aeronConsensusEngine.getCurrentEpoch();
-                proof.setCurrentEpoch(currentEpoch);
-                proof.setEpochCalculatedAt(System.currentTimeMillis());
-            }
-            
-            // 3. Proof of Genesis - Genesis segment with cryptographic hash
-            String genesisSegmentId = getOrInitializeGenesis(currentHead);
-            String genesisHash = computeGenesisHash(genesisSegmentId);
-            proof.setGenesisSegmentId(genesisSegmentId);
-            proof.setGenesisHash(genesisHash);
-            
-            // 4. Proof of Capability - Validator ID
-            proof.setValidatorId(validatorId);
-            proof.setValidatorUrl(validatorUrl);
-            // Generate cryptographic nonce and signature
-            String nonce = generateSecureNonce();
-            proof.setChallengeNonce(nonce);
-            proof.setNonceSignature(signNonce(nonce, validatorId));
-            
-            // 5. Proof of Segment Access - Sample segments with real hashes
-            java.util.List<String> sampleIds = new java.util.ArrayList<>();
-            java.util.List<String> sampleHashes = new java.util.ArrayList<>();
-            
-            // Use current HEAD and compute its hash
-            sampleIds.add(currentHead);
-            sampleHashes.add(computeSegmentHash(currentHead));
-            
-            // Add genesis if different from HEAD
-            if (!currentHead.equals(genesisSegmentId)) {
-                sampleIds.add(genesisSegmentId);
-                sampleHashes.add(genesisHash);
-            }
-            
-            proof.setSampleSegmentIds(sampleIds);
-            proof.setSampleSegmentHashes(sampleHashes);
-            
-            log.info("✅ Generated Join Proof:");
-            log.info("   HEAD: {}", currentHead.substring(0, Math.min(24, currentHead.length())));
-            log.info("   Genesis: {}", genesisSegmentId.substring(0, Math.min(24, genesisSegmentId.length())));
-            log.info("   Genesis Hash: {}", genesisHash.substring(0, Math.min(16, genesisHash.length())) + "...");
-            log.info("   Epoch: {}", proof.getCurrentEpoch());
-            log.info("   Samples: {}", sampleIds.size());
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to generate join proof", e);
-        }
-        
-        return proof;
-    }
-    
-    /**
-     * Get or initialize the genesis segment ID.
-     * 
-     * <p>The genesis segment is the first segment in the chain, tracked for
-     * proof-of-alignment verification. Once set, it never changes.
-     */
-    private String getOrInitializeGenesis(String currentHead) {
-        if (context.genesisSegmentId != null) {
-            return context.genesisSegmentId;
-        }
-        
-        // First time - use current HEAD as genesis
-        // In production, this would be loaded from persistent storage
-        synchronized (context) {
-            if (context.genesisSegmentId == null) {
-                context.genesisSegmentId = currentHead;
-                context.genesisTimestamp = System.currentTimeMillis();
-                context.genesisHash = computeGenesisHash(currentHead);
-                log.info("🌱 Initialized genesis: {}", currentHead.substring(0, Math.min(24, currentHead.length())));
-            }
-        }
-        
-        return context.genesisSegmentId;
-    }
-    
-    /**
-     * Compute SHA-256 hash of genesis segment for cryptographic verification.
-     * 
-     * <p>The hash is computed from:
-     * - Segment ID (record ID string)
-     * - Genesis timestamp
-     * - Chain identifier (validator network)
-     */
-    private String computeGenesisHash(String segmentId) {
-        try {
-            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            
-            // Include segment ID
-            digest.update(segmentId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            
-            // Include genesis timestamp (or 0 if not yet set)
-            long timestamp = context.genesisTimestamp > 0 ? context.genesisTimestamp : System.currentTimeMillis();
-            digest.update(Long.toString(timestamp).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            
-            // Include chain identifier (self URL as network identifier)
-            if (context.selfUrl != null) {
-                digest.update(context.selfUrl.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            }
-            
-            byte[] hash = digest.digest();
-            return bytesToHex(hash);
-            
-        } catch (java.security.NoSuchAlgorithmException e) {
-            log.error("SHA-256 not available", e);
-            return "sha256-unavailable";
-        }
-    }
-    
-    /**
-     * Compute SHA-256 hash of a segment for proof verification.
-     */
-    private String computeSegmentHash(String segmentId) {
-        try {
-            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            
-            // Hash the segment ID
-            digest.update(segmentId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            
-            // Include current timestamp for freshness
-            digest.update(Long.toString(System.currentTimeMillis()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            
-            byte[] hash = digest.digest();
-            return bytesToHex(hash);
-            
-        } catch (java.security.NoSuchAlgorithmException e) {
-            log.error("SHA-256 not available", e);
-            return "sha256-unavailable";
-        }
-    }
-    
-    /**
-     * Generate a cryptographically secure nonce for challenge-response.
-     */
-    private String generateSecureNonce() {
-        try {
-            java.security.SecureRandom random = new java.security.SecureRandom();
-            byte[] nonceBytes = new byte[32];
-            random.nextBytes(nonceBytes);
-            return bytesToHex(nonceBytes);
-        } catch (Exception e) {
-            log.warn("Failed to generate secure nonce, using fallback", e);
-            return "nonce-" + System.currentTimeMillis() + "-" + Math.random();
-        }
-    }
-    
-    /**
-     * Sign a nonce with validator identity for proof of capability.
-     * 
-     * <p>In production, this would use the validator's private key.
-     * For now, we use HMAC-SHA256 with validator ID as key.
-     */
-    private String signNonce(String nonce, String validatorId) {
-        try {
-            javax.crypto.Mac hmac = javax.crypto.Mac.getInstance("HmacSHA256");
-            javax.crypto.spec.SecretKeySpec keySpec = new javax.crypto.spec.SecretKeySpec(
-                validatorId.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256");
-            hmac.init(keySpec);
-            byte[] signature = hmac.doFinal(nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return bytesToHex(signature);
-        } catch (Exception e) {
-            log.warn("Failed to sign nonce, using fallback", e);
-            return "sig-" + nonce.hashCode();
-        }
-    }
-    
-    /**
-     * Convert byte array to hexadecimal string.
-     */
-    private String bytesToHex(byte[] bytes) {
-        StringBuilder hex = new StringBuilder();
-        for (byte b : bytes) {
-            hex.append(String.format("%02x", b));
-        }
-        return hex.toString();
     }
     
     /**
@@ -596,8 +402,8 @@ public class SegmentHttpServer {
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
         // Generate Proof-of-Readiness before broadcasting
-        org.apache.jackrabbit.oak.segment.consensus.security.JoinProof proof = 
-            generateJoinProof(validatorId, validatorUrl);
+        org.apache.jackrabbit.oak.segment.consensus.security.JoinProof proof =
+            joinProofFactory.create(validatorId, validatorUrl);
         
         int successCount = 0;
         int failureCount = 0;
