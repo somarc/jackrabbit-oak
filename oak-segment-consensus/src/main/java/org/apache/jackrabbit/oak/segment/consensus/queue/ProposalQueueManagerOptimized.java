@@ -84,6 +84,7 @@ public class ProposalQueueManagerOptimized {
     
     // Configuration
     private final long confirmationTimeoutMs;
+    private final int requiredConfirmations;
     private final long restoreTimeoutMs;
     private final int maxMessageBatch;
     private final int maxRetryCount;
@@ -237,6 +238,7 @@ public class ProposalQueueManagerOptimized {
         this.persistenceStore = createPersistenceStore(persistenceDir, resolved);
         this.counterStateStore = createCounterStateStore(persistenceDir);
         this.confirmationTimeoutMs = resolved.getConfirmationTimeoutMs();
+        this.requiredConfirmations = resolved.getRequiredConfirmations();
         this.restoreTimeoutMs = resolved.getRestoreTimeoutMs();
         this.maxMessageBatch = resolved.getMaxMessageBatch();
         this.maxRetryCount = resolved.getMaxRetryCount();
@@ -333,7 +335,8 @@ public class ProposalQueueManagerOptimized {
         log.info("   - Release Finalizer Agent: SleepingMillisIdleStrategy({}ms)",
             releaseMode == AdaptiveReleaseMode.ADAPTIVE_ACTIVE ? 25 : 1000);
         log.info("   - Max batch size: {}", maxMessageBatch);
-        log.info("   - Finality: 2 epochs (~{} minutes)", (2 * 384_000) / 60000.0);
+        log.info("   - Required payment confirmations: {}", requiredConfirmations);
+        log.info("   - Legacy epoch delay: 2 epochs (~{} minutes) when release_mode=epoch", (2 * 384_000) / 60000.0);
         log.info("   - Release mode: {}", releaseMode.configValue());
         if (persistenceStore != null) {
             if (isAsyncPersistenceEnabled()) {
@@ -567,6 +570,7 @@ public class ProposalQueueManagerOptimized {
         runtimeStages.put("backpressureOverflowSeparateBufferEnabled", true);
         stats.put("runtimeStageCounts", runtimeStages);
         stats.put("releaseMode", releaseMode.configValue());
+        stats.put("requiredConfirmations", requiredConfirmations);
         stats.put("adaptiveReleaseGovernorState", adaptiveDecision.getState().name());
         stats.put("adaptiveReleaseAction", adaptiveDecision.getAction().name());
         stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.getReasonCodes());
@@ -1898,7 +1902,7 @@ public class ProposalQueueManagerOptimized {
                         continue;
                     }
                     
-                    if (!proof.isConfirmed(1)) {
+                    if (!proof.isConfirmed(requiredConfirmations)) {
                         // Payment exists but not confirmed yet - re-queue
                         verifierRequeueUnconfirmedCount.incrementAndGet();
                         unverifiedQueue.offer(proposal);

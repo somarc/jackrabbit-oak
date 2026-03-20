@@ -31,6 +31,7 @@ public final class ProposalQueueTuningIntrospection {
         ProposalQueueTuning tuning = ProposalQueueTuningRegistry.get();
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("confirmation_timeout_ms", tuning.getConfirmationTimeoutMs());
+        values.put("required_confirmations", tuning.getRequiredConfirmations());
         values.put("restore_timeout_ms", tuning.getRestoreTimeoutMs());
         values.put("max_message_batch", tuning.getMaxMessageBatch());
         values.put("max_retry_count", tuning.getMaxRetryCount());

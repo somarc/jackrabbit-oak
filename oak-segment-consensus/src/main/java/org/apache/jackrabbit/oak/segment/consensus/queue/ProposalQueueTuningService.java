@@ -39,7 +39,7 @@ public final class ProposalQueueTuningService {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromConfig(config);
         ProposalQueueTuningRegistry.set(tuning);
         log.info("ProposalQueueTuningService activated");
-        log.info("QUEUE_TUNING_SOURCE source=osgi-config-admin persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={} release_mode={}",
+        log.info("QUEUE_TUNING_SOURCE source=osgi-config-admin persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={} required_confirmations={} release_mode={}",
             tuning.isPersistenceEnabled(),
             tuning.getMaxMessageBatch(),
             tuning.getFinalizationChunkSize(),
@@ -47,6 +47,7 @@ public final class ProposalQueueTuningService {
             tuning.getMaxPendingMessages(),
             tuning.getBackpressureTimeoutMs(),
             tuning.getCounterRotationIntervalMs(),
+            tuning.getRequiredConfirmations(),
             tuning.getReleaseMode().configValue());
         log.info("  maxMessageBatch: {}", tuning.getMaxMessageBatch());
         log.info("  finalizationChunkSize: {}", tuning.getFinalizationChunkSize());
@@ -54,6 +55,7 @@ public final class ProposalQueueTuningService {
         log.info("  maxRetryCount: {}", tuning.getMaxRetryCount());
         log.info("  verifierThreads: {}", tuning.getVerifierThreads());
         log.info("  confirmationTimeoutMs: {}", tuning.getConfirmationTimeoutMs());
+        log.info("  requiredConfirmations: {}", tuning.getRequiredConfirmations());
         log.info("  restoreTimeoutMs: {}", tuning.getRestoreTimeoutMs());
         log.info("  processedRetentionMs: {}", tuning.getProcessedRetentionMs());
         log.info("  persistenceEnabled: {}", tuning.isPersistenceEnabled());

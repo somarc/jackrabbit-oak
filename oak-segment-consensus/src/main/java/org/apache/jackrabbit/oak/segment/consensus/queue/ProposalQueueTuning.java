@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
 final class ProposalQueueTuning {
 
     static final long DEFAULT_CONFIRMATION_TIMEOUT_MS = 300_000;
+    static final int DEFAULT_REQUIRED_CONFIRMATIONS = 1;
     static final int DEFAULT_MAX_MESSAGE_BATCH = 10;
     static final int DEFAULT_MAX_RETRY_COUNT = 5;
     static final int DEFAULT_FINALIZATION_CHUNK_SIZE = 3;
@@ -35,6 +36,7 @@ final class ProposalQueueTuning {
     static final String DEFAULT_RELEASE_MODE = "epoch";
 
     private final long confirmationTimeoutMs;
+    private final int requiredConfirmations;
     private final long restoreTimeoutMs;
     private final int maxMessageBatch;
     private final int maxRetryCount;
@@ -52,6 +54,7 @@ final class ProposalQueueTuning {
     private final AdaptiveReleaseMode releaseMode;
 
     private ProposalQueueTuning(long confirmationTimeoutMs,
+                                int requiredConfirmations,
                                 long restoreTimeoutMs,
                                 int maxMessageBatch,
                                 int maxRetryCount,
@@ -68,6 +71,7 @@ final class ProposalQueueTuning {
                                 long counterRotationIntervalMs,
                                 AdaptiveReleaseMode releaseMode) {
         this.confirmationTimeoutMs = confirmationTimeoutMs;
+        this.requiredConfirmations = requiredConfirmations;
         this.restoreTimeoutMs = restoreTimeoutMs;
         this.maxMessageBatch = maxMessageBatch;
         this.maxRetryCount = maxRetryCount;
@@ -93,6 +97,11 @@ final class ProposalQueueTuning {
         long restoreTimeoutMs = Long.getLong(
             "oak.proposal.restore.timeout.ms",
             confirmationTimeoutMs
+        );
+        int requiredConfirmations = readIntProp(
+            "oak.proposal.confirmation.required",
+            DEFAULT_REQUIRED_CONFIRMATIONS,
+            1
         );
         int maxMessageBatch = readIntProp("oak.proposal.batch.max", DEFAULT_MAX_MESSAGE_BATCH, 1);
         int maxRetryCount = readIntProp("oak.proposal.max.retry.count", DEFAULT_MAX_RETRY_COUNT, 1);
@@ -144,6 +153,7 @@ final class ProposalQueueTuning {
         );
         return new ProposalQueueTuning(
             confirmationTimeoutMs,
+            requiredConfirmations,
             restoreTimeoutMs,
             maxMessageBatch,
             maxRetryCount,
@@ -164,6 +174,7 @@ final class ProposalQueueTuning {
 
     static ProposalQueueTuning fromConfig(ProposalQueueTuningConfig config) {
         long confirmationTimeoutMs = Math.max(1L, config.confirmation_timeout_ms());
+        int requiredConfirmations = clampInt(config.required_confirmations(), 1);
         long restoreTimeoutMs = config.restore_timeout_ms() > 0
             ? config.restore_timeout_ms()
             : confirmationTimeoutMs;
@@ -174,6 +185,7 @@ final class ProposalQueueTuning {
             : configuredVerifierThreads;
         return new ProposalQueueTuning(
             confirmationTimeoutMs,
+            requiredConfirmations,
             restoreTimeoutMs,
             clampInt(config.max_message_batch(), 1),
             config.max_retry_count(),
@@ -194,6 +206,10 @@ final class ProposalQueueTuning {
 
     long getConfirmationTimeoutMs() {
         return confirmationTimeoutMs;
+    }
+
+    int getRequiredConfirmations() {
+        return requiredConfirmations;
     }
 
     long getRestoreTimeoutMs() {

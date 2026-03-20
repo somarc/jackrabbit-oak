@@ -32,6 +32,12 @@ public @interface ProposalQueueTuningConfig {
     long confirmation_timeout_ms() default ProposalQueueTuning.DEFAULT_CONFIRMATION_TIMEOUT_MS;
 
     @AttributeDefinition(
+        name = "Required Confirmations",
+        description = "Minimum payment confirmations required before a verified proposal can leave the verifier stage."
+    )
+    int required_confirmations() default ProposalQueueTuning.DEFAULT_REQUIRED_CONFIRMATIONS;
+
+    @AttributeDefinition(
         name = "Restore Timeout (ms)",
         description = "Timeout applied to proposals restored from persistence. Uses confirmation timeout if <= 0."
     )

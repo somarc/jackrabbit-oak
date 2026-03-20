@@ -461,6 +461,14 @@ public class OsgiConfigApiHandler {
             "Proposal confirmation timeout",
             "oak.proposal.confirmation.timeout.ms"));
         schema.add(schemaEntry(
+            "proposalQueueTuning.required_confirmations",
+            "int",
+            1,
+            "runtime-readable",
+            "guarded",
+            "Minimum payment confirmations before verifier release",
+            "oak.proposal.confirmation.required"));
+        schema.add(schemaEntry(
             "proposalQueueTuning.restore_timeout_ms",
             "long",
             300000L,
@@ -506,7 +514,7 @@ public class OsgiConfigApiHandler {
             "epoch",
             "runtime-readable",
             "guarded",
-            "Verified-to-Aeron release mode (epoch or adaptive-shadow)",
+            "Verified-to-Aeron release mode (epoch, adaptive-shadow, or adaptive-active)",
             "oak.proposal.release.mode"));
 
         schema.add(schemaEntry(

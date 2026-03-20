@@ -31,6 +31,7 @@ public class ProposalQueueTuningTest {
         System.clearProperty("oak.proposal.persistence.flush.ms");
         System.clearProperty("oak.proposal.persistence.flush.batch");
         System.clearProperty("oak.proposal.release.mode");
+        System.clearProperty("oak.proposal.confirmation.required");
     }
 
     @Test
@@ -64,6 +65,22 @@ public class ProposalQueueTuningTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
         assertEquals(AdaptiveReleaseMode.EPOCH, tuning.getReleaseMode());
+    }
+
+    @Test
+    public void testRequiredConfirmationsDefaultsToOne() {
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertEquals(1, tuning.getRequiredConfirmations());
+    }
+
+    @Test
+    public void testRequiredConfirmationsOverrideApplies() {
+        System.setProperty("oak.proposal.confirmation.required", "3");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertEquals(3, tuning.getRequiredConfirmations());
     }
 
     @Test

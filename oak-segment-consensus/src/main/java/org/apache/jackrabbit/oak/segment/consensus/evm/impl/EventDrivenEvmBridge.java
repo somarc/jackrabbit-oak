@@ -143,17 +143,17 @@ public class EventDrivenEvmBridge implements EvmBridge {
         // Check if payment proof already exists (from processed event)
         PaymentProof existing = payments.get(proposalId);
         if (existing != null) {
-            return existing;
+            return refreshProofConfirmations(existing);
         }
         
         // In mock mode, auto-confirm proposals for testing
         // This allows load tests to work without injecting events
         if (mockMode) {
-            return autoConfirmMockProposal(proposalId);
+            return refreshProofConfirmations(autoConfirmMockProposal(proposalId));
         }
-        
+
         // In real mode, fall back to direct log query in case subscription missed event.
-        return fetchPaymentFromChain(proposalId);
+        return refreshProofConfirmations(fetchPaymentFromChain(proposalId));
     }
     
     /**
@@ -326,6 +326,16 @@ public class EventDrivenEvmBridge implements EvmBridge {
         } else {
             log.warn("⚠️  simulateWriteAuthorizedEvent called in REAL mode - ignoring (events come from blockchain)");
         }
+    }
+
+    /**
+     * Advance the mock chain head to simulate additional confirmations in tests.
+     */
+    public void advanceMockBlocks(long blocks) {
+        if (!mockMode || blocks <= 0) {
+            return;
+        }
+        currentBlock += blocks;
     }
     
     /**
@@ -502,6 +512,45 @@ public class EventDrivenEvmBridge implements EvmBridge {
             log.debug("On-chain payment lookup failed for proposalId={}", proposalId, e);
         }
         return null;
+    }
+
+    private PaymentProof refreshProofConfirmations(PaymentProof proof) {
+        if (proof == null) {
+            return null;
+        }
+        int confirmations = confirmationsForBlock(proof.getBlockNumber());
+        if (confirmations == proof.getConfirmations()) {
+            return proof;
+        }
+        PaymentProof refreshed = new SimplePaymentProof(
+            proof.getTransactionHash(),
+            proof.getBlockNumber(),
+            proof.getFromAddress(),
+            proof.getContractAddress(),
+            proof.getProposalId(),
+            proof.getAmountWei(),
+            confirmations
+        );
+        payments.put(proof.getProposalId(), refreshed);
+        return refreshed;
+    }
+
+    private int confirmationsForBlock(long blockNumber) {
+        long latestBlock = resolveLatestBlockNumber();
+        long confirmations = latestBlock >= blockNumber ? (latestBlock - blockNumber) + 1L : 1L;
+        return confirmations > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) confirmations;
+    }
+
+    private long resolveLatestBlockNumber() {
+        if (!mockMode && web3j != null) {
+            try {
+                long latestBlock = web3j.ethBlockNumber().send().getBlockNumber().longValue();
+                currentBlock = Math.max(currentBlock, latestBlock);
+            } catch (Exception e) {
+                log.debug("Unable to refresh latest block number from Web3j; using cached head {}", currentBlock, e);
+            }
+        }
+        return currentBlock;
     }
 
     private WriteAuthorizedEvent parsePaymentLog(

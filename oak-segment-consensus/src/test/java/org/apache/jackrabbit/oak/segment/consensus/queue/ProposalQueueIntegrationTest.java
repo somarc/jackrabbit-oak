@@ -76,8 +76,11 @@ public class ProposalQueueIntegrationTest {
         // Create Beacon Chain client (will use mock mode - 30s epochs)
         beaconClient = new BeaconChainClient("ignored-in-mock-mode");
         beaconClient.startBackgroundPolling();
-        
-        // Create queue manager with callback
+
+        createQueueManager();
+    }
+
+    private void createQueueManager() {
         raftAppendLatch = new CountDownLatch(1);
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
@@ -113,10 +116,34 @@ public class ProposalQueueIntegrationTest {
         
         // Create backpressure manager for test
         BackpressureManager backpressureManager = new BackpressureManager();
-        
+
         // Use optimized queue manager (production implementation)
         queueManager = new ProposalQueueManagerOptimized(bridge, callback, backpressureManager, beaconClient);
         queueManager.start();
+    }
+
+    private void recreateQueueManager() {
+        if (queueManager != null) {
+            queueManager.stop();
+        }
+        if (bridge != null) {
+            bridge.stop();
+        }
+        if (beaconClient != null) {
+            beaconClient.stopBackgroundPolling();
+        }
+
+        bridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        bridge.start();
+
+        beaconClient = new BeaconChainClient("ignored-in-mock-mode");
+        beaconClient.startBackgroundPolling();
+
+        createQueueManager();
     }
     
     @After
@@ -134,6 +161,7 @@ public class ProposalQueueIntegrationTest {
         System.clearProperty("oak.proposal.persistence.flush.ms");
         System.clearProperty("oak.proposal.persistence.flush.batch");
         System.clearProperty("oak.consensus.max.pending.messages");
+        System.clearProperty("oak.proposal.confirmation.required");
     }
     
     @Test
@@ -180,6 +208,50 @@ public class ProposalQueueIntegrationTest {
         // Step 4: Verify proposal processed
         // Note: After processing, proposal is removed from allProposals map
         // So we check via the callback capture
+        assertEquals("Callback should have captured proposal", "captured", appendedProposalId);
+    }
+
+    @Test
+    public void testPriorityTierWaitsForConfiguredConfirmations() throws InterruptedException {
+        System.setProperty("oak.proposal.confirmation.required", "2");
+        recreateQueueManager();
+        assertEquals("Queue should load the configured confirmation depth",
+            2L, longStat(queueManager.getQueueStats(), "requiredConfirmations"));
+
+        String proposalId = "test-confirmations-001";
+        String ethereumTxHash = "0xtxconfirm001";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/page-confirmations";
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "Needs two confirmations",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
+            null
+        );
+
+        long paymentBlockNumber = bridge.getCurrentBlockNumber();
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(1_000_000),
+            paymentBlockNumber,
+            ethereumTxHash
+        );
+
+        assertFalse("Proposal should not release before the second confirmation",
+            raftAppendLatch.await(300, TimeUnit.MILLISECONDS));
+
+        bridge.advanceMockBlocks(1);
+
+        assertTrue("Proposal should release once required confirmations are satisfied",
+            raftAppendLatch.await(10, TimeUnit.SECONDS));
         assertEquals("Callback should have captured proposal", "captured", appendedProposalId);
     }
     
