@@ -385,7 +385,7 @@ public class GlobalStoreServer {
                 System.err.println("");
                 System.err.println("See: oak-segment-consensus/IPFS-DATASTORE.md");
                 System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.exit(1);
+                throw startupFailure("blobstore.type is not configured");
             }
             
             if (!"ipfs".equalsIgnoreCase(blobStoreType)) {
@@ -398,7 +398,7 @@ public class GlobalStoreServer {
                 System.err.println("");
                 System.err.println("FIX: Set blobstore.type=ipfs");
                 System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.exit(1);
+                throw startupFailure("Invalid blobstore.type: " + blobStoreType);
             }
             
             // Initialize IPFS DataStore (REQUIRED)
@@ -448,8 +448,7 @@ public class GlobalStoreServer {
                 System.err.println("See: oak-segment-consensus/IPFS-DATASTORE.md");
                 System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 e.printStackTrace();
-                System.exit(1);
-                throw new RuntimeException("IPFS BlobStore initialization failed", e); // Never reached
+                throw startupFailure("IPFS BlobStore initialization failed", e);
             }
             
             // Build FileStore with IPFS BlobStore (REQUIRED)
@@ -1181,6 +1180,14 @@ public class GlobalStoreServer {
 
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig currentAeronConfig() {
         return aeronClusterService != null ? aeronClusterService.getConfig() : null;
+    }
+
+    private static IOException startupFailure(String message) {
+        return new IOException(message);
+    }
+
+    private static IOException startupFailure(String message, Exception cause) {
+        return new IOException(message, cause);
     }
 
     private String resolveNodeKeystorePath() {

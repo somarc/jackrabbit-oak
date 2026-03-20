@@ -55,14 +55,11 @@ public class ProposalQueryHandler {
         response.setContentType("application/json");
 
         try {
-            String path = request.getRequestURI();
-            // Extract proposalId from path: /v1/proposals/{proposalId}/status
-            String[] parts = path.split("/");
-            if (parts.length < 4) {
+            String proposalId = extractPathSegment(request.getRequestURI(), 3, "status");
+            if (proposalId == null) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID");
                 return;
             }
-            String proposalId = parts[3];
 
             if (context.proposalQueueManager == null) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
@@ -102,14 +99,11 @@ public class ProposalQueryHandler {
         response.setContentType("application/json");
 
         try {
-            String path = request.getRequestURI();
-            // Extract operationId from path: /v1/ops/operations/{operationId}
-            String[] parts = path.split("/");
-            if (parts.length < 5) {
+            String operationId = extractPathSegment(request.getRequestURI(), 4, null);
+            if (operationId == null) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid operation ID");
                 return;
             }
-            String operationId = parts[4];
 
             if (context.proposalQueueManager == null) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
@@ -305,6 +299,26 @@ public class ProposalQueryHandler {
 
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
         }
+    }
+
+    private static String extractPathSegment(String path, int segmentIndex, String requiredSuffix) {
+        if (path == null || path.trim().isEmpty()) {
+            return null;
+        }
+
+        String[] parts = path.split("/");
+        if (segmentIndex < 0 || parts.length <= segmentIndex) {
+            return null;
+        }
+        if (requiredSuffix != null) {
+            int lastIndex = parts.length - 1;
+            if (lastIndex <= segmentIndex || !requiredSuffix.equals(parts[lastIndex])) {
+                return null;
+            }
+        }
+
+        String segment = parts[segmentIndex];
+        return segment == null || segment.trim().isEmpty() ? null : segment;
     }
 
     private String mapToOpsLifecycleState(ProposalStatus status) {

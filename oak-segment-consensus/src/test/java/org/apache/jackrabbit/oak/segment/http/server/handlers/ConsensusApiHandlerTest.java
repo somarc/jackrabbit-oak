@@ -301,13 +301,13 @@ public class ConsensusApiHandlerTest {
     @Test
     public void testGetProposalStatusRejectsMissingId() throws Exception {
         // Given: Request without proposal ID (null path)
-        when(mockRequest.getPathInfo()).thenReturn(null);
+        when(mockRequest.getRequestURI()).thenReturn(null);
         
         // When: Proposal status requested
         handler.handleGetProposalStatus(mockRequest, mockResponse);
         
-        // Then: Should return error (500 for null path)
-        assertJsonErrorContains(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error");
+        // Then: Should reject the malformed request without throwing internally
+        assertJsonErrorContains(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID");
     }
 
     @Test
