@@ -632,6 +632,44 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testProposeDeleteRouteQueuesDeleteProposal() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-propose-delete");
+            try {
+                String wallet = "0x1234567890abcdef1234567890abcdef12345678";
+                MemoryNodeStore nodeStore = new MemoryNodeStore();
+                seedWallet(nodeStore, wallet);
+                String contentPath = WalletPathUtil.getShardRoot(wallet) + "/content/doc-1";
+                ServerContext context = newContext(nodeStore, storeDirectory);
+                AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+                when(engine.isClusterHealthy()).thenReturn(true);
+                context.aeronConsensusEngine = engine;
+                ClientRegistration registration = new ClientRegistration("author-1", "http://author-1:4502", wallet);
+                context.registeredClients.put(wallet, registration);
+                context.registeredClients.put("author-1", registration);
+                context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("POST", "/v1/propose-delete");
+                when(request.getParameter("walletAddress")).thenReturn(wallet);
+                when(request.getParameter("signature")).thenReturn("0xabcdef12");
+                when(request.getParameter("contentPath")).thenReturn(contentPath);
+                when(request.getParameter("ethereumTxHash")).thenReturn("0xabcdef123456789f");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+                assertTrue(body.toString().contains("\"type\":\"DELETE\""));
+                assertTrue(body.toString().contains("\"status\":\"accepted\""));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
     public void testNgrokRouteReturnsSelfUrl() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
