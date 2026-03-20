@@ -34,8 +34,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.nio.file.Path;
 
 /**
@@ -63,6 +61,7 @@ public class SegmentHttpServer {
     private final RequestRouter router;
     private final TlsConfiguration tlsConfig;
     private final JoinProofFactory joinProofFactory;
+    private final PeerUrlResolver peerUrlResolver;
     
     // Keep references for backward compatibility and methods that need direct access
     private final FileStore fileStore;
@@ -104,6 +103,7 @@ public class SegmentHttpServer {
         // Create RequestRouter (will be updated when consensus engines are set)
         this.router = new RequestRouter(context);
         this.joinProofFactory = new JoinProofFactory(fileStore, context, System::currentTimeMillis);
+        this.peerUrlResolver = new PeerUrlResolver();
         
         // Create server - TLS will be configured in start() if enabled
         this.server = new Server();
@@ -198,71 +198,6 @@ public class SegmentHttpServer {
     }
     
     /**
-     * Convert hostname-based URL to IP-based URL for reliable Docker networking.
-     * 
-     * <p>DNS resolution can be unreliable in Docker Compose, especially during startup.
-     * This method resolves hostnames to IP addresses to ensure peer registration succeeds.
-     * 
-     * @param url URL with hostname (e.g., "http://validator-2:8090")
-     * @return URL with IP address (e.g., "http://172.18.0.3:8090")
-     */
-    private String convertUrlToIP(String url) {
-        try {
-            java.net.URL parsedUrl = new java.net.URL(url);
-            String hostname = parsedUrl.getHost();
-            int port = parsedUrl.getPort();
-            String protocol = parsedUrl.getProtocol();
-            String path = parsedUrl.getPath();
-            
-            // If already an IP address, return as-is
-            if (hostname.matches("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) {
-                return url;
-            }
-            
-            // Resolve hostname to IP with retry logic
-            final int maxRetries = 10;
-            int retryDelayMs = 1000;
-            
-            for (int attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    String ip = InetAddress.getByName(hostname).getHostAddress();
-                    String ipUrl = String.format("%s://%s%s%s", 
-                        protocol, 
-                        ip, 
-                        port != -1 ? ":" + port : "", 
-                        path != null ? path : "");
-                    if (attempt > 1) {
-                        log.debug("✅ Resolved {} → {} (attempt {})", url, ipUrl, attempt);
-                    }
-                    return ipUrl;
-                } catch (UnknownHostException e) {
-                    if (attempt < maxRetries) {
-                        if (attempt <= 3 || attempt % 5 == 0) {
-                            log.debug("⚠️  DNS resolution failed for {} (attempt {}/{}), retrying...", 
-                                hostname, attempt, maxRetries);
-                        }
-                        try {
-                            Thread.sleep(retryDelayMs);
-                            retryDelayMs = Math.min(retryDelayMs * 2, 5000); // Cap at 5s
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            log.warn("⚠️  DNS resolution interrupted for {}", hostname);
-                            return url; // Fallback to original URL
-                        }
-                    } else {
-                        log.warn("⚠️  Failed to resolve {} after {} attempts, using hostname", hostname, maxRetries);
-                        return url; // Fallback to original URL
-                    }
-                }
-            }
-            return url; // Fallback
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to parse URL {}: {}, using original", url, e.getMessage());
-            return url; // Fallback to original URL
-        }
-    }
-    
-    /**
      * Register this validator with peer validators.
      * Called during startup to announce this validator's presence to the network.
      * 
@@ -308,7 +243,7 @@ public class SegmentHttpServer {
             }
             
             // Convert hostname URL to IP-based URL for reliable Docker networking
-            String peerUrlIP = convertUrlToIP(peerUrl);
+            String peerUrlIP = peerUrlResolver.resolve(peerUrl);
             
             boolean registered = false;
             for (int attempt = 1; attempt <= maxRetries; attempt++) {
@@ -417,7 +352,7 @@ public class SegmentHttpServer {
                 }
                 
                 // Convert hostname URL to IP-based URL for reliable Docker networking
-                String peerUrlIP = convertUrlToIP(peerUrl);
+                String peerUrlIP = peerUrlResolver.resolve(peerUrl);
                 
                 // Build peer-joined endpoint URL (using IP-based URL)
                 String peerJoinedUrl = peerUrlIP + "/v1/consensus/peer-joined";
