@@ -538,6 +538,97 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testWalletStatsRouteReturnsWalletPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-wallet-stats");
+            try {
+                String wallet = "0x1234567890abcdef1234567890abcdef12345678";
+                MemoryNodeStore nodeStore = new MemoryNodeStore();
+                seedWallet(nodeStore, wallet);
+                ServerContext context = newContext(nodeStore, storeDirectory);
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/v1/wallets/stats");
+                when(request.getParameter("wallet")).thenReturn(wallet);
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                assertTrue(body.toString().contains("\"wallet\":\"" + wallet + "\""));
+                assertTrue(body.toString().contains("\"contentCount\":2"));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testWalletContentRouteReturnsContentPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-wallet-content");
+            try {
+                String wallet = "0x1234567890abcdef1234567890abcdef12345678";
+                MemoryNodeStore nodeStore = new MemoryNodeStore();
+                seedWallet(nodeStore, wallet);
+                ServerContext context = newContext(nodeStore, storeDirectory);
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/v1/wallets/content");
+                when(request.getParameter("wallet")).thenReturn(wallet);
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                assertTrue(body.toString().contains("\"content\":["));
+                assertTrue(body.toString().contains("\"name\":\"doc-1\""));
+                assertTrue(body.toString().contains("\"message\":\"hello\""));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testPeersRouteReturnsKnownValidators() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.selfUrl = "http://validator-1:8090";
+            context.registeredValidators.put("validator-2", new ValidatorRegistration("validator-2", "http://validator-2:8090"));
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/peers");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"validatorUrl\":\"http://validator-1:8090\""));
+            assertTrue(body.toString().contains("\"validatorUrl\":\"http://validator-2:8090\""));
+        });
+    }
+
+    @Test
+    public void testNgrokRouteReturnsSelfUrl() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.selfUrl = "https://public.ngrok.app";
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/ngrok-url");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("https://public.ngrok.app"));
+        });
+    }
+
+    @Test
     public void testAeronValidatorIdentitiesRouteReturnsIdentityPayload() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
@@ -762,7 +853,10 @@ public class RequestRouterTest {
             .child(wallet);
         walletNode.setProperty("contentCount", 2L);
         walletNode.setProperty("totalWrites", 7L);
-        walletNode.child("content").child("doc-1").setProperty("contentType", "fragment");
+        walletNode.child("content").child("doc-1")
+            .setProperty("contentType", "fragment")
+            .setProperty("timestamp", 300L)
+            .setProperty("message", "hello");
         nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
     }
 
