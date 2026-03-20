@@ -18,8 +18,10 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.junit.After;
 import org.junit.Test;
 
 import javax.servlet.http.HttpServletResponse;
@@ -35,6 +37,13 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class DashboardHandlerTest {
+
+    @After
+    public void tearDown() {
+        System.clearProperty("oak.dashboard.external.url");
+        System.clearProperty("oak.blockchain.mode");
+        BlockchainConfig.reset();
+    }
 
     @Test
     public void testHandleApiIndexIncludesCoreEndpoints() throws Exception {
@@ -91,7 +100,7 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("Oak Control Plane Home"));
         assertTrue(html.contains("/api-browser"));
         assertTrue(html.contains("/v1/proposals/queue/stats"));
-        assertTrue(html.contains("legacy in-process dashboard is retired"));
+        assertTrue(html.contains("API-first runtime"));
     }
 
     @Test
@@ -123,5 +132,89 @@ public class DashboardHandlerTest {
 
         String html = body.toString();
         assertTrue(html.contains("<div class='k'>Leader</div><div class='v'>0</div>"));
+    }
+
+    @Test
+    public void testHandleDashboardRendersExternalDashboardLinkWhenConfigured() throws Exception {
+        System.setProperty("oak.dashboard.external.url", "https://ops.example.invalid/dashboard");
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        DashboardHandler handler = new DashboardHandler(newContext());
+        handler.handleDashboard(response);
+
+        String html = body.toString();
+        assertTrue(html.contains("External Ops Dashboard"));
+        assertTrue(html.contains("https://ops.example.invalid/dashboard"));
+    }
+
+    @Test
+    public void testHandleExplorerUiRendersSepoliaModeBadge() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        BlockchainConfig.reset();
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        DashboardHandler handler = new DashboardHandler(newContext());
+        handler.handleExplorerUI(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("text/html; charset=UTF-8");
+        String html = body.toString();
+        assertTrue(html.contains("Explorer | Blockchain AEM Validator"));
+        assertTrue(html.contains("mode-sepolia"));
+        assertTrue(html.contains("SEPOLIA"));
+    }
+
+    @Test
+    public void testHandleApiBrowserUiRendersMainnetModeBadge() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mainnet");
+        BlockchainConfig.reset();
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        DashboardHandler handler = new DashboardHandler(newContext());
+        handler.handleApiBrowserUI(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("text/html; charset=UTF-8");
+        String html = body.toString();
+        assertTrue(html.contains("API Browser | Blockchain AEM Validator"));
+        assertTrue(html.contains("mode-mainnet"));
+        assertTrue(html.contains("MAINNET"));
+    }
+
+    @Test
+    public void testHandleChatUiDefaultsToMockModeBadge() throws Exception {
+        BlockchainConfig.reset();
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        DashboardHandler handler = new DashboardHandler(newContext());
+        handler.handleChatUI(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("text/html; charset=UTF-8");
+        String html = body.toString();
+        assertTrue(html.contains("LLM Chat | Blockchain AEM Validator"));
+        assertTrue(html.contains("mode-mock"));
+        assertTrue(html.contains("MOCK MODE"));
+    }
+
+    private static ServerContext newContext() {
+        return new ServerContext(
+            mock(FileStore.class),
+            mock(NodeStore.class),
+            Paths.get("/tmp/store"),
+            "http://localhost:8090"
+        );
     }
 }
