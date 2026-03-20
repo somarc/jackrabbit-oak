@@ -440,6 +440,14 @@ public class ProposalQueueIntegrationTest {
                     && Boolean.TRUE.equals(runtimeStages.get("backpressureOverflowSeparateBufferEnabled"));
             }, 10_000, 25));
 
+        Map<String, Object> overflowStats = queueManager.getQueueStats();
+        assertTrue("Adaptive packing totals should expose queued proposals",
+            longStat(overflowStats, "adaptivePackingQueuedProposalCountTotal") >= 1L);
+        assertTrue("Overflow totals should record buffered proposals",
+            longStat(overflowStats, "backpressureOverflowBufferedProposalCountTotal") >= 1L);
+        assertTrue("Verified resident count should include overflow debt",
+            longStat(overflowStats, "verifiedResidentProposalCount") >= 1L);
+
         pressuredBackpressure.incrementAcknowledged(2L);
 
         assertTrue("Overflowed proposal should drain after backpressure clears",
@@ -450,8 +458,11 @@ public class ProposalQueueIntegrationTest {
             ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
 
         assertTrue("Overflow buffer should eventually drain after promotion",
-            waitForCondition(() -> longStat(queueManager.getQueueStats(), "backpressureOverflowProposalCount") == 0L,
-                10_000, 25));
+            waitForCondition(() -> {
+                Map<String, Object> stats = queueManager.getQueueStats();
+                return longStat(stats, "backpressureOverflowProposalCount") == 0L
+                    && longStat(stats, "backpressureOverflowPromotedProposalCountTotal") >= 1L;
+            }, 10_000, 25));
     }
 
     @Test
@@ -725,6 +736,9 @@ public class ProposalQueueIntegrationTest {
         assertTrue("Should have finalizedEpoch", stats.containsKey("finalizedEpoch"));
         assertTrue("Should have pendingCount", stats.containsKey("pendingCount"));
         assertTrue("Should have maxRetryLimit", stats.containsKey("maxRetryLimit"));
+        assertTrue("Should expose adaptive packing totals", stats.containsKey("adaptivePackingQueuedProposalCountTotal"));
+        assertTrue("Should expose overflow totals", stats.containsKey("backpressureOverflowBufferedProposalCountTotal"));
+        assertTrue("Should expose verified resident count", stats.containsKey("verifiedResidentProposalCount"));
         
         // Verify retry limit is configured
         assertEquals("Max retry limit should be 5", 5, stats.get("maxRetryLimit"));

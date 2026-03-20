@@ -380,19 +380,35 @@ public class ProposalQueueManagerOptimized {
         long epochVerifiedPackingBufferCount = getLongStat(epochStatsMap, "pendingProposals");
         long adaptiveVerifiedPackingBufferCount = getLongStat(adaptiveStatsMap, "pendingProposals");
         long verifiedPackingBufferCount = getVerifiedPackingBufferCount(epochStatsMap, adaptiveStatsMap);
+        long adaptiveWalletCount = getLongStat(adaptiveStatsMap, "walletCount");
+        long adaptiveQueuedProposalTotal = getLongStat(adaptiveStatsMap, "totalProposalsQueued");
+        long adaptiveDrainedProposalTotal = getLongStat(adaptiveStatsMap, "totalProposalsDrained");
+        long adaptiveCreatedBatchTotal = getLongStat(adaptiveStatsMap, "totalBatchesCreated");
         long overflowProposalCount = getLongStat(overflowStatsMap, "pendingProposals");
         long overflowBatchCount = getLongStat(overflowStatsMap, "pendingBatches");
+        long overflowBufferedBatchTotal = getLongStat(overflowStatsMap, "totalBatchesBuffered");
+        long overflowBufferedProposalTotal = getLongStat(overflowStatsMap, "totalProposalsBuffered");
+        long overflowPromotedBatchTotal = getLongStat(overflowStatsMap, "totalBatchesPromoted");
+        long overflowPromotedProposalTotal = getLongStat(overflowStatsMap, "totalProposalsPromoted");
         stats.put("currentEpoch", currentEpoch);
         stats.put("finalizedEpoch", finalizedEpoch);
         stats.put("epochsUntilFinality", currentEpoch - finalizedEpoch);
         stats.put("pendingEpochStats", epochQueue.getStats());
         stats.put("adaptivePackingBufferStats", adaptivePackingBuffer.getStats());
         stats.put("backpressureOverflowStats", backpressureOverflowBuffer.getStats());
+        stats.put("adaptivePackingWalletCount", adaptiveWalletCount);
         stats.put("epochVerifiedPackingBufferCount", epochVerifiedPackingBufferCount);
         stats.put("adaptiveVerifiedPackingBufferCount", adaptiveVerifiedPackingBufferCount);
         stats.put("verifiedPackingBufferCount", verifiedPackingBufferCount);
+        stats.put("adaptivePackingQueuedProposalCountTotal", adaptiveQueuedProposalTotal);
+        stats.put("adaptivePackingDrainedProposalCountTotal", adaptiveDrainedProposalTotal);
+        stats.put("adaptivePackingCreatedBatchCountTotal", adaptiveCreatedBatchTotal);
         stats.put("backpressureOverflowProposalCount", overflowProposalCount);
         stats.put("backpressureOverflowBatchCount", overflowBatchCount);
+        stats.put("backpressureOverflowBufferedBatchCountTotal", overflowBufferedBatchTotal);
+        stats.put("backpressureOverflowBufferedProposalCountTotal", overflowBufferedProposalTotal);
+        stats.put("backpressureOverflowPromotedBatchCountTotal", overflowPromotedBatchTotal);
+        stats.put("backpressureOverflowPromotedProposalCountTotal", overflowPromotedProposalTotal);
         
         // Count proposals by state + mempool age stats
         long pending = 0;
@@ -430,10 +446,12 @@ public class ProposalQueueManagerOptimized {
         long releaseReadyProposalCount = countQueuedProposals(batchQueue);
         long releasePressureProposalCount = releaseReadyProposalCount + overflowProposalCount;
         long releasePressureBatchCount = batchQueue.size() + overflowBatchCount;
+        long verifiedResidentProposalCount = verifiedPackingBufferCount + releasePressureProposalCount;
         stats.put("releaseReadyProposalCount", releaseReadyProposalCount);
         stats.put("releaseReadyBatchCount", batchQueue.size());
         stats.put("releasePressureProposalCount", releasePressureProposalCount);
         stats.put("releasePressureBatchCount", releasePressureBatchCount);
+        stats.put("verifiedResidentProposalCount", verifiedResidentProposalCount);
         
         // Rotating counters: bounded current window + persisted lifetime totals
         long rejectedCurrent = totalRejectedCount.get();
@@ -545,6 +563,7 @@ public class ProposalQueueManagerOptimized {
         runtimeStages.put("releaseReadyBatchCount", batchQueue.size());
         runtimeStages.put("backpressureOverflowProposalCount", overflowProposalCount);
         runtimeStages.put("backpressureOverflowBatchCount", overflowBatchCount);
+        runtimeStages.put("verifiedResidentProposalCount", verifiedResidentProposalCount);
         runtimeStages.put("backpressureOverflowSeparateBufferEnabled", true);
         stats.put("runtimeStageCounts", runtimeStages);
         stats.put("releaseMode", releaseMode.configValue());
