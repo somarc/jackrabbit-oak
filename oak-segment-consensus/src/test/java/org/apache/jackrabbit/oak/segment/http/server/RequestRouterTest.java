@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -28,6 +29,9 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.nio.file.Paths;
 
 import static org.junit.Assert.assertTrue;
@@ -174,6 +178,145 @@ public class RequestRouterTest {
         });
     }
 
+    @Test
+    public void testClusterHealthRouteReturnsClusterMetrics() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = baseEngine();
+            when(engine.isClusterHealthy()).thenReturn(true);
+            when(engine.getReachableValidatorCount()).thenReturn(2);
+            when(engine.getTotalMemberCount()).thenReturn(3);
+            when(engine.getQuorumSize()).thenReturn(2);
+            when(engine.hasQuorum()).thenReturn(true);
+            when(engine.getLastHeartbeatTime()).thenReturn(1234L);
+            when(engine.getHeartbeatAgeMs()).thenReturn(56L);
+            when(engine.getCurrentLeader()).thenReturn("http://validator-2:8090");
+            context.aeronConsensusEngine = engine;
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/health/cluster");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"status\":\"UP\""));
+            assertTrue(body.toString().contains("\"reachableCount\":2"));
+            assertTrue(body.toString().contains("\"hasQuorum\":true"));
+        });
+    }
+
+    @Test
+    public void testOpsHealthSnapshotRouteReturnsOpsEnvelope() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = baseEngine();
+            when(engine.isClusterHealthy()).thenReturn(true);
+            when(engine.getReachableValidatorCount()).thenReturn(2);
+            when(engine.getTotalMemberCount()).thenReturn(3);
+            when(engine.getQuorumSize()).thenReturn(2);
+            when(engine.getCurrentRole()).thenReturn(org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole.FOLLOWER);
+            when(engine.getCurrentLeader()).thenReturn("http://validator-2:8090");
+            context.aeronConsensusEngine = engine;
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/ops/snapshots/health");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
+            assertTrue(body.toString().contains("\"hit\":false"));
+        });
+    }
+
+    @Test
+    public void testAeronClusterStateRouteReturnsEnrichedState() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.selfUrl = "http://validator-2:8090";
+            context.aeronConsensusEngine = baseEngine();
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/aeron/cluster-state");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"clusterId\":\"oak-consensus-cluster\""));
+            assertTrue(body.toString().contains("\"walletAddress\":\"0x2222222222222222222222222222222222222222\""));
+        });
+    }
+
+    @Test
+    public void testAeronValidatorIdentitiesRouteReturnsIdentityPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.selfUrl = "http://validator-2:8090";
+            context.aeronConsensusEngine = baseEngine();
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/aeron/validator-identities");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"totalValidators\":1"));
+            assertTrue(body.toString().contains("\"knownWallets\":1"));
+        });
+    }
+
+    @Test
+    public void testAeronReplicationLagRouteReturnsLagPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = baseEngine();
+            Map<String, Object> lagStatus = new HashMap<>();
+            lagStatus.put("healthy", true);
+            lagStatus.put("replicationLag", 4);
+            when(engine.getReplicationLagStatus()).thenReturn(lagStatus);
+            context.aeronConsensusEngine = engine;
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/aeron/replication-lag");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"replicationLag\":4"));
+            assertTrue(body.toString().contains("\"healthy\":true"));
+        });
+    }
+
+    @Test
+    public void testOpsClusterSnapshotRouteReturnsOpsEnvelope() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.selfUrl = "http://validator-2:8090";
+            context.aeronConsensusEngine = baseEngine();
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/ops/snapshots/cluster");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
+            assertTrue(body.toString().contains("\"clusterId\":\"oak-consensus-cluster\""));
+        });
+    }
+
     private StringWriter body;
 
     private ServerContext newContext() {
@@ -198,6 +341,33 @@ public class RequestRouterTest {
         body = new StringWriter();
         when(response.getWriter()).thenReturn(new PrintWriter(body));
         return response;
+    }
+
+    private AeronConsensusEngine baseEngine() {
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.getNativeClusterState()).thenReturn(nativeClusterState());
+        when(engine.getWalletAddress()).thenReturn("0x2222222222222222222222222222222222222222");
+        when(engine.getPublicKeyHex()).thenReturn("0xabc123");
+        when(engine.getReachableValidatorCount()).thenReturn(3);
+        when(engine.getLastHeartbeatTime()).thenReturn(1234L);
+        when(engine.getCurrentLeader()).thenReturn("http://validator-2:8090");
+        when(engine.getAllFollowers()).thenReturn(new ArrayList<>());
+        when(engine.isLeader()).thenReturn(false);
+        return engine;
+    }
+
+    private Map<String, Object> nativeClusterState() {
+        Map<String, Object> state = new HashMap<>();
+        state.put("role", "FOLLOWER");
+        state.put("memberId", 2);
+        state.put("clusterMemberCount", 3);
+        java.util.List<Map<String, Object>> members = new ArrayList<>();
+        Map<String, Object> self = new HashMap<>();
+        self.put("url", "http://validator-2:8090");
+        self.put("memberId", 2);
+        members.add(self);
+        state.put("members", members);
+        return state;
     }
 
     private void withRoutingProperties(boolean browserUiEnabled, ThrowingRunnable runnable) throws Exception {
