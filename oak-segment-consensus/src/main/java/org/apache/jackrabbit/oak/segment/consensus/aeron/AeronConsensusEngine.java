@@ -1736,7 +1736,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 // 🔍 HEALTH CHECK: Verify session is open before offering batch
                 if (internalClusterClient.isClosed()) {
                     log.error("❌ Cannot send batch - internal cluster client session is CLOSED (batch size: {})", proposals.size());
-                    log.error("   This indicates session timeout or connection loss during epoch queueing");
+                    log.error("   This indicates session timeout or connection loss during release queueing");
                     log.error("   Attempting reconnection...");
                     
                     // Try to reconnect

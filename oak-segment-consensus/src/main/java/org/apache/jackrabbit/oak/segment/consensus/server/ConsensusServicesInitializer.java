@@ -115,7 +115,7 @@ final class ConsensusServicesInitializer {
         ServerContext context = httpServer.getContext();
         context.setProposalQueueManager(proposalQueueManager);
         context.evmBridge = evmBridge;
-        log.info("✅ Proposal Queue Manager initialized (Ethereum epoch-based batching + 3-checkpoint security)");
+        log.info("✅ Proposal Queue Manager initialized (adaptive packing/release + 3-checkpoint security)");
 
         // Initialize Validator Earnings Tracker (economic simulation)
         List<String> validatorWallets = buildValidatorWallets(wallet.getWalletAddress(), hostnamesList);

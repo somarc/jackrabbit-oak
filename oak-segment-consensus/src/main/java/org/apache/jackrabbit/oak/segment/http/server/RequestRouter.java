@@ -968,10 +968,9 @@ public class RequestRouter {
             }
         }
         
-        // Get BeaconChainClient from EpochQueue
-        if (context.proposalQueueManager != null && context.proposalQueueManager.getEpochQueue() != null) {
-            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient = 
-                context.proposalQueueManager.getEpochQueue().getBeaconClient();
+        if (context.proposalQueueManager != null) {
+            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient =
+                context.proposalQueueManager.getBeaconClient();
             if (beaconClient != null) {
                 boolean success = beaconClient.advanceMockEpoch(epochs);
                 if (success) {
@@ -1021,10 +1020,9 @@ public class RequestRouter {
             return;
         }
         
-        // Get BeaconChainClient from EpochQueue
-        if (context.proposalQueueManager != null && context.proposalQueueManager.getEpochQueue() != null) {
-            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient = 
-                context.proposalQueueManager.getEpochQueue().getBeaconClient();
+        if (context.proposalQueueManager != null) {
+            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient =
+                context.proposalQueueManager.getBeaconClient();
             if (beaconClient != null) {
                 boolean success = beaconClient.setMockEpochOffset(offset);
                 if (success) {
@@ -1058,9 +1056,9 @@ public class RequestRouter {
         json.append("{");
         json.append("\"mode\":\"").append(FormatUtils.escapeJson(config.getMode().toString())).append("\",");
         
-        if (context.proposalQueueManager != null && context.proposalQueueManager.getEpochQueue() != null) {
-            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient = 
-                context.proposalQueueManager.getEpochQueue().getBeaconClient();
+        if (context.proposalQueueManager != null) {
+            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient =
+                context.proposalQueueManager.getBeaconClient();
             if (beaconClient != null) {
                 java.util.Map<String, Object> health = beaconClient.getHealthStatus();
                 json.append("\"currentEpoch\":").append(beaconClient.getCachedCurrentEpoch()).append(",");

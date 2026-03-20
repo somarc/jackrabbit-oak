@@ -105,6 +105,15 @@ public class ProposalQueueTuningTest {
     }
 
     @Test
+    public void testReleaseModeEpochAliasFallsBackToAdaptiveActive() {
+        System.setProperty("oak.proposal.release.mode", "epoch");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.getReleaseMode());
+    }
+
+    @Test
     public void testInvalidReleaseModeFallsBackToAdaptiveActive() {
         System.setProperty("oak.proposal.release.mode", "unknown-mode");
 

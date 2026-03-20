@@ -123,7 +123,7 @@ public @interface ProposalQueueTuningConfig {
 
     @AttributeDefinition(
         name = "Release Mode",
-        description = "Verified-to-Aeron release mode. Supported values: epoch, adaptive-shadow, adaptive-active."
+        description = "Verified-to-Aeron release mode. Supported values: adaptive-shadow, adaptive-active. The legacy value epoch is accepted as a deprecated alias for adaptive-active."
     )
     String release_mode() default ProposalQueueTuning.DEFAULT_RELEASE_MODE;
 

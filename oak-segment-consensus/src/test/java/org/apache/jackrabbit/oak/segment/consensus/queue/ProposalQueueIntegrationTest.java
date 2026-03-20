@@ -41,12 +41,12 @@ import static org.junit.Assert.*;
  * <p>Uses {@link ProposalQueueManagerOptimized} (production implementation) with:
  * <ul>
  *   <li>Mock EVM bridge for instant payment verification</li>
- *   <li>Mock Beacon Chain client for synthetic epoch tracking (30s epochs)</li>
- *   <li>Tri-agent architecture (EVM verifier, Aeron sender, Epoch finalizer)</li>
+ *   <li>Mock Beacon Chain client for epoch compatibility overlays and mock controls</li>
+ *   <li>Tri-agent architecture (EVM verifier, Aeron sender, adaptive release finalizer)</li>
  * </ul>
  * 
  * <p>This tests the same code path used in production, ensuring test coverage
- * of epoch-based batching, payment tiers, and retry logic.
+ * of adaptive release, payment tiers, and retry logic.
  */
 public class ProposalQueueIntegrationTest {
     
@@ -344,7 +344,7 @@ public class ProposalQueueIntegrationTest {
     }
     
     @Test
-    public void testStandardTierWithEpochBatching() throws InterruptedException {
+    public void testStandardTierDrainsWithoutLegacyEpochScheduling() throws InterruptedException {
         String proposalId = "test-standard-456";
         String ethereumTxHash = "0xtx456789";
         String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
@@ -372,20 +372,10 @@ public class ProposalQueueIntegrationTest {
             12346L,
             ethereumTxHash
         );
-        
-        // STANDARD tier requires 2 epoch transitions (~60s in mock mode with 30s epochs)
-        // For test, we wait longer but use a reasonable timeout
-        // In mock mode, epochs advance every 30 seconds
-        boolean processed = raftAppendLatch.await(90, TimeUnit.SECONDS);
-        
-        // Note: This test may timeout in CI if epoch finalization is slow
-        // The important thing is that the proposal enters the epoch queue
-        if (!processed) {
-            // Check that proposal is at least VERIFIED and in epoch queue
-            java.util.Map<String, Object> stats = queueManager.getQueueStats();
-            long verifiedCount = (Long) stats.get("totalVerifiedCount");
-            assertTrue("At least one proposal should be verified", verifiedCount >= 1);
-        }
+
+        assertTrue("Standard tier should drain on the default adaptive path within 10s",
+            raftAppendLatch.await(10, TimeUnit.SECONDS));
+        assertEquals("Callback should have captured proposal", proposalId, appendedProposalId);
     }
     
     @Test
@@ -1130,7 +1120,62 @@ public class ProposalQueueIntegrationTest {
     }
 
     @Test
-    public void testStandardBurstBuildsDebtThenDrainsAfterEpochAdvance() throws InterruptedException {
+    public void testSubmissionEpochNoLongerDerivedFromTier() {
+        final String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        final String basePath = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/";
+
+        QueuedProposal standard = queueManager.queueProposal(
+            "submission-epoch-standard",
+            "0xsubepoch1",
+            walletAddress,
+            basePath + "standard",
+            "page",
+            "standard",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            null
+        );
+        QueuedProposal express = queueManager.queueProposal(
+            "submission-epoch-express",
+            "0xsubepoch2",
+            walletAddress,
+            basePath + "express",
+            "page",
+            "express",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS,
+            null
+        );
+        QueuedProposal priority = queueManager.queueProposal(
+            "submission-epoch-priority",
+            "0xsubepoch3",
+            walletAddress,
+            basePath + "priority",
+            "page",
+            "priority",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
+            null
+        );
+        QueuedProposal delete = queueManager.queueDeleteProposal(
+            "submission-epoch-delete",
+            "0xsubepoch4",
+            walletAddress,
+            basePath + "delete",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY
+        );
+
+        assertEquals("EXPRESS should share the same submission epoch as STANDARD",
+            standard.getEpoch(), express.getEpoch());
+        assertEquals("PRIORITY should share the same submission epoch as STANDARD",
+            standard.getEpoch(), priority.getEpoch());
+        assertEquals("DELETE should share the same submission epoch as WRITE proposals",
+            standard.getEpoch(), delete.getEpoch());
+    }
+
+    @Test
+    public void testStandardBurstBuildsDebtThenDrainsUnderAdaptiveRelease() throws InterruptedException {
         final int proposalCount = 40;
         final CountDownLatch finalizedLatch = new CountDownLatch(proposalCount);
         final String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
@@ -1168,9 +1213,6 @@ public class ProposalQueueIntegrationTest {
         testQueue.start();
 
         try {
-            // Keep mock epoch stable while we create burst load.
-            assertTrue("Should be able to control mock epoch", beaconClient.setMockEpochOffset(0));
-
             for (int i = 0; i < proposalCount; i++) {
                 String proposalId = "standard-burst-" + i;
                 String txHash = "0xstd" + i;
@@ -1206,12 +1248,8 @@ public class ProposalQueueIntegrationTest {
             long preGap = preVerified - preFinalized;
 
             assertTrue("Invariant: verified count must be >= finalized count", preVerified >= preFinalized);
-            assertTrue("Standard burst should create temporary finalization debt before epoch advance", preGap > 0);
 
-            // Move finalized epoch forward to trigger drain of pending finalized work.
-            assertTrue("Mock epoch advance should succeed", beaconClient.advanceMockEpoch(3));
-
-            assertTrue("Finalization should drain after epoch advance",
+            assertTrue("Finalization should drain under adaptive release without epoch gating",
                 finalizedLatch.await(20, TimeUnit.SECONDS));
 
             Map<String, Object> postAdvance = testQueue.getQueueStats();
@@ -1220,7 +1258,11 @@ public class ProposalQueueIntegrationTest {
             long postGap = postVerified - postFinalized;
 
             assertTrue("Invariant: verified count must remain >= finalized count", postVerified >= postFinalized);
-            assertTrue("Finalization debt should reduce after advancing epochs", postGap < preGap);
+            if (preGap > 0L) {
+                assertTrue("Finalization debt should reduce as adaptive release drains verified work", postGap < preGap);
+            } else {
+                assertEquals("Adaptive release is allowed to stay debt-free through the burst", 0L, postGap);
+            }
             assertTrue("Backpressure pending should never be negative",
                 longStat(postAdvance, "backpressurePendingCount") >= 0);
         } finally {
@@ -1229,7 +1271,7 @@ public class ProposalQueueIntegrationTest {
     }
 
     @Test
-    public void testStandardBurstDrainRateTurnsNegativeAfterEpochAdvance() throws InterruptedException {
+    public void testStandardBurstDebtTrendsDownUnderAdaptiveRelease() throws InterruptedException {
         final int proposalCount = 80;
         final String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
 
@@ -1239,8 +1281,6 @@ public class ProposalQueueIntegrationTest {
         testQueue.start();
 
         try {
-            assertTrue("Should be able to control mock epoch", beaconClient.setMockEpochOffset(0));
-
             for (int i = 0; i < proposalCount; i++) {
                 String proposalId = "standard-slope-" + i;
                 String txHash = "0xslope" + i;
@@ -1270,14 +1310,9 @@ public class ProposalQueueIntegrationTest {
                 waitForCondition(() -> longStat(testQueue.getQueueStats(), "totalVerifiedCount") >= proposalCount,
                     20_000, 100));
 
-            long preGap = queueGap(testQueue.getQueueStats());
-            assertTrue("Burst should create measurable finalization debt", preGap >= 20);
-
-            assertTrue("Mock epoch advance should succeed", beaconClient.advanceMockEpoch(3));
-
-            // Bounded drain-rate SLA: gap slope must turn negative within 12s.
             long firstGap = queueGap(testQueue.getQueueStats());
             long firstTs = System.currentTimeMillis();
+            long maxObservedGap = firstGap;
             long minObservedGap = firstGap;
             long lastGap = firstGap;
             long lastTs = firstTs;
@@ -1287,16 +1322,21 @@ public class ProposalQueueIntegrationTest {
                 Thread.sleep(500);
                 long gap = queueGap(testQueue.getQueueStats());
                 long now = System.currentTimeMillis();
+                maxObservedGap = Math.max(maxObservedGap, gap);
                 minObservedGap = Math.min(minObservedGap, gap);
                 lastGap = gap;
                 lastTs = now;
             }
 
-            double slopePerSec = ((double) (lastGap - firstGap)) / ((lastTs - firstTs) / 1000.0);
-            assertTrue("Gap must show a negative drain slope after epoch advance, slope=" + slopePerSec,
-                slopePerSec < -0.1d);
-            assertTrue("Gap should improve by at least 10 proposals in SLA window",
-                (firstGap - minObservedGap) >= 10);
+            if (maxObservedGap == 0L) {
+                assertEquals("Adaptive release should be allowed to stay effectively debt-free under burst load",
+                    0L, lastGap);
+            } else {
+                assertTrue("Adaptive release debt should improve over the observation window",
+                    minObservedGap < maxObservedGap);
+                assertTrue("Adaptive release should not end the window with more debt than it observed at peak",
+                    lastGap < maxObservedGap);
+            }
         } finally {
             testQueue.stop();
         }

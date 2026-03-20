@@ -745,8 +745,8 @@ public class WriteProposalHandler {
                 if (context.validatorEarningsTracker != null) {
                     // Get current epoch from BeaconChainClient (if available)
                     long currentEpoch = -1;
-                    if (context.proposalQueueManager != null && context.proposalQueueManager.getEpochQueue() != null) {
-                        currentEpoch = context.proposalQueueManager.getEpochQueue().getCurrentEpoch();
+                    if (context.proposalQueueManager != null) {
+                        currentEpoch = context.proposalQueueManager.getCurrentEpoch();
                     }
 
                     context.validatorEarningsTracker.recordPayment(paymentAmount, tier, currentEpoch);

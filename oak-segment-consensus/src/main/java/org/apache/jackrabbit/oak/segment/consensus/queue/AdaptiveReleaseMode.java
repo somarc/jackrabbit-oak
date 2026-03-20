@@ -20,7 +20,6 @@ import java.util.Locale;
 
 enum AdaptiveReleaseMode {
 
-    EPOCH("epoch"),
     ADAPTIVE_SHADOW("adaptive-shadow"),
     ADAPTIVE_ACTIVE("adaptive-active");
 
@@ -47,6 +46,9 @@ enum AdaptiveReleaseMode {
             return ADAPTIVE_SHADOW;
         }
         if ("active".equals(normalized)) {
+            return ADAPTIVE_ACTIVE;
+        }
+        if ("epoch".equals(normalized)) {
             return ADAPTIVE_ACTIVE;
         }
         for (AdaptiveReleaseMode mode : values()) {

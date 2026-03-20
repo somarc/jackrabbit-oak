@@ -100,8 +100,8 @@ public class ProposalQueueManagerOptimized {
     private final boolean priorityDirectReleaseEnabled;
     
     // Queues
+    private final org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient;
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
-    private final EpochBasedBatchQueue epochQueue; // NEW: Epoch-based batching for optimal segment packing
     private final AdaptivePackingBuffer adaptivePackingBuffer;
     private final BackpressureOverflowBuffer backpressureOverflowBuffer;
     private final ConcurrentLinkedQueue<List<QueuedProposal>> batchQueue = new ConcurrentLinkedQueue<>(); // Batches ready to send
@@ -126,7 +126,7 @@ public class ProposalQueueManagerOptimized {
     // Agents (3-agent architecture)
     private AgentRunner aeronSenderAgent;
     private AgentRunner[] evmVerifierAgents;
-    private AgentRunner epochFinalizerAgent; // NEW: Finalizes epochs and creates batches
+    private AgentRunner releaseFinalizerAgent;
     private volatile boolean running = false;
 
     private final int verifierThreads;
@@ -187,7 +187,7 @@ public class ProposalQueueManagerOptimized {
         AdaptiveReleaseGovernor.Decision.healthyDirect().signature();
     
     /**
-     * Create optimized proposal queue manager with Ethereum epoch-based batching.
+     * Create optimized proposal queue manager with adaptive verified release.
      * 
      * @param evmBridge EVM bridge for payment verification
      * @param raftAppendCallback Callback to append verified proposals to Raft
@@ -232,7 +232,7 @@ public class ProposalQueueManagerOptimized {
         this.evmBridge = evmBridge;
         this.raftAppendCallback = raftAppendCallback;
         this.backpressureManager = backpressureManager;
-        this.epochQueue = new EpochBasedBatchQueue(beaconClient);
+        this.beaconClient = beaconClient;
         this.adaptivePackingBuffer = new AdaptivePackingBuffer();
         this.backpressureOverflowBuffer = new BackpressureOverflowBuffer();
         ProposalQueueTuning resolved = tuning != null ? tuning : ProposalQueueTuningRegistry.get();
@@ -257,7 +257,7 @@ public class ProposalQueueManagerOptimized {
     }
     
     /**
-     * Start tri-agent architecture with epoch-based batching.
+     * Start tri-agent architecture with adaptive verified release.
      */
     public void start() {
         if (running) {
@@ -302,12 +302,12 @@ public class ProposalQueueManagerOptimized {
             );
         }
         
-        // Agent 3: Epoch Finalizer (PERIODIC - checks for finalizable epochs every 1 second)
-        epochFinalizerAgent = new AgentRunner(
-            new SleepingMillisIdleStrategy(releaseMode == AdaptiveReleaseMode.ADAPTIVE_ACTIVE ? 25 : 1000),
-            throwable -> log.error("Error in epoch finalizer agent", throwable),
+        // Agent 3: Release Finalizer (PERIODIC - drains adaptive packing / overflow)
+        releaseFinalizerAgent = new AgentRunner(
+            new SleepingMillisIdleStrategy(25),
+            throwable -> log.error("Error in release finalizer agent", throwable),
             null,
-            new EpochFinalizerAgent()
+            new ReleaseFinalizerAgent()
         );
         
         // Start all agents on separate threads
@@ -324,21 +324,19 @@ public class ProposalQueueManagerOptimized {
                 return t;
             });
         }
-        AgentRunner.startOnThread(epochFinalizerAgent, r -> {
-            Thread t = new Thread(r, "epoch-finalizer");
+        AgentRunner.startOnThread(releaseFinalizerAgent, r -> {
+            Thread t = new Thread(r, "release-finalizer");
             t.setDaemon(true);
             return t;
         });
         
-        log.info("✅ ProposalQueueManager started (tri-agent + release governor)");
+        log.info("✅ ProposalQueueManager started (tri-agent + adaptive release)");
         log.info("   - Aeron Sender Agent: BackoffIdleStrategy (ultra-low latency)");
         log.info("   - EVM Verifier Agents: {} thread(s), SleepingIdleStrategy (1ms idle, 3-checkpoint security)",
             evmVerifierAgents.length);
-        log.info("   - Release Finalizer Agent: SleepingMillisIdleStrategy({}ms)",
-            releaseMode == AdaptiveReleaseMode.ADAPTIVE_ACTIVE ? 25 : 1000);
+        log.info("   - Release Finalizer Agent: SleepingMillisIdleStrategy(25ms)");
         log.info("   - Max batch size: {}", maxMessageBatch);
         log.info("   - Required payment confirmations: {}", requiredConfirmations);
-        log.info("   - Legacy epoch delay: 2 epochs (~{} minutes) when release_mode=epoch", (2 * 384_000) / 60000.0);
         log.info("   - Release mode: {}", releaseMode.configValue());
         log.info("   - Priority direct release: {}", priorityDirectReleaseEnabled);
         if (persistenceStore != null) {
@@ -357,10 +355,18 @@ public class ProposalQueueManagerOptimized {
     }
     
     /**
-     * Get the epoch queue (for dashboard and metrics).
+     * Get the beacon client backing the epoch compatibility overlay.
      */
-    public EpochBasedBatchQueue getEpochQueue() {
-        return epochQueue;
+    public org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient getBeaconClient() {
+        return beaconClient;
+    }
+
+    public long getCurrentEpoch() {
+        return resolveCurrentEpoch();
+    }
+
+    public long getFinalizedEpoch() {
+        return resolveFinalizedEpoch();
     }
     
     /**
@@ -377,15 +383,14 @@ public class ProposalQueueManagerOptimized {
         stats.put("batchQueueSize", batchQueue.size());
         stats.put("totalProposals", allProposals.size());
         
-        // Epoch queue stats
-        java.util.Map<String, Object> epochStatsMap = epochQueue.getStatsMap();
+        long currentEpoch = resolveCurrentEpoch();
+        long finalizedEpoch = resolveFinalizedEpoch();
+        java.util.Map<String, Object> epochStatsMap = buildEpochOverlayStats(currentEpoch, finalizedEpoch);
         java.util.Map<String, Object> adaptiveStatsMap = adaptivePackingBuffer.getStatsMap();
         java.util.Map<String, Object> overflowStatsMap = backpressureOverflowBuffer.getStatsMap();
-        long currentEpoch = ((Number) epochStatsMap.get("currentEpoch")).longValue();
-        long finalizedEpoch = epochQueue.getFinalizedEpoch();
         long epochVerifiedPackingBufferCount = getLongStat(epochStatsMap, "pendingProposals");
-        long adaptiveVerifiedPackingBufferCount = getLongStat(adaptiveStatsMap, "pendingProposals");
-        long verifiedPackingBufferCount = getVerifiedPackingBufferCount(epochStatsMap, adaptiveStatsMap);
+        long adaptiveVerifiedPackingBufferCount = getVerifiedPackingBufferCount();
+        long verifiedPackingBufferCount = adaptiveVerifiedPackingBufferCount;
         long adaptiveWalletCount = getLongStat(adaptiveStatsMap, "walletCount");
         long adaptiveQueuedProposalTotal = getLongStat(adaptiveStatsMap, "totalProposalsQueued");
         long adaptiveDrainedProposalTotal = getLongStat(adaptiveStatsMap, "totalProposalsDrained");
@@ -398,8 +403,8 @@ public class ProposalQueueManagerOptimized {
         long overflowPromotedProposalTotal = getLongStat(overflowStatsMap, "totalProposalsPromoted");
         stats.put("currentEpoch", currentEpoch);
         stats.put("finalizedEpoch", finalizedEpoch);
-        stats.put("epochsUntilFinality", currentEpoch - finalizedEpoch);
-        stats.put("pendingEpochStats", epochQueue.getStats());
+        stats.put("epochsUntilFinality", currentEpoch >= 0 && finalizedEpoch >= 0 ? currentEpoch - finalizedEpoch : -1L);
+        stats.put("pendingEpochStats", buildEpochOverlaySummary(currentEpoch, finalizedEpoch));
         stats.put("adaptivePackingBufferStats", adaptivePackingBuffer.getStats());
         stats.put("backpressureOverflowStats", backpressureOverflowBuffer.getStats());
         stats.put("adaptivePackingWalletCount", adaptiveWalletCount);
@@ -651,9 +656,58 @@ public class ProposalQueueManagerOptimized {
         return 0L;
     }
 
+    private long resolveCurrentEpoch() {
+        long currentEpoch = beaconClient != null ? beaconClient.getCachedCurrentEpoch() : -1L;
+        if (currentEpoch >= 0L) {
+            return currentEpoch;
+        }
+        long finalizedEpoch = beaconClient != null ? beaconClient.getCachedFinalizedEpoch() : -1L;
+        return finalizedEpoch >= 0L ? finalizedEpoch + 2L : -1L;
+    }
+
+    private long resolveFinalizedEpoch() {
+        long finalizedEpoch = beaconClient != null ? beaconClient.getCachedFinalizedEpoch() : -1L;
+        if (finalizedEpoch >= 0L) {
+            return finalizedEpoch;
+        }
+        long currentEpoch = beaconClient != null ? beaconClient.getCachedCurrentEpoch() : -1L;
+        return currentEpoch >= 0L ? Math.max(0L, currentEpoch - 2L) : -1L;
+    }
+
+    private long getPendingSubmissionEpochCount() {
+        java.util.Set<Long> epochs = new java.util.HashSet<>();
+        for (QueuedProposal proposal : allProposals.values()) {
+            ProposalState state = proposal.getState();
+            if (state == ProposalState.PENDING || state == ProposalState.VERIFIED) {
+                epochs.add(proposal.getEpoch());
+            }
+        }
+        return epochs.size();
+    }
+
+    private java.util.Map<String, Object> buildEpochOverlayStats(long currentEpoch, long finalizedEpoch) {
+        java.util.Map<String, Object> stats = new java.util.LinkedHashMap<>();
+        stats.put("source", "compatibility-overlay");
+        stats.put("schedulerRetired", Boolean.TRUE);
+        stats.put("currentEpoch", currentEpoch);
+        stats.put("finalizedEpoch", finalizedEpoch);
+        stats.put("pendingEpochs", getPendingSubmissionEpochCount());
+        stats.put("pendingProposals", 0L);
+        stats.put("totalBatchesCreated", 0L);
+        stats.put("totalProposalsFinalized", totalFinalizedCount.get());
+        return stats;
+    }
+
+    private String buildEpochOverlaySummary(long currentEpoch, long finalizedEpoch) {
+        return String.format(
+            "EpochOverlay[current=%d, finalized=%d, activeSubmissionEpochs=%d, schedulerRetired=true]",
+            currentEpoch,
+            finalizedEpoch,
+            getPendingSubmissionEpochCount()
+        );
+    }
+
     private AdaptiveReleaseGovernor.Decision evaluateAdaptiveReleaseDecision(long nowMs) {
-        java.util.Map<String, Object> epochStatsMap = epochQueue.getStatsMap();
-        java.util.Map<String, Object> adaptiveStatsMap = adaptivePackingBuffer.getStatsMap();
         AdaptiveReleaseGovernor.SignalSnapshot signals = new AdaptiveReleaseGovernor.SignalSnapshot(
             Math.max(0L, totalVerifiedCount.get() - totalFinalizedCount.get()),
             backpressureManager.getPendingCount(),
@@ -661,7 +715,7 @@ public class ProposalQueueManagerOptimized {
             backpressureManager.isBackpressureActive(),
             backpressureManager.getPendingOldestMs(nowMs),
             backpressureManager.getPendingStalledMs(nowMs),
-            getVerifiedPackingBufferCount(epochStatsMap, adaptiveStatsMap),
+            getVerifiedPackingBufferCount(),
             getReleasePressureBatchCount(),
             getReleasePressureProposalCount()
         );
@@ -678,7 +732,7 @@ public class ProposalQueueManagerOptimized {
                 decision.getAction(),
                 decision.getReasonCodes(),
                 Math.max(0L, totalVerifiedCount.get() - totalFinalizedCount.get()),
-                getVerifiedPackingBufferCount(epochQueue.getStatsMap(), adaptivePackingBuffer.getStatsMap()),
+                getVerifiedPackingBufferCount(),
                 getReleasePressureProposalCount(),
                 backpressureManager.getPendingCount(),
                 backpressureManager.getPendingOldestMs(nowMs),
@@ -688,16 +742,8 @@ public class ProposalQueueManagerOptimized {
         }
     }
 
-    private long getVerifiedPackingBufferCount(java.util.Map<String, Object> epochStatsMap,
-                                               java.util.Map<String, Object> adaptiveStatsMap) {
-        if (releaseMode == AdaptiveReleaseMode.ADAPTIVE_ACTIVE) {
-            return getLongStat(adaptiveStatsMap, "pendingProposals");
-        }
-        return getLongStat(epochStatsMap, "pendingProposals");
-    }
-
-    private boolean isAdaptiveActive() {
-        return releaseMode == AdaptiveReleaseMode.ADAPTIVE_ACTIVE;
+    private long getVerifiedPackingBufferCount() {
+        return getLongStat(adaptivePackingBuffer.getStatsMap(), "pendingProposals");
     }
 
     private long getReleasePressureProposalCount() {
@@ -711,42 +757,19 @@ public class ProposalQueueManagerOptimized {
     private void routeVerifiedProposal(QueuedProposal proposal,
                                        String txHashSummary,
                                        long confirmedBlockNumber) {
-        if (isAdaptiveActive()) {
-            adaptivePackingBuffer.addProposal(proposal, proposal.getVerifiedTimestampMs());
-            logRateLimitedInfo(lastEpochQueueLogMs, epochQueueSuppressed,
-                "📥 Proposal added to adaptive packing buffer: {} | wallet: {} | epoch: {} | tier: {}",
-                proposal.getProposalId().substring(0, 8),
-                proposal.getWalletAddress().substring(0, 10),
-                proposal.getEpoch(),
-                proposal.getTier());
-            log.debug("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, tier: {}, wallet: {}) → queued for adaptive release",
-                proposal.getProposalId(),
-                txHashSummary,
-                confirmedBlockNumber,
-                proposal.getEpoch(),
-                proposal.getTier(),
-                proposal.getWalletAddress());
-            return;
-        }
-
-        epochQueue.addProposal(proposal, proposal.getEpoch());
-
-        String tierLabel = proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS
-            ? "EXPRESS (1-epoch)" : "STANDARD (2-epoch)";
-
+        adaptivePackingBuffer.addProposal(proposal, proposal.getVerifiedTimestampMs());
         logRateLimitedInfo(lastEpochQueueLogMs, epochQueueSuppressed,
-            "📥 Proposal added to epoch queue: {} | wallet: {} | epoch: {} | tier: {}",
+            "📥 Proposal added to adaptive packing buffer: {} | wallet: {} | epoch: {} | tier: {}",
             proposal.getProposalId().substring(0, 8),
             proposal.getWalletAddress().substring(0, 10),
             proposal.getEpoch(),
-            tierLabel);
-
-        log.debug("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, tier: {}, wallet: {}) → queued for epoch finality",
+            proposal.getTier());
+        log.debug("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, tier: {}, wallet: {}) → queued for adaptive release",
             proposal.getProposalId(),
             txHashSummary,
             confirmedBlockNumber,
             proposal.getEpoch(),
-            tierLabel,
+            proposal.getTier(),
             proposal.getWalletAddress());
     }
 
@@ -933,22 +956,17 @@ public class ProposalQueueManagerOptimized {
      * This is the upstream source of truth for /v1/proposals/epochs.
      */
     public java.util.Map<String, Object> getProposalEpochFlowStats() {
-        long currentEpoch = epochQueue.getCurrentEpoch();
-        long finalizedEpoch = epochQueue.getFinalizedEpoch();
+        long currentEpoch = resolveCurrentEpoch();
+        long finalizedEpoch = resolveFinalizedEpoch();
         long nextEpoch = Math.max(finalizedEpoch + 1, currentEpoch);
 
         java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
         payload.put("currentEpoch", currentEpoch);
         payload.put("finalizedEpoch", finalizedEpoch);
-        payload.put("pendingEpochs", epochQueue.getAllPendingEpochs().size());
-        payload.put("epochsUntilFinality", Math.max(0L, currentEpoch - finalizedEpoch));
-        if (isAdaptiveActive()) {
-            payload.put("source", "compatibility-epoch-overlay");
-            payload.put("note", "Adaptive release mode is active; epoch counters are a compatibility overlay for submission/finalized views, not the authoritative verified release scheduler.");
-        } else {
-            payload.put("source", "upstream-epoch-counters");
-            payload.put("note", "Epoch counters are authoritative for unverified/verified residency and finalized/rejected per epoch-tier.");
-        }
+        payload.put("pendingEpochs", getPendingSubmissionEpochCount());
+        payload.put("epochsUntilFinality", currentEpoch >= 0 && finalizedEpoch >= 0 ? Math.max(0L, currentEpoch - finalizedEpoch) : -1L);
+        payload.put("source", "compatibility-epoch-overlay");
+        payload.put("note", "Epoch counters are derived from beacon state and proposal submission epochs. They remain available for compatibility, but the verified release scheduler is adaptive-only.");
 
         java.util.List<java.util.Map<String, Object>> blocks = new java.util.ArrayList<>();
         blocks.add(buildEpochFlowBlock("Finalized", "finalized", finalizedEpoch));
@@ -1316,11 +1334,11 @@ public class ProposalQueueManagerOptimized {
             }
         }
         
-        if (epochFinalizerAgent != null) {
+        if (releaseFinalizerAgent != null) {
             try {
-                epochFinalizerAgent.close();
+                releaseFinalizerAgent.close();
             } catch (Exception e) {
-                log.error("Error closing epoch finalizer agent", e);
+                log.error("Error closing release finalizer agent", e);
             }
         }
 
@@ -1339,8 +1357,8 @@ public class ProposalQueueManagerOptimized {
     }
     
     /**
-     * Queue a new proposal for verification and epoch-based batching.
-     * This overload calculates the current epoch automatically.
+     * Queue a new proposal for verification and adaptive release.
+     * This overload calculates the current submission epoch automatically.
      * 
      * @param proposalId Unique proposal ID
      * @param ethereumTxHash Ethereum transaction hash (optional)
@@ -1360,14 +1378,14 @@ public class ProposalQueueManagerOptimized {
             String message,
             String signature) {
         // Calculate current epoch automatically
-        long currentEpoch = epochQueue.getCurrentEpoch();
+        long currentEpoch = resolveCurrentEpoch();
         return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch, 
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD, null);
     }
     
     /**
-     * Queue a new proposal for verification and epoch-based batching (with payment tier).
-     * This overload calculates the target epoch automatically based on payment tier.
+     * Queue a new proposal for verification and adaptive release (with payment tier).
+     * This overload captures the current submission epoch for compatibility overlays.
      * 
      * @param proposalId Unique proposal ID
      * @param ethereumTxHash Ethereum transaction hash (optional)
@@ -1390,13 +1408,12 @@ public class ProposalQueueManagerOptimized {
             String signature,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
             String intentToken) {
-        long currentEpoch = epochQueue.getCurrentEpoch();
-        long targetEpoch = LegacyTierEpochSchedule.resolveQueueEpoch(tier, currentEpoch);
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, targetEpoch, tier, intentToken);
+        long currentEpoch = resolveCurrentEpoch();
+        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch, tier, intentToken);
     }
     
     /**
-     * Queue a new proposal for verification and epoch-based batching.
+     * Queue a new proposal for verification and adaptive release.
      * 
      * @param proposalId Unique proposal ID
      * @param walletAddress Ethereum wallet address
@@ -1405,7 +1422,7 @@ public class ProposalQueueManagerOptimized {
      * @param message Content message
      * @param signature Transaction signature
      * @param ethereumTxHash Ethereum transaction hash (optional)
-     * @param epoch Ethereum epoch when transaction was seen (for finality tracking)
+     * @param epoch Ethereum epoch when transaction was seen (for compatibility overlays)
      * @param tier Payment tier (STANDARD, EXPRESS, or PRIORITY) for priority handling
      * @param intentToken Intent token for lazy binary upload (optional, ADR 020)
      * @return The queued proposal
@@ -1438,7 +1455,7 @@ public class ProposalQueueManagerOptimized {
         proposal.setContentType(contentType);
         proposal.setMessage(message);
         proposal.setSignature(signature);
-        proposal.setEpoch(epoch); // NEW: Track epoch for finality
+        proposal.setEpoch(epoch);
         proposal.setTier(tier); // Set payment tier for priority handling
         proposal.setIntentToken(intentToken); // Set intent token for lazy binary upload (ADR 020)
         proposal.setDurabilityState(DurabilityState.PENDING, null, null);
@@ -1465,7 +1482,7 @@ public class ProposalQueueManagerOptimized {
     }
     
     /**
-     * Queue a DELETE proposal for verification and epoch-based batching.
+     * Queue a DELETE proposal for verification and adaptive release.
      * Deletes flow through same pipeline as writes, just with different type.
      * 
      * @param proposalId Unique proposal ID
@@ -1484,8 +1501,7 @@ public class ProposalQueueManagerOptimized {
             String signature,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
         
-        long currentEpoch = epochQueue.getCurrentEpoch();
-        long targetEpoch = LegacyTierEpochSchedule.resolveQueueEpoch(tier, currentEpoch);
+        long currentEpoch = resolveCurrentEpoch();
         
         long now = System.currentTimeMillis();
         QueuedProposal proposal = new QueuedProposal(
@@ -1504,7 +1520,7 @@ public class ProposalQueueManagerOptimized {
         proposal.setContentType("delete"); // Special marker for deletes
         proposal.setMessage(""); // Not needed for deletes
         proposal.setSignature(signature);
-        proposal.setEpoch(targetEpoch);
+        proposal.setEpoch(currentEpoch);
         proposal.setTier(tier);
         proposal.setDurabilityState(DurabilityState.PENDING, null, null);
         
@@ -1518,7 +1534,7 @@ public class ProposalQueueManagerOptimized {
         unverifiedQueue.offer(proposal);
         
         log.info("🗑️  Queued DELETE proposal {} for EVM verification in epoch {} (tier: {}, path: {}, queue size: {})", 
-            proposalId, targetEpoch, tier, path, unverifiedQueue.size());
+            proposalId, currentEpoch, tier, path, unverifiedQueue.size());
         long persistStart = System.nanoTime();
         persistProposals();
         long persistNanos = System.nanoTime() - persistStart;
@@ -1575,7 +1591,7 @@ public class ProposalQueueManagerOptimized {
      * Get pending count (for backpressure management).
      */
     public int getPendingCount() {
-        long verifiedBufferCount = getVerifiedPackingBufferCount(epochQueue.getStatsMap(), adaptivePackingBuffer.getStatsMap());
+        long verifiedBufferCount = getVerifiedPackingBufferCount();
         long totalPending = unverifiedQueue.size()
             + verifiedBufferCount
             + countQueuedProposals(batchQueue)
@@ -1584,16 +1600,16 @@ public class ProposalQueueManagerOptimized {
     }
     
     /**
-     * Get queue statistics (including epoch queue).
+     * Get queue statistics.
      */
     public String getStats() {
-        return String.format("Unverified: %d, Verified Buffer: %d, Batches Ready: %d, Overflow: %d, Total: %d | Epoch: %s | Adaptive: %s | Overflow Buffer: %s",
+        return String.format("Unverified: %d, Verified Buffer: %d, Batches Ready: %d, Overflow: %d, Total: %d | Epoch Overlay: %s | Adaptive: %s | Overflow Buffer: %s",
             unverifiedQueue.size(),
-            getVerifiedPackingBufferCount(epochQueue.getStatsMap(), adaptivePackingBuffer.getStatsMap()),
+            getVerifiedPackingBufferCount(),
             batchQueue.size(),
             backpressureOverflowBuffer.getPendingBatchCount(),
             allProposals.size(),
-            epochQueue.getStats(),
+            buildEpochOverlaySummary(resolveCurrentEpoch(), resolveFinalizedEpoch()),
             adaptivePackingBuffer.getStats(),
             backpressureOverflowBuffer.getStats());
     }
@@ -1616,7 +1632,7 @@ public class ProposalQueueManagerOptimized {
             
             int workCount = 0;
             
-            // 🚀 EPOCH-BASED BATCHING: Process pre-batched proposals from epoch finalizer
+            // 🚀 RELEASE BATCHING: Process verified batches prepared by the adaptive finalizer
             // Batches are organized by wallet address for optimal segment packing
             
             // Process up to maxMessageBatch batches per cycle
@@ -2229,15 +2245,12 @@ public class ProposalQueueManagerOptimized {
      *   <li>Accurate Metrics: Per-wallet fragmentation trivial to calculate</li>
      * </ul>
      */
-    private class EpochFinalizerAgent implements Agent {
+    private class ReleaseFinalizerAgent implements Agent {
         
         private long lastQueueDepthAlert = 0;
-        private long lastWatchdogCheck = 0;
         private static final long ALERT_INTERVAL_MS = 60_000; // Alert every 60 seconds max
-        private static final long WATCHDOG_INTERVAL_MS = 30_000; // Check for stale proposals every 30s
         private static final int QUEUE_DEPTH_WARNING = 1000;  // Warn at 1000 proposals
         private static final int QUEUE_DEPTH_CRITICAL = 5000; // Critical at 5000 proposals
-        private static final int MAX_TIER_DELAY = 2; // STANDARD tier = max delay (epochs)
         
         @Override
         public int doWork() {
@@ -2246,13 +2259,6 @@ public class ProposalQueueManagerOptimized {
             }
             long now = System.currentTimeMillis();
             captureAdaptiveReleaseDecision(now);
-            if (isAdaptiveActive()) {
-                return doAdaptiveWork(now);
-            }
-            return doEpochWork(now);
-        }
-
-        private int doAdaptiveWork(long now) {
             int workCount = 0;
             java.util.Map<String, Object> adaptiveStats = adaptivePackingBuffer.getStatsMap();
             long pendingProposals = getLongStat(adaptiveStats, "pendingProposals");
@@ -2285,180 +2291,30 @@ public class ProposalQueueManagerOptimized {
             return workCount;
         }
 
-        private int doEpochWork(long now) {
-            int workCount = 0;
-
-            // Check for epochs ready to finalize
-            List<Long> finalizableEpochs = epochQueue.getFinalizableEpochs();
-
-            // ════════════════════════════════════════════════════════════════
-            // QUEUE DEPTH MONITORING & ALERTING
-            // ════════════════════════════════════════════════════════════════
-            java.util.Map<String, Object> epochStats = epochQueue.getStatsMap();
-            long pendingProposals = getLongStat(epochStats, "pendingProposals");
-
-            maybeLogQueueDepthAlert(pendingProposals, now);
-
-            // DEBUG: Log finalization check every ~10 seconds
-            if (finalizableEpochs.isEmpty() && System.currentTimeMillis() % 10000 < 1000) {
-                log.debug("🔍 Epoch finalization check: {} finalizable epochs, pending={}, finalized={}, current={}",
-                    finalizableEpochs.size(),
-                    pendingProposals,
-                    epochQueue.getFinalizedEpoch(),
-                    epochQueue.getCurrentEpoch());
-            }
-            
-            for (Long epoch : finalizableEpochs) {
-                try {
-                    // Finalize epoch and get wallet-based batches
-                    List<List<QueuedProposal>> batches = epochQueue.finalizeEpoch(epoch);
-                    
-                    if (batches.isEmpty()) {
-                        continue;
-                    }
-                    
-                    // Queue each batch for Aeron sender (with chunking to avoid backpressure)
-                    int totalProposals = 0;
-                    int totalChunks;
-                    
-                    for (List<QueuedProposal> batch : batches) {
-                        totalProposals += batch.size();
-                    }
-                    totalChunks = queueReleaseBatches(batches, "epoch " + epoch);
-                    workCount += totalChunks;
-                    
-                    log.info("✅ Finalized epoch {}: {} proposals → {} batches/chunks (chunk size: {}, avg batch: {})",
-                        epoch, totalProposals, totalChunks, finalizationChunkSize,
-                        totalChunks > 0 ? totalProposals / totalChunks : 0);
-                    
-                    // Update batch sent counter
-                    batchedProposalsSent.addAndGet(totalProposals);
-                    
-                } catch (Exception e) {
-                    log.error("❌ Error finalizing epoch {}", epoch, e);
-                }
-            }
-            
-            // ════════════════════════════════════════════════════════════════
-            // 🛡️ WATCHDOG: Force-finalize stale epochs (defense in depth)
-            // ════════════════════════════════════════════════════════════════
-            // Even with the epoch polling bug fixed, this safeguard catches:
-            // - Logic errors in getFinalizableEpochs()
-            // - Stale epoch data from any source
-            // - Edge cases we haven't thought of
-            // 
-            // Rule: If current epoch >= (proposal epoch + MAX delay), 
-            //       AND it wasn't already finalized, force-finalize it now
-            // ════════════════════════════════════════════════════════════════
-            if (now - lastWatchdogCheck > WATCHDOG_INTERVAL_MS) {
-                lastWatchdogCheck = now;
-                
-                long currentEpoch = epochQueue.getCurrentEpoch();
-                long finalizedEpoch = epochQueue.getFinalizedEpoch();
-                List<Long> allPendingEpochs = epochQueue.getAllPendingEpochs();
-                
-                for (Long pendingEpoch : allPendingEpochs) {
-                    if (pendingEpoch <= finalizedEpoch) {
-                        continue;
-                    }
-                    // Check if this epoch is DEFINITELY past due
-                    // (current epoch is at least MAX_TIER_DELAY epochs ahead)
-                    long epochAge = currentEpoch - pendingEpoch;
-                    
-                    if (epochAge >= MAX_TIER_DELAY) {
-                        // This epoch should have been finalized by now
-                        // Check if it was in the finalizable list
-                        if (!finalizableEpochs.contains(pendingEpoch)) {
-                            log.warn("🛡️ WATCHDOG: Detected stale epoch {} (age: {} epochs, current: {}). " +
-                                "Forcing finalization to prevent proposals from being stuck forever!",
-                                pendingEpoch, epochAge, currentEpoch);
-                            
-                            try {
-                                // Force finalize this epoch
-                                List<List<QueuedProposal>> batches = epochQueue.finalizeEpoch(pendingEpoch);
-                                
-                                if (!batches.isEmpty()) {
-                                    int totalProposals = 0;
-                                    for (List<QueuedProposal> batch : batches) {
-                                        totalProposals += batch.size();
-                                    }
-                                    int totalChunks = queueReleaseBatches(batches, "watchdog epoch " + pendingEpoch);
-                                    workCount += totalChunks;
-                                    
-                                    log.warn("🛡️ WATCHDOG: Force-finalized stale epoch {}: {} proposals → {} batches/chunks",
-                                        pendingEpoch, totalProposals, totalChunks);
-                                    
-                                    batchedProposalsSent.addAndGet(totalProposals);
-                                }
-                            } catch (Exception e) {
-                                log.error("🛡️ WATCHDOG: Error force-finalizing stale epoch {}", pendingEpoch, e);
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // ════════════════════════════════════════════════════════════════
-            // QUEUE HEALTH REPORTING (periodic)
-            // ════════════════════════════════════════════════════════════════
-            if (!finalizableEpochs.isEmpty() && System.currentTimeMillis() % 30000 < 1000) {
-                java.util.Map<String, Object> healthStats = epochQueue.getStatsMap();
-                long batchesCreated = healthStats.containsKey("totalBatchesCreated") ? 
-                    ((Number) healthStats.get("totalBatchesCreated")).longValue() : 0L;
-                long pendingCount = healthStats.containsKey("pendingProposals") ? 
-                    ((Number) healthStats.get("pendingProposals")).longValue() : 0L;
-                long processedCount = healthStats.containsKey("totalProposalsFinalized") ? 
-                    ((Number) healthStats.get("totalProposalsFinalized")).longValue() : 0L;
-                    
-                log.info("📊 Queue Health: {} batches created, {} proposals pending, {} proposals processed",
-                    batchesCreated, pendingCount, processedCount);
-            }
-            
-            return workCount;
-        }
-
         private void maybeLogQueueDepthAlert(long pendingProposals, long now) {
             long releaseReadyProposals = countQueuedProposals(batchQueue);
             long overflowProposals = backpressureOverflowBuffer.getPendingProposalCount();
-            long totalAdaptiveResidentProposals = pendingProposals + releaseReadyProposals + overflowProposals;
-            long alertDepth = isAdaptiveActive() ? totalAdaptiveResidentProposals : pendingProposals;
+            long alertDepth = pendingProposals + releaseReadyProposals + overflowProposals;
             if (now - lastQueueDepthAlert <= ALERT_INTERVAL_MS) {
                 return;
             }
             if (alertDepth >= QUEUE_DEPTH_CRITICAL) {
-                if (isAdaptiveActive()) {
-                    log.error("🚨 CRITICAL: Adaptive resident depth at {} proposals (threshold: {})! Packing={}, release-ready={}, overflow={}, backpressurePending={}",
-                        alertDepth,
-                        QUEUE_DEPTH_CRITICAL,
-                        pendingProposals,
-                        releaseReadyProposals,
-                        overflowProposals,
-                        backpressureManager.getPendingCount());
-                } else {
-                    log.error("🚨 CRITICAL: Queue depth at {} proposals (threshold: {})! Finalized epoch: {}, Current epoch: {}, Backlog: {} epochs",
-                        alertDepth,
-                        QUEUE_DEPTH_CRITICAL,
-                        epochQueue.getFinalizedEpoch(),
-                        epochQueue.getCurrentEpoch(),
-                        epochQueue.getCurrentEpoch() - epochQueue.getFinalizedEpoch());
-                }
+                log.error("🚨 CRITICAL: Adaptive resident depth at {} proposals (threshold: {})! Packing={}, release-ready={}, overflow={}, backpressurePending={}",
+                    alertDepth,
+                    QUEUE_DEPTH_CRITICAL,
+                    pendingProposals,
+                    releaseReadyProposals,
+                    overflowProposals,
+                    backpressureManager.getPendingCount());
                 lastQueueDepthAlert = now;
             } else if (alertDepth >= QUEUE_DEPTH_WARNING) {
-                if (isAdaptiveActive()) {
-                    log.warn("⚠️  WARNING: Adaptive resident depth at {} proposals (threshold: {})! Packing={}, release-ready={}, overflow={}, backpressurePending={}",
-                        alertDepth,
-                        QUEUE_DEPTH_WARNING,
-                        pendingProposals,
-                        releaseReadyProposals,
-                        overflowProposals,
-                        backpressureManager.getPendingCount());
-                } else {
-                    log.warn("⚠️  WARNING: Queue depth at {} proposals (threshold: {})! Finalized epoch: {}, Current epoch: {}",
-                        alertDepth,
-                        QUEUE_DEPTH_WARNING,
-                        epochQueue.getFinalizedEpoch(),
-                        epochQueue.getCurrentEpoch());
-                }
+                log.warn("⚠️  WARNING: Adaptive resident depth at {} proposals (threshold: {})! Packing={}, release-ready={}, overflow={}, backpressurePending={}",
+                    alertDepth,
+                    QUEUE_DEPTH_WARNING,
+                    pendingProposals,
+                    releaseReadyProposals,
+                    overflowProposals,
+                    backpressureManager.getPendingCount());
                 lastQueueDepthAlert = now;
             }
         }
@@ -2478,7 +2334,7 @@ public class ProposalQueueManagerOptimized {
         
         @Override
         public String roleName() {
-            return "epoch-finalizer-agent";
+            return "release-finalizer-agent";
         }
     }
     

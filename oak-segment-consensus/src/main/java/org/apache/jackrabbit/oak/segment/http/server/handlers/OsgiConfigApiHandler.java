@@ -511,15 +511,15 @@ public class OsgiConfigApiHandler {
         schema.add(schemaEntry(
             "proposalQueueTuning.release_mode",
             "string",
-            "epoch",
+            "adaptive-active",
             "runtime-readable",
             "guarded",
-            "Verified-to-Aeron release mode (epoch, adaptive-shadow, or adaptive-active)",
+            "Verified-to-Aeron release mode (adaptive-shadow or adaptive-active; epoch is accepted as a deprecated alias for adaptive-active)",
             "oak.proposal.release.mode"));
         schema.add(schemaEntry(
             "proposalQueueTuning.priority_direct_release_enabled",
             "boolean",
-            true,
+            false,
             "runtime-readable",
             "guarded",
             "Enable direct Aeron release for PRIORITY proposals after verification",
