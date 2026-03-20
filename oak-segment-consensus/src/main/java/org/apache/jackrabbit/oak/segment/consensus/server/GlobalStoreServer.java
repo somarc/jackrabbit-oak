@@ -250,70 +250,41 @@ public class GlobalStoreServer {
             List<String> aeronPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(currentAeronConfig());
             String bootstrapPrimaryHost = RuntimeConfigValueResolver.readString("bootstrap.primary.host", "");
             String bootstrapPrimaryPortStr = RuntimeConfigValueResolver.readString("bootstrap.primary.port", "");
-            
-            // First, try to verify peers from consensus.peers
-            if (!aeronPeers.isEmpty()) {
+            BootstrapPreflightPlanner.Decision preflightDecision = new BootstrapPreflightPlanner().plan(
+                isAeronMode,
+                directoryIsEmpty,
+                aeronPeers,
+                bootstrapPrimaryHost,
+                bootstrapPrimaryPortStr,
+                standbyBootstrapEnabled,
+                port + 1
+            );
+            needsBootstrapBeforeBuild = preflightDecision.needsBootstrapBeforeBuild();
+            hasVerifiedReachablePeers = preflightDecision.hasVerifiedReachablePeers();
+            verifiedBootstrapPrimaryHost = preflightDecision.verifiedBootstrapPrimaryHost();
+            verifiedBootstrapPrimaryPort = preflightDecision.verifiedBootstrapPrimaryPort();
+
+            if (hasVerifiedReachablePeers && !verifiedBootstrapPrimaryHost.isEmpty()) {
+                boolean matchedPeerUrl = false;
                 for (String peerUrl : aeronPeers) {
                     try {
-                        java.net.URL url = new java.net.URL(peerUrl + "/health");
-                        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                        conn.setRequestMethod("GET");
-                        conn.setConnectTimeout(2000);
-                        conn.setReadTimeout(2000);
-                        if (conn.getResponseCode() == 200) {
-                            hasVerifiedReachablePeers = true;
-                            // Extract host from peer URL for bootstrap
-                            verifiedBootstrapPrimaryHost = peerUrl.replace("http://", "").replace("https://", "").split(":")[0];
-                            // Standby port = HTTP port + 1
-                            try {
-                                int httpPort = Integer.parseInt(peerUrl.split(":")[2]);
-                                verifiedBootstrapPrimaryPort = httpPort + 1;
-                            } catch (Exception e) {
-                                verifiedBootstrapPrimaryPort = port + 1; // Fallback
-                            }
+                        java.net.URL url = new java.net.URL(peerUrl);
+                        if (verifiedBootstrapPrimaryHost.equals(url.getHost())) {
                             System.out.println("✅ Verified reachable peer: " + peerUrl);
+                            matchedPeerUrl = true;
                             break;
                         }
                     } catch (Exception e) {
-                        // Try next peer
+                        // Ignore malformed peer URL in startup logging.
                     }
                 }
-            }
-            
-            // If no peers from consensus.peers, try bootstrap.primary.host
-            if (!hasVerifiedReachablePeers && !bootstrapPrimaryHost.isEmpty()) {
-                try {
-                    // Try to reach bootstrap primary (use HTTP port, not standby port)
-                    int httpPort = 8090; // Default
-                    if (!bootstrapPrimaryPortStr.isEmpty()) {
-                        try {
-                            int parsedStandbyPort = Integer.parseInt(bootstrapPrimaryPortStr);
-                            httpPort = parsedStandbyPort - 1; // Standby port - 1 = HTTP port
-                        } catch (NumberFormatException e) {
-                            // Use default
-                        }
-                    }
-                    String primaryUrl = "http://" + bootstrapPrimaryHost + ":" + httpPort;
-                    java.net.URL url = new java.net.URL(primaryUrl + "/health");
-                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("GET");
-                    conn.setConnectTimeout(2000);
-                    conn.setReadTimeout(2000);
-                    if (conn.getResponseCode() == 200) {
-                        hasVerifiedReachablePeers = true;
-                        verifiedBootstrapPrimaryHost = bootstrapPrimaryHost;
-                        verifiedBootstrapPrimaryPort = !bootstrapPrimaryPortStr.isEmpty() ? 
-                            Integer.parseInt(bootstrapPrimaryPortStr) : (httpPort + 1);
-                        System.out.println("✅ Verified bootstrap primary: " + bootstrapPrimaryHost + ":" + verifiedBootstrapPrimaryPort);
-                    }
-                } catch (Exception e) {
-                    System.out.println("⚠️  Bootstrap primary configured but not reachable: " + bootstrapPrimaryHost);
-                    System.out.println("   Will fall back to GENESIS mode if store is empty");
+                if (!matchedPeerUrl && !bootstrapPrimaryHost.isEmpty()) {
+                    System.out.println("✅ Verified bootstrap primary: " + verifiedBootstrapPrimaryHost + ":" + verifiedBootstrapPrimaryPort);
                 }
+            } else if (!bootstrapPrimaryHost.isEmpty()) {
+                System.out.println("⚠️  Bootstrap primary configured but not reachable: " + bootstrapPrimaryHost);
+                System.out.println("   Will fall back to GENESIS mode if store is empty");
             }
-            
-            // Only mark for bootstrap if we've VERIFIED a peer is reachable AND explicit opt-in is enabled.
-            needsBootstrapBeforeBuild = hasVerifiedReachablePeers && standbyBootstrapEnabled;
 
             if (needsBootstrapBeforeBuild) {
                 System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
