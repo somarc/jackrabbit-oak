@@ -52,6 +52,7 @@ public class QueuedProposal implements java.io.Serializable {
     private volatile String ipfsCid; // IPFS CID from client-side upload (ADR 016)
     private volatile int retryCount = 0; // Number of times this proposal has been retried
     private volatile long lastRetryTimestamp = 0; // Timestamp of last retry attempt
+    private volatile long verifiedTimestampMs = 0; // Timestamp when proposal entered verified release scheduling
 
     // Durability tracking (ADR 026)
     private volatile DurabilityState durabilityState = DurabilityState.PENDING;
@@ -253,6 +254,14 @@ public class QueuedProposal implements java.io.Serializable {
      */
     public int getRetryCount() {
         return retryCount;
+    }
+
+    public long getVerifiedTimestampMs() {
+        return verifiedTimestampMs;
+    }
+
+    public void setVerifiedTimestampMs(long verifiedTimestampMs) {
+        this.verifiedTimestampMs = verifiedTimestampMs;
     }
     
     /**

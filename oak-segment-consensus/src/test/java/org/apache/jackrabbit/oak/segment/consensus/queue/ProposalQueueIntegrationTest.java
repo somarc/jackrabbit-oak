@@ -128,6 +128,7 @@ public class ProposalQueueIntegrationTest {
         if (beaconClient != null) {
             beaconClient.stopBackgroundPolling();
         }
+        System.clearProperty("oak.proposal.release.mode");
     }
     
     @Test
@@ -250,6 +251,93 @@ public class ProposalQueueIntegrationTest {
         // For unit test, we just verify the proposal is tracked
         java.util.Map<String, Object> stats = queueManager.getQueueStats();
         assertTrue("Should have pending proposals", (Long) stats.get("pendingCount") >= 1);
+    }
+
+    @Test
+    public void testAdaptiveActiveStandardTierBypassesEpochDelay() throws InterruptedException {
+        queueManager.stop();
+
+        System.setProperty("oak.proposal.release.mode", "adaptive-active");
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        CountDownLatch latch = new CountDownLatch(1);
+
+        RaftAppendCallback callback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                appendedProposalId = "captured";
+                latch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature, String blobId, String mimeType) {
+                appendProposal(walletAddress, path, contentType, message, signature);
+            }
+
+            @Override
+            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                appendedProposalId = "delete-captured";
+                latch.countDown();
+            }
+
+            @Override
+            public int appendProposalBatch(java.util.List<QueuedProposal> batch) {
+                for (QueuedProposal proposal : batch) {
+                    appendedProposalId = proposal.getProposalId();
+                }
+                for (int i = 0; i < batch.size(); i++) {
+                    latch.countDown();
+                }
+                return batch.size();
+            }
+        };
+
+        queueManager = new ProposalQueueManagerOptimized(
+            bridge,
+            callback,
+            new BackpressureManager(),
+            beaconClient,
+            null,
+            tuning
+        );
+        queueManager.start();
+
+        String proposalId = "test-adaptive-standard-123";
+        String ethereumTxHash = "0xtx-adaptive-123";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/page-adaptive";
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "Adaptive tier content",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            null
+        );
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(500_000),
+            12347L,
+            ethereumTxHash
+        );
+
+        assertTrue("Adaptive-active standard proposal should drain without epoch wait",
+            latch.await(10, TimeUnit.SECONDS));
+        assertTrue("Adaptive-active proposal should be sent via single or batched callback",
+            "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
+        assertEquals("Adaptive-active proposal should reach PROCESSED state",
+            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+
+        Map<String, Object> stats = queueManager.getQueueStats();
+        assertEquals("adaptive-active", stats.get("releaseMode"));
     }
     
     @Test
