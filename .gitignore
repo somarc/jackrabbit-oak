@@ -18,3 +18,4 @@ oak-segment-consensus/META-INF/MANIFEST.MF
 # Built artifacts (JARs should not be committed)
 *.jar
 !**/src/**/*.jardocs/
+.claude/settings.local.json
