@@ -716,12 +716,76 @@ public class RequestRouterTest {
                     "GET",
                     "/api/cid/gateway/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
                 );
+                when(request.getPathInfo()).thenReturn(
+                    "/api/cid/gateway/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
+                );
                 HttpServletResponse response = responseWithBody();
 
                 router.route(baseRequest, request, response);
 
                 verify(baseRequest).setHandled(true);
                 verify(response).sendRedirect("https://ipfs.io/ipfs/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testCidLookupRouteReturnsMappedCidPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-cid-lookup");
+            try {
+                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
+                context.cidMappingService = new CidMappingService(storeDirectory);
+                context.cidMappingService.registerMapping(
+                    "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
+                    "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
+                );
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request(
+                    "GET",
+                    "/api/cid/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
+                );
+                when(request.getPathInfo()).thenReturn(
+                    "/api/cid/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
+                );
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"ipfsCid\":\"Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3\""));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testCidReverseLookupRouteReturnsOakBlobId() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-cid-reverse");
+            try {
+                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
+                context.cidMappingService = new CidMappingService(storeDirectory);
+                context.cidMappingService.registerMapping(
+                    "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
+                    "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
+                );
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/api/cid/reverse/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+                when(request.getPathInfo()).thenReturn("/api/cid/reverse/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"oakBlobId\":\"ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442\""));
             } finally {
                 deleteRecursively(storeDirectory);
             }
@@ -764,6 +828,54 @@ public class RequestRouterTest {
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"status\":\"READY_FOR_UPLOAD\""));
             assertTrue(body.toString().contains("\"epochNumber\":17"));
+        });
+    }
+
+    @Test
+    public void testBinaryCompleteUploadRouteReturnsSuccessPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            String wallet = "0x1234567890abcdef1234567890abcdef12345678";
+            UploadSession session = router.getBinaryUploadHandler().getSessionManager()
+                .createSession(wallet, 456L, "application/pdf", null);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/v1/binary/complete-upload");
+            when(request.getParameter("intentToken")).thenReturn(session.getIntentToken());
+            when(request.getParameter("cid")).thenReturn("Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+            when(request.getParameter("walletAddress")).thenReturn(wallet);
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"status\":\"complete\""));
+        });
+    }
+
+    @Test
+    public void testFollowerHeadUpdateRouteReplicatesHead() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+            when(engine.isLeader()).thenReturn(false);
+            when(engine.getCurrentLeader()).thenReturn("http://127.0.0.1:8090");
+            when(engine.pullSegmentsForHead("abc:r1", "http://localhost:8090")).thenReturn(4);
+            context.aeronConsensusEngine = engine;
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/v1/follower/head-update");
+            when(request.getReader()).thenReturn(new java.io.BufferedReader(
+                new java.io.StringReader("{\"head\":\"abc:r1\",\"epoch\":\"12\",\"leaderUrl\":\"http://localhost:8090\"}")
+            ));
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"success\":true"));
+            assertTrue(body.toString().contains("\"segmentCount\":4"));
         });
     }
 
