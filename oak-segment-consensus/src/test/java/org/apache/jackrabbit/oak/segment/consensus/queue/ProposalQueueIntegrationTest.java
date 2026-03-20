@@ -466,6 +466,87 @@ public class ProposalQueueIntegrationTest {
     }
 
     @Test
+    public void testAdaptiveActiveDeleteBypassesEpochDelay() throws InterruptedException {
+        queueManager.stop();
+
+        System.setProperty("oak.proposal.release.mode", "adaptive-active");
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        CountDownLatch latch = new CountDownLatch(1);
+
+        RaftAppendCallback callback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                appendedProposalId = "captured";
+                latch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature, String blobId, String mimeType) {
+                appendProposal(walletAddress, path, contentType, message, signature);
+            }
+
+            @Override
+            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                appendedProposalId = "delete-captured";
+                latch.countDown();
+            }
+
+            @Override
+            public int appendProposalBatch(java.util.List<QueuedProposal> batch) {
+                for (QueuedProposal proposal : batch) {
+                    appendedProposalId = proposal.getProposalId();
+                }
+                for (int i = 0; i < batch.size(); i++) {
+                    latch.countDown();
+                }
+                return batch.size();
+            }
+        };
+
+        queueManager = new ProposalQueueManagerOptimized(
+            bridge,
+            callback,
+            new BackpressureManager(),
+            beaconClient,
+            null,
+            tuning
+        );
+        queueManager.start();
+
+        String proposalId = "test-adaptive-delete-123";
+        String ethereumTxHash = "0xtx-adaptive-delete-123";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/delete-adaptive";
+
+        queueManager.queueDeleteProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD
+        );
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(2_000_000),
+            12349L,
+            ethereumTxHash
+        );
+
+        assertTrue("Adaptive-active delete proposal should drain without epoch wait",
+            latch.await(10, TimeUnit.SECONDS));
+        assertEquals("Adaptive-active delete proposal should use delete callback",
+            "delete-captured", appendedProposalId);
+        assertEquals("Adaptive-active delete proposal should reach PROCESSED state",
+            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+    }
+
+    @Test
     public void testAdaptiveActiveRestoresVerifiedProposalAfterRestart() throws Exception {
         queueManager.stop();
         bridge.stop();
@@ -592,6 +673,150 @@ public class ProposalQueueIntegrationTest {
         assertTrue("Restored proposal should be sent via single or batched callback",
             "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
         assertEquals("Restored proposal should remain tracked as processed",
+            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+    }
+
+    @Test
+    public void testAdaptiveActiveRestoresOverflowedVerifiedProposalAfterRestart() throws Exception {
+        queueManager.stop();
+        bridge.stop();
+
+        System.setProperty("oak.proposal.release.mode", "adaptive-active");
+        System.setProperty("oak.proposal.persistence.flush.ms", "0");
+        System.setProperty("oak.proposal.persistence.flush.batch", "1");
+        System.setProperty("oak.consensus.max.pending.messages", "1");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        Path persistenceDir = Files.createTempDirectory("proposal-restore-adaptive-overflow");
+
+        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        firstBridge.start();
+        bridge = firstBridge;
+
+        BackpressureManager pressuredBackpressure = new BackpressureManager(
+            1L,
+            tuning.getBackpressureTimeoutMs(),
+            tuning.getBackpressureParkNanos()
+        );
+        pressuredBackpressure.incrementSent(2L);
+        queueManager = new ProposalQueueManagerOptimized(
+            firstBridge,
+            new NoopRaftAppendCallback(),
+            pressuredBackpressure,
+            beaconClient,
+            persistenceDir.toString(),
+            tuning
+        );
+        queueManager.start();
+
+        String proposalId = "restore-adaptive-overflow-001";
+        String ethereumTxHash = "0xtx-restore-adaptive-overflow-001";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/page-restored-overflow";
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "Restore adaptive overflow content",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            null
+        );
+
+        firstBridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(500_000),
+            12350L,
+            ethereumTxHash
+        );
+
+        assertTrue("Proposal should reach overflow before restart",
+            waitForCondition(() -> longStat(queueManager.getQueueStats(), "backpressureOverflowProposalCount") >= 1L,
+                10_000, 25));
+
+        queueManager.stop();
+        firstBridge.stop();
+
+        CountDownLatch restoredLatch = new CountDownLatch(1);
+        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        restoredBridge.start();
+        bridge = restoredBridge;
+        appendedProposalId = null;
+
+        BackpressureManager restoredBackpressure = new BackpressureManager(
+            1L,
+            tuning.getBackpressureTimeoutMs(),
+            tuning.getBackpressureParkNanos()
+        );
+        restoredBackpressure.incrementSent(2L);
+
+        RaftAppendCallback callback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                appendedProposalId = "captured";
+                restoredLatch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature, String blobId, String mimeType) {
+                appendProposal(walletAddress, path, contentType, message, signature);
+            }
+
+            @Override
+            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                appendedProposalId = "delete-captured";
+                restoredLatch.countDown();
+            }
+
+            @Override
+            public int appendProposalBatch(java.util.List<QueuedProposal> batch) {
+                for (QueuedProposal proposal : batch) {
+                    appendedProposalId = proposal.getProposalId();
+                }
+                for (int i = 0; i < batch.size(); i++) {
+                    restoredLatch.countDown();
+                }
+                return batch.size();
+            }
+        };
+
+        queueManager = new ProposalQueueManagerOptimized(
+            restoredBridge,
+            callback,
+            restoredBackpressure,
+            beaconClient,
+            persistenceDir.toString(),
+            tuning
+        );
+        queueManager.start();
+
+        assertTrue("Restored overflowed proposal should remain resident until pressure clears",
+            waitForCondition(() -> longStat(queueManager.getQueueStats(), "verifiedResidentProposalCount") >= 1L,
+                10_000, 25));
+        assertEquals("No callback should fire while restored backpressure remains active", null, appendedProposalId);
+
+        restoredBackpressure.incrementAcknowledged(2L);
+
+        assertTrue("Restored overflowed proposal should drain after backpressure clears",
+            restoredLatch.await(10, TimeUnit.SECONDS));
+        assertTrue("Restored overflowed proposal should be sent via single or batched callback",
+            "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
+        assertEquals("Restored overflowed proposal should remain tracked as processed",
             ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
     }
     

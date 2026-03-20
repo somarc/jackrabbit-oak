@@ -101,6 +101,29 @@ public class AdaptivePackingBufferTest {
         assertEquals(0L, ((Number) buffer.getStatsMap().get("pendingProposals")).longValue());
     }
 
+    @Test
+    public void testOverloadedDrainPromotesForcedResidencyBeforeNewerWallets() {
+        AdaptivePackingBuffer buffer = new AdaptivePackingBuffer();
+        buffer.addProposal(buildProposal("forced-cold", "0xwallet-cold",
+            "/oak-chain/aa/bb/cc/0xwallet-cold/content/oldest", 1L), 0L);
+        buffer.addProposal(buildProposal("hot-a", "0xwallet-hot-a",
+            "/oak-chain/aa/bb/cc/0xwallet-hot-a/content/item-a", 2L), 1_400L);
+        buffer.addProposal(buildProposal("hot-b", "0xwallet-hot-b",
+            "/oak-chain/aa/bb/cc/0xwallet-hot-b/content/item-b", 3L), 1_450L);
+
+        AdaptiveReleaseGovernor.Decision decision = new AdaptiveReleaseGovernor.Decision(
+            AdaptiveReleaseGovernor.GovernorState.OVERLOADED,
+            AdaptiveReleaseGovernor.ReleaseAction.THROTTLED,
+            Collections.singletonList("backpressure_active")
+        );
+
+        List<List<QueuedProposal>> batches = buffer.drainReadyBatches(2_200L, decision);
+
+        assertEquals(2, batches.size());
+        assertEquals("forced-cold", batches.get(0).get(0).getProposalId());
+        assertEquals(1L, ((Number) buffer.getStatsMap().get("pendingProposals")).longValue());
+    }
+
     private static QueuedProposal buildProposal(String proposalId, String wallet, String path, long timestamp) {
         QueuedProposal proposal = new QueuedProposal(
             proposalId,
