@@ -27,6 +27,8 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
+import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSession;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
@@ -670,6 +672,102 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testCidStatsRouteReturnsMappingStats() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-cid-stats");
+            try {
+                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
+                context.cidMappingService = new CidMappingService(storeDirectory);
+                context.cidMappingService.registerMapping(
+                    "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
+                    "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
+                );
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/api/cid/stats");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"totalMappings\":1"));
+                assertTrue(body.toString().contains("\"currentSize\":1"));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testCidGatewayRouteRedirectsToGatewayUrl() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-cid-gateway");
+            try {
+                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
+                context.cidMappingService = new CidMappingService(storeDirectory);
+                context.cidMappingService.registerMapping(
+                    "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
+                    "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
+                );
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request(
+                    "GET",
+                    "/api/cid/gateway/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
+                );
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).sendRedirect("https://ipfs.io/ipfs/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testBinaryDeclareIntentRouteReturnsIntentToken() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/v1/binary/declare-intent");
+            when(request.getParameter("walletAddress")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
+            when(request.getParameter("filesize")).thenReturn("123");
+            when(request.getParameter("mimeType")).thenReturn("image/png");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"intentToken\":\"intent-"));
+        });
+    }
+
+    @Test
+    public void testBinaryCheckIntentRouteReturnsReadyState() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            UploadSession session = router.getBinaryUploadHandler().getSessionManager()
+                .createSession("0x1234567890abcdef1234567890abcdef12345678", 123L, "image/png", null);
+            router.getBinaryUploadHandler().getSessionManager().markReadyForUpload(session.getIntentToken(), 17L);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/binary/check-intent/" + session.getIntentToken());
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"status\":\"READY_FOR_UPLOAD\""));
+            assertTrue(body.toString().contains("\"epochNumber\":17"));
+        });
+    }
+
+    @Test
     public void testNgrokRouteReturnsSelfUrl() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
@@ -863,6 +961,7 @@ public class RequestRouterTest {
     private HttpServletRequest request(String method, String uri) {
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(request.getRequestURI()).thenReturn(uri);
+        when(request.getPathInfo()).thenReturn(uri);
         when(request.getMethod()).thenReturn(method);
         when(request.getRemoteAddr()).thenReturn("127.0.0.1");
         return request;
