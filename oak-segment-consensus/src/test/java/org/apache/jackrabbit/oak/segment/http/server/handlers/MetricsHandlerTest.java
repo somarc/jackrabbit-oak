@@ -72,11 +72,11 @@ public class MetricsHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_OK);
         String json = body.toString();
-        assertTrue(json.contains("\"role\": \"LEADER\""));
-        assertTrue(json.contains("\"reachableValidators\": 2"));
-        assertTrue(json.contains("\"replicationLag\": 0"));
-        assertTrue(json.contains("\"registeredClients\": 1"));
-        assertTrue(json.contains("\"registeredValidators\": 1"));
+        assertTrue(json.contains("\"role\":\"LEADER\""));
+        assertTrue(json.contains("\"reachableValidators\":2"));
+        assertTrue(json.contains("\"replicationLag\":0"));
+        assertTrue(json.contains("\"registeredClients\":1"));
+        assertTrue(json.contains("\"registeredValidators\":1"));
     }
 
     @Test
@@ -96,7 +96,7 @@ public class MetricsHandlerTest {
         handler.handleMetrics(response);
 
         String json = body.toString();
-        assertTrue(json.contains("\"consensus\": null"));
-        assertTrue(json.contains("\"replication\": null"));
+        assertTrue(json.contains("\"consensus\":null"));
+        assertTrue(json.contains("\"replication\":null"));
     }
 }

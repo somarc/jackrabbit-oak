@@ -16,10 +16,22 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
+import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
+import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
+import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
+import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
+import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
+import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
+import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.eclipse.jetty.server.Request;
 import org.junit.Test;
@@ -28,11 +40,16 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.Files;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.nio.file.Paths;
+import java.nio.file.Path;
+import java.io.IOException;
+import java.util.Comparator;
 
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -351,6 +368,176 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testExplorerSummaryRouteReturnsCompactSummaryPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.validatorWalletAddress = "0x1234567890abcdef1234567890abcdef12345678";
+            context.clusterWalletAddress = "0x9999999999999999999999999999999999999999";
+            context.registeredClients.put("c1", new ClientRegistration("c1", "http://client-1:4502",
+                "0x1234567890abcdef1234567890abcdef12345678"));
+            context.registeredValidators.put("v1", new ValidatorRegistration("validator-1", "http://validator-1:8090"));
+            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+            when(engine.getClusterSize()).thenReturn(3);
+            when(engine.getReachableValidatorCount()).thenReturn(2);
+            when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
+            when(engine.isLeader()).thenReturn(false);
+            when(engine.getCurrentLeader()).thenReturn("http://validator-1:8090");
+            when(engine.getCurrentTerm()).thenReturn(8);
+            when(engine.getCurrentEpoch()).thenReturn(13);
+            when(engine.getCurrentEthereumEpoch()).thenReturn(21);
+            context.aeronConsensusEngine = engine;
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            Map<String, Object> queueStats = new HashMap<>();
+            queueStats.put("verifiedCount", 7L);
+            queueStats.put("totalFinalizedCount", 5L);
+            queueStats.put("batchQueueSize", 2L);
+            queueStats.put("pendingCount", 1L);
+            queueStats.put("mempoolPendingCount", 1L);
+            queueStats.put("rejectedCount", 0L);
+            queueStats.put("backpressurePendingCount", 0L);
+            queueStats.put("backpressurePendingRawCount", 0L);
+            queueStats.put("backpressureMaxPending", 3L);
+            queueStats.put("backpressureActive", false);
+            queueStats.put("totalProposalsSent", 9L);
+            queueStats.put("currentEpoch", 13L);
+            queueStats.put("finalizedEpoch", 12L);
+            queueStats.put("epochsUntilFinality", 1L);
+            when(queueManager.getQueueStats()).thenReturn(queueStats);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/explorer/summary");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"explorer.v1\""));
+            assertTrue(body.toString().contains("\"routingDebt\":4"));
+            assertTrue(body.toString().contains("\"registeredClients\":1"));
+        });
+    }
+
+    @Test
+    public void testExplorerProposalRouteReturnsProposalPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            ProposalStatus status = new ProposalStatus(
+                "proposal-1",
+                ProposalState.CONFIRMED,
+                "0xtx",
+                123L,
+                88L,
+                null,
+                DurabilityState.PENDING,
+                456L,
+                null,
+                "head-2"
+            );
+            when(queueManager.getProposalStatus("proposal-1")).thenReturn(status);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/explorer/proposals/proposal-1");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"proposalId\":\"proposal-1\""));
+            assertTrue(body.toString().contains("\"state\":\"CONFIRMED\""));
+        });
+    }
+
+    @Test
+    public void testExplorerWalletRouteReturnsWalletMetadata() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-explorer-wallet");
+            try {
+                String wallet = "0x1234567890abcdef1234567890abcdef12345678";
+                MemoryNodeStore nodeStore = new MemoryNodeStore();
+                seedWallet(nodeStore, wallet);
+                ServerContext context = newContext(nodeStore, storeDirectory);
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/v1/explorer/wallets/" + wallet);
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"wallet\":\"" + wallet + "\""));
+                assertTrue(body.toString().contains("\"contentCount\":2"));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testApiExploreRouteReturnsNodeTreePayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-api-explore");
+            try {
+                MemoryNodeStore nodeStore = new MemoryNodeStore();
+                NodeBuilder root = nodeStore.getRoot().builder();
+                NodeBuilder doc = root.child("content").child("doc");
+                doc.child("child-a");
+                doc.setProperty("title", "Hello");
+                nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+                ServerContext context = newContext(nodeStore, storeDirectory);
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/api/explore");
+                when(request.getParameter("path")).thenReturn("/content/doc");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"path\":\"/content/doc\""));
+                assertTrue(body.toString().contains("\"children\":[\"child-a\"]"));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testRecentSegmentsRouteReturnsJournalEntries() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-recent-segments");
+            try {
+                Files.write(storeDirectory.resolve("journal.log"), Arrays.asList(
+                    "seg-001 2026-03-20T00:00:00Z",
+                    "seg-002 2026-03-20T00:01:00Z"
+                ));
+                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/api/segments/recent");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"id\":\"seg-002\""));
+                assertTrue(body.toString().contains("\"id\":\"seg-001\""));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
     public void testAeronValidatorIdentitiesRouteReturnsIdentityPayload() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
@@ -500,10 +687,14 @@ public class RequestRouterTest {
     private StringWriter body;
 
     private ServerContext newContext() {
+        return newContext(mock(NodeStore.class), Paths.get("/tmp/store"));
+    }
+
+    private ServerContext newContext(NodeStore nodeStore, Path storeDirectory) {
         return new ServerContext(
             mock(FileStore.class),
-            mock(NodeStore.class),
-            Paths.get("/tmp/store"),
+            nodeStore,
+            storeDirectory,
             "http://localhost:8090"
         );
     }
@@ -559,6 +750,35 @@ public class RequestRouterTest {
         members.add(self);
         state.put("members", members);
         return state;
+    }
+
+    private void seedWallet(MemoryNodeStore nodeStore, String wallet) throws Exception {
+        String[] levels = WalletPathUtil.getShardLevels(wallet);
+        NodeBuilder root = nodeStore.getRoot().builder();
+        NodeBuilder walletNode = root.child("oak-chain")
+            .child(levels[0])
+            .child(levels[1])
+            .child(levels[2])
+            .child(wallet);
+        walletNode.setProperty("contentCount", 2L);
+        walletNode.setProperty("totalWrites", 7L);
+        walletNode.child("content").child("doc-1").setProperty("contentType", "fragment");
+        nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+    }
+
+    private void deleteRecursively(Path dir) throws IOException {
+        if (dir == null || !Files.exists(dir)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> stream = Files.walk(dir)) {
+            stream.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        }
     }
 
     private void withRoutingProperties(boolean browserUiEnabled, ThrowingRunnable runnable) throws Exception {

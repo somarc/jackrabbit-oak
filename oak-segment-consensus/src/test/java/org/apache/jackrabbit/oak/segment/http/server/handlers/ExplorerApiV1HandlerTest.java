@@ -1,0 +1,278 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.jackrabbit.oak.segment.http.server.handlers;
+
+import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
+import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
+import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
+import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
+import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
+import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
+import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
+import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
+import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
+import org.junit.Test;
+
+import javax.servlet.http.HttpServletResponse;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.math.BigDecimal;
+import java.nio.file.Paths;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+public class ExplorerApiV1HandlerTest {
+
+    private static final String WALLET = "0x1234567890abcdef1234567890abcdef12345678";
+
+    @Test
+    public void testHandleSummaryIncludesClusterQueueAndIdentityDetails() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext(new MemoryNodeStore());
+        context.validatorWalletAddress = WALLET;
+        context.clusterWalletAddress = "0x9999999999999999999999999999999999999999";
+        context.registeredClients.put("c1", new ClientRegistration("c1", "http://client-1:4502", WALLET));
+        context.registeredValidators.put("v1", new ValidatorRegistration("validator-1", "http://validator-1:8090"));
+
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.getClusterSize()).thenReturn(5);
+        when(engine.getReachableValidatorCount()).thenReturn(4);
+        when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
+        when(engine.isLeader()).thenReturn(false);
+        when(engine.getCurrentLeader()).thenReturn("http://validator-1:8090");
+        when(engine.getCurrentTerm()).thenReturn(9);
+        when(engine.getCurrentEpoch()).thenReturn(17);
+        when(engine.getCurrentEthereumEpoch()).thenReturn(27);
+        context.aeronConsensusEngine = engine;
+
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        Map<String, Object> queueStats = new LinkedHashMap<>();
+        queueStats.put("verifiedCount", 11L);
+        queueStats.put("totalFinalizedCount", 8L);
+        queueStats.put("batchQueueSize", 3L);
+        queueStats.put("pendingCount", 2L);
+        queueStats.put("mempoolPendingCount", 1L);
+        queueStats.put("rejectedCount", 1L);
+        queueStats.put("backpressurePendingCount", 2L);
+        queueStats.put("backpressurePendingRawCount", 4L);
+        queueStats.put("backpressureMaxPending", 6L);
+        queueStats.put("backpressureActive", true);
+        queueStats.put("totalProposalsSent", 14L);
+        queueStats.put("currentEpoch", 18L);
+        queueStats.put("finalizedEpoch", 15L);
+        queueStats.put("epochsUntilFinality", 2L);
+        when(queueManager.getQueueStats()).thenReturn(queueStats);
+        context.proposalQueueManager = queueManager;
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
+        handler.handleSummary(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"explorer.v1\""));
+        assertTrue(json.contains("\"consensusType\":\"aeron-cluster\""));
+        assertTrue(json.contains("\"role\":\"FOLLOWER\""));
+        assertTrue(json.contains("\"clusterState\":\"HEALTHY\""));
+        assertTrue(json.contains("\"routingDebt\":6"));
+        assertTrue(json.contains("\"validatorWalletAddress\":\"" + WALLET + "\""));
+        assertTrue(json.contains("\"registeredClients\":1"));
+        assertTrue(json.contains("\"registeredValidators\":1"));
+    }
+
+    @Test
+    public void testHandleSummaryFallsBackToStandaloneDefaults() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(newContext(new MemoryNodeStore()));
+        handler.handleSummary(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"consensusType\":\"none\""));
+        assertTrue(json.contains("\"role\":\"STANDALONE\""));
+        assertTrue(json.contains("\"clusterState\":\"HEALTHY\""));
+        assertTrue(json.contains("\"queue\":{}"));
+    }
+
+    @Test
+    public void testHandleProposalByIdRejectsMissingProposalId() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(newContext(new MemoryNodeStore()));
+        handler.handleProposalById(response, "");
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("proposalId is required"));
+    }
+
+    @Test
+    public void testHandleProposalByIdReturnsStatusPayload() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext(new MemoryNodeStore());
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        ProposalStatus status = new ProposalStatus(
+            "proposal-1",
+            ProposalState.VERIFIED,
+            "0xtx",
+            111L,
+            22L,
+            null,
+            DurabilityState.ACKED,
+            222L,
+            null,
+            "head-1"
+        );
+        when(queueManager.getProposalStatus("proposal-1")).thenReturn(status);
+        context.proposalQueueManager = queueManager;
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
+        handler.handleProposalById(response, "proposal-1");
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"proposalId\":\"proposal-1\""));
+        assertTrue(json.contains("\"state\":\"VERIFIED\""));
+        assertTrue(json.contains("\"durabilityState\":\"ACKED\""));
+        assertTrue(json.contains("\"durableHead\":\"head-1\""));
+    }
+
+    @Test
+    public void testHandleWalletByAddressReturnsWalletMetadataAndGcAccount() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedWallet(nodeStore, WALLET);
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext(nodeStore);
+        context.gcAccountManager = new GCAccountManager();
+        EntityGCAccount account = context.gcAccountManager.getAccount(WALLET.toLowerCase());
+        account.totalDebt = new BigDecimal("4.25");
+        account.executedDebt = new BigDecimal("1.50");
+        account.writesBlocked = false;
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
+        handler.handleWalletByAddress(response, WALLET);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"wallet\":\"" + WALLET + "\""));
+        assertTrue(json.contains("\"walletPath\":\"" + WalletPathUtil.getShardRoot(WALLET) + "\""));
+        assertTrue(json.contains("\"contentCount\":2"));
+        assertTrue(json.contains("\"totalWrites\":7"));
+        assertTrue(json.contains("\"name\":\"doc-1\""));
+        assertTrue(json.contains("\"contentType\":\"fragment\""));
+        assertTrue(json.contains("\"totalDebt\":\"4.25\""));
+        assertTrue(json.contains("\"pendingDebt\":\"2.75\""));
+    }
+
+    @Test
+    public void testHandleWalletByAddressReturnsNotFoundForMissingWallet() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(newContext(new MemoryNodeStore()));
+        handler.handleWalletByAddress(response, WALLET);
+
+        verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+        assertTrue(body.toString().contains("Wallet not found"));
+    }
+
+    @Test
+    public void testHandleEpochsRequiresProposalQueue() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(newContext(new MemoryNodeStore()));
+        handler.handleEpochs(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("Proposal queue not available"));
+    }
+
+    @Test
+    public void testHandleEpochsReturnsFlowPayload() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext(new MemoryNodeStore());
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        Map<String, Object> flow = new LinkedHashMap<>();
+        flow.put("currentEpoch", 42L);
+        flow.put("finalizedEpoch", 40L);
+        when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
+        context.proposalQueueManager = queueManager;
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
+        handler.handleEpochs(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"explorer.v1\""));
+        assertTrue(json.contains("\"epochs\":{\"currentEpoch\":42,\"finalizedEpoch\":40}"));
+    }
+
+    private static ServerContext newContext(MemoryNodeStore nodeStore) {
+        return new ServerContext(
+            mock(FileStore.class),
+            nodeStore,
+            Paths.get("/tmp/store"),
+            "http://localhost:8090"
+        );
+    }
+
+    private static HttpServletResponse responseWithBody(StringWriter body) throws Exception {
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+        return response;
+    }
+
+    private static void seedWallet(MemoryNodeStore nodeStore, String wallet) throws Exception {
+        String[] levels = WalletPathUtil.getShardLevels(wallet);
+        NodeBuilder root = nodeStore.getRoot().builder();
+        NodeBuilder walletNode = root.child("oak-chain")
+            .child(levels[0])
+            .child(levels[1])
+            .child(levels[2])
+            .child(wallet);
+        walletNode.setProperty("contentCount", 2L);
+        walletNode.setProperty("totalWrites", 7L);
+        walletNode.setProperty("walletCreated", 100L);
+        walletNode.setProperty("lastWrite", 200L);
+        walletNode.setProperty("nodeType", "wallet-root");
+        NodeBuilder doc = walletNode.child("content").child("doc-1");
+        doc.setProperty("contentType", "fragment");
+        doc.setProperty("timestamp", 300L);
+        doc.setProperty("message", "hello");
+        nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+    }
+}
