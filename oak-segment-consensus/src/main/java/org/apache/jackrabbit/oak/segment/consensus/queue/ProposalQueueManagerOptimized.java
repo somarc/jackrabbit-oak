@@ -1928,8 +1928,10 @@ public class ProposalQueueManagerOptimized {
                     }
                     
                     // Verify payment amount is present and positive.
-                    // Tier-specific proof enforcement remains a follow-up because mock/runtime bridges
-                    // currently expose different payment units.
+                    // TODO(contract-review): Oak no longer centers release on payment tiers, but
+                    // proof-tier enforcement still requires a contract/bridge review because
+                    // current bridges expose mixed payment units and proofs do not carry an
+                    // authoritative entitlement/capability marker.
                     try {
                         java.math.BigInteger amountWei = new java.math.BigInteger(proof.getAmountWei());
                         if (amountWei.signum() <= 0) {

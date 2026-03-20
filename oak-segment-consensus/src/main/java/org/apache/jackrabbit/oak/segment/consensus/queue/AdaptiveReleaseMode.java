@@ -36,12 +36,12 @@ enum AdaptiveReleaseMode {
 
     static AdaptiveReleaseMode fromValue(String value) {
         if (value == null) {
-            return EPOCH;
+            return ADAPTIVE_ACTIVE;
         }
 
         String normalized = value.trim().toLowerCase(Locale.ROOT).replace('_', '-');
         if (normalized.isEmpty()) {
-            return EPOCH;
+            return ADAPTIVE_ACTIVE;
         }
         if ("shadow".equals(normalized)) {
             return ADAPTIVE_SHADOW;
@@ -54,6 +54,6 @@ enum AdaptiveReleaseMode {
                 return mode;
             }
         }
-        return EPOCH;
+        return ADAPTIVE_ACTIVE;
     }
 }

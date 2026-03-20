@@ -33,8 +33,8 @@ final class ProposalQueueTuning {
     static final long DEFAULT_BACKPRESSURE_TIMEOUT_MS = 30_000L;
     static final long DEFAULT_BACKPRESSURE_PARK_NANOS = 1_000_000L;
     static final long DEFAULT_COUNTER_ROTATION_INTERVAL_MS = 24L * 60L * 60L * 1000L;
-    static final String DEFAULT_RELEASE_MODE = "epoch";
-    static final boolean DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED = true;
+    static final String DEFAULT_RELEASE_MODE = "adaptive-active";
+    static final boolean DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED = false;
     static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED = true;
     static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER = true;
 
@@ -95,7 +95,7 @@ final class ProposalQueueTuning {
         this.backpressureTimeoutMs = backpressureTimeoutMs;
         this.backpressureParkNanos = backpressureParkNanos;
         this.counterRotationIntervalMs = counterRotationIntervalMs;
-        this.releaseMode = releaseMode != null ? releaseMode : AdaptiveReleaseMode.EPOCH;
+        this.releaseMode = releaseMode != null ? releaseMode : AdaptiveReleaseMode.ADAPTIVE_ACTIVE;
         this.priorityDirectReleaseEnabled = priorityDirectReleaseEnabled;
         this.validatorHostedBinaryUploadEnabled = validatorHostedBinaryUploadEnabled;
         this.validatorHostedBinaryRequiresPriorityTier = validatorHostedBinaryRequiresPriorityTier;

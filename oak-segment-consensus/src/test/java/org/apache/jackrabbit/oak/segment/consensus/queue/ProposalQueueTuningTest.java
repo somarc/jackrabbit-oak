@@ -64,10 +64,10 @@ public class ProposalQueueTuningTest {
     }
 
     @Test
-    public void testReleaseModeDefaultsToEpoch() {
+    public void testReleaseModeDefaultsToAdaptiveActive() {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(AdaptiveReleaseMode.EPOCH, tuning.getReleaseMode());
+        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.getReleaseMode());
     }
 
     @Test
@@ -105,28 +105,28 @@ public class ProposalQueueTuningTest {
     }
 
     @Test
-    public void testInvalidReleaseModeFallsBackToEpoch() {
+    public void testInvalidReleaseModeFallsBackToAdaptiveActive() {
         System.setProperty("oak.proposal.release.mode", "unknown-mode");
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(AdaptiveReleaseMode.EPOCH, tuning.getReleaseMode());
+        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.getReleaseMode());
     }
 
     @Test
-    public void testPriorityDirectReleaseDefaultsEnabled() {
+    public void testPriorityDirectReleaseDefaultsDisabled() {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertTrue(tuning.isPriorityDirectReleaseEnabled());
+        assertFalse(tuning.isPriorityDirectReleaseEnabled());
     }
 
     @Test
     public void testPriorityDirectReleaseOverrideApplies() {
-        System.setProperty("oak.proposal.priority.direct.release.enabled", "false");
+        System.setProperty("oak.proposal.priority.direct.release.enabled", "true");
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertFalse(tuning.isPriorityDirectReleaseEnabled());
+        assertTrue(tuning.isPriorityDirectReleaseEnabled());
     }
 
     @Test

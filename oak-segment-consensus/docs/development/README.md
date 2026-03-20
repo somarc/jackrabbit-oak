@@ -29,6 +29,7 @@ java -jar target/oak-segment-consensus.jar
 ### Runtime Knobs and Gears
 
 - [Blockchain Config Knobs and Gears](BLOCKCHAIN-CONFIG-KNOBS.md) - OSGi/env/system precedence and API introspection mapping used by dashboard consumers.
+- [ADR 077 Contract Review Follow-Up](ADR-077-CONTRACT-REVIEW-FOLLOW-UP.md) - Oak-side backend changes that require separate smart contract and SDK review.
 
 ---
 
