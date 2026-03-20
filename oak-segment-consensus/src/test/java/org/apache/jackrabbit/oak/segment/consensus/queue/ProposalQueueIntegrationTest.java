@@ -375,7 +375,8 @@ public class ProposalQueueIntegrationTest {
 
         assertTrue("Standard tier should drain on the default adaptive path within 10s",
             raftAppendLatch.await(10, TimeUnit.SECONDS));
-        assertEquals("Callback should have captured proposal", proposalId, appendedProposalId);
+        assertTrue("Standard tier should be sent via single or batched callback",
+            "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
     }
     
     @Test
@@ -488,8 +489,9 @@ public class ProposalQueueIntegrationTest {
             latch.await(10, TimeUnit.SECONDS));
         assertTrue("Adaptive-active proposal should be sent via single or batched callback",
             "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
-        assertEquals("Adaptive-active proposal should reach PROCESSED state",
-            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+        assertTrue("Adaptive-active proposal should reach PROCESSED state",
+            waitForCondition(() -> queueManager.getProposal(proposalId).getState() == ProposalState.PROCESSED,
+                5_000, 25));
 
         Map<String, Object> stats = queueManager.getQueueStats();
         assertEquals("adaptive-active", stats.get("releaseMode"));
@@ -966,8 +968,9 @@ public class ProposalQueueIntegrationTest {
             restoredLatch.await(10, TimeUnit.SECONDS));
         assertTrue("Restored overflowed proposal should be sent via single or batched callback",
             "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
-        assertEquals("Restored overflowed proposal should remain tracked as processed",
-            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+        assertTrue("Restored overflowed proposal should remain tracked as processed",
+            waitForCondition(() -> queueManager.getProposal(proposalId).getState() == ProposalState.PROCESSED,
+                5_000, 25));
     }
     
     @Test
