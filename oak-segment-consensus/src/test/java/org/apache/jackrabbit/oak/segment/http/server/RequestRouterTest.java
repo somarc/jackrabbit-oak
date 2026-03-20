@@ -17,6 +17,9 @@
 package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.Segment;
+import org.apache.jackrabbit.oak.segment.SegmentId;
+import org.apache.jackrabbit.oak.segment.SegmentIdProvider;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
@@ -38,12 +41,16 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.eclipse.jetty.server.Request;
 import org.junit.Test;
 
+import javax.servlet.ServletOutputStream;
+import javax.servlet.WriteListener;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -52,9 +59,13 @@ import java.nio.file.Paths;
 import java.nio.file.Path;
 import java.io.IOException;
 import java.util.Comparator;
+import java.util.UUID;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -880,6 +891,74 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testJournalRouteStreamsFileContents() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-journal");
+            try {
+                byte[] payload = "journal-entry".getBytes(StandardCharsets.UTF_8);
+                Files.write(storeDirectory.resolve("journal.log"), payload);
+                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/journal.log");
+                RecordingServletOutputStream output = new RecordingServletOutputStream();
+                HttpServletResponse response = mock(HttpServletResponse.class);
+                when(response.getOutputStream()).thenReturn(output);
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                verify(response).setContentType("text/plain");
+                assertArrayEquals(payload, output.toByteArray());
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testManifestHeadRouteReturnsHeaders() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-manifest");
+            try {
+                byte[] payload = "manifest-data".getBytes(StandardCharsets.UTF_8);
+                Files.write(storeDirectory.resolve("manifest"), payload);
+                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("HEAD", "/manifest");
+                HttpServletResponse response = mock(HttpServletResponse.class);
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                verify(response).setContentType("text/plain");
+                verify(response).setContentLengthLong(payload.length);
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testSegmentRouteRejectsInvalidUuid() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/segments/not-a-uuid");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            assertTrue(body.toString().contains("Invalid segment UUID"));
+        });
+    }
+
+    @Test
     public void testNgrokRouteReturnsSelfUrl() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
@@ -1142,6 +1221,28 @@ public class RequestRouterTest {
                     throw new RuntimeException(e);
                 }
             });
+        }
+    }
+
+    private static final class RecordingServletOutputStream extends ServletOutputStream {
+        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        @Override
+        public void write(int b) {
+            output.write(b);
+        }
+
+        @Override
+        public boolean isReady() {
+            return true;
+        }
+
+        @Override
+        public void setWriteListener(WriteListener writeListener) {
+        }
+
+        private byte[] toByteArray() {
+            return output.toByteArray();
         }
     }
 
