@@ -1153,6 +1153,47 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testConfigRouteReturns429WhenRateLimited() throws Exception {
+        String previousBrowser = System.getProperty("oak.http.browser.ui.enabled");
+        String previousRateLimit = System.getProperty("rate.limit.enabled");
+        String previousClientRps = System.getProperty(RateLimiter.PROP_REQUESTS_PER_SECOND);
+        String previousBurst = System.getProperty(RateLimiter.PROP_BURST_SIZE);
+        String previousGlobalRps = System.getProperty(RateLimiter.PROP_GLOBAL_RPS);
+        String previousToken = System.getProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME);
+        try {
+            System.setProperty("oak.http.browser.ui.enabled", "true");
+            System.setProperty("rate.limit.enabled", "true");
+            System.setProperty(RateLimiter.PROP_REQUESTS_PER_SECOND, "1");
+            System.setProperty(RateLimiter.PROP_BURST_SIZE, "1");
+            System.setProperty(RateLimiter.PROP_GLOBAL_RPS, "100");
+            System.clearProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME);
+
+            RequestRouter router = new RequestRouter(newContext());
+
+            Request firstBaseRequest = mock(Request.class);
+            HttpServletResponse firstResponse = responseWithBody();
+            router.route(firstBaseRequest, request("GET", "/v1/config/osgi"), firstResponse);
+            verify(firstBaseRequest).setHandled(true);
+            verify(firstResponse).setStatus(HttpServletResponse.SC_OK);
+
+            Request secondBaseRequest = mock(Request.class);
+            HttpServletResponse secondResponse = responseWithBody();
+            router.route(secondBaseRequest, request("GET", "/v1/config/osgi"), secondResponse);
+
+            verify(secondBaseRequest).setHandled(true);
+            verify(secondResponse).setStatus(429);
+            assertTrue(body.toString().contains("rate_limit_exceeded"));
+        } finally {
+            restoreProperty("oak.http.browser.ui.enabled", previousBrowser);
+            restoreProperty("rate.limit.enabled", previousRateLimit);
+            restoreProperty(RateLimiter.PROP_REQUESTS_PER_SECOND, previousClientRps);
+            restoreProperty(RateLimiter.PROP_BURST_SIZE, previousBurst);
+            restoreProperty(RateLimiter.PROP_GLOBAL_RPS, previousGlobalRps);
+            restoreProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME, previousToken);
+        }
+    }
+
+    @Test
     public void testHeadRouteUsesAeronHeadValuesWhenAvailable() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContextWithHead("file-head");
@@ -1376,6 +1417,14 @@ public class RequestRouterTest {
             } else {
                 System.setProperty("rate.limit.enabled", previousRateLimit);
             }
+        }
+    }
+
+    private void restoreProperty(String key, String value) {
+        if (value == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, value);
         }
     }
 
