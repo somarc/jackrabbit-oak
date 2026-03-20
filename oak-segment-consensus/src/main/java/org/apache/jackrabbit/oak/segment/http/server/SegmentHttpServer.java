@@ -62,6 +62,7 @@ public class SegmentHttpServer {
     private final TlsConfiguration tlsConfig;
     private final JoinProofFactory joinProofFactory;
     private final PeerUrlResolver peerUrlResolver;
+    private final PeerJsonHttpClient peerJsonHttpClient;
     
     // Keep references for backward compatibility and methods that need direct access
     private final FileStore fileStore;
@@ -104,6 +105,7 @@ public class SegmentHttpServer {
         this.router = new RequestRouter(context);
         this.joinProofFactory = new JoinProofFactory(fileStore, context, System::currentTimeMillis);
         this.peerUrlResolver = new PeerUrlResolver();
+        this.peerJsonHttpClient = new PeerJsonHttpClient();
         
         // Create server - TLS will be configured in start() if enabled
         this.server = new Server();
@@ -258,22 +260,7 @@ public class SegmentHttpServer {
                         context.selfUrl.replace("\"", "\\\"")
                     );
                     
-                    // Send registration request
-                    java.net.URL url = new java.net.URL(registrationUrl);
-                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("POST");
-                    conn.setRequestProperty("Content-Type", "application/json");
-                    conn.setDoOutput(true);
-                    conn.setConnectTimeout(5000);
-                    conn.setReadTimeout(10000);
-                    
-                    // Write JSON payload
-                    try (java.io.OutputStream os = conn.getOutputStream()) {
-                        byte[] input = jsonPayload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                        os.write(input, 0, input.length);
-                    }
-                    
-                    int responseCode = conn.getResponseCode();
+                    int responseCode = peerJsonHttpClient.postJson(registrationUrl, jsonPayload).getResponseCode();
                     if (responseCode == 200) {
                         log.info("✅ Registered with peer validator: {} → {} (attempt {}/{})", peerUrl, peerUrlIP, attempt, maxRetries);
                         registered = true;
@@ -372,30 +359,11 @@ public class SegmentHttpServer {
                 
                 log.info("   → Broadcasting to {} → {} (with public key)", peerUrl, peerUrlIP);
                 
-                // Send broadcast request
-                java.net.URL url = new java.net.URL(peerJoinedUrl);
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setDoOutput(true);
-                conn.setConnectTimeout(5000);
-                conn.setReadTimeout(10000);
-                
-                // Write JSON payload
-                try (java.io.OutputStream os = conn.getOutputStream()) {
-                    byte[] input = jsonPayload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                    os.write(input, 0, input.length);
-                }
-                
-                int responseCode = conn.getResponseCode();
+                PeerJsonHttpClient.PostResult result = peerJsonHttpClient.postJson(peerJoinedUrl, jsonPayload);
+                int responseCode = result.getResponseCode();
                 
                 if (responseCode == 200) {
-                    // Read response
-                    java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(conn.getInputStream())
-                    );
-                    String response = reader.lines().collect(java.util.stream.Collectors.joining());
-                    reader.close();
+                    String response = result.getResponseBody();
                     
                     log.info("   ✅ Accepted by peer: {} → {}", peerUrl, peerUrlIP);
                     log.debug("      Response: {}", response);
