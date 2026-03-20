@@ -560,9 +560,9 @@ public class WriteApplicationService {
                 walletNode.setProperty("nodeType", "wallet-root");
                 walletNode.setProperty("description", "Wallet-scoped content root for " + walletAddress);
                 
-                // Initialize statistics
-                walletNode.setProperty("contentCount", 0L);
-                walletNode.setProperty("totalWrites", 0L);
+                // First write creates the wallet node and its initial content entry.
+                walletNode.setProperty("contentCount", 1L);
+                walletNode.setProperty("totalWrites", 1L);
                 walletNode.setProperty("lastWrite", System.currentTimeMillis());
                 
                 log.debug("✅ Wallet node metadata initialized: {}", walletAddress);
