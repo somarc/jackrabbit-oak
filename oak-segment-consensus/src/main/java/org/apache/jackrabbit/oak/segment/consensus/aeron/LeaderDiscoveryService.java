@@ -190,6 +190,19 @@ public class LeaderDiscoveryService {
         this.cachedLeaderTimestamp = System.currentTimeMillis();
         log.debug("Set known leader: {} (memberId: {})", leaderUrl, memberId);
     }
+
+    /**
+     * Return the best locally known leader hint without performing network I/O.
+     */
+    public String getKnownLeaderHint() {
+        if (knownLeaderUrl != null && !knownLeaderUrl.isEmpty()) {
+            return knownLeaderUrl;
+        }
+        if (cachedLeaderUrl != null && !cachedLeaderUrl.isEmpty()) {
+            return cachedLeaderUrl;
+        }
+        return null;
+    }
     
     /**
      * Discover the current leader URL.
@@ -315,19 +328,7 @@ public class LeaderDiscoveryService {
                 log.debug("Failed to poll peer {}: {}", peerUrl, e.getMessage());
             }
         }
-        
-        // Also check self if we're in the peer list
-        if (selfUrl != null && !peerUrls.contains(selfUrl)) {
-            try {
-                String leaderUrl = pollPeerForLeader(selfUrl);
-                if (leaderUrl != null) {
-                    return leaderUrl;
-                }
-            } catch (Exception e) {
-                log.debug("Failed to poll self: {}", e.getMessage());
-            }
-        }
-        
+
         return null;
     }
     
@@ -538,4 +539,3 @@ public class LeaderDiscoveryService {
         return cachedLeaderUrl;
     }
 }
-

@@ -296,7 +296,8 @@ public class HealthHandler {
                 consensus.put("epoch", aeronEngine.getCurrentEpoch());
                 consensus.put("term", aeronEngine.getCurrentTerm());
                 consensus.put("reachableValidators", aeronEngine.getReachableValidatorCount());
-                consensus.put("currentLeader", aeronEngine.getCurrentLeader() != null ? aeronEngine.getCurrentLeader() : "none");
+                String currentLeader = aeronEngine.getCurrentLeaderHint();
+                consensus.put("currentLeader", currentLeader != null ? currentLeader : "none");
             } catch (Exception e) {
                 consensus.put("status", "DOWN");
                 consensus.put("error", e.getMessage());
@@ -382,7 +383,7 @@ public class HealthHandler {
         payload.put("hasQuorum", context.aeronConsensusEngine.hasQuorum());
         payload.put("lastHeartbeatTime", context.aeronConsensusEngine.getLastHeartbeatTime());
         payload.put("heartbeatAgeMs", context.aeronConsensusEngine.getHeartbeatAgeMs());
-        payload.put("leaderUrl", context.aeronConsensusEngine.getCurrentLeader());
+        payload.put("leaderUrl", context.aeronConsensusEngine.getCurrentLeaderHint());
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
 
@@ -464,7 +465,7 @@ public class HealthHandler {
             totalMembers = context.aeronConsensusEngine.getTotalMemberCount();
             quorumSize = context.aeronConsensusEngine.getQuorumSize();
             currentRole = context.aeronConsensusEngine.getCurrentRole().name();
-            leaderUrl = context.aeronConsensusEngine.getCurrentLeader();
+            leaderUrl = context.aeronConsensusEngine.getCurrentLeaderHint();
         }
 
         boolean blobStoreActive = context != null && context.blobStore != null;

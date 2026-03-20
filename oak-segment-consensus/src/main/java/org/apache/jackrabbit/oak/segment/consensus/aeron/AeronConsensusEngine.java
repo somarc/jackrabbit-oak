@@ -2502,9 +2502,9 @@ public class AeronConsensusEngine implements ClusteredService {
         state.put("epoch", getCurrentEpoch());
         state.put("ethereumEpoch", getCurrentEthereumEpoch());
         
-        // Build members list and discover leader
+        // Build members list using only local/cached leader state.
         java.util.List<java.util.Map<String, Object>> members = new java.util.ArrayList<>();
-        String leaderUrl = getCurrentLeader();
+        String leaderUrl = getCurrentLeaderHint();
 
         // Add self to members list
         java.util.Map<String, Object> selfInfo = new java.util.HashMap<>();
@@ -2552,6 +2552,28 @@ public class AeronConsensusEngine implements ClusteredService {
         state.put("currentLeader", leaderUrl);
         
         return state;
+    }
+
+    /**
+     * Return the best local leader hint without triggering peer polling.
+     */
+    public String getCurrentLeaderHint() {
+        if (cluster == null) {
+            return currentLeader;
+        }
+
+        if (cluster.role() == Cluster.Role.LEADER) {
+            return selfUrl;
+        }
+
+        if (leaderDiscoveryService != null) {
+            String hintedLeader = leaderDiscoveryService.getKnownLeaderHint();
+            if (hintedLeader != null) {
+                return hintedLeader;
+            }
+        }
+
+        return currentLeader;
     }
 
     private int findNodeIdByUrl(String url) {
