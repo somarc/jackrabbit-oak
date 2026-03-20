@@ -144,6 +144,14 @@ public class GlobalStoreServer {
      * Start the global store server.
      */
     public void start() throws IOException {
+        startRuntime();
+        awaitStop();
+    }
+
+    /**
+     * Start runtime components without blocking the calling thread.
+     */
+    protected void startRuntime() throws IOException {
         // Create store directory if it doesn't exist
         Path storePath = Paths.get(storeDirectory);
         if (!Files.exists(storePath)) {
@@ -1065,8 +1073,12 @@ public class GlobalStoreServer {
         System.out.println("Server started successfully!");
         System.out.println("Waiting for client connections...");
         System.out.println();
-        
-        // Keep server running
+    }
+
+    /**
+     * Block until the server is stopped.
+     */
+    protected void awaitStop() {
         while (running) {
             try {
                 Thread.sleep(1000);
