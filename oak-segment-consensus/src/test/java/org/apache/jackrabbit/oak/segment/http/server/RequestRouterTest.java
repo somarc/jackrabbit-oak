@@ -35,6 +35,7 @@ import java.util.Map;
 import java.nio.file.Paths;
 
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -87,6 +88,102 @@ public class RequestRouterTest {
             verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"config.osgi.delta.v1\""));
+        });
+    }
+
+    @Test
+    public void testOsgiConfigSchemaRouteReturnsSchemaPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/config/osgi/schema");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"config.osgi.schema.v1\""));
+        });
+    }
+
+    @Test
+    public void testOsgiConfigSourcesRouteReturnsSourcesPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/config/osgi/sources");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"config.osgi.sources.v1\""));
+        });
+    }
+
+    @Test
+    public void testDashboardRouteRendersLandingPage() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/dashboard");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("Oak Control Plane Home"));
+        });
+    }
+
+    @Test
+    public void testExplorerRouteRendersExplorerUiWhenBrowserEnabled() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/explorer");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("Explorer | Blockchain AEM Validator"));
+        });
+    }
+
+    @Test
+    public void testApiBrowserRouteRendersBrowserUiWhenEnabled() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/api-browser");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("API Browser | Blockchain AEM Validator"));
+        });
+    }
+
+    @Test
+    public void testChatRouteRendersChatUiWhenBrowserEnabled() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/chat");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("LLM Chat | Blockchain AEM Validator"));
         });
     }
 
@@ -317,11 +414,105 @@ public class RequestRouterTest {
         });
     }
 
+    @Test
+    public void testHeadRouteUsesAeronHeadValuesWhenAvailable() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContextWithHead("file-head");
+            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+            when(engine.getLatestHead()).thenReturn("latest-aeron-head");
+            when(engine.getCommittedHead()).thenReturn("committed-aeron-head");
+            when(engine.getLatestEpochSeen()).thenReturn(12);
+            when(engine.getLastCommittedEpoch()).thenReturn(11);
+            context.aeronConsensusEngine = engine;
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/head");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"latestHead\": \"latest-aeron-head\""));
+            assertTrue(body.toString().contains("\"committedHead\": \"committed-aeron-head\""));
+            assertTrue(body.toString().contains("\"latestEpochSeen\": 12"));
+            assertTrue(body.toString().contains("\"committedEpoch\": 11"));
+        });
+    }
+
+    @Test
+    public void testHeadRouteFallsBackToFileStoreHeadWhenAeronStateMissing() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContextWithHead("fallback-file-head");
+            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+            when(engine.getLatestHead()).thenReturn(null);
+            when(engine.getCommittedHead()).thenReturn("");
+            when(engine.getLatestEpochSeen()).thenReturn(-1);
+            when(engine.getLastCommittedEpoch()).thenReturn(-1);
+            context.aeronConsensusEngine = engine;
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/head");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"latestHead\": \"fallback-file-head\""));
+            assertTrue(body.toString().contains("\"committedHead\": \"fallback-file-head\""));
+        });
+    }
+
+    @Test
+    public void testRecentEventsRouteReturnsEmptyPayloadWhenNoEventsBroadcast() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/events/recent");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            assertTrue(body.toString().contains("\"events\":[]"));
+            assertTrue(body.toString().contains("\"count\":0"));
+        });
+    }
+
+    @Test
+    public void testEventStatsRouteReturnsEmptyStatsPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/events/stats");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            assertTrue(body.toString().contains("\"connectedClients\":0"));
+            assertTrue(body.toString().contains("\"eventBufferSize\":0"));
+            assertTrue(body.toString().contains("\"totalEventsBroadcast\":0"));
+        });
+    }
+
     private StringWriter body;
 
     private ServerContext newContext() {
         return new ServerContext(
             mock(FileStore.class),
+            mock(NodeStore.class),
+            Paths.get("/tmp/store"),
+            "http://localhost:8090"
+        );
+    }
+
+    private ServerContext newContextWithHead(String head) {
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString10()).thenReturn(head);
+        return new ServerContext(
+            fileStore,
             mock(NodeStore.class),
             Paths.get("/tmp/store"),
             "http://localhost:8090"

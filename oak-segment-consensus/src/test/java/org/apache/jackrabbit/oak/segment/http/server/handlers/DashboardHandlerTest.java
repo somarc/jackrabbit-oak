@@ -135,6 +135,42 @@ public class DashboardHandlerTest {
     }
 
     @Test
+    public void testHandleDashboardDerivesLeaderFromCurrentLeaderUrlWhenIdsMissing() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        ServerContext context = new ServerContext(
+            mock(FileStore.class),
+            mock(NodeStore.class),
+            Paths.get("/tmp/store"),
+            "http://localhost:8090"
+        );
+
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        Map<String, Object> nativeState = new HashMap<>();
+        nativeState.put("role", "FOLLOWER");
+        nativeState.put("memberId", 2);
+        nativeState.put("clusterMemberCount", 4);
+        nativeState.put("leadershipTermId", 9L);
+        nativeState.put("currentLeader", "http://validator-4:8096");
+        when(engine.getNativeClusterState()).thenReturn(nativeState);
+        when(engine.getReachableValidatorCount()).thenReturn(4);
+        when(engine.getLastHeartbeatTime()).thenReturn(System.currentTimeMillis());
+        context.aeronConsensusEngine = engine;
+
+        DashboardHandler handler = new DashboardHandler(context);
+        handler.handleDashboard(response);
+
+        String html = body.toString();
+        assertTrue(html.contains("<div class='k'>Role</div><div class='v'>FOLLOWER</div>"));
+        assertTrue(html.contains("<div class='k'>Node</div><div class='v'>2</div>"));
+        assertTrue(html.contains("<div class='k'>Leader</div><div class='v'>3</div>"));
+        assertTrue(html.contains("<div class='k'>Term</div><div class='v'>9</div>"));
+        assertTrue(html.contains("<div class='k'>Members</div><div class='v'>4</div>"));
+    }
+
+    @Test
     public void testHandleDashboardRendersExternalDashboardLinkWhenConfigured() throws Exception {
         System.setProperty("oak.dashboard.external.url", "https://ops.example.invalid/dashboard");
 
