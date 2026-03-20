@@ -166,7 +166,7 @@ public class GlobalStoreServer {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         
         // 1. Load/create NODE wallet (this validator's identity for signing)
-        String nodeKeystorePath = resolveNodeKeystorePath();
+        String nodeKeystorePath = GlobalStoreRuntimeConfigUtil.resolveNodeKeystorePath(storeDirectory);
         try {
             this.wallet = components().createEthereumWallet(nodeKeystorePath);
             System.out.println("🔑 Node wallet: " + this.wallet.getWalletAddress());
@@ -247,7 +247,7 @@ public class GlobalStoreServer {
         int verifiedBootstrapPrimaryPort = 0;
         
         if (isAeronMode && directoryIsEmpty) {
-            List<String> aeronPeers = resolvePeerUrls();
+            List<String> aeronPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(currentAeronConfig());
             String bootstrapPrimaryHost = RuntimeConfigValueResolver.readString("bootstrap.primary.host", "");
             String bootstrapPrimaryPortStr = RuntimeConfigValueResolver.readString("bootstrap.primary.port", "");
             
@@ -512,8 +512,8 @@ public class GlobalStoreServer {
             System.out.println("Initializing HTTP server on port " + port + "...");
             httpServer = components().createHttpServer(storeDir, port, fileStore, nodeStore);
             // Get self URL from system property, or resolve localhost to IP
-            String selfUrl = resolveSelfUrl();
-            if (isConfiguredSelfUrl()) {
+            String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(port, currentAeronConfig());
+            if (GlobalStoreRuntimeConfigUtil.isConfiguredSelfUrl(currentAeronConfig())) {
                 System.out.println("   Using configured self URL: " + selfUrl);
             } else {
                 System.out.println("   Resolved self URL to IP: " + selfUrl);
@@ -589,7 +589,7 @@ public class GlobalStoreServer {
             try {
                 // Determine total validators (from peers + self)
                 int totalValidators = 1; // Default: just self
-                List<String> configuredPeers = resolvePeerUrls();
+                List<String> configuredPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(currentAeronConfig());
                 if (!configuredPeers.isEmpty()) {
                     totalValidators = configuredPeers.size() + 1; // Peers + self
                 }
@@ -695,7 +695,7 @@ public class GlobalStoreServer {
                 boolean storeIsEmpty = directoryIsEmpty;
                 
                 // Parse peer URLs for bootstrap
-                List<String> aeronPeers = resolvePeerUrls();
+                List<String> aeronPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(currentAeronConfig());
                 
                 // If bootstrap was needed before build, ensure it runs NOW (immediately after FileStore build)
                 // CRITICAL: Re-verify peer reachability AFTER FileStore build (peer might have come online)
@@ -787,8 +787,8 @@ public class GlobalStoreServer {
                 
                 // CRITICAL: Store Aeron configuration BEFORE bootstrap starts (needed for callback)
                 // Get self URL from system property, or resolve localhost to IP
-                String selfUrlStandy = resolveSelfUrl();
-                List<String> peerUrlsStandy = resolvePeerUrls();
+                String selfUrlStandy = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(port, currentAeronConfig());
+                List<String> peerUrlsStandy = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(currentAeronConfig());
                 
                 // Store for bootstrap callback
                 this.aeronSelfUrl = selfUrlStandy;
@@ -938,7 +938,7 @@ public class GlobalStoreServer {
         // Get self URL from system property, or resolve localhost to IP
         org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig aeronConfig =
             aeronClusterService != null ? aeronClusterService.getConfig() : null;
-        String selfUrl = resolveSelfUrl();
+        String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(port, currentAeronConfig());
         String peersConfig = RuntimeConfigValueResolver.readString("consensus.peers", "");
         List<String> peerUrlsFromConfig = new ArrayList<>();
         if (aeronConfig != null && aeronConfig.peerUrls() != null && aeronConfig.peerUrls().length > 0) {
@@ -987,7 +987,7 @@ public class GlobalStoreServer {
                 System.out.println("      - Majority quorum requirements");
                 System.out.println("      - High performance, low latency");
 
-                String beaconApiUrl = resolveBeaconApiUrl();
+                String beaconApiUrl = GlobalStoreRuntimeConfigUtil.resolveBeaconApiUrl(currentAeronConfig());
 
                 ensureAeronClusterService();
                 boolean observeElections = aeronConfig != null && aeronConfig.observeElections();
@@ -1200,57 +1200,6 @@ public class GlobalStoreServer {
 
     private static IOException startupFailure(String message, Exception cause) {
         return new IOException(message, cause);
-    }
-
-    private String resolveNodeKeystorePath() {
-        return RuntimeConfigValueResolver.readString(
-            "wallet.keystore.path",
-            storeDirectory + "/validator-keystore.properties"
-        );
-    }
-
-    private boolean isConfiguredSelfUrl() {
-        org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig config = currentAeronConfig();
-        if (config != null && config.selfUrl() != null && !config.selfUrl().trim().isEmpty()) {
-            return true;
-        }
-        return RuntimeConfigValueResolver.hasConfiguredValue("consensus.self.url");
-    }
-
-    private String resolveSelfUrl() {
-        org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig config = currentAeronConfig();
-        if (config != null && config.selfUrl() != null && !config.selfUrl().trim().isEmpty()) {
-            return config.selfUrl().trim();
-        }
-        String configured = RuntimeConfigValueResolver.readString("consensus.self.url", null);
-        if (configured != null && !configured.trim().isEmpty()) {
-            return configured.trim();
-        }
-        return ServerNetworkUtil.resolveUrlToIP("http://localhost:" + port);
-    }
-
-    private List<String> resolvePeerUrls() {
-        org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig config = currentAeronConfig();
-        if (config != null && config.peerUrls() != null && config.peerUrls().length > 0) {
-            List<String> peerUrls = new ArrayList<>();
-            for (String peerUrl : config.peerUrls()) {
-                if (peerUrl != null && !peerUrl.trim().isEmpty()) {
-                    peerUrls.add(peerUrl.trim());
-                }
-            }
-            if (!peerUrls.isEmpty()) {
-                return peerUrls;
-            }
-        }
-        return ServerNetworkUtil.parsePeerUrls(RuntimeConfigValueResolver.readString("consensus.peers", ""));
-    }
-
-    private String resolveBeaconApiUrl() {
-        org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig config = currentAeronConfig();
-        if (config != null && config.beaconApiUrl() != null && !config.beaconApiUrl().trim().isEmpty()) {
-            return config.beaconApiUrl().trim();
-        }
-        return RuntimeConfigValueResolver.readString("ethereum.beacon.api.url", "https://beaconcha.in/api");
     }
     
     /**
