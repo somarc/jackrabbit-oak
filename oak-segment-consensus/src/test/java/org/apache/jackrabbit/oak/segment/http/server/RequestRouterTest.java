@@ -1100,6 +1100,59 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testConsensusStatusRouteReturnsAeronStatusPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = baseEngine();
+            when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
+            when(engine.getCurrentEpoch()).thenReturn(12);
+            when(engine.getCurrentTerm()).thenReturn(8);
+            when(engine.getReachableValidatorCount()).thenReturn(3);
+            when(engine.getAllFollowers()).thenReturn(Arrays.asList("http://validator-2:8090"));
+            when(engine.getCurrentEthereumEpoch()).thenReturn(1024);
+            context.aeronConsensusEngine = engine;
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/consensus/status");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"consensusType\":\"aeron-cluster\""));
+            assertTrue(body.toString().contains("\"currentEpoch\":12"));
+            assertTrue(body.toString().contains("\"ethereumEpoch\":1024"));
+        });
+    }
+
+    @Test
+    public void testDashboardRouteRequiresTokenWhenAuthEnabled() throws Exception {
+        withRoutingProperties(true, () -> {
+            String previousToken = System.getProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME);
+            try {
+                System.setProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME, "secret-token");
+                RequestRouter router = new RequestRouter(newContext());
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/dashboard");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                assertTrue(body.toString().contains("Missing Authorization header"));
+            } finally {
+                if (previousToken == null) {
+                    System.clearProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME);
+                } else {
+                    System.setProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME, previousToken);
+                }
+            }
+        });
+    }
+
+    @Test
     public void testHeadRouteUsesAeronHeadValuesWhenAvailable() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContextWithHead("file-head");
