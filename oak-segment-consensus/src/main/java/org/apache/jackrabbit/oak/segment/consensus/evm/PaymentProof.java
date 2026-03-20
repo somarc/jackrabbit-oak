@@ -16,7 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.evm;
 
+import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Proof of payment on an EVM-compatible blockchain.
@@ -72,6 +74,16 @@ public interface PaymentProof {
      */
     @NotNull
     String getAmountWei();
+
+    /**
+     * Get the on-chain payment tier when the proof source provides it.
+     *
+     * @return resolved payment tier, or {@code null} when unavailable
+     */
+    @Nullable
+    default ValidatorEarningsTracker.PaymentTier getPaymentTier() {
+        return null;
+    }
     
     /**
      * Get the number of confirmations this transaction has.
@@ -91,4 +103,3 @@ public interface PaymentProof {
      */
     boolean isConfirmed(int requiredConfirmations);
 }
-

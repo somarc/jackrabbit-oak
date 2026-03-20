@@ -736,6 +736,7 @@ public class WriteProposalHandler {
                         simpleEvmBridge.getContractAddress(),
                         proposalId,
                         paymentAmount.toString(), // Wei amount based on tier
+                        tier,
                         ProposalQueuePolicy.requiredConfirmations()
                     );
                 simpleEvmBridge.simulatePayment(mockPayment);

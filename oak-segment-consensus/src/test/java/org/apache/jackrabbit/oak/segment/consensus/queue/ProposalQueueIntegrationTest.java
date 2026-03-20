@@ -298,6 +298,50 @@ public class ProposalQueueIntegrationTest {
         assertTrue("Proposal should drain through the scheduled/batched path instead",
             longStat(stats, "batchedProposalsSent") >= 1L);
     }
+
+    @Test
+    public void testProofTierOverridesRequestedPriorityForCompatibilityRouting() throws InterruptedException {
+        System.setProperty("oak.proposal.priority.direct.release.enabled", "true");
+        System.setProperty("oak.proposal.release.mode", "adaptive-active");
+        recreateQueueManager();
+
+        String proposalId = "test-proof-tier-reconcile-001";
+        String ethereumTxHash = "0xtxprooftier001";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/page-proof-tier";
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "Priority requested, standard proved",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
+            null
+        );
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(1_000_000),
+            bridge.getCurrentBlockNumber(),
+            ethereumTxHash,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD
+        );
+
+        assertTrue("Proposal should still process after tier reconciliation",
+            raftAppendLatch.await(10, TimeUnit.SECONDS));
+
+        Map<String, Object> stats = queueManager.getQueueStats();
+        assertEquals(Boolean.TRUE, stats.get("priorityDirectReleaseEnabled"));
+        assertEquals("Priority direct-send counter should remain zero when proof resolves to standard",
+            0L, longStat(stats, "priorityProposalsSent"));
+        assertTrue("Proposal should drain through the normal scheduled/batched path",
+            longStat(stats, "batchedProposalsSent") >= 1L);
+    }
     
     @Test
     public void testStandardTierWithEpochBatching() throws InterruptedException {

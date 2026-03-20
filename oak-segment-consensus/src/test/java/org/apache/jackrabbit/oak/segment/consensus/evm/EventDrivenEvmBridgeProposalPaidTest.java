@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.evm;
 
+import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
 import org.junit.Test;
 import org.web3j.abi.EventEncoder;
@@ -71,7 +72,7 @@ public class EventDrivenEvmBridgeProposalPaidTest {
         ));
         ethLog.setData("0x"
             + paddedUint(amount)
-            + paddedUint(BigInteger.ZERO)
+            + paddedUint(BigInteger.valueOf(ValidatorEarningsTracker.PaymentTier.PRIORITY.ordinal()))
             + paddedAddressWord(preferredValidator)
             + paddedUint(BigInteger.valueOf(1_710_000_000L)));
 
@@ -94,6 +95,7 @@ public class EventDrivenEvmBridgeProposalPaidTest {
         assertEquals(payer, proof.getFromAddress());
         assertEquals(contractAddress, proof.getContractAddress());
         assertEquals(amount.toString(), proof.getAmountWei());
+        assertEquals(ValidatorEarningsTracker.PaymentTier.PRIORITY, proof.getPaymentTier());
         assertEquals(blockNumber, proof.getBlockNumber());
     }
 

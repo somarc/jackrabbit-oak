@@ -1944,6 +1944,14 @@ public class ProposalQueueManagerOptimized {
                         rejectProposal(proposal, "Invalid payment amount format: " + proof.getAmountWei());
                         continue;
                     }
+
+                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier proofTier =
+                        proof.getPaymentTier();
+                    if (proofTier != null && proofTier != proposal.getTier()) {
+                        log.info("🔁 PAYMENT TIER RECONCILED: proposal={} requestedTier={} proofTier={}",
+                            proposal.getProposalId(), proposal.getTier(), proofTier);
+                        proposal.setTier(proofTier);
+                    }
                     
                     log.debug("✅ CHECKPOINT 1 PASSED: Ethereum tx {} confirmed (block: {}, amount: {} wei)",
                         proof.getTransactionHash(), proof.getBlockNumber(), proof.getAmountWei());
@@ -2189,6 +2197,7 @@ public class ProposalQueueManagerOptimized {
                 evmBridge.getContractAddress(),
                 proposalId,
                 "1000000000000000",
+                proposal.getTier(),
                 requiredConfirmations
             );
         } catch (Exception e) {

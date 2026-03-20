@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.evm.impl;
 
 import io.reactivex.disposables.Disposable;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.jetbrains.annotations.NotNull;
@@ -198,6 +199,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
             contractAddress,
             proposalId,
             BASE_FEE.toString(), // Mock payment amount
+            null,
             1 // 1 confirmation (just "mined")
         );
         
@@ -309,6 +311,17 @@ public class EventDrivenEvmBridge implements EvmBridge {
             @NotNull BigInteger amount,
             long blockNumber,
             @NotNull String txHash) {
+        simulateWriteAuthorizedEvent(proposalId, payer, shardHash, amount, blockNumber, txHash, null);
+    }
+
+    public void simulateWriteAuthorizedEvent(
+            @NotNull String proposalId,
+            @NotNull String payer,
+            @NotNull String shardHash,
+            @NotNull BigInteger amount,
+            long blockNumber,
+            @NotNull String txHash,
+            ValidatorEarningsTracker.PaymentTier paymentTier) {
         
         WriteAuthorizedEvent event = new WriteAuthorizedEvent(
             proposalId,
@@ -316,7 +329,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
             shardHash,
             amount,
             blockNumber,
-            txHash
+            txHash,
+            paymentTier
         );
         
         if (mockMode) {
@@ -529,6 +543,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
             proof.getContractAddress(),
             proof.getProposalId(),
             proof.getAmountWei(),
+            proof.getPaymentTier(),
             confirmations
         );
         payments.put(proof.getProposalId(), refreshed);
@@ -594,7 +609,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
             shardHash,
             amount,
             eventBlockNumber,
-            txHash
+            txHash,
+            null
         );
     }
 
@@ -608,10 +624,11 @@ public class EventDrivenEvmBridge implements EvmBridge {
         String shardHash = "0x0";
 
         String data = ethLog.getData();
-        if (data == null || data.length() < 66) {
+        if (data == null || data.length() < 130) {
             return null;
         }
         BigInteger amount = Numeric.toBigInt(data.substring(0, 66));
+        ValidatorEarningsTracker.PaymentTier paymentTier = decodePaymentTier(data.substring(66, 130));
         long blockNumber = ethLog.getBlockNumber() != null
             ? ethLog.getBlockNumber().longValue()
             : currentBlock;
@@ -623,7 +640,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
             shardHash,
             amount,
             blockNumber,
-            txHash
+            txHash,
+            paymentTier
         );
     }
     
@@ -660,6 +678,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
             contractAddress,
             event.proposalId,
             event.amount.toString(),
+            event.paymentTier,
             1 // 1 confirmation (just mined)
         );
         
@@ -698,6 +717,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
         public final BigInteger amount;
         public final long blockNumber;
         public final String txHash;
+        public final ValidatorEarningsTracker.PaymentTier paymentTier;
         
         public WriteAuthorizedEvent(
                 String proposalId,
@@ -705,19 +725,39 @@ public class EventDrivenEvmBridge implements EvmBridge {
                 String shardHash,
                 BigInteger amount,
                 long blockNumber,
-                String txHash) {
+                String txHash,
+                ValidatorEarningsTracker.PaymentTier paymentTier) {
             this.proposalId = proposalId;
             this.payer = payer;
             this.shardHash = shardHash;
             this.amount = amount;
             this.blockNumber = blockNumber;
             this.txHash = txHash;
+            this.paymentTier = paymentTier;
         }
         
         @Override
         public String toString() {
-            return String.format("WriteAuthorizedEvent{proposalId=%s, payer=%s, amount=%s, block=%d, txHash=%s}",
-                proposalId, payer, amount, blockNumber, txHash);
+            return String.format("WriteAuthorizedEvent{proposalId=%s, payer=%s, amount=%s, tier=%s, block=%d, txHash=%s}",
+                proposalId, payer, amount, paymentTier, blockNumber, txHash);
+        }
+    }
+
+    private ValidatorEarningsTracker.PaymentTier decodePaymentTier(String encodedWord) {
+        if (encodedWord == null || encodedWord.isEmpty()) {
+            return null;
+        }
+        int code = Numeric.toBigInt(encodedWord).intValue();
+        switch (code) {
+            case 0:
+                return ValidatorEarningsTracker.PaymentTier.STANDARD;
+            case 1:
+                return ValidatorEarningsTracker.PaymentTier.EXPRESS;
+            case 2:
+                return ValidatorEarningsTracker.PaymentTier.PRIORITY;
+            default:
+                log.warn("Unknown payment tier code in ProposalPaid event: {}", code);
+                return null;
         }
     }
 }

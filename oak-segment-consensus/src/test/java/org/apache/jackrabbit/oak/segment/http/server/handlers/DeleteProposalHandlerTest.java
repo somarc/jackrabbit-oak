@@ -151,15 +151,47 @@ public class DeleteProposalHandlerTest {
             eq(VALID_WALLET),
             eq(contentPath),
             eq(VALID_SIGNATURE),
-            eq(ValidatorEarningsTracker.PaymentTier.PRIORITY)
+            eq(ValidatorEarningsTracker.PaymentTier.STANDARD)
         );
         assertEquals("0.10", context.gcAccountManager.getAccount(VALID_WALLET).totalDebt.toString());
         String json = body.toString();
         assertTrue(json.contains("\"status\":\"accepted\""));
         assertTrue(json.contains("\"type\":\"DELETE\""));
-        assertTrue(json.contains("\"tier\":\"PRIORITY\""));
+        assertTrue(json.contains("\"tier\":\"STANDARD\""));
         assertTrue(json.contains("\"gcDebtIncurred\":\"0.10\""));
         assertTrue(json.contains("\"totalDebt\":\"0.10\""));
+    }
+
+    @Test
+    public void testHandleDeleteProposalUsesExplicitPriorityTierWhenProvided() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedContent(nodeStore, VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.gcAccountManager = new GCAccountManager();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        when(request.getParameter("paymentTier")).thenReturn("priority");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        verify(context.proposalQueueManager).queueDeleteProposal(
+            anyString(),
+            eq(PRIORITY_TX_HASH),
+            eq(VALID_WALLET),
+            eq(contentPath),
+            eq(VALID_SIGNATURE),
+            eq(ValidatorEarningsTracker.PaymentTier.PRIORITY)
+        );
+        assertTrue(body.toString().contains("\"tier\":\"PRIORITY\""));
     }
 
     @Test

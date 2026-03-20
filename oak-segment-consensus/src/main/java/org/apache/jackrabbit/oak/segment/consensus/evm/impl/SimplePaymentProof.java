@@ -16,8 +16,10 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.evm.impl;
 
+import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Simple implementation of payment proof.
@@ -30,6 +32,7 @@ public class SimplePaymentProof implements PaymentProof {
     private final String contractAddress;
     private final String proposalId;
     private final String amountWei;
+    private final ValidatorEarningsTracker.PaymentTier paymentTier;
     private final int confirmations;
     
     public SimplePaymentProof(
@@ -40,12 +43,25 @@ public class SimplePaymentProof implements PaymentProof {
             @NotNull String proposalId,
             @NotNull String amountWei,
             int confirmations) {
+        this(transactionHash, blockNumber, fromAddress, contractAddress, proposalId, amountWei, null, confirmations);
+    }
+
+    public SimplePaymentProof(
+            @NotNull String transactionHash,
+            long blockNumber,
+            @NotNull String fromAddress,
+            @NotNull String contractAddress,
+            @NotNull String proposalId,
+            @NotNull String amountWei,
+            @Nullable ValidatorEarningsTracker.PaymentTier paymentTier,
+            int confirmations) {
         this.transactionHash = transactionHash;
         this.blockNumber = blockNumber;
         this.fromAddress = fromAddress;
         this.contractAddress = contractAddress;
         this.proposalId = proposalId;
         this.amountWei = amountWei;
+        this.paymentTier = paymentTier;
         this.confirmations = confirmations;
     }
     
@@ -83,6 +99,12 @@ public class SimplePaymentProof implements PaymentProof {
     public String getAmountWei() {
         return amountWei;
     }
+
+    @Override
+    @Nullable
+    public ValidatorEarningsTracker.PaymentTier getPaymentTier() {
+        return paymentTier;
+    }
     
     @Override
     public int getConfirmations() {
@@ -102,8 +124,8 @@ public class SimplePaymentProof implements PaymentProof {
                 ", confirmations=" + confirmations +
                 ", from='" + fromAddress + '\'' +
                 ", proposalId='" + proposalId + '\'' +
+                ", tier=" + paymentTier +
                 ", amount=" + amountWei + " wei" +
                 '}';
     }
 }
-

@@ -189,7 +189,7 @@ public class DeleteProposalHandler {
             }
 
             String paymentTier = request.getParameter("paymentTier");
-            ValidatorEarningsTracker.PaymentTier tier;
+            ValidatorEarningsTracker.PaymentTier tier = ValidatorEarningsTracker.PaymentTier.STANDARD;
             if (paymentTier != null && !paymentTier.trim().isEmpty()) {
                 tier = parsePaymentTier(paymentTier);
                 if (tier == null) {
@@ -197,9 +197,6 @@ public class DeleteProposalHandler {
                         "Invalid paymentTier: '" + paymentTier + "'. Must be 'standard', 'express', or 'priority'.");
                     return;
                 }
-            } else {
-                // Compatibility fallback for older delete clients that only pass ethereumTxHash.
-                tier = determineTierFromEthereumTx(ethereumTxHash);
             }
 
             // Generate unique proposal ID for this delete
@@ -378,41 +375,6 @@ public class DeleteProposalHandler {
         }
 
         return new long[] { nodeCount, propertyCount };
-    }
-
-    /**
-     * Determine payment tier from Ethereum transaction hash.
-     *
-     * <p>For MVP: Simple heuristic based on tx hash characters.
-     * In production, this would query the Ethereum chain to check the payment amount
-     * and determine tier from ValidatorPaymentV3_2.sol events.</p>
-     *
-     * @param ethereumTxHash Ethereum transaction hash
-     * @return Payment tier (STANDARD, EXPRESS, or PRIORITY)
-     */
-    private ValidatorEarningsTracker.PaymentTier determineTierFromEthereumTx(String ethereumTxHash) {
-        // MVP heuristic: check tx hash pattern
-        // In production, this would:
-        // 1. Query Sepolia/mainnet for tx details
-        // 2. Check ProposalPaid event amount
-        // 3. Map amount to tier (e.g., 0.001 ETH = STANDARD, 0.005 = EXPRESS, 0.01 = PRIORITY)
-
-        if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
-            return ValidatorEarningsTracker.PaymentTier.STANDARD;
-        }
-
-        // Simple heuristic for demo: last char determines tier
-        char lastChar = ethereumTxHash.toLowerCase().charAt(ethereumTxHash.length() - 1);
-        if (lastChar >= 'a' && lastChar <= 'f') {
-            // High hex digit = PRIORITY
-            return ValidatorEarningsTracker.PaymentTier.PRIORITY;
-        } else if (lastChar >= '5' && lastChar <= '9') {
-            // Mid-range digit = EXPRESS
-            return ValidatorEarningsTracker.PaymentTier.EXPRESS;
-        } else {
-            // Low digit = STANDARD
-            return ValidatorEarningsTracker.PaymentTier.STANDARD;
-        }
     }
 
     private ValidatorEarningsTracker.PaymentTier parsePaymentTier(String paymentTier) {
