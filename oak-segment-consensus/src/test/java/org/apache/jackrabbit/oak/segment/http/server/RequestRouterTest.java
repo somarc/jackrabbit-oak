@@ -611,6 +611,27 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testRegisterClientRouteStoresClientByWallet() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/v1/register-client");
+            when(request.getParameter("walletAddress")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
+            when(request.getParameter("clientId")).thenReturn("author-1");
+            when(request.getParameter("clientUrl")).thenReturn("http://author-1:4502");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"walletAddress\":\"0x1234567890abcdef1234567890abcdef12345678\""));
+            assertTrue(context.registeredClients.containsKey("0x1234567890abcdef1234567890abcdef12345678"));
+        });
+    }
+
+    @Test
     public void testNgrokRouteReturnsSelfUrl() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
