@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
@@ -33,12 +34,46 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
+import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 final class ConsensusServicesInitializer {
 
     private static final Logger log = LoggerFactory.getLogger(ConsensusServicesInitializer.class);
+
+    private final Supplier<BlockchainConfig> blockchainConfigSupplier;
+    private final EvmBridgeFactory evmBridgeFactory;
+    private final BeaconChainClientFactory beaconChainClientFactory;
+    private final ProposalQueueManagerFactory proposalQueueManagerFactory;
+    private final ValidatorEarningsTrackerFactory validatorEarningsTrackerFactory;
+    private final RuntimeConfigReader runtimeConfigReader;
+
+    ConsensusServicesInitializer() {
+        this(BlockchainConfig::getInstance,
+            blockchainConfig -> blockchainConfig.isMockMode()
+                ? new SimpleEvmBridge(blockchainConfig.getNetwork(), blockchainConfig.getContractAddress())
+                : new EventDrivenEvmBridge(blockchainConfig.getNetwork(), blockchainConfig.getContractAddress(), false),
+            BeaconChainClient::new,
+            ProposalQueueManagerOptimized::new,
+            ValidatorEarningsTracker::new,
+            RuntimeConfigValueResolver::readString);
+    }
+
+    ConsensusServicesInitializer(
+            Supplier<BlockchainConfig> blockchainConfigSupplier,
+            EvmBridgeFactory evmBridgeFactory,
+            BeaconChainClientFactory beaconChainClientFactory,
+            ProposalQueueManagerFactory proposalQueueManagerFactory,
+            ValidatorEarningsTrackerFactory validatorEarningsTrackerFactory,
+            RuntimeConfigReader runtimeConfigReader) {
+        this.blockchainConfigSupplier = blockchainConfigSupplier;
+        this.evmBridgeFactory = evmBridgeFactory;
+        this.beaconChainClientFactory = beaconChainClientFactory;
+        this.proposalQueueManagerFactory = proposalQueueManagerFactory;
+        this.validatorEarningsTrackerFactory = validatorEarningsTrackerFactory;
+        this.runtimeConfigReader = runtimeConfigReader;
+    }
 
     void initialize(AeronConsensusEngine aeronEngine,
                     SegmentHttpServer httpServer,
@@ -48,26 +83,82 @@ final class ConsensusServicesInitializer {
                     String finalClusterWallet,
                     List<String> hostnamesList) {
         // Initialize Proposal Queue Manager (for Ethereum confirmation tracking)
-        BlockchainConfig blockchainConfig = BlockchainConfig.getInstance();
-
-        EvmBridge evmBridge;
+        BlockchainConfig blockchainConfig = blockchainConfigSupplier.get();
+        EvmBridge evmBridge = evmBridgeFactory.create(blockchainConfig);
         if (blockchainConfig.isMockMode()) {
-            evmBridge = new SimpleEvmBridge(
-                blockchainConfig.getNetwork(),
-                blockchainConfig.getContractAddress()
-            );
             log.info("🎭 Using SimpleEvmBridge (mock simulation)");
         } else {
-            evmBridge = new EventDrivenEvmBridge(
-                blockchainConfig.getNetwork(),
-                blockchainConfig.getContractAddress(),
-                false
-            );
             log.info("🌐 Using EventDrivenEvmBridge (real blockchain event verification)");
         }
         evmBridge.start();
 
-        RaftAppendCallback raftCallback = new RaftAppendCallback() {
+        RaftAppendCallback raftCallback = createRaftAppendCallback(aeronEngine);
+        BackpressureManager backpressureManager = resolveBackpressureManager(aeronEngine);
+        BeaconChainClient beaconClient = beaconChainClientFactory.create(beaconApiUrl);
+        beaconClient.startBackgroundPolling();
+        log.info("✅ Beacon Chain client initialized (tracking Ethereum epochs from {})", beaconApiUrl);
+
+        String proposalPersistenceDir = runtimeConfigReader.readString(
+            "oak.proposal.persistence.dir",
+            "OAK_PROPOSAL_PERSISTENCE_DIR",
+            new java.io.File(storeDirectory, "proposal-queue").getAbsolutePath()
+        );
+
+        ProposalQueueManagerOptimized proposalQueueManager = proposalQueueManagerFactory.create(
+            evmBridge,
+            raftCallback,
+            backpressureManager,
+            beaconClient,
+            proposalPersistenceDir
+        );
+        proposalQueueManager.start();
+        ServerContext context = httpServer.getContext();
+        context.setProposalQueueManager(proposalQueueManager);
+        context.evmBridge = evmBridge;
+        log.info("✅ Proposal Queue Manager initialized (Ethereum epoch-based batching + 3-checkpoint security)");
+
+        // Initialize Validator Earnings Tracker (economic simulation)
+        List<String> validatorWallets = buildValidatorWallets(wallet.getWalletAddress(), hostnamesList);
+        ValidatorEarningsTracker earningsTracker = validatorEarningsTrackerFactory.create(validatorWallets);
+        context.setValidatorEarningsTracker(earningsTracker);
+        System.out.println("   ✅ Validator Earnings Tracker initialized (" + validatorWallets.size() + " validators)");
+        System.out.println("   - Self wallet: " + wallet.getWalletAddress());
+
+        context.validatorWalletAddress = wallet.getWalletAddress();
+        context.clusterWalletAddress = finalClusterWallet;
+        System.out.println("   - Payments routed to cluster wallet: " + finalClusterWallet);
+
+        // Aeron Cluster handles membership via Raft consensus.
+        // Keep only local self-registration for compatibility state (health/metrics/peer views).
+        String validatorId = wallet.getWalletAddress();
+        httpServer.registerSelfValidator(validatorId);
+        System.out.println("   - Self registered (local context only): " + validatorId);
+    }
+
+    static List<String> buildValidatorWallets(String selfWalletAddress, List<String> hostnamesList) {
+        List<String> validatorWallets = new ArrayList<>();
+        validatorWallets.add(selfWalletAddress);
+
+        int expectedValidators = hostnamesList != null ? hostnamesList.size() : 1;
+        for (int i = 1; i < expectedValidators; i++) {
+            validatorWallets.add("0x" + String.format("%040x", i));
+        }
+        return validatorWallets;
+    }
+
+    private static BackpressureManager resolveBackpressureManager(AeronConsensusEngine aeronEngine) {
+        BackpressureManager backpressureManager =
+            aeronEngine != null ? aeronEngine.getBackpressureManager() : null;
+
+        if (backpressureManager == null) {
+            log.warn("⚠️  BackpressureManager not available - using fallback");
+            return new BackpressureManager();
+        }
+        return backpressureManager;
+    }
+
+    private static RaftAppendCallback createRaftAppendCallback(AeronConsensusEngine aeronEngine) {
+        return new RaftAppendCallback() {
             @Override
             public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
                 if (aeronEngine == null) {
@@ -167,60 +258,29 @@ final class ConsensusServicesInitializer {
                 return sent;
             }
         };
+    }
 
-        BackpressureManager backpressureManager =
-            aeronEngine != null ? aeronEngine.getBackpressureManager() : null;
+    interface EvmBridgeFactory {
+        EvmBridge create(BlockchainConfig blockchainConfig);
+    }
 
-        if (backpressureManager == null) {
-            log.warn("⚠️  BackpressureManager not available - using fallback");
-            backpressureManager = new BackpressureManager();
-        }
+    interface BeaconChainClientFactory {
+        BeaconChainClient create(String beaconApiUrl);
+    }
 
-        BeaconChainClient beaconClient = new BeaconChainClient(beaconApiUrl);
-        beaconClient.startBackgroundPolling();
-        log.info("✅ Beacon Chain client initialized (tracking Ethereum epochs from {})", beaconApiUrl);
+    interface ProposalQueueManagerFactory {
+        ProposalQueueManagerOptimized create(EvmBridge evmBridge,
+                                             RaftAppendCallback raftCallback,
+                                             BackpressureManager backpressureManager,
+                                             BeaconChainClient beaconClient,
+                                             String proposalPersistenceDir);
+    }
 
-        String proposalPersistenceDir = RuntimeConfigValueResolver.readString(
-            "oak.proposal.persistence.dir",
-            "OAK_PROPOSAL_PERSISTENCE_DIR",
-            new java.io.File(storeDirectory, "proposal-queue").getAbsolutePath()
-        );
+    interface ValidatorEarningsTrackerFactory {
+        ValidatorEarningsTracker create(List<String> validatorWallets);
+    }
 
-        ProposalQueueManagerOptimized proposalQueueManager =
-            new ProposalQueueManagerOptimized(
-                evmBridge,
-                raftCallback,
-                backpressureManager,
-                beaconClient,
-                proposalPersistenceDir
-            );
-        proposalQueueManager.start();
-        httpServer.getContext().setProposalQueueManager(proposalQueueManager);
-        httpServer.getContext().evmBridge = evmBridge;
-        log.info("✅ Proposal Queue Manager initialized (Ethereum epoch-based batching + 3-checkpoint security)");
-
-        // Initialize Validator Earnings Tracker (economic simulation)
-        List<String> validatorWallets = new ArrayList<>();
-        validatorWallets.add(wallet.getWalletAddress());
-
-        int expectedValidators = hostnamesList != null ? hostnamesList.size() : 1;
-        for (int i = 1; i < expectedValidators; i++) {
-            validatorWallets.add("0x" + String.format("%040x", i));
-        }
-
-        ValidatorEarningsTracker earningsTracker = new ValidatorEarningsTracker(validatorWallets);
-        httpServer.getContext().setValidatorEarningsTracker(earningsTracker);
-        System.out.println("   ✅ Validator Earnings Tracker initialized (" + validatorWallets.size() + " validators)");
-        System.out.println("   - Self wallet: " + wallet.getWalletAddress());
-
-        httpServer.getContext().validatorWalletAddress = wallet.getWalletAddress();
-        httpServer.getContext().clusterWalletAddress = finalClusterWallet;
-        System.out.println("   - Payments routed to cluster wallet: " + finalClusterWallet);
-
-        // Aeron Cluster handles membership via Raft consensus.
-        // Keep only local self-registration for compatibility state (health/metrics/peer views).
-        String validatorId = wallet.getWalletAddress();
-        httpServer.registerSelfValidator(validatorId);
-        System.out.println("   - Self registered (local context only): " + validatorId);
+    interface RuntimeConfigReader {
+        String readString(String propertyName, String environmentVariable, String defaultValue);
     }
 }
