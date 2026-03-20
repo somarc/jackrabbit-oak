@@ -12,6 +12,8 @@ atlassian-ide-plugin.xml
 derby.log
 .java-version
 oak-shaded-guava/dependency-reduced-pom.xml
+oak-segment-consensus/dependency-reduced-pom.xml
+oak-segment-consensus/META-INF/MANIFEST.MF
 .DS_Store
 # Built artifacts (JARs should not be committed)
 *.jar

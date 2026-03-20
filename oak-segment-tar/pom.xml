@@ -40,6 +40,14 @@
                 <configuration>
                     <instructions>
                         <Export-Package>
+                            <!-- Fork-local contract: oak-segment-consensus now runs as a standalone
+                                 bundle instead of a Fragment-Host attached to oak-segment-tar, so
+                                 the fork must export the segment/standby packages it imports. -->
+                            org.apache.jackrabbit.oak.segment,
+                            org.apache.jackrabbit.oak.segment.file,
+                            org.apache.jackrabbit.oak.segment.file.tar,
+                            org.apache.jackrabbit.oak.segment.standby.client,
+                            org.apache.jackrabbit.oak.segment.standby.server,
                         	org.apache.jackrabbit.oak.segment.spi,
                             org.apache.jackrabbit.oak.segment.spi.monitor,
                             org.apache.jackrabbit.oak.segment.spi.persistence,
