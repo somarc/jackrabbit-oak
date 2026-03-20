@@ -131,14 +131,56 @@ JSON metrics endpoint.
 
 ## GET /v1/blockchain/config
 
-Detect the current blockchain mode (MOCK/SEPOLIA/MAINNET) and client capabilities.
+Detect the active blockchain runtime mode and gas pricing model used for write-tier estimates.
 
-Use this endpoint to toggle client behavior (e.g., MetaMask requirements, testnet prompts).
+Use this endpoint to drive dashboard/client behavior (network badges, wallet requirements, and fee displays).
 
 Example:
 ```bash
 curl http://localhost:8090/v1/blockchain/config
 ```
+
+### Response (example)
+
+```json
+{
+  "mode": "sepolia",
+  "network": "Sepolia Testnet",
+  "chainId": 11155111,
+  "contractAddress": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+  "rpcUrl": "https://sepolia.infura.io/v3/***",
+  "requiresMetaMask": true,
+  "useTestnet": true,
+  "displayName": "✅ SEPOLIA TESTNET",
+  "badgeColor": "#10b981",
+  "configSource": "env-or-system-properties",
+  "gasModel": {
+    "source": "measured-sepolia-baseline",
+    "gasPriceGwei": 3,
+    "writeGasUnitsStandard": 74534,
+    "writeGasUnitsExpress": 74534,
+    "writeGasUnitsPriority": 74534
+  },
+  "tiers": {
+    "STANDARD": {
+      "tier": 0,
+      "maxDelay": "13 min",
+      "baseFeeWei": "5000000000000000",
+      "gasUnits": 74534,
+      "gasPriceGwei": 3,
+      "estimatedGasFeeWei": "223602000000000",
+      "estimatedTotalWei": "5223602000000000",
+      "estimatedCost": "~0.005224 ETH"
+    }
+  }
+}
+```
+
+### Key Fields
+
+- `configSource`: `osgi-config-admin` or `env-or-system-properties`
+- `gasModel`: effective gas assumptions after precedence resolution
+- `tiers.*.estimatedTotalWei`: base fee + estimated gas fee (wei string)
 
 ---
 

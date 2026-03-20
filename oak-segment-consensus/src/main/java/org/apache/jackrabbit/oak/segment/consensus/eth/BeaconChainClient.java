@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.eth;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -85,6 +86,7 @@ public class BeaconChainClient {
     // API call statistics
     private volatile long apiCallCount = 0;
     private volatile long apiErrorCount = 0;
+    private volatile String lastEndpointUsed = null;
     
     /**
      * Create a new Beacon Chain client (mode-aware).
@@ -229,20 +231,48 @@ public class BeaconChainClient {
      */
     private void updateRealEpochs() {
         try {
-            // Fetch latest finalized epoch from API
-            String endpoint = "/epoch/finalized";
-            String response = httpGet(apiBaseUrl + endpoint);
-            apiCallCount++;
-            
-            // Parse response: {"status":"OK","data":{"epoch":12345,...}}
-            long finalizedEpoch = parseEpochFromResponse(response);
-            
-            if (finalizedEpoch < 0) {
-                throw new RuntimeException("Failed to parse epoch from API response");
+            long finalizedEpoch = -1;
+            long currentEpoch = -1;
+            StringBuilder attempts = new StringBuilder();
+
+            // Preferred endpoint (historical behavior)
+            try {
+                String endpoint = "/epoch/finalized";
+                String response = httpGet(apiBaseUrl + endpoint);
+                apiCallCount++;
+                finalizedEpoch = parseEpochFromResponse(response);
+                if (finalizedEpoch >= 0) {
+                    currentEpoch = finalizedEpoch + 2;
+                    lastEndpointUsed = endpoint;
+                } else {
+                    attempts.append(endpoint).append(":parse-failed; ");
+                }
+            } catch (Exception e) {
+                attempts.append("/epoch/finalized:").append(e.getMessage()).append("; ");
             }
-            
-            // Current epoch is typically finalized + 2 (can verify with /epoch/latest)
-            long currentEpoch = finalizedEpoch + 2;
+
+            // Fallback endpoint (derive finalized from latest).
+            if (finalizedEpoch < 0) {
+                try {
+                    String endpoint = "/epoch/latest";
+                    String response = httpGet(apiBaseUrl + endpoint);
+                    apiCallCount++;
+                    long latestEpoch = parseEpochFromResponse(response);
+                    if (latestEpoch >= 0) {
+                        currentEpoch = latestEpoch;
+                        finalizedEpoch = Math.max(0L, latestEpoch - 2);
+                        lastEndpointUsed = endpoint;
+                    } else {
+                        attempts.append(endpoint).append(":parse-failed; ");
+                    }
+                } catch (Exception e) {
+                    attempts.append("/epoch/latest:").append(e.getMessage()).append("; ");
+                }
+            }
+
+            if (finalizedEpoch < 0 || currentEpoch < 0) {
+                throw new RuntimeException("All epoch endpoint attempts failed: " + attempts);
+            }
             
             // Validate epochs
             if (cachedFinalizedEpoch > 0 && finalizedEpoch < cachedFinalizedEpoch) {
@@ -265,8 +295,13 @@ public class BeaconChainClient {
             
         } catch (Exception e) {
             apiErrorCount++;
-            lastError = e.getMessage();
-            log.error("Failed to fetch epoch from {}: {}", apiBaseUrl, e.getMessage());
+            String newError = e.getMessage();
+            if (!String.valueOf(newError).equals(String.valueOf(lastError))) {
+                log.error("Failed to fetch epoch from {}: {}", apiBaseUrl, newError);
+            } else {
+                log.debug("Epoch fetch still failing from {}: {}", apiBaseUrl, newError);
+            }
+            lastError = newError;
             
             // If we have no cached data, try fallback calculation
             if (cachedFinalizedEpoch < 0) {
@@ -473,6 +508,7 @@ public class BeaconChainClient {
         health.put("apiCallCount", apiCallCount);
         health.put("apiErrorCount", apiErrorCount);
         health.put("lastError", lastError);
+        health.put("lastEndpointUsed", lastEndpointUsed);
         
         if (networkMode == BlockchainConfig.Mode.MOCK) {
             health.put("mockEpochOffset", mockEpochOffset);
@@ -484,9 +520,11 @@ public class BeaconChainClient {
 
     private long resolveMockEpochDurationMs() {
         long defaultSeconds = DEFAULT_MOCK_EPOCH_DURATION_MS / 1000L;
-        String envValue = System.getenv(ENV_MOCK_EPOCH_DURATION_SECONDS);
-        String propValue = System.getProperty(PROP_MOCK_EPOCH_DURATION_SECONDS);
-        String raw = (envValue != null && !envValue.trim().isEmpty()) ? envValue : propValue;
+        String raw = RuntimeConfigValueResolver.readStringEnvFirst(
+            PROP_MOCK_EPOCH_DURATION_SECONDS,
+            ENV_MOCK_EPOCH_DURATION_SECONDS,
+            null
+        );
         if (raw == null || raw.trim().isEmpty()) {
             return DEFAULT_MOCK_EPOCH_DURATION_MS;
         }

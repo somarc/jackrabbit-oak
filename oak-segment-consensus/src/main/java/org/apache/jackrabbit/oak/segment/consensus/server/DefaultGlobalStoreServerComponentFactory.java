@@ -120,8 +120,8 @@ public final class DefaultGlobalStoreServerComponentFactory implements GlobalSto
     }
 
     @Override
-    public GenesisInitializer createGenesisInitializer(NodeStore nodeStore, FileStore fileStore, BlobStore blobStore) {
-        return new GenesisInitializer(nodeStore, fileStore, blobStore);
+    public GenesisInitializer createGenesisInitializer(NodeStore nodeStore, FileStore fileStore, BlobStore blobStore, String selfUrl) {
+        return new GenesisInitializer(nodeStore, fileStore, blobStore, selfUrl);
     }
 
     @Override

@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.*;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
@@ -69,7 +70,7 @@ public class RequestRouter {
         this.context = context;
         this.authValidator = new AuthTokenValidator();
         this.rateLimiter = new RateLimiter();
-        this.browserUiEnabled = Boolean.parseBoolean(System.getProperty("oak.http.browser.ui.enabled", "true"));
+        this.browserUiEnabled = RuntimeConfigValueResolver.readBoolean("oak.http.browser.ui.enabled", true);
         
         // Initialize all handlers
         this.healthHandler = new HealthHandler(

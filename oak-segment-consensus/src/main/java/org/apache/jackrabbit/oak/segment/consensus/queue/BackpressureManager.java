@@ -65,6 +65,12 @@ public class BackpressureManager {
      * Incremented by AeronConsensusEngine when snapshots applied.
      */
     private final AtomicLong acknowledgedCount = new AtomicLong(0);
+    private final AtomicLong lastPendingChangeMs = new AtomicLong(0);
+    private final AtomicLong pendingSinceMs = new AtomicLong(0);
+    private final AtomicLong lastObservedPending = new AtomicLong(0);
+    private final AtomicLong backpressureTimeoutCount = new AtomicLong(0);
+    private final AtomicLong stalePendingReconciliationCount = new AtomicLong(0);
+    private final AtomicLong lastReconciledMs = new AtomicLong(0);
     
     /**
      * Volatile flag to track if backpressure is currently active.
@@ -111,6 +117,7 @@ public class BackpressureManager {
             return;
         }
         sentCount.addAndGet(delta);
+        observePendingState(System.currentTimeMillis());
     }
     
     /**
@@ -134,6 +141,7 @@ public class BackpressureManager {
             long sent = sentCount.get();
             return Math.min(target, sent);
         });
+        observePendingState(System.currentTimeMillis());
     }
     
     /**
@@ -172,6 +180,34 @@ public class BackpressureManager {
         return backpressureActive;
     }
 
+    public long getBackpressureTimeoutCount() {
+        return backpressureTimeoutCount.get();
+    }
+
+    public long getStalePendingReconciliationCount() {
+        return stalePendingReconciliationCount.get();
+    }
+
+    public long getPendingOldestMs(long nowMs) {
+        long since = pendingSinceMs.get();
+        if (since <= 0) {
+            return 0;
+        }
+        return Math.max(0, nowMs - since);
+    }
+
+    public long getPendingStalledMs(long nowMs) {
+        long pending = getPendingCount();
+        if (pending <= 0) {
+            return 0;
+        }
+        long lastChange = lastPendingChangeMs.get();
+        if (lastChange <= 0) {
+            return 0;
+        }
+        return Math.max(0, nowMs - lastChange);
+    }
+
     public long getMaxPendingMessages() {
         return maxPendingMessages;
     }
@@ -205,6 +241,8 @@ public class BackpressureManager {
      */
     public void applyBackpressureIfNeeded() throws BackpressureTimeoutException {
         long pending = getPendingCount();
+        long now = System.currentTimeMillis();
+        observePendingState(now);
         
         // Fast path: no backpressure needed
         if (pending < maxPendingMessages) {
@@ -226,12 +264,27 @@ public class BackpressureManager {
         
         long startTime = System.currentTimeMillis();
         long deadline = startTime + backpressureTimeoutMs;
+        long pendingAtStart = pending;
+        boolean pendingChanged = false;
         
         // Wait for pending count to drop below max
         while (getPendingCount() >= maxPendingMessages) {
+            long currentPending = getPendingCount();
+            long currentNow = System.currentTimeMillis();
+            observePendingState(currentNow);
+            if (currentPending != pendingAtStart) {
+                pendingChanged = true;
+            }
             // Check timeout
-            if (System.currentTimeMillis() > deadline) {
-                long currentPending = getPendingCount();
+            if (currentNow > deadline) {
+                backpressureTimeoutCount.incrementAndGet();
+                if (!pendingChanged && reconcilePendingAccounting(
+                        "backpressure-timeout",
+                        "pending did not move while sender blocked",
+                        currentPending,
+                        currentNow)) {
+                    return;
+                }
                 log.error("❌ Backpressure timeout: pending={}, max={}, waited={}ms",
                     currentPending, maxPendingMessages, backpressureTimeoutMs);
                 throw new BackpressureTimeoutException(
@@ -249,8 +302,34 @@ public class BackpressureManager {
         // Backpressure released
         long waitTime = System.currentTimeMillis() - startTime;
         backpressureActive = false;
+        observePendingState(System.currentTimeMillis());
         log.info("✅ Backpressure released after {}ms: pending={}, max={}",
             waitTime, getPendingCount(), maxPendingMessages);
+    }
+
+    /**
+     * Attempt to reconcile stale pending accounting.
+     *
+     * <p>Used as a safety valve when pending acknowledgements are stuck and
+     * no longer reflect the actual queue/cluster state.
+     */
+    public boolean reconcileIfStalled(long minStallMs, String reason) {
+        long now = System.currentTimeMillis();
+        long pending = getPendingCount();
+        observePendingState(now);
+        if (pending < maxPendingMessages) {
+            return false;
+        }
+        long stalledMs = getPendingStalledMs(now);
+        if (stalledMs < Math.max(0L, minStallMs)) {
+            return false;
+        }
+        return reconcilePendingAccounting(
+            reason,
+            "pending exceeded max and remained unchanged",
+            pending,
+            now
+        );
     }
     
     /**
@@ -259,6 +338,12 @@ public class BackpressureManager {
     public void reset() {
         sentCount.set(0);
         acknowledgedCount.set(0);
+        lastPendingChangeMs.set(0);
+        pendingSinceMs.set(0);
+        lastObservedPending.set(0);
+        backpressureTimeoutCount.set(0);
+        stalePendingReconciliationCount.set(0);
+        lastReconciledMs.set(0);
         backpressureActive = false;
     }
     
@@ -269,12 +354,43 @@ public class BackpressureManager {
      */
     public String getStats() {
         return String.format(
-            "BackpressureManager[sent=%d, acked=%d, pending=%d, max=%d, active=%s]",
+            "BackpressureManager[sent=%d, acked=%d, pending=%d, max=%d, active=%s, timeouts=%d, reconciliations=%d]",
             getSentCount(),
             getAcknowledgedCount(),
             getPendingCount(),
             maxPendingMessages,
-            backpressureActive
+            backpressureActive,
+            getBackpressureTimeoutCount(),
+            getStalePendingReconciliationCount()
         );
+    }
+
+    private void observePendingState(long nowMs) {
+        long pending = getPendingCount();
+        long previous = lastObservedPending.getAndSet(pending);
+        if (pending != previous) {
+            lastPendingChangeMs.set(nowMs);
+        }
+        if (pending > 0) {
+            pendingSinceMs.compareAndSet(0, nowMs);
+        } else {
+            pendingSinceMs.set(0);
+        }
+    }
+
+    private boolean reconcilePendingAccounting(String reason, String detail, long pending, long nowMs) {
+        long sent = sentCount.get();
+        long ackedBefore = acknowledgedCount.get();
+        if (ackedBefore >= sent) {
+            return false;
+        }
+        acknowledgedCount.set(sent);
+        stalePendingReconciliationCount.incrementAndGet();
+        lastReconciledMs.set(nowMs);
+        backpressureActive = false;
+        observePendingState(nowMs);
+        log.warn("⚠️  Reconciled stale backpressure accounting: reason={}, detail={}, sent={}, ackedBefore={}, pendingBefore={}, pendingAfter={}",
+            reason, detail, sent, ackedBefore, pending, getPendingCount());
+        return true;
     }
 }

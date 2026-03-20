@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
@@ -111,7 +112,7 @@ public class SegmentHttpServer {
             if (tlsConfig.isEnabled()) {
                 // TLS enabled - configure HTTPS
                 int httpsPort = port;
-                int httpPort = Integer.getInteger("http.port", 0); // Optional HTTP port for health checks
+                int httpPort = RuntimeConfigValueResolver.readInt("http.port", 0); // Optional HTTP port for health checks
                 tlsConfig.configureServer(server, httpPort, httpsPort);
                 log.info("🔒 TLS enabled - HTTPS on port {}", httpsPort);
             } else {

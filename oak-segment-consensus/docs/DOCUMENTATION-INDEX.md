@@ -16,11 +16,13 @@ docs/
 │   ├── README.md               # API overview
 │   ├── consensus.md            # Write/delete proposals, consensus status
 │   ├── aeron.md                # Aeron Cluster state, leadership
-│   └── health.md               # Health checks, metrics
+│   ├── health.md               # Health checks, metrics
+│   └── osgi-config.md          # Read-only OSGi config control surface
 ├── architecture/                # System Architecture
 │   └── README.md               # How the system works
 ├── development/                 # Development Guide
 │   └── README.md               # How to extend the module
+│   └── BLOCKCHAIN-CONFIG-KNOBS.md # OSGi/env/system/API knob mapping
 ├── testing/                     # Testing Guide
 │   └── README.md               # How to test
 ├── troubleshooting/            # Troubleshooting
@@ -40,8 +42,10 @@ docs/
 
 ### Development
 1. **[Development Guide](development/README.md)** - Extending the module
-2. **[API Reference](api/README.md)** - Complete API docs
-3. **[Testing Guide](testing/README.md)** - Testing strategies
+2. **[Blockchain Config Knobs](development/BLOCKCHAIN-CONFIG-KNOBS.md)** - Runtime knobs/gears map for dashboards
+3. **[API Reference](api/README.md)** - Complete API docs
+4. **[OSGi Config Introspection](api/osgi-config.md)** - Effective values, sources, and drift
+5. **[Testing Guide](testing/README.md)** - Testing strategies
 
 ### Operations
 1. **[Troubleshooting](troubleshooting/README.md)** - Common issues
@@ -57,6 +61,7 @@ Complete HTTP API documentation:
 - **Consensus APIs** - Write/delete proposals, status
 - **Aeron APIs** - Cluster state, leadership, metrics
 - **Health APIs** - Health checks, Prometheus metrics
+- **OSGi Config APIs** - Effective values, schema, source provenance, coverage, drift
 - **Content APIs** - Content operations, exploration
 - **GC APIs** - Garbage collection, account management
 

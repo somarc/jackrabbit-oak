@@ -1,10 +1,10 @@
 # Oak Segment Consensus
 
-**Status**: ✅ **POC Complete (Mock Mode)** / 🚧 **Sepolia Phase Pending**  
-**Purpose**: Distributed consensus layer for Oak Segment Store - Blockchain AEM proof of concept  
-**Garage Week Deadline**: December 15, 2025 (✅ Completed)
+**Status**: Active fork / standalone validator baseline established / architecture cleanup and production hardening ongoing
+**Purpose**: Standalone validator runtime for Oak Segment Store with Aeron consensus, Ethereum-backed write enforcement, and IPFS-capable blob storage
+**Origin**: Blockchain AEM garage-week prototype, now maintained as a fork-first architecture track
 
-**Current Phase**: POC-complete in mock mode. Sepolia testnet deployment and production hardening pending.
+**Current Phase**: Standalone validator build is the source of truth. Fragment-host coupling has been removed; boundary cleanup, test hardening, and chain-backed deployment paths remain active work.
 
 ## 📖 Quick Links
 
@@ -13,6 +13,7 @@
 - **[QUICK-START.md](QUICK-START.md)** - Quick start guide for developers
 - **[IPFS-DATASTORE.md](IPFS-DATASTORE.md)** - IPFS binary storage guide (ADR 015)
 - **[DELETE-QUICK-REFERENCE.md](DELETE-QUICK-REFERENCE.md)** - Quick reference for delete/GC development
+- **[docs/api/osgi-config.md](docs/api/osgi-config.md)** - Read-only OSGi config control surface
 
 ### Comprehensive Documentation
 
@@ -27,22 +28,22 @@ For architecture deep dives, gap analysis, and detailed implementation docs, see
 `oak-segment-consensus` implements a **distributed consensus layer** for Apache Jackrabbit Oak Segment Store, enabling blockchain-backed AEM content repositories with:
 
 - ✅ **Deterministic state machine** (guaranteed consistency via Aeron Cluster)
-- ✅ **Aeron Cluster-based Raft consensus** (Aeron is production-grade; our integration is POC-complete)
-- ✅ **Ethereum wallet-based access control** (path ownership enforcement - mock mode: simulated, Sepolia/Mainnet: cryptographic)
+- ✅ **Aeron Cluster-based Raft consensus** (Aeron is the consensus substrate; validator hardening is still in progress)
+- ✅ **Ethereum wallet-based access control** (path ownership enforcement supports mock and chain-backed modes)
 - ✅ **HTTP segment transfer** (read-only mounts - write storage is local TAR files only)
 - ✅ **Distributed validator network** (all nodes commit writes identically via Aeron Raft - transient differences during genesis/bootstrap)
 - ✅ **Dynamic backpressure** (flow control for write throughput)
 - ✅ **Embedded HTTP server** (dashboard, APIs, segment serving)
 - ✅ **LLM Chat Interface** (optional AI assistant via `oak-segment-agentic`)
 
-This module is part of the **Blockchain AEM POC** project, demonstrating how Oak can be extended to support distributed, consensus-based content repositories.
+This module is part of the **Blockchain AEM** project and is maintained as a forked standalone validator architecture on top of Oak Segment Tar.
 
 ## Key Features
 
 ### Consensus & State Machine
 - **Deterministic State Machine**: All nodes commit writes identically via Aeron's guaranteed message ordering
   - ⚠️ **Genesis Bootstrap**: Followers may have transient extra journal entries until first snapshot (harmless, cleaned up automatically)
-- **Aeron Cluster Raft**: Battle-tested consensus algorithm (Aeron is production-grade; our integration is POC-complete)
+- **Aeron Cluster Raft**: Battle-tested consensus algorithm used as the validator's ordering and replication substrate
 - **Automatic Leader Election**: Aeron Cluster handles leader election and failover
 - **Guaranteed Consistency**: Same message order = same processing = same SegmentStore state (after genesis bootstrap)
 - **Quorum Requirements**: Majority-based consensus (2 of 3, 3 of 5, etc.)
@@ -61,17 +62,18 @@ This module is part of the **Blockchain AEM POC** project, demonstrating how Oak
 - **Dashboard UI**: Web-based dashboard at `/` (cluster state, metrics, explorer)
 - **Chat Interface**: LLM-powered chat at `/chat` (requires `oak-segment-agentic`)
 - **REST APIs**: Comprehensive API endpoints for cluster state, consensus status, health
+- **OSGi Config Surface**: Read-only introspection endpoints at `/v1/config/osgi*`
 - **Segment Serving**: HTTP endpoints for segment transfer (`/segments/{id}`, `/journal.log`)
 
-**Security Note**: Validators are pure Oak (no Sling), so they don't have Sling authentication. 
+**Security Note**: Validators are pure Oak (no Sling), so they don't have Sling authentication.
 
 **Token-Based Authentication (Optional)**:
 - Validators support optional token-based authentication
 - Configure token via system property: `-Doak.validator.auth.token=<token>`
 - Or environment variable: `OAK_VALIDATOR_AUTH_TOKEN=<token>`
-- If no token is configured, authentication is **disabled** (POC mode - all requests allowed)
+- If no token is configured, authentication is **disabled** (development/default mode - all requests allowed)
 - Health checks (`/health`, `/health/deep`) are always public (needed for monitoring)
-- Clients should use `ValidatorAuthHelper` to add `Authorization` header when token is configured
+- Clients should send the raw token value in the `Authorization` header when token auth is configured
 
 **Production Deployment**:
 - For production, validators should be protected by:
@@ -112,7 +114,7 @@ Write Flow (Deterministic):
 - ✅ No manual HEAD broadcasting needed (Aeron Raft handles replication)
 - ✅ Simpler architecture (Aeron handles consensus, we focus on Ethereum integration)
 - ✅ Better performance (no HTTP sync overhead for writes)
-- ✅ Production-ready pattern (Aeron Cluster is production-grade; our integration is POC-complete)
+- ✅ Strong consensus foundation (Aeron Cluster is production-grade; validator-specific production hardening remains in progress)
 
 ### Distributed Validator Network
 
@@ -241,7 +243,7 @@ http://localhost:8091/
 - `GET /v1/aeron/raft-metrics` - Raft metrics
 - `GET /v1/aeron/replication-lag` - Replication lag for followers
 - `GET /v1/aeron/node-status` - Node status snapshot
-- `GET /v1/blockchain/config` - Capabilities and current mode (mock/sepolia)
+- `GET /v1/blockchain/config` - Effective blockchain mode, config source, gas model, and tier cost estimates
 
 ### Health & Metrics
 - `GET /health` - Basic health check
@@ -290,9 +292,10 @@ http://localhost:8091/
 - Provides `/chat` endpoint and AI assistant capabilities
 
 ### With Sling Authors
-- Sling authors mount validator's global store as read-only composite mount
+- Sling authors mount validator-managed stores as read-only composite mounts
 - Dynamic validator URL configuration via `OAK_GLOBAL_STORE_URL`
 - Automatic client registration on startup
+- Standalone validator packaging is the source of truth; client-side mount adapters belong outside this module
 
 ## Module Structure
 
@@ -305,7 +308,7 @@ oak-segment-consensus/
 │   ├── eth/                # Ethereum integration (Beacon Chain)
 │   ├── security/           # Wallet signature verification
 │   ├── store/              # Composite store builders
-│   └── osgi/               # OSGi integration
+│   └── mount/              # Remote mount helpers for composite read paths
 ├── pom.xml                 # Maven build configuration
 └── README.md               # This file
 ```
@@ -334,20 +337,22 @@ For architecture deep dives, gap analysis, package maps, and technical specifica
 
 ## Status
 
-### ✅ Implemented (POC-Complete)
+### ✅ Implemented
 - Deterministic state machine (guaranteed consistency after genesis bootstrap)
-- Aeron Cluster Raft consensus (mock mode)
+- Aeron Cluster Raft consensus
 - Dynamic backpressure management
+- Standalone validator runtime and embedded HTTP control plane
 - HTTP segment transfer (read-only mounts)
 - Dashboard UI
-- Wallet-based write enforcement (mock mode: simulated, Sepolia: real)
+- Wallet-based write enforcement (mock and chain-backed modes)
 - Client registration
 - Health monitoring
 - Prometheus metrics
 
-### 🚧 In Progress / Pending
-- **Sepolia Phase**: Smart contract integration, real payment verification (6 TODOs)
-- **Production Hardening**: Monitoring, resilience, security (6 TODOs)
+### 🚧 Active Work
+- Validator/core boundary cleanup (apply path, adapter split, module boundaries)
+- Chain-backed deployment paths (Sepolia and beyond)
+- Production hardening (monitoring, resilience, security)
 - Comprehensive test suite (current: ~50% unit, ~10% integration)
 - Production deployment automation
 
@@ -376,6 +381,6 @@ Apache License 2.0 - See [LICENSE](../../LICENSE) for details
 
 ---
 
-**Part of**: [Blockchain AEM POC](https://github.com/mhess_adobe/blockchain-aem)  
-**Repository**: [jackrabbit-oak](https://github.com/somarc/jackrabbit-oak/tree/feature/blockchain-aem-poc)  
+**Part of**: [Blockchain AEM](https://github.com/mhess_adobe/blockchain-aem)
+**Repository**: [jackrabbit-oak](https://github.com/somarc/jackrabbit-oak/tree/feature/blockchain-aem-poc)
 **Branch**: `feature/blockchain-aem-poc`

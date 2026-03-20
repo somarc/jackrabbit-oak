@@ -81,8 +81,8 @@
 | `paymentTier` | string | ⚠️ Optional | STANDARD/EXPRESS/PRIORITY | ✅ Enum validation |
 | `contentType` | string | ⚠️ Optional | "page", "asset", etc. | ❌ No validation |
 | `organization` | string | ⚠️ Optional | Organization scope (ADR 037) | ❌ No validation |
-| `ipfsCid` | string | ⚠️ Optional | IPFS CID for binary (client-side default) | ❌ No validation |
-| `file` | binary | ⚠️ Optional | Binary file (validator-hosted, requires PRIORITY) | ✅ Tier check |
+| `ipfsCid` | string | ⚠️ Optional | IPFS CID for binary (enterprise-only path) | ✅ Enterprise registration + validator-known CID mapping |
+| `file` | binary | ⚠️ Optional | Binary file (validator-hosted default, requires PRIORITY) | ✅ Tier check |
 
 #### Response Format
 
@@ -116,6 +116,7 @@ Request → Validate Wallet Format
          → Verify Payment (Ethereum)
          → Validate Path Format
          → Check Path Ownership
+         → Enforce IPFS policy (enterprise-only ipfsCid + CID provenance + single-source binary guardrails)
          → Enforce PRIORITY tier for validator-hosted binary (if file/base64 present)
          → Queue Proposal
          → Return 202 Accepted

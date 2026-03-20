@@ -81,6 +81,7 @@ public class MetricsHandler {
         validator.put("registeredValidators", registeredValidators.size());
         validator.put("storePath", storeDirectory != null ? storeDirectory.toString() : "");
         payload.put("validator", validator);
+        payload.put("ipfsPolicy", buildIpfsPolicyMetrics());
 
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
@@ -128,6 +129,19 @@ public class MetricsHandler {
             replication.put("reason", status.get("reason"));
         }
         return replication;
+    }
+
+    private Map<String, Object> buildIpfsPolicyMetrics() {
+        if (context == null) {
+            return null;
+        }
+        Map<String, Object> policy = new LinkedHashMap<>();
+        policy.put("rejectedAmbiguousSource", context.apiIpfsPolicyRejectAmbiguousSource.get());
+        policy.put("rejectedNonEnterpriseCid", context.apiIpfsPolicyRejectNonEnterpriseCid.get());
+        policy.put("rejectedUnknownCid", context.apiIpfsPolicyRejectUnknownCid.get());
+        policy.put("rejectedCidServiceUnavailable", context.apiIpfsPolicyRejectCidServiceUnavailable.get());
+        policy.put("acceptedEnterpriseCid", context.apiIpfsPolicyAcceptedEnterpriseCid.get());
+        return policy;
     }
     
     /**

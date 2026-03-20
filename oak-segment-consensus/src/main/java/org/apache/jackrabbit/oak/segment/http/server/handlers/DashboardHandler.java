@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
@@ -68,7 +69,7 @@ public class DashboardHandler {
                 && DashboardHandler.class.getPackage().getImplementationVersion() != null
                 ? DashboardHandler.class.getPackage().getImplementationVersion()
                 : "dev";
-        final String externalDashboardUrl = System.getProperty("oak.dashboard.external.url", "");
+        final String externalDashboardUrl = RuntimeConfigValueResolver.readString("oak.dashboard.external.url", "");
         final String uptime = formatUptime(java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime());
         final String now = formatTimestamp(System.currentTimeMillis());
 
@@ -106,9 +107,11 @@ public class DashboardHandler {
         html.append(".links{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin:16px 0;}");
         html.append(".link{background:#111827;border:1px solid #1f2937;border-radius:10px;padding:10px 12px;display:block;}");
         html.append(".muted{font-size:12px;color:#94a3b8;} .warn{margin-top:16px;padding:10px 12px;border-left:3px solid #f59e0b;background:#111827;border-radius:8px;}");
+        html.append(".tip{margin-top:16px;padding:12px 14px;border-left:3px solid #38bdf8;background:#111827;border-radius:8px;}");
+        html.append(".section{margin-top:20px;}");
         html.append("</style></head><body><div class='wrap'>");
         html.append("<h1>Oak Control Plane Home</h1>");
-        html.append("<p>API-first runtime. The legacy in-process dashboard is retired from this entry point.</p>");
+        html.append("<p>API-first runtime. This page is the read-only entry point for health, consensus, and OSGi-governed runtime configuration.</p>");
         html.append("<div class='grid'>");
         html.append("<div class='card'><div class='k'>Build</div><div class='v'>").append(FormatUtils.escapeHtml(version)).append("</div></div>");
         html.append("<div class='card'><div class='k'>Role</div><div class='v'>").append(FormatUtils.escapeHtml(role)).append("</div></div>");
@@ -119,12 +122,16 @@ public class DashboardHandler {
         html.append("<div class='card'><div class='k'>Uptime</div><div class='v'>").append(FormatUtils.escapeHtml(uptime)).append("</div></div>");
         html.append("<div class='card'><div class='k'>Updated</div><div class='v'>").append(FormatUtils.escapeHtml(now)).append("</div></div>");
         html.append("</div>");
-        html.append("<h2>Surfaces</h2>");
+        html.append("<div class='tip'><strong>OSGi workflow:</strong> start with <code>/v1/config/osgi</code> for effective values, then <code>/v1/config/osgi/sources</code> for provenance, <code>/v1/config/osgi/schema</code> for metadata, and <code>/v1/config/osgi/delta</code> or <code>/v1/config/osgi/coverage</code> for drift and gaps.</div>");
+        html.append("<div class='section'>");
+        html.append("<h2>Control Plane Surfaces</h2>");
         html.append("<div class='links'>");
         html.append("<a class='link' href='/api-browser'><strong>API Browser</strong><div class='muted'>Interactive endpoint catalog and tester.</div></a>");
         html.append("<a class='link' href='/v1/consensus/status'><strong>/v1/consensus/status</strong><div class='muted'>Consensus status and leader context.</div></a>");
         html.append("<a class='link' href='/v1/proposals/queue/stats'><strong>/v1/proposals/queue/stats</strong><div class='muted'>Queue/finality/backpressure counters.</div></a>");
         html.append("<a class='link' href='/v1/config/osgi'><strong>/v1/config/osgi</strong><div class='muted'>Effective OSGi tuning values.</div></a>");
+        html.append("<a class='link' href='/v1/config/osgi/schema'><strong>/v1/config/osgi/schema</strong><div class='muted'>Knob metadata: types, defaults, reload mode, and risk.</div></a>");
+        html.append("<a class='link' href='/v1/config/osgi/sources'><strong>/v1/config/osgi/sources</strong><div class='muted'>Where each effective config group came from.</div></a>");
         html.append("<a class='link' href='/v1/config/osgi/coverage'><strong>/v1/config/osgi/coverage</strong><div class='muted'>Read-only config coverage and gaps.</div></a>");
         html.append("<a class='link' href='/v1/config/osgi/delta'><strong>/v1/config/osgi/delta</strong><div class='muted'>Current values vs defaults.</div></a>");
         html.append("<a class='link' href='/v1/explorer/summary'><strong>/v1/explorer/summary</strong><div class='muted'>Explorer contract for external blockscan UI.</div></a>");
@@ -133,6 +140,7 @@ public class DashboardHandler {
         if (externalDashboardUrl != null && !externalDashboardUrl.trim().isEmpty()) {
             html.append("<a class='link' href='").append(FormatUtils.escapeHtml(externalDashboardUrl)).append("'><strong>External Ops Dashboard</strong><div class='muted'>Configured via -Doak.dashboard.external.url.</div></a>");
         }
+        html.append("</div>");
         html.append("</div>");
         html.append("<div class='warn'><strong>Safety:</strong> This page is read-only. Use signed API/CLI flows for mutating operations.</div>");
         html.append("</div></body></html>");
@@ -989,6 +997,11 @@ public class DashboardHandler {
         html.append("<div class='category'>\n");
         html.append("<h2>⚙️ Configuration</h2>\n");
         addApiEndpoint(html, "GET", "/v1/blockchain/config", "Get blockchain mode and network config (MOCK/SEPOLIA/MAINNET)", "blockchain_config");
+        addApiEndpoint(html, "GET", "/v1/config/osgi", "Effective OSGi-governed runtime values grouped by component", "osgi_effective");
+        addApiEndpoint(html, "GET", "/v1/config/osgi/schema", "OSGi config metadata: keys, defaults, risk, and reload mode", "osgi_schema");
+        addApiEndpoint(html, "GET", "/v1/config/osgi/sources", "Effective source map for OSGi tuning groups", "osgi_sources");
+        addApiEndpoint(html, "GET", "/v1/config/osgi/coverage", "Coverage report for supported tunables vs exposed config keys", "osgi_coverage");
+        addApiEndpoint(html, "GET", "/v1/config/osgi/delta", "Config drift report showing current values against defaults", "osgi_delta");
         html.append("</div>\n");
 
         html.append("<div class='category'>\n");

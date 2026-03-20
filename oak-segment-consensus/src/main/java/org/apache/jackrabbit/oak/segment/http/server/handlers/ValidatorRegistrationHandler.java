@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
@@ -154,10 +155,10 @@ public class ValidatorRegistrationHandler {
     
     public ValidatorRegistrationHandler(ServerContext context) {
         this.context = context;
-        this.enabled = Boolean.parseBoolean(System.getProperty(PROP_REGISTRATION_ENABLED, "true"));
-        this.approvalRequired = Boolean.parseBoolean(System.getProperty(PROP_REGISTRATION_APPROVAL_REQUIRED, "false"));
-        this.rpId = System.getProperty(PROP_RP_ID, "oak-chain.io");
-        this.rpName = System.getProperty(PROP_RP_NAME, "Oak Chain Validator");
+        this.enabled = RuntimeConfigValueResolver.readBoolean(PROP_REGISTRATION_ENABLED, true);
+        this.approvalRequired = RuntimeConfigValueResolver.readBoolean(PROP_REGISTRATION_APPROVAL_REQUIRED, false);
+        this.rpId = RuntimeConfigValueResolver.readString(PROP_RP_ID, "oak-chain.io");
+        this.rpName = RuntimeConfigValueResolver.readString(PROP_RP_NAME, "Oak Chain Validator");
         
         log.info("Validator registration handler initialized: enabled={}, approvalRequired={}, rpId={}",
             enabled, approvalRequired, rpId);

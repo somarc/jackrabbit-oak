@@ -11,12 +11,14 @@ Complete HTTP API documentation with examples, request/response formats, and aut
 - [Consensus & Proposals](api/consensus.md) - Write/delete proposals, status
 - [Aeron Cluster](api/aeron.md) - Cluster state, leadership, metrics
 - [Health & Metrics](api/health.md) - Health checks, Prometheus metrics
+- [OSGi Config Introspection](api/osgi-config.md) - Effective config, schema, sources, coverage, drift
 
 ### [Architecture Overview](architecture/README.md)
 How the system works: Aeron Raft consensus, deterministic state machine, proposal flow.
 
 ### [Development Guide](development/README.md)
 How to extend the module: adding features, modifying handlers, understanding the codebase.
+- Includes [Blockchain Config Knobs and Gears](development/BLOCKCHAIN-CONFIG-KNOBS.md) for OSGi/env/system/API surface mapping.
 
 ### [Testing Guide](testing/README.md)
 How to test: unit tests, integration tests, local development testing.

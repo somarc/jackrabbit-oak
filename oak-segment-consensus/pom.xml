@@ -36,25 +36,15 @@
           <artifactId>maven-bundle-plugin</artifactId>
           <configuration>
             <instructions>
-              <!-- BACK TO FRAGMENT: Only way to access internal oak-segment-tar APIs -->
-              <!-- BundleActivator will manually register services (DS won't work in fragments) -->
-              <Fragment-Host>org.apache.jackrabbit.oak-segment-tar</Fragment-Host>
-              
-              <!-- Specify our BundleActivator for manual service registration -->
-              <Bundle-Activator>org.apache.jackrabbit.oak.segment.consensus.osgi.ConsensusActivator</Bundle-Activator>
-              
-              <!-- Export our own packages for use by other bundles -->
+              <!-- Standalone runtime bundle: consensus depends on fork-exported Oak packages,
+                   but it no longer attaches itself to oak-segment-tar as a fragment. -->
               <Export-Package>
                 org.apache.jackrabbit.oak.segment.consensus,
                 org.apache.jackrabbit.oak.segment.consensus.protocol,
                 org.apache.jackrabbit.oak.segment.consensus.wallet,
                 org.apache.jackrabbit.oak.segment.consensus.network,
-                org.apache.jackrabbit.oak.segment.consensus.servlets,
-                org.apache.jackrabbit.oak.segment.consensus.osgi,
-                org.apache.jackrabbit.oak.segment.consensus.mount
+                org.apache.jackrabbit.oak.segment.consensus.servlets
               </Export-Package>
-              
-              <!-- Import packages - Bouncy Castle is optional for signature verification -->
               <Import-Package>
                 org.bouncycastle.*;resolution:=optional,
                 *
@@ -68,7 +58,6 @@
           <configuration>
             <excludes>
               <exclude>Dockerfile.global-store</exclude>
-              <exclude>dependency-reduced-pom.xml</exclude>
               <!-- Documentation files don't need license headers -->
               <exclude>**/*.md</exclude>
               <!-- HTML templates with complex content -->
@@ -99,6 +88,7 @@
                 <goal>shade</goal>
               </goals>
               <configuration>
+                <createDependencyReducedPom>false</createDependencyReducedPom>
                 <shadedArtifactAttached>true</shadedArtifactAttached>
                 <shadedClassifierName>standalone</shadedClassifierName>
                 <finalName>oak-segment-consensus</finalName>
@@ -335,17 +325,17 @@
         <dependency>
             <groupId>io.aeron</groupId>
             <artifactId>aeron-cluster</artifactId>
-            <version>1.49.1</version>
+            <version>1.50.1</version>
         </dependency>
         <dependency>
             <groupId>io.aeron</groupId>
             <artifactId>aeron-client</artifactId>
-            <version>1.49.1</version>
+            <version>1.50.1</version>
         </dependency>
         <dependency>
             <groupId>io.aeron</groupId>
             <artifactId>aeron-driver</artifactId>
-            <version>1.49.1</version>
+            <version>1.50.1</version>
         </dependency>
 
         <!-- Test dependencies -->

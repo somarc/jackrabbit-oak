@@ -227,6 +227,23 @@ public class ConsensusMetrics {
             .help("Total number of HTTP requests to validators")
             .labelNames("method", "endpoint", "status") // method: GET/POST, status: 2xx/4xx/5xx
             .register();
+
+    /**
+     * Total number of IPFS policy rejections on write proposals.
+     */
+    public static final Counter ipfsPolicyRejectionsTotal = Counter.build()
+            .name("oak_api_ipfs_policy_rejections_total")
+            .help("Total number of write rejections due to IPFS supply-chain policy enforcement")
+            .labelNames("reason")
+            .register();
+
+    /**
+     * Total number of enterprise ipfsCid write requests accepted by policy checks.
+     */
+    public static final Counter enterpriseCidAcceptedTotal = Counter.build()
+            .name("oak_api_ipfs_enterprise_cid_accepted_total")
+            .help("Total number of enterprise client ipfsCid write requests accepted by policy checks")
+            .register();
     
     /**
      * Histogram of HTTP request latencies (seconds).
@@ -493,6 +510,22 @@ public class ConsensusMetrics {
         httpRequestsTotal.labels(method, endpoint, statusBucket).inc();
         httpRequestLatency.labels(method, endpoint).observe(latencySeconds);
     }
+
+    /**
+     * Record an IPFS policy rejection reason.
+     *
+     * @param reason policy rejection reason
+     */
+    public static void recordIpfsPolicyRejection(String reason) {
+        ipfsPolicyRejectionsTotal.labels(reason == null ? "unknown" : reason).inc();
+    }
+
+    /**
+     * Record accepted enterprise ipfsCid request.
+     */
+    public static void recordEnterpriseCidAccepted() {
+        enterpriseCidAcceptedTotal.inc();
+    }
     
     // ====================================================================================
     // HTTP Connection Pool Metrics
@@ -552,4 +585,3 @@ public class ConsensusMetrics {
         // Utility class, no instances
     }
 }
-

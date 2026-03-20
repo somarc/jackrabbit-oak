@@ -68,7 +68,7 @@ public interface GlobalStoreServerComponentFactory {
 
     ValidatorBootstrap createValidatorBootstrap(FileStore fileStore, int standbyPort);
 
-    GenesisInitializer createGenesisInitializer(NodeStore nodeStore, FileStore fileStore, BlobStore blobStore);
+    GenesisInitializer createGenesisInitializer(NodeStore nodeStore, FileStore fileStore, BlobStore blobStore, String selfUrl);
 
     ConsensusServicesInitializer createConsensusServicesInitializer();
 }

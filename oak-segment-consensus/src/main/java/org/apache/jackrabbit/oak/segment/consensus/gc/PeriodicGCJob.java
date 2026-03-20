@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.gc;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -298,9 +299,11 @@ public class PeriodicGCJob {
         if (mode != BlockchainConfig.Mode.MOCK) {
             return ETHEREUM_EPOCH_SECONDS;
         }
-        String envValue = System.getenv(ENV_MOCK_EPOCH_DURATION_SECONDS);
-        String propValue = System.getProperty(PROP_MOCK_EPOCH_DURATION_SECONDS);
-        String raw = (envValue != null && !envValue.trim().isEmpty()) ? envValue : propValue;
+        String raw = RuntimeConfigValueResolver.readStringEnvFirst(
+            PROP_MOCK_EPOCH_DURATION_SECONDS,
+            ENV_MOCK_EPOCH_DURATION_SECONDS,
+            null
+        );
         if (raw == null || raw.trim().isEmpty()) {
             return DEFAULT_MOCK_EPOCH_SECONDS;
         }

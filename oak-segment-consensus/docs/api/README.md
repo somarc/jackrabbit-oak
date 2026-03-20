@@ -21,10 +21,12 @@ Default port: `8090` (configurable via `PORT` environment variable)
 If `OAK_VALIDATOR_AUTH_TOKEN` is configured:
 
 ```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:8090/v1/consensus/status
+curl -H "Authorization: YOUR_TOKEN" http://localhost:8090/v1/consensus/status
 ```
 
 **Note**: Health endpoints (`/health`, `/health/deep`) are always public.
+The validator currently expects the raw token value in the `Authorization`
+header, not a `Bearer` prefix.
 
 ---
 
@@ -51,13 +53,17 @@ API/CLI-first `ops.v1` contract for external dashboard derivation, including asy
 ### [Control Plane Checklist](control-plane-dashboard-contract-checklist.md)
 Implementation mapping of `ops.v1` contract requirements to current handlers/endpoints with `implemented/partial/missing` status.
 
+### [OSGi Config Introspection](osgi-config.md)
+Read-only operator surface for effective config, schema, source provenance,
+coverage, and default drift.
+
 ### [Segment Transfer](segments.md)
 Journal, manifest, segment fetching (for Sling authors).
 
 ### [Registration & Discovery](registration.md)
 Client registration, peer discovery, validator info.
 
-**Binary upload note**: Client-side IPFS (`ipfsCid`) is the default. Validator-hosted binary uploads (multipart/base64) require `paymentTier=PRIORITY`.
+**Binary upload note**: Validator-hosted IPFS is the default and recommended path. Client-side `ipfsCid` is restricted to registered `enterprise` clients and must map to a validator-known CID.
 
 ---
 
@@ -73,6 +79,7 @@ This provides:
 - Request/response examples
 - Interactive testing interface
 - Response formatting
+- Direct discovery of the OSGi config surface under `/v1/config/osgi*`
 
 ---
 

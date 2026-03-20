@@ -21,8 +21,10 @@ import java.util.List;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -48,10 +50,21 @@ final class ConsensusServicesInitializer {
         // Initialize Proposal Queue Manager (for Ethereum confirmation tracking)
         BlockchainConfig blockchainConfig = BlockchainConfig.getInstance();
 
-        EvmBridge evmBridge = new SimpleEvmBridge(
-            blockchainConfig.getNetwork(),
-            blockchainConfig.getContractAddress()
-        );
+        EvmBridge evmBridge;
+        if (blockchainConfig.isMockMode()) {
+            evmBridge = new SimpleEvmBridge(
+                blockchainConfig.getNetwork(),
+                blockchainConfig.getContractAddress()
+            );
+            log.info("🎭 Using SimpleEvmBridge (mock simulation)");
+        } else {
+            evmBridge = new EventDrivenEvmBridge(
+                blockchainConfig.getNetwork(),
+                blockchainConfig.getContractAddress(),
+                false
+            );
+            log.info("🌐 Using EventDrivenEvmBridge (real blockchain event verification)");
+        }
         evmBridge.start();
 
         RaftAppendCallback raftCallback = new RaftAppendCallback() {
@@ -167,13 +180,19 @@ final class ConsensusServicesInitializer {
         beaconClient.startBackgroundPolling();
         log.info("✅ Beacon Chain client initialized (tracking Ethereum epochs from {})", beaconApiUrl);
 
+        String proposalPersistenceDir = RuntimeConfigValueResolver.readString(
+            "oak.proposal.persistence.dir",
+            "OAK_PROPOSAL_PERSISTENCE_DIR",
+            new java.io.File(storeDirectory, "proposal-queue").getAbsolutePath()
+        );
+
         ProposalQueueManagerOptimized proposalQueueManager =
             new ProposalQueueManagerOptimized(
                 evmBridge,
                 raftCallback,
                 backpressureManager,
                 beaconClient,
-                new java.io.File(storeDirectory, "proposal-queue").getAbsolutePath()
+                proposalPersistenceDir
             );
         proposalQueueManager.start();
         httpServer.getContext().setProposalQueueManager(proposalQueueManager);

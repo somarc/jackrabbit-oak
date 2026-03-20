@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.gc;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
+
 import java.math.BigDecimal;
 
 /**
@@ -34,7 +36,7 @@ public class MockGasOracle implements GasOracle {
      * <p>System property: `gc.usdc.per.mb` (default: 0.10)
      */
     public MockGasOracle() {
-        String usdcRateStr = System.getProperty("gc.usdc.per.mb", "0.10");
+        String usdcRateStr = RuntimeConfigValueResolver.readString("gc.usdc.per.mb", "0.10");
         this.fixedUsdcPerMB = new BigDecimal(usdcRateStr);
     }
     
@@ -57,4 +59,3 @@ public class MockGasOracle implements GasOracle {
         return "Mock Oracle (fixed: $" + fixedUsdcPerMB + " per MB)";
     }
 }
-

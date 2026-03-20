@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.eclipse.jetty.http.HttpVersion;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
@@ -118,20 +119,20 @@ public class TlsConfiguration {
      * Create TLS configuration from system properties.
      */
     public TlsConfiguration() {
-        this.enabled = Boolean.parseBoolean(System.getProperty(PROP_TLS_ENABLED, "false"));
-        this.keystorePath = System.getProperty(PROP_KEYSTORE_PATH);
-        this.keystorePassword = System.getProperty(PROP_KEYSTORE_PASSWORD, "");
-        this.keystoreType = System.getProperty(PROP_KEYSTORE_TYPE, DEFAULT_KEYSTORE_TYPE);
-        this.certPath = System.getProperty(PROP_CERT_PATH);
-        this.keyPath = System.getProperty(PROP_KEY_PATH);
-        this.truststorePath = System.getProperty(PROP_TRUSTSTORE_PATH);
-        this.truststorePassword = System.getProperty(PROP_TRUSTSTORE_PASSWORD, "");
-        this.clientAuth = System.getProperty(PROP_CLIENT_AUTH, DEFAULT_CLIENT_AUTH);
-        
-        String protocolsStr = System.getProperty(PROP_PROTOCOLS, DEFAULT_PROTOCOLS);
+        this.enabled = RuntimeConfigValueResolver.readBoolean(PROP_TLS_ENABLED, false);
+        this.keystorePath = RuntimeConfigValueResolver.readString(PROP_KEYSTORE_PATH, null);
+        this.keystorePassword = RuntimeConfigValueResolver.readString(PROP_KEYSTORE_PASSWORD, "");
+        this.keystoreType = RuntimeConfigValueResolver.readString(PROP_KEYSTORE_TYPE, DEFAULT_KEYSTORE_TYPE);
+        this.certPath = RuntimeConfigValueResolver.readString(PROP_CERT_PATH, null);
+        this.keyPath = RuntimeConfigValueResolver.readString(PROP_KEY_PATH, null);
+        this.truststorePath = RuntimeConfigValueResolver.readString(PROP_TRUSTSTORE_PATH, null);
+        this.truststorePassword = RuntimeConfigValueResolver.readString(PROP_TRUSTSTORE_PASSWORD, "");
+        this.clientAuth = RuntimeConfigValueResolver.readString(PROP_CLIENT_AUTH, DEFAULT_CLIENT_AUTH);
+
+        String protocolsStr = RuntimeConfigValueResolver.readString(PROP_PROTOCOLS, DEFAULT_PROTOCOLS);
         this.protocols = protocolsStr.split(",");
-        
-        String ciphersStr = System.getProperty(PROP_CIPHERS);
+
+        String ciphersStr = RuntimeConfigValueResolver.readString(PROP_CIPHERS, null);
         this.ciphers = ciphersStr != null ? ciphersStr.split(",") : RECOMMENDED_CIPHERS;
     }
     

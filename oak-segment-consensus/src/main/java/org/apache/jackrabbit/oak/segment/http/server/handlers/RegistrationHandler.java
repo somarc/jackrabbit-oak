@@ -80,11 +80,13 @@ public class RegistrationHandler {
             String clientId = null;
             String clientUrl = null;
             String walletAddress = null;
+            String clientType = null;
             
             if (body != null && !body.isEmpty()) {
                 clientId = JsonParser.extractField(body, "clientId");
                 clientUrl = JsonParser.extractField(body, "clientUrl");
                 walletAddress = JsonParser.extractField(body, "walletAddress");
+                clientType = JsonParser.extractField(body, "clientType");
             }
             
             // Fallback to query params if JSON not provided
@@ -96,6 +98,9 @@ public class RegistrationHandler {
             }
             if (walletAddress == null || walletAddress.isEmpty()) {
                 walletAddress = request.getParameter("walletAddress");
+            }
+            if (clientType == null || clientType.isEmpty()) {
+                clientType = request.getParameter("clientType");
             }
             
             // REQUIRE Ethereum wallet address - this is the primary identifier
@@ -113,6 +118,15 @@ public class RegistrationHandler {
                 log.warn("🚫 Registration rejected: Invalid Ethereum address format: {}", walletAddress);
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid Ethereum address format. Must be 0x followed by 40 hex characters (e.g., 0x1234...abcd).");
+                return;
+            }
+
+            String normalizedClientType = ClientRegistration.normalizeClientType(clientType);
+            if (clientType != null && !clientType.trim().isEmpty()
+                && !ClientRegistration.CLIENT_TYPE_ENTERPRISE.equalsIgnoreCase(clientType)
+                && !ClientRegistration.CLIENT_TYPE_SUPPLY_CHAIN.equalsIgnoreCase(clientType)) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "Invalid clientType. Supported values: 'supply-chain' (default), 'enterprise'.");
                 return;
             }
             
@@ -133,15 +147,15 @@ public class RegistrationHandler {
             }
             
             if (registration == null) {
-                registration = new ClientRegistration(clientId, clientUrl, walletAddress);
+                registration = new ClientRegistration(clientId, clientUrl, walletAddress, normalizedClientType);
                 // Store by wallet address (primary) and clientId (secondary)
                 context.registeredClients.put(walletAddress, registration);
                 if (!walletAddress.equals(clientId)) {
                     context.registeredClients.put(clientId, registration);
                 }
-                log.info("✅ New client registered: wallet={} (clientId={}, url={})", walletAddress, clientId, clientUrl);
+                log.info("✅ New client registered: wallet={} (clientId={}, type={}, url={})",
+                    walletAddress, clientId, registration.clientType, clientUrl);
             } else {
-                registration.updateLastSeen();
                 // Verify wallet matches
                 if (registration.walletAddress != null && !registration.walletAddress.equalsIgnoreCase(walletAddress)) {
                     log.warn("⚠️  Client {} already registered with different wallet: {} (attempted: {})", 
@@ -150,7 +164,23 @@ public class RegistrationHandler {
                         String.format("Client %s already registered with wallet %s", clientId, registration.walletAddress));
                     return;
                 }
-                log.debug("Client heartbeat: wallet={} (clientId={})", walletAddress, clientId);
+
+                if (!registration.clientType.equals(normalizedClientType)) {
+                    String previousType = registration.clientType;
+                    ClientRegistration updated = new ClientRegistration(clientId, clientUrl, walletAddress, normalizedClientType);
+                    updated.lastSeen = registration.lastSeen;
+                    context.registeredClients.put(walletAddress, updated);
+                    if (!walletAddress.equals(clientId)) {
+                        context.registeredClients.put(clientId, updated);
+                    }
+                    registration = updated;
+                    log.info("🔄 Updated clientType for wallet {}: {} -> {}", walletAddress,
+                        previousType, normalizedClientType);
+                } else {
+                    registration.updateLastSeen();
+                    log.debug("Client heartbeat: wallet={} (clientId={}, type={})",
+                        walletAddress, clientId, registration.clientType);
+                }
             }
             
             // Return success
@@ -160,6 +190,7 @@ public class RegistrationHandler {
             result.put("success", true);
             result.put("clientId", clientId);
             result.put("walletAddress", walletAddress);
+            result.put("clientType", registration.clientType);
             result.put("message", "Client registered");
             response.getWriter().write(JsonOutputUtil.toJson(result));
             

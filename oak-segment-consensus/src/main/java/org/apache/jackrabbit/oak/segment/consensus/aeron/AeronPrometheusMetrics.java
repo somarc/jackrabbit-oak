@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import io.aeron.Aeron;
-import io.aeron.driver.status.StreamCounter;
 import io.aeron.driver.status.SystemCounterDescriptor;
 import io.prometheus.client.Gauge;
 import org.agrona.concurrent.status.CountersReader;
@@ -224,10 +223,7 @@ public class AeronPrometheusMetrics implements AutoCloseable {
                 int streamId = keyBuffer.getInt(STREAM_ID_OFFSET);
                 String channel = keyBuffer.getStringAscii(CHANNEL_OFFSET);
                 
-                String metricName = StreamCounter.labelName(typeId);
-                if (typeId == PUBLISHER_POS_TYPE_ID) {
-                    metricName = "pub_pos"; // Remove "(sampled)" suffix
-                }
+                String metricName = streamMetricName(typeId);
                 
                 // Create Prometheus gauge with labels
                 Gauge gauge = Gauge.build()
@@ -264,6 +260,25 @@ public class AeronPrometheusMetrics implements AutoCloseable {
      */
     public void updateGaugeValues() {
         updateMetrics(); // Same as updateMetrics()
+    }
+
+    private static String streamMetricName(int typeId) {
+        if (typeId == PUBLISHER_LIMIT_TYPE_ID) {
+            return "pub_limit";
+        }
+        if (typeId == SENDER_LIMIT_TYPE_ID) {
+            return "snd_limit";
+        }
+        if (typeId == RECEIVER_POS_TYPE_ID) {
+            return "rcv_pos";
+        }
+        if (typeId == PER_IMAGE_TYPE_ID) {
+            return "sub_pos";
+        }
+        if (typeId == PUBLISHER_POS_TYPE_ID) {
+            return "pub_pos";
+        }
+        return "stream_counter_" + typeId;
     }
     
     /**
@@ -319,4 +334,3 @@ public class AeronPrometheusMetrics implements AutoCloseable {
         }
     }
 }
-

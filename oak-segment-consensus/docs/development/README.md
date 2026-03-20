@@ -26,6 +26,10 @@ cd oak-segment-consensus
 java -jar target/oak-segment-consensus.jar
 ```
 
+### Runtime Knobs and Gears
+
+- [Blockchain Config Knobs and Gears](BLOCKCHAIN-CONFIG-KNOBS.md) - OSGi/env/system precedence and API introspection mapping used by dashboard consumers.
+
 ---
 
 ## Code Structure
@@ -179,17 +183,19 @@ public void applyReplicatedWrite(String wallet, String path, String content) {
 
 ### Adding a New Configuration Option
 
-1. **Add to CONFIGURATION.md**
-2. **Read in GlobalStoreServer.java**
+1. **Define the config surface**
+   - Add or extend an `@ObjectClassDefinition`
+   - Wire the override through the runtime resolver/registry layer
+2. **Consume it in the runtime path**
    ```java
-   String myConfig = System.getProperty("oak.my.config", 
-       System.getenv("OAK_MY_CONFIG"));
+   String myConfig = RuntimeConfigValueResolver.readString("oak.my.config", "OAK_MY_CONFIG", "default");
    ```
-
-3. **Pass to Components**
-   ```java
-   new MyComponent(myConfig);
-   ```
+3. **Expose it in the read-only control plane**
+   - Update `OsgiConfigApiHandler` effective values, sources, schema, and coverage
+   - Add the endpoint to dashboard/API docs if it changes operator workflow
+4. **Document it**
+   - Update `CONFIGURATION.md`
+   - Update any relevant API or development docs
 
 ### Adding Metrics
 

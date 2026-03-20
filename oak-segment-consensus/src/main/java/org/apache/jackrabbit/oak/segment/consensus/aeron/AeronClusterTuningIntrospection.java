@@ -29,6 +29,13 @@ public final class AeronClusterTuningIntrospection {
 
     public static Map<String, Object> effectiveValues() {
         Map<String, Object> values = new LinkedHashMap<>();
+        AeronClusterRuntimeRegistry.Snapshot snapshot = AeronClusterRuntimeRegistry.snapshot();
+        values.put("enabled", snapshot.enabled);
+        values.put("node_id", snapshot.nodeId);
+        values.put("self_url_configured", snapshot.selfUrl != null);
+        values.put("peer_urls_count", snapshot.peerUrls.size());
+        values.put("observe_elections", snapshot.observeElections);
+        values.put("log_cluster_state_details", snapshot.logClusterStateDetails);
         values.put("cluster_environment", readString("oak.cluster.environment", ""));
         values.put("session_timeout_minutes", readInt("oak.cluster.session.timeout.minutes", 0));
         values.put("media_driver_timeout_ms", readInt("oak.cluster.media.driver.timeout.ms", 0));

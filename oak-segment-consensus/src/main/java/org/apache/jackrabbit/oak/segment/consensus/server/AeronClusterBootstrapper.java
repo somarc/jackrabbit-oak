@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
@@ -69,7 +70,7 @@ public final class AeronClusterBootstrapper {
         int nodeId = Integer.parseInt(System.getProperty("aeron.cluster.nodeId", "0"));
 
         // 🌐 DYNAMIC CLUSTER SIZE: Start with just self, discover peers organically
-        String hostnamesConfig = System.getProperty("aeron.cluster.hostnames", "");
+        String hostnamesConfig = RuntimeConfigValueResolver.readString("aeron.cluster.hostnames", "");
         List<String> hostnamesList;
 
         // Check if cluster state already exists (discover existing cluster members)

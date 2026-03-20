@@ -76,6 +76,11 @@ public class ServerContext {
     // API-level metrics (rejections before reaching queue)
     public final java.util.concurrent.atomic.AtomicLong apiRejectedRequests = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong apiAcceptedRequests = new java.util.concurrent.atomic.AtomicLong(0);
+    public final java.util.concurrent.atomic.AtomicLong apiIpfsPolicyRejectAmbiguousSource = new java.util.concurrent.atomic.AtomicLong(0);
+    public final java.util.concurrent.atomic.AtomicLong apiIpfsPolicyRejectNonEnterpriseCid = new java.util.concurrent.atomic.AtomicLong(0);
+    public final java.util.concurrent.atomic.AtomicLong apiIpfsPolicyRejectUnknownCid = new java.util.concurrent.atomic.AtomicLong(0);
+    public final java.util.concurrent.atomic.AtomicLong apiIpfsPolicyRejectCidServiceUnavailable = new java.util.concurrent.atomic.AtomicLong(0);
+    public final java.util.concurrent.atomic.AtomicLong apiIpfsPolicyAcceptedEnterpriseCid = new java.util.concurrent.atomic.AtomicLong(0);
     
     // Shared state
     public final Map<String, ClientRegistration> registeredClients;
@@ -198,4 +203,3 @@ public class ServerContext {
         log.info("📡 Event Broadcaster initialized (ADR 036 SSE streaming)");
     }
 }
-

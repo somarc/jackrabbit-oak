@@ -26,11 +26,13 @@ final class GenesisInitializer {
     private final NodeStore nodeStore;
     private final FileStore fileStore;
     private final BlobStore blobStore;
+    private final String genesisValidatorUrl;
 
-    GenesisInitializer(NodeStore nodeStore, FileStore fileStore, BlobStore blobStore) {
+    GenesisInitializer(NodeStore nodeStore, FileStore fileStore, BlobStore blobStore, String genesisValidatorUrl) {
         this.nodeStore = nodeStore;
         this.fileStore = fileStore;
         this.blobStore = blobStore;
+        this.genesisValidatorUrl = genesisValidatorUrl;
     }
 
     /**
@@ -138,7 +140,9 @@ final class GenesisInitializer {
 
             long timestamp = System.currentTimeMillis();
             String genesisDate = new java.util.Date(timestamp).toString();
-            String genesisValidator = System.getProperty("consensus.self.url", "http://localhost:8090");
+            String genesisValidator = genesisValidatorUrl != null && !genesisValidatorUrl.trim().isEmpty()
+                ? genesisValidatorUrl
+                : "http://localhost:8090";
             String genesisHost = genesisValidator.replace("http://", "").replace("https://", "").split(":")[0];
 
             // JCR Standard

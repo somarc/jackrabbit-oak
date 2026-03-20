@@ -17,6 +17,9 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterTuningIntrospection;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfigIntrospection;
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueTuningIntrospection;
 import org.apache.jackrabbit.oak.segment.http.server.AuthTokenValidator;
 import org.apache.jackrabbit.oak.segment.http.server.RateLimiter;
@@ -190,6 +193,8 @@ public class OsgiConfigApiHandler {
         components.put("tokenAuthTuning", buildTokenAuthTuning());
         components.put("fileStoreFlushTuning", buildFileStoreFlushTuning());
         components.put("gcEconomicsTuning", buildGcEconomicsTuning());
+        components.put("blockchainTuning", BlockchainConfigIntrospection.effectiveValues());
+        components.put("nodeRuntimeTuning", buildNodeRuntimeTuning());
         components.put("runtimeUiTuning", buildRuntimeUiTuning());
         return components;
     }
@@ -199,19 +204,69 @@ public class OsgiConfigApiHandler {
         sources.put("aeronClusterTuning", AeronClusterTuningIntrospection.source());
         sources.put("proposalQueueTuning", ProposalQueueTuningIntrospection.source());
         sources.put("rateLimiterTuning", RateLimiterTuningIntrospection.source());
-        sources.put("tlsTuning", "system-properties");
-        sources.put("validatorAuthTuning", "system-properties");
-        sources.put("validatorRegistrationTuning", "system-properties");
-        sources.put("tokenAuthTuning", "system-properties-or-env");
-        sources.put("fileStoreFlushTuning", "system-properties");
-        sources.put("gcEconomicsTuning", "system-properties");
-        sources.put("runtimeUiTuning", "system-properties");
+        sources.put("tlsTuning", RuntimePropertySourceRegistry.getSource("tlsTuning", "system-properties"));
+        sources.put("validatorAuthTuning", RuntimePropertySourceRegistry.getSource("validatorAuthTuning", "system-properties"));
+        sources.put("validatorRegistrationTuning", RuntimePropertySourceRegistry.getSource("validatorRegistrationTuning", "system-properties"));
+        sources.put("tokenAuthTuning", RuntimePropertySourceRegistry.getSource("tokenAuthTuning", "system-properties-or-env"));
+        sources.put("fileStoreFlushTuning", RuntimePropertySourceRegistry.getSource("fileStoreFlushTuning", "system-properties"));
+        sources.put("gcEconomicsTuning", RuntimePropertySourceRegistry.getSource("gcEconomicsTuning", "system-properties"));
+        sources.put("blockchainTuning", BlockchainConfigIntrospection.source());
+        sources.put("nodeRuntimeTuning", RuntimePropertySourceRegistry.getSource("nodeRuntimeTuning", "system-properties-or-env"));
+        sources.put("runtimeUiTuning", RuntimePropertySourceRegistry.getSource("runtimeUiTuning", "system-properties"));
         return sources;
     }
 
     private List<Map<String, Object>> buildSchema() {
         List<Map<String, Object>> schema = new ArrayList<>();
 
+        schema.add(schemaEntry(
+            "aeronClusterTuning.enabled",
+            "boolean",
+            true,
+            "startup-only",
+            "guarded",
+            "Enable Aeron cluster service",
+            "osgi:AeronClusterConfig.enabled"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.node_id",
+            "int",
+            0,
+            "startup-only",
+            "guarded",
+            "Aeron cluster node id",
+            "osgi:AeronClusterConfig.nodeId"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.self_url_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether an explicit self URL is configured",
+            "osgi:AeronClusterConfig.selfUrl"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.peer_urls_count",
+            "int",
+            0,
+            "startup-only",
+            "guarded",
+            "Number of configured peer URLs",
+            "osgi:AeronClusterConfig.peerUrls"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.observe_elections",
+            "boolean",
+            true,
+            "startup-only",
+            "safe",
+            "Observe elections before genesis writes",
+            "osgi:AeronClusterConfig.observeElections"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.log_cluster_state_details",
+            "boolean",
+            false,
+            "startup-only",
+            "safe",
+            "Enable verbose cluster startup logging",
+            "osgi:AeronClusterConfig.logClusterStateDetails"));
         schema.add(schemaEntry(
             "aeronClusterTuning.cluster_environment",
             "string",
@@ -660,6 +715,175 @@ public class OsgiConfigApiHandler {
             "guarded",
             "Mock GC cost per MB",
             "gc.usdc.per.mb"));
+        schema.add(schemaEntry(
+            "blockchainTuning.mode",
+            "string",
+            "mock",
+            "startup-only",
+            "guarded",
+            "Blockchain mode override",
+            "oak.blockchain.mode"));
+        schema.add(schemaEntry(
+            "blockchainTuning.contract_address",
+            "string",
+            "",
+            "startup-only",
+            "guarded",
+            "Blockchain contract address override",
+            "oak.blockchain.contractAddress"));
+        schema.add(schemaEntry(
+            "blockchainTuning.rpc_url_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether RPC URL is configured via OSGi/env/system",
+            "oak.blockchain.rpcUrl"));
+        schema.add(schemaEntry(
+            "blockchainTuning.gas_price_gwei",
+            "long",
+            3L,
+            "runtime-readable",
+            "guarded",
+            "Gas price assumption for write estimate math",
+            "oak.blockchain.gasPriceGwei"));
+        schema.add(schemaEntry(
+            "blockchainTuning.gas_write_standard",
+            "long",
+            74534L,
+            "runtime-readable",
+            "guarded",
+            "Measured gas units for STANDARD write path",
+            "oak.blockchain.gas.write.standard"));
+        schema.add(schemaEntry(
+            "blockchainTuning.gas_write_express",
+            "long",
+            74534L,
+            "runtime-readable",
+            "guarded",
+            "Measured gas units for EXPRESS write path",
+            "oak.blockchain.gas.write.express"));
+        schema.add(schemaEntry(
+            "blockchainTuning.gas_write_priority",
+            "long",
+            74534L,
+            "runtime-readable",
+            "guarded",
+            "Measured gas units for PRIORITY write path",
+            "oak.blockchain.gas.write.priority"));
+
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.consensus_enabled",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Enable consensus startup",
+            "consensus.enabled"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.consensus_mode",
+            "string",
+            "aeron",
+            "startup-only",
+            "guarded",
+            "Consensus mode selector",
+            "consensus.mode"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.wallet_keystore_path_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether node wallet keystore path is configured",
+            "wallet.keystore.path"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.standby_bootstrap_enabled",
+            "boolean",
+            false,
+            "startup-only",
+            "expert-only",
+            "Enable pre-cluster standby bootstrap",
+            "consensus.aeron.standby.bootstrap.enabled"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.bootstrap_primary_host_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "expert-only",
+            "Whether bootstrap primary host is configured",
+            "bootstrap.primary.host"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.bootstrap_primary_port",
+            "int",
+            0,
+            "startup-only",
+            "expert-only",
+            "Bootstrap primary standby port",
+            "bootstrap.primary.port"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.blobstore_type",
+            "string",
+            "",
+            "startup-only",
+            "guarded",
+            "BlobStore backend type",
+            "blobstore.type|BLOBSTORE_TYPE"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.ipfs_api_endpoint_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether IPFS API endpoint is configured",
+            "ipfs.api.endpoint|IPFS_API_ENDPOINT"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.http_port",
+            "int",
+            0,
+            "startup-only",
+            "safe",
+            "Optional plain HTTP port when TLS is enabled",
+            "http.port"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.sharding_num_shards",
+            "int",
+            1,
+            "startup-only",
+            "guarded",
+            "Configured shard count",
+            "sharding.numShards|NUM_SHARDS"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.mock_epoch_duration_seconds",
+            "long",
+            300L,
+            "runtime-readable",
+            "safe",
+            "Mock-mode epoch duration in seconds",
+            "oak.mock.epoch.duration.seconds|OAK_MOCK_EPOCH_DURATION_SECONDS"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.aeron_dir_name_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "expert-only",
+            "Whether a custom Aeron directory is configured",
+            "aeron.dir.name"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.aeron_cluster_hostnames_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "expert-only",
+            "Whether explicit Aeron hostnames are configured",
+            "aeron.cluster.hostnames"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.proposal_persistence_dir_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether an explicit proposal persistence directory is configured",
+            "oak.proposal.persistence.dir|OAK_PROPOSAL_PERSISTENCE_DIR"));
 
         schema.add(schemaEntry(
             "runtimeUiTuning.browser_ui_enabled",
@@ -684,11 +908,11 @@ public class OsgiConfigApiHandler {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("enabled", readBoolean(TlsConfiguration.PROP_TLS_ENABLED, false));
         values.put("keystore_type", readString(TlsConfiguration.PROP_KEYSTORE_TYPE, "PKCS12"));
-        values.put("keystore_path_configured", hasText(System.getProperty(TlsConfiguration.PROP_KEYSTORE_PATH)));
-        values.put("truststore_path_configured", hasText(System.getProperty(TlsConfiguration.PROP_TRUSTSTORE_PATH)));
+        values.put("keystore_path_configured", RuntimeConfigValueResolver.hasConfiguredValue(TlsConfiguration.PROP_KEYSTORE_PATH));
+        values.put("truststore_path_configured", RuntimeConfigValueResolver.hasConfiguredValue(TlsConfiguration.PROP_TRUSTSTORE_PATH));
         values.put("client_auth", readString(TlsConfiguration.PROP_CLIENT_AUTH, "none"));
         values.put("protocols", readString(TlsConfiguration.PROP_PROTOCOLS, "TLSv1.2,TLSv1.3"));
-        values.put("ciphers_configured", hasText(System.getProperty(TlsConfiguration.PROP_CIPHERS)));
+        values.put("ciphers_configured", RuntimeConfigValueResolver.hasConfiguredValue(TlsConfiguration.PROP_CIPHERS));
         return values;
     }
 
@@ -696,7 +920,7 @@ public class OsgiConfigApiHandler {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("enabled", readBoolean(ValidatorAuthHandler.PROP_AUTH_ENABLED, true));
         values.put("session_ttl_hours", readInt(ValidatorAuthHandler.PROP_SESSION_TTL, 24));
-        String allowedWallets = System.getProperty(ValidatorAuthHandler.PROP_ALLOWED_WALLETS);
+        String allowedWallets = RuntimeConfigValueResolver.readString(ValidatorAuthHandler.PROP_ALLOWED_WALLETS, null);
         values.put("allowed_wallets_configured", hasText(allowedWallets));
         values.put("allowed_wallets_count", countCsv(allowedWallets));
         return values;
@@ -713,8 +937,9 @@ public class OsgiConfigApiHandler {
 
     private Map<String, Object> buildTokenAuthTuning() {
         Map<String, Object> values = new LinkedHashMap<>();
-        boolean tokenConfigured = hasText(System.getProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME))
-            || hasText(System.getenv(AuthTokenValidator.TOKEN_ENV_VAR_NAME));
+        boolean tokenConfigured = RuntimeConfigValueResolver.hasConfiguredValue(
+            AuthTokenValidator.TOKEN_PROPERTY_NAME,
+            AuthTokenValidator.TOKEN_ENV_VAR_NAME);
         values.put("auth_token_configured", tokenConfigured);
         return values;
     }
@@ -735,7 +960,40 @@ public class OsgiConfigApiHandler {
     private Map<String, Object> buildRuntimeUiTuning() {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("browser_ui_enabled", readBoolean("oak.http.browser.ui.enabled", true));
-        values.put("external_dashboard_url_configured", hasText(System.getProperty("oak.dashboard.external.url")));
+        values.put("external_dashboard_url_configured",
+            RuntimeConfigValueResolver.hasConfiguredValue("oak.dashboard.external.url"));
+        return values;
+    }
+
+    private Map<String, Object> buildNodeRuntimeTuning() {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("consensus_enabled", readBoolean("consensus.enabled", false));
+        values.put("consensus_mode", readString("consensus.mode", "aeron"));
+        values.put("wallet_keystore_path_configured",
+            RuntimeConfigValueResolver.hasConfiguredValue("wallet.keystore.path"));
+        values.put("standby_bootstrap_enabled",
+            readBoolean("consensus.aeron.standby.bootstrap.enabled", false));
+        values.put("bootstrap_primary_host_configured",
+            RuntimeConfigValueResolver.hasConfiguredValue("bootstrap.primary.host"));
+        values.put("bootstrap_primary_port", readInt("bootstrap.primary.port", 0));
+        values.put("blobstore_type",
+            RuntimeConfigValueResolver.readString("blobstore.type", "BLOBSTORE_TYPE", ""));
+        values.put("ipfs_api_endpoint_configured",
+            RuntimeConfigValueResolver.hasConfiguredValue("ipfs.api.endpoint", "IPFS_API_ENDPOINT"));
+        values.put("http_port", readInt("http.port", 0));
+        values.put("sharding_num_shards",
+            RuntimeConfigValueResolver.readInt("sharding.numShards", "NUM_SHARDS", 1));
+        values.put("mock_epoch_duration_seconds",
+            RuntimeConfigValueResolver.readLongEnvFirst(
+                "oak.mock.epoch.duration.seconds",
+                "OAK_MOCK_EPOCH_DURATION_SECONDS",
+                300L));
+        values.put("aeron_dir_name_configured",
+            RuntimeConfigValueResolver.hasConfiguredValue("aeron.dir.name"));
+        values.put("aeron_cluster_hostnames_configured",
+            RuntimeConfigValueResolver.hasConfiguredValue("aeron.cluster.hostnames"));
+        values.put("proposal_persistence_dir_configured",
+            RuntimeConfigValueResolver.hasConfiguredValue("oak.proposal.persistence.dir", "OAK_PROPOSAL_PERSISTENCE_DIR"));
         return values;
     }
 
@@ -846,43 +1104,19 @@ public class OsgiConfigApiHandler {
     }
 
     private static int readInt(String key, int defaultValue) {
-        String raw = System.getProperty(key);
-        if (!hasText(raw)) {
-            return defaultValue;
-        }
-        try {
-            return Integer.parseInt(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
+        return RuntimeConfigValueResolver.readInt(key, defaultValue);
     }
 
     private static long readLong(String key, long defaultValue) {
-        String raw = System.getProperty(key);
-        if (!hasText(raw)) {
-            return defaultValue;
-        }
-        try {
-            return Long.parseLong(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
+        return RuntimeConfigValueResolver.readLong(key, defaultValue);
     }
 
     private static boolean readBoolean(String key, boolean defaultValue) {
-        String raw = System.getProperty(key);
-        if (!hasText(raw)) {
-            return defaultValue;
-        }
-        return Boolean.parseBoolean(raw.trim());
+        return RuntimeConfigValueResolver.readBoolean(key, defaultValue);
     }
 
     private static String readString(String key, String defaultValue) {
-        String raw = System.getProperty(key);
-        if (raw == null) {
-            return defaultValue;
-        }
-        return raw;
+        return RuntimeConfigValueResolver.readString(key, defaultValue);
     }
 
     private Map<String, Object> schemaEntry(String key,

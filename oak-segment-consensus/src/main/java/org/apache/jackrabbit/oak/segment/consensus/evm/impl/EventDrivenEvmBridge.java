@@ -29,10 +29,14 @@ import org.web3j.abi.datatypes.Address;
 import org.web3j.abi.datatypes.Event;
 import org.web3j.abi.datatypes.generated.Bytes32;
 import org.web3j.abi.datatypes.generated.Uint32;
+import org.web3j.abi.datatypes.generated.Uint256;
 import org.web3j.abi.datatypes.generated.Uint96;
+import org.web3j.abi.datatypes.generated.Uint8;
 import org.web3j.protocol.Web3j;
+import org.web3j.protocol.core.DefaultBlockParameter;
 import org.web3j.protocol.core.DefaultBlockParameterName;
 import org.web3j.protocol.core.methods.request.EthFilter;
+import org.web3j.protocol.core.methods.response.EthLog;
 import org.web3j.protocol.http.HttpService;
 import org.web3j.utils.Numeric;
 
@@ -69,6 +73,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
     private static final BigInteger SEGMENT_FEE = new BigInteger("100000000000000"); // 0.0001 ETH per segment
     private static final BigInteger STORAGE_FEE_PER_KB = new BigInteger("10000000000000"); // 0.00001 ETH per KB
     private static final BigInteger BLOB_FEE = new BigInteger("50000000000000"); // 0.00005 ETH per blob
+    private static final BigInteger EVENT_LOOKBACK_BLOCKS = BigInteger.valueOf(10_000L);
     
     private final String networkName;
     private final String contractAddress;
@@ -86,6 +91,18 @@ public class EventDrivenEvmBridge implements EvmBridge {
             new TypeReference<Bytes32>(true) {},   // shardHash (indexed)
             new TypeReference<Uint96>() {},        // amount
             new TypeReference<Uint32>() {}         // blockNumber
+        ));
+
+    // ProposalPaid event definition (matches ValidatorPaymentV3_1/V3_2)
+    private static final Event PROPOSAL_PAID_EVENT = new Event("ProposalPaid",
+        Arrays.asList(
+            new TypeReference<Bytes32>(true) {},   // proposalId (indexed)
+            new TypeReference<Address>(true) {},   // payer (indexed)
+            new TypeReference<Uint256>() {},       // amount
+            new TypeReference<Uint8>() {},         // tier
+            new TypeReference<Uint8>(true) {},     // paymentToken (indexed)
+            new TypeReference<Address>() {},       // preferredValidator
+            new TypeReference<Uint256>() {}        // timestamp
         ));
     
     // Event listeners (for real mode - Web3j subscriptions)
@@ -135,8 +152,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
             return autoConfirmMockProposal(proposalId);
         }
         
-        // In real mode, payment proof must come from blockchain events
-        return null;
+        // In real mode, fall back to direct log query in case subscription missed event.
+        return fetchPaymentFromChain(proposalId);
     }
     
     /**
@@ -387,33 +404,13 @@ public class EventDrivenEvmBridge implements EvmBridge {
                 .subscribe(
                     ethLog -> {
                         try {
-                            // Parse event data
-                            String proposalId = ethLog.getTopics().get(1); // First indexed param
-                            String payer = "0x" + ethLog.getTopics().get(2).substring(26); // Address from topic
-                            String shardHash = ethLog.getTopics().get(3); // Third indexed param
-                            
-                            // Parse non-indexed params from data
-                            String data = ethLog.getData();
-                            BigInteger amount = Numeric.toBigInt(data.substring(0, 66)); // First 32 bytes
-                            long eventBlockNumber = Numeric.toBigInt(data.substring(66, 130)).longValue(); // Next 32 bytes
-                            
-                            String txHash = ethLog.getTransactionHash();
-                            
+                            WriteAuthorizedEvent event = parseWriteAuthorizedLog(ethLog);
+                            if (event == null) {
+                                return;
+                            }
                             log.info("📨 Received WriteAuthorized event: proposalId={}, payer={}, block={}",
-                                proposalId, payer, eventBlockNumber);
-                            
-                            // Create and process event
-                            WriteAuthorizedEvent event = new WriteAuthorizedEvent(
-                                proposalId,
-                                payer,
-                                shardHash,
-                                amount,
-                                eventBlockNumber,
-                                txHash
-                            );
-                            
+                                event.proposalId, event.payer, event.blockNumber);
                             processWriteAuthorizedEvent(event);
-                            
                         } catch (Exception e) {
                             log.error("Error parsing WriteAuthorized event", e);
                         }
@@ -454,6 +451,131 @@ public class EventDrivenEvmBridge implements EvmBridge {
                 Thread.currentThread().interrupt();
             }
         }, "Web3j-Reconnect").start();
+    }
+
+    private PaymentProof fetchPaymentFromChain(@NotNull String proposalId) {
+        if (web3j == null) {
+            return null;
+        }
+        if (!proposalId.matches("^0x[0-9a-fA-F]{64}$")) {
+            return null;
+        }
+
+        try {
+            BigInteger latest = web3j.ethBlockNumber().send().getBlockNumber();
+            BigInteger from = latest.subtract(EVENT_LOOKBACK_BLOCKS);
+            if (from.signum() < 0) {
+                from = BigInteger.ZERO;
+            }
+
+            EthFilter filter = new EthFilter(
+                DefaultBlockParameter.valueOf(from),
+                DefaultBlockParameterName.LATEST,
+                contractAddress
+            );
+            filter.addOptionalTopics(
+                EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
+                EventEncoder.encode(PROPOSAL_PAID_EVENT)
+            );
+            filter.addOptionalTopics(proposalId);
+
+            EthLog logResponse = web3j.ethGetLogs(filter).send();
+            if (logResponse == null || logResponse.hasError() || logResponse.getLogs() == null || logResponse.getLogs().isEmpty()) {
+                return null;
+            }
+
+            for (EthLog.LogResult<?> logResult : logResponse.getLogs()) {
+                Object value = logResult.get();
+                if (!(value instanceof org.web3j.protocol.core.methods.response.Log)) {
+                    continue;
+                }
+                org.web3j.protocol.core.methods.response.Log logEntry =
+                    (org.web3j.protocol.core.methods.response.Log) value;
+                WriteAuthorizedEvent event = parsePaymentLog(logEntry);
+                if (event == null) {
+                    continue;
+                }
+                processWriteAuthorizedEvent(event);
+                return payments.get(event.proposalId);
+            }
+        } catch (Exception e) {
+            log.debug("On-chain payment lookup failed for proposalId={}", proposalId, e);
+        }
+        return null;
+    }
+
+    private WriteAuthorizedEvent parsePaymentLog(
+            org.web3j.protocol.core.methods.response.Log ethLog) {
+        if (ethLog.getTopics() == null || ethLog.getTopics().isEmpty()) {
+            return null;
+        }
+        String signature = ethLog.getTopics().get(0);
+        String writeAuthorizedSignature = EventEncoder.encode(WRITE_AUTHORIZED_EVENT);
+        String proposalPaidSignature = EventEncoder.encode(PROPOSAL_PAID_EVENT);
+
+        if (writeAuthorizedSignature.equalsIgnoreCase(signature)) {
+            return parseWriteAuthorizedLog(ethLog);
+        }
+        if (proposalPaidSignature.equalsIgnoreCase(signature)) {
+            return parseProposalPaidLog(ethLog);
+        }
+        return null;
+    }
+
+    private WriteAuthorizedEvent parseWriteAuthorizedLog(
+            org.web3j.protocol.core.methods.response.Log ethLog) {
+        if (ethLog.getTopics() == null || ethLog.getTopics().size() < 4) {
+            return null;
+        }
+        String proposalId = ethLog.getTopics().get(1);
+        String payer = "0x" + ethLog.getTopics().get(2).substring(26);
+        String shardHash = ethLog.getTopics().get(3);
+
+        String data = ethLog.getData();
+        if (data == null || data.length() < 130) {
+            return null;
+        }
+        BigInteger amount = Numeric.toBigInt(data.substring(0, 66));
+        long eventBlockNumber = Numeric.toBigInt(data.substring(66, 130)).longValue();
+        String txHash = ethLog.getTransactionHash();
+
+        return new WriteAuthorizedEvent(
+            proposalId,
+            payer,
+            shardHash,
+            amount,
+            eventBlockNumber,
+            txHash
+        );
+    }
+
+    private WriteAuthorizedEvent parseProposalPaidLog(
+            org.web3j.protocol.core.methods.response.Log ethLog) {
+        if (ethLog.getTopics() == null || ethLog.getTopics().size() < 3) {
+            return null;
+        }
+        String proposalId = ethLog.getTopics().get(1);
+        String payer = "0x" + ethLog.getTopics().get(2).substring(26);
+        String shardHash = "0x0";
+
+        String data = ethLog.getData();
+        if (data == null || data.length() < 66) {
+            return null;
+        }
+        BigInteger amount = Numeric.toBigInt(data.substring(0, 66));
+        long blockNumber = ethLog.getBlockNumber() != null
+            ? ethLog.getBlockNumber().longValue()
+            : currentBlock;
+        String txHash = ethLog.getTransactionHash();
+
+        return new WriteAuthorizedEvent(
+            proposalId,
+            payer,
+            shardHash,
+            amount,
+            blockNumber,
+            txHash
+        );
     }
     
     /**
@@ -550,4 +672,3 @@ public class EventDrivenEvmBridge implements EvmBridge {
         }
     }
 }
-

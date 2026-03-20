@@ -242,13 +242,12 @@ public class EthereumSignatureVerifier {
         BigInteger x = r.add(i.multiply(n));
         
         // Check x is valid
-        BigInteger prime = ((org.bouncycastle.math.ec.ECCurve.Fp) ecParams.getCurve()).getQ();
+        BigInteger prime = ecParams.getCurve().getField().getCharacteristic();
         if (x.compareTo(prime) >= 0) {
             return null;
         }
-        
+
         // Decompress point
-        org.bouncycastle.math.ec.ECCurve.Fp curve = (org.bouncycastle.math.ec.ECCurve.Fp) ecParams.getCurve();
         byte[] compressedPoint = new byte[33];
         compressedPoint[0] = (byte) ((recoveryId & 1) == 0 ? 0x02 : 0x03);
         byte[] xBytes = x.toByteArray();
@@ -263,7 +262,7 @@ public class EthereumSignatureVerifier {
         }
         
         try {
-            return curve.decodePoint(compressedPoint);
+            return ecParams.getCurve().decodePoint(compressedPoint);
         } catch (Exception e) {
             return null;
         }

@@ -22,21 +22,32 @@ export OAK_VALIDATOR_AUTH_TOKEN=your-secret-token
 # Ethereum
 export OAK_BLOCKCHAIN_RPC_URL=https://sepolia.infura.io/v3/YOUR-PROJECT-ID
 export OAK_BLOCKCHAIN_CONTRACT_ADDRESS=0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0
+export OAK_BLOCKCHAIN_GAS_PRICE_GWEI=3
+export OAK_BLOCKCHAIN_GAS_WRITE_STANDARD=74534
+export OAK_BLOCKCHAIN_GAS_WRITE_EXPRESS=74534
+export OAK_BLOCKCHAIN_GAS_WRITE_PRIORITY=74534
 ```
 
 ---
 
 ## Configuration Priority
 
-**All settings follow this priority order:**
+**Most settings follow this priority order:**
 
 1. **Environment variables** (highest priority) - `export VAR=value`
 2. **System properties** (medium priority) - `-Dvar=value`
 3. **Default values** (lowest priority) - hardcoded defaults
 
+**Blockchain tuning keys use this priority order:**
+
+1. **OSGi ConfigAdmin override** (highest for configured keys)
+2. **Environment variables**
+3. **System properties**
+4. **Default values**
+
 **OSGi file-based configuration (when running in OSGi):**
-- For proposal queue / backpressure tuning, **OSGi config files override system properties**.
-- If the OSGi config file is absent, the system property values are used.
+- For proposal queue / backpressure tuning and blockchain tuning, **OSGi config values override env/system/default** when configured.
+- For blockchain tuning keys, empty string (string keys) or `<= 0` (numeric keys) means "no OSGi override", and resolution falls back to env/system/default.
 
 **Example:**
 ```bash
@@ -47,6 +58,33 @@ export OAK_BLOCKCHAIN_MODE=sepolia
 java -Doak.blockchain.mode=mock -jar oak-segment-consensus.jar
 # Result: Uses "sepolia" from environment variable
 ```
+
+## Read-Only OSGi Control Surface
+
+The validator exposes a read-only HTTP surface for inspecting the effective
+OSGi-governed runtime configuration. This is the supported operator path for
+configuration visibility in `oak-segment-consensus`; it avoids the need for an
+embedded Felix console.
+
+**Endpoints:**
+- `/v1/config/osgi` - effective values grouped by component
+- `/v1/config/osgi/schema` - metadata for exposed keys, defaults, risk, reload mode
+- `/v1/config/osgi/sources` - effective source/provenance by config group
+- `/v1/config/osgi/coverage` - exposed vs known tunables, missing keys
+- `/v1/config/osgi/delta` - current values compared to defaults
+
+**Auth behavior:**
+- If token auth is enabled, send `Authorization: {token}`
+- If token auth is disabled, the surface is open for local/dev use
+
+**Operator flow:**
+1. Check `/v1/config/osgi` for the effective runtime state.
+2. Check `/v1/config/osgi/sources` to verify where values came from.
+3. Check `/v1/config/osgi/schema` when building dashboards or docs.
+4. Check `/v1/config/osgi/delta` for non-default behavior.
+5. Check `/v1/config/osgi/coverage` during cleanup work.
+
+**See also:** [docs/api/osgi-config.md](docs/api/osgi-config.md)
 
 ---
 
@@ -131,6 +169,91 @@ java -Doak.blockchain.rpcUrl=https://sepolia.infura.io/v3/YOUR-PROJECT-ID -jar o
 
 ---
 
+### Blockchain Gas Model Tuning
+
+These knobs tune write gas assumptions used for tier pricing and `/v1/blockchain/config` estimates.
+
+#### OAK_BLOCKCHAIN_GAS_PRICE_GWEI
+
+**Description:** Gas price assumption in gwei for fee estimation.
+
+**Default:** `3`
+
+**Environment Variable:**
+```bash
+export OAK_BLOCKCHAIN_GAS_PRICE_GWEI=3
+```
+
+**System Property:**
+```bash
+java -Doak.blockchain.gasPriceGwei=3 -jar oak-segment-consensus.jar
+```
+
+#### OAK_BLOCKCHAIN_GAS_WRITE_STANDARD
+
+**Description:** Gas units assumed for STANDARD write path.
+
+**Default:** `74534`
+
+**Environment Variable:**
+```bash
+export OAK_BLOCKCHAIN_GAS_WRITE_STANDARD=74534
+```
+
+**System Property:**
+```bash
+java -Doak.blockchain.gas.write.standard=74534 -jar oak-segment-consensus.jar
+```
+
+#### OAK_BLOCKCHAIN_GAS_WRITE_EXPRESS
+
+**Description:** Gas units assumed for EXPRESS write path.
+
+**Default:** `74534`
+
+**Environment Variable:**
+```bash
+export OAK_BLOCKCHAIN_GAS_WRITE_EXPRESS=74534
+```
+
+**System Property:**
+```bash
+java -Doak.blockchain.gas.write.express=74534 -jar oak-segment-consensus.jar
+```
+
+#### OAK_BLOCKCHAIN_GAS_WRITE_PRIORITY
+
+**Description:** Gas units assumed for PRIORITY write path.
+
+**Default:** `74534`
+
+**Environment Variable:**
+```bash
+export OAK_BLOCKCHAIN_GAS_WRITE_PRIORITY=74534
+```
+
+**System Property:**
+```bash
+java -Doak.blockchain.gas.write.priority=74534 -jar oak-segment-consensus.jar
+```
+
+#### OSGi PID / Keys (blockchain tuning)
+
+**PID:** `org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfigTuningService`
+
+**Keys:**
+- `mode`
+- `contract_address`
+- `rpc_url`
+- `gas_price_gwei`
+- `gas_write_standard`
+- `gas_write_express`
+- `gas_write_priority`
+
+See also: `docs/development/BLOCKCHAIN-CONFIG-KNOBS.md`
+
+---
+
 ## 2. Binary Storage (IPFS DataStore)
 
 ### BLOBSTORE_TYPE
@@ -156,8 +279,9 @@ java -Dblobstore.type=ipfs -jar oak-segment-consensus.jar
 - Binaries ≥ 16 KB → Stored in IPFS
 - Content-addressed (CID = hash of content)
 - P2P replication between validators
-- Client-side IPFS (`ipfsCid`) is the default upload path
+- Validator-hosted IPFS is the default upload path
 - Validator-hosted binary uploads require `paymentTier=PRIORITY`
+- Client-side `ipfsCid` is restricted to registered `enterprise` clients and must reference a validator-known CID mapping
 
 **See Also:** [IPFS-DATASTORE.md](IPFS-DATASTORE.md) for complete documentation
 

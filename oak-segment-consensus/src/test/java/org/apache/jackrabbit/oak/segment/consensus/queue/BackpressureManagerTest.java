@@ -96,4 +96,28 @@ public class BackpressureManagerTest {
         assertEquals(3, manager.getAcknowledgedCount());
         assertEquals(0, manager.getPendingCount());
     }
+
+    @Test
+    public void testReconcileIfStalledClearsPending() {
+        BackpressureManager manager = new BackpressureManager(5, 100, 1_000);
+
+        manager.incrementSent(8);
+
+        assertTrue(manager.reconcileIfStalled(0, "test"));
+        assertEquals(8, manager.getSentCount());
+        assertEquals(8, manager.getAcknowledgedCount());
+        assertEquals(0, manager.getPendingCount());
+        assertEquals(1, manager.getStalePendingReconciliationCount());
+    }
+
+    @Test
+    public void testReconcileIfStalledHonorsThreshold() {
+        BackpressureManager manager = new BackpressureManager(5, 100, 1_000);
+
+        manager.incrementSent(6);
+
+        assertFalse(manager.reconcileIfStalled(60_000, "test"));
+        assertEquals(6, manager.getPendingCount());
+        assertEquals(0, manager.getStalePendingReconciliationCount());
+    }
 }

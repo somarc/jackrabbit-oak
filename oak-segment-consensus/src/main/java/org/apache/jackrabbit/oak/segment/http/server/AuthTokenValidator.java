@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,12 +68,8 @@ public class AuthTokenValidator {
      * If no token is configured, authentication is disabled (POC mode).
      */
     public AuthTokenValidator() {
-        // Try system property first, then environment variable
-        String token = System.getProperty(TOKEN_PROPERTY_NAME);
-        if (token == null || token.trim().isEmpty()) {
-            token = System.getenv(TOKEN_ENV_VAR_NAME);
-        }
-        
+        String token = RuntimeConfigValueResolver.readString(TOKEN_PROPERTY_NAME, TOKEN_ENV_VAR_NAME, null);
+
         if (token != null && !token.trim().isEmpty()) {
             this.expectedToken = token.trim();
             this.authEnabled = true;

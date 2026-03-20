@@ -20,7 +20,7 @@ Propose a write transaction. Requires wallet signature and Ethereum payment veri
 - `ethereumTxHash` (required) - Ethereum transaction hash for payment
 - `paymentTier` (optional) - Payment tier: `STANDARD`, `EXPRESS`, `PRIORITY` (default: STANDARD)
 - `organization` (optional) - Organization name (ADR 037)
-- `ipfsCid` (optional) - IPFS CID for binary content (ADR 016, client-side default)
+- `ipfsCid` (optional) - IPFS CID for binary content (ADR 016). Allowed only for registered `enterprise` clients and must be present in validator CID mappings.
 - `intentToken` (optional) - Lazy binary upload token (ADR 020)
 - `binaryData` (optional) - Legacy base64 binary payload (validator-hosted, requires PRIORITY)
 - `mimeType` (optional) - MIME type for legacy base64
@@ -28,6 +28,11 @@ Propose a write transaction. Requires wallet signature and Ethereum payment veri
 **Multipart Form Data** (for binary uploads):
 - `file` - Binary file (validator-hosted, requires paymentTier=PRIORITY)
 - Other parameters as form fields
+
+**Binary policy guardrails**:
+- Provide exactly one binary source: `ipfsCid` or `intentToken` or validator-hosted binary (`file`/`binaryData`).
+- `ipfsCid` + `intentToken` is rejected.
+- `ipfsCid` + validator-hosted binary payload is rejected.
 
 ### Response
 

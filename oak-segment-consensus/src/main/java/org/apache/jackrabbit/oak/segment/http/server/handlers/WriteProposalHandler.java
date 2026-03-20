@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
+import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
@@ -32,6 +33,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Handler for write proposals (`/v1/propose-write`).
@@ -84,6 +86,7 @@ public class WriteProposalHandler {
             String message = null;
             String contentType = null;
             String ethereumTxHash = null;
+            String clientProposalId = null;
             String intentToken = null;
             String paymentTier = null;
             String organization = null;  // ADR 037: Organization-scoped content paths
@@ -124,6 +127,7 @@ public class WriteProposalHandler {
                             case "message": message = value; break;
                             case "contentType": contentType = value; break;
                             case "ethereumTxHash": ethereumTxHash = value; break;
+                            case "proposalId": clientProposalId = value; break;
                             case "intentToken": intentToken = value; break;
                             case "paymentTier": paymentTier = value; break;
                             case "organization": organization = value; break;  // ADR 037
@@ -141,6 +145,7 @@ public class WriteProposalHandler {
                 message = request.getParameter("message");
                 contentType = request.getParameter("contentType");
                 ethereumTxHash = request.getParameter("ethereumTxHash");
+                clientProposalId = request.getParameter("proposalId");
                 intentToken = request.getParameter("intentToken");
                 paymentTier = request.getParameter("paymentTier");
                 organization = request.getParameter("organization");  // ADR 037
@@ -292,6 +297,80 @@ public class WriteProposalHandler {
 
             log.debug("Client lookup: wallet={}, clientId={}, registeredClients.size()={}",
                 normalizedWallet, clientId, context.registeredClients.size());
+
+            // ============================================================
+            // IPFS SUPPLY CHAIN POLICY ENFORCEMENT
+            // - supply-chain clients: validator-hosted IPFS only (intent/file)
+            // - enterprise clients: may use ipfsCid, but only if CID is known to validator
+            // ============================================================
+            if (ipfsCid != null) {
+                ipfsCid = ipfsCid.trim();
+                if (ipfsCid.isEmpty()) {
+                    ipfsCid = null;
+                }
+            }
+            if (intentToken != null) {
+                intentToken = intentToken.trim();
+                if (intentToken.isEmpty()) {
+                    intentToken = null;
+                }
+            }
+
+            boolean hasClientIpfsCid = ipfsCid != null;
+            boolean hasBinaryPayload = binaryBytes != null && binaryBytes.length > 0;
+            boolean hasIntentToken = intentToken != null;
+
+            if (hasClientIpfsCid && hasBinaryPayload) {
+                context.apiRejectedRequests.incrementAndGet();
+                context.apiIpfsPolicyRejectAmbiguousSource.incrementAndGet();
+                ConsensusMetrics.recordIpfsPolicyRejection("ambiguous_source");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "Ambiguous binary source: provide either ipfsCid or validator-hosted binary payload, not both.");
+                return;
+            }
+            if (hasClientIpfsCid && hasIntentToken) {
+                context.apiRejectedRequests.incrementAndGet();
+                context.apiIpfsPolicyRejectAmbiguousSource.incrementAndGet();
+                ConsensusMetrics.recordIpfsPolicyRejection("ambiguous_source");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "Ambiguous binary source: provide either ipfsCid or intentToken, not both.");
+                return;
+            }
+            if (hasClientIpfsCid && !clientReg.isEnterpriseClient()) {
+                context.apiRejectedRequests.incrementAndGet();
+                context.apiIpfsPolicyRejectNonEnterpriseCid.incrementAndGet();
+                ConsensusMetrics.recordIpfsPolicyRejection("non_enterprise_client");
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,
+                    "client_ipfs_cid_requires_enterprise_registration",
+                    "Client-side ipfsCid is restricted to registered enterprise clients. " +
+                    "Use validator-hosted binary upload (intentToken or multipart/base64) for supply-chain clients.");
+                return;
+            }
+            if (hasClientIpfsCid) {
+                if (context.cidMappingService == null) {
+                    context.apiRejectedRequests.incrementAndGet();
+                    context.apiIpfsPolicyRejectCidServiceUnavailable.incrementAndGet();
+                    ConsensusMetrics.recordIpfsPolicyRejection("cid_service_unavailable");
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                        "CID provenance service unavailable. Cannot validate external ipfsCid.");
+                    return;
+                }
+                Optional<String> knownBlobId = context.cidMappingService.getOakBlobId(ipfsCid);
+                if (knownBlobId.isEmpty()) {
+                    context.apiRejectedRequests.incrementAndGet();
+                    context.apiIpfsPolicyRejectUnknownCid.incrementAndGet();
+                    ConsensusMetrics.recordIpfsPolicyRejection("unknown_cid");
+                    ApiErrorUtil.sendJsonError(response, 422,
+                        "unknown_ipfs_cid",
+                        "ipfsCid is not known to validator CID mappings. " +
+                        "Upload via validator-hosted flow first, or register/ingest CID through enterprise pipeline.");
+                    return;
+                }
+                log.debug("🔐 Enterprise ipfsCid accepted for wallet {}: cid={} mappedBlob={}",
+                    normalizedWallet, ipfsCid, knownBlobId.get());
+                context.apiIpfsPolicyAcceptedEnterpriseCid.incrementAndGet();
+                ConsensusMetrics.recordEnterpriseCidAccepted();
+            }
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // WRITE BLOCKING: Check if entity has exceeded GC debt limit
@@ -536,8 +615,22 @@ public class WriteProposalHandler {
             String contentId = contentType + "-" + System.currentTimeMillis();
             String fullPath = contentRoot + "/" + contentId;
 
-            // Generate proposal ID
-            String proposalId = java.util.UUID.randomUUID().toString();
+            // V5 alignment: allow client to supply on-chain proposalId (e.g. bytes32 from authorizeWrite()).
+            String proposalId;
+            if (clientProposalId != null && !clientProposalId.trim().isEmpty()) {
+                proposalId = clientProposalId.trim();
+                if (!isValidClientProposalId(proposalId)) {
+                    context.apiRejectedRequests.incrementAndGet();
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "Invalid proposalId format. Expected 0x-prefixed 32-byte hex or UUID.");
+                    return;
+                }
+                if (proposalId.startsWith("0X")) {
+                    proposalId = "0x" + proposalId.substring(2);
+                }
+            } else {
+                proposalId = java.util.UUID.randomUUID().toString();
+            }
 
             // Check if proposal queue manager is available
             if (context.proposalQueueManager == null) {
@@ -704,6 +797,7 @@ public class WriteProposalHandler {
             resultPayload.put("state", "PENDING");
             resultPayload.put("message", "Proposal queued, waiting for Ethereum confirmation");
             resultPayload.put("ethereumTxHash", ethereumTxHash);
+            resultPayload.put("proposalIdSource", clientProposalId != null && !clientProposalId.trim().isEmpty() ? "client" : "server");
             resultPayload.put("timeoutTimestamp", System.currentTimeMillis() + 300_000);
             resultPayload.put("wallet", wallet);
             resultPayload.put("storagePath", fullPath);
@@ -715,6 +809,17 @@ public class WriteProposalHandler {
             log.error("❌ Test write failed", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Test write failed: " + e.getMessage());
         }
+    }
+
+    private static boolean isValidClientProposalId(String proposalId) {
+        if (proposalId == null) {
+            return false;
+        }
+        String value = proposalId.trim();
+        if (value.matches("(?i)^0x[a-f0-9]{64}$")) {
+            return true;
+        }
+        return value.matches("(?i)^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
     }
 
 }

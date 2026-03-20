@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -141,10 +142,10 @@ public class ValidatorAuthHandler {
      * Create auth handler from system properties.
      */
     public ValidatorAuthHandler() {
-        this.enabled = Boolean.parseBoolean(System.getProperty(PROP_AUTH_ENABLED, "true"));
-        this.sessionTtlHours = Integer.getInteger(PROP_SESSION_TTL, DEFAULT_SESSION_TTL_HOURS);
-        
-        String walletsStr = System.getProperty(PROP_ALLOWED_WALLETS);
+        this.enabled = RuntimeConfigValueResolver.readBoolean(PROP_AUTH_ENABLED, true);
+        this.sessionTtlHours = RuntimeConfigValueResolver.readInt(PROP_SESSION_TTL, DEFAULT_SESSION_TTL_HOURS);
+
+        String walletsStr = RuntimeConfigValueResolver.readString(PROP_ALLOWED_WALLETS, null);
         if (walletsStr != null && !walletsStr.isEmpty()) {
             this.allowedWallets = walletsStr.toLowerCase().split(",");
         } else {

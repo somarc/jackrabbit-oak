@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,8 +51,8 @@ public final class FileStoreFlushService implements AutoCloseable {
 
     public FileStoreFlushService(FileStore fileStore) {
         this.fileStore = fileStore;
-        this.flushIntervalMs = Long.getLong("oak.filestore.flush.ms", DEFAULT_FLUSH_INTERVAL_MS);
-        this.flushBatch = Integer.getInteger("oak.filestore.flush.batch", DEFAULT_FLUSH_BATCH);
+        this.flushIntervalMs = RuntimeConfigValueResolver.readLong("oak.filestore.flush.ms", DEFAULT_FLUSH_INTERVAL_MS);
+        this.flushBatch = RuntimeConfigValueResolver.readInt("oak.filestore.flush.batch", DEFAULT_FLUSH_BATCH);
 
         if (isAsyncEnabled()) {
             this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {

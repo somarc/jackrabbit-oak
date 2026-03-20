@@ -38,11 +38,13 @@ public class BlockchainConfigApiHandlerTest {
 
     private static final String PROP_MODE = "oak.blockchain.mode";
     private static final String PROP_RPC = "oak.blockchain.rpcUrl";
+    private static final String PROP_GAS_PRICE_GWEI = "oak.blockchain.gasPriceGwei";
 
     @Before
     public void setUp() {
         System.clearProperty(PROP_MODE);
         System.clearProperty(PROP_RPC);
+        System.clearProperty(PROP_GAS_PRICE_GWEI);
         BlockchainConfig.reset();
     }
 
@@ -50,6 +52,7 @@ public class BlockchainConfigApiHandlerTest {
     public void tearDown() {
         System.clearProperty(PROP_MODE);
         System.clearProperty(PROP_RPC);
+        System.clearProperty(PROP_GAS_PRICE_GWEI);
         BlockchainConfig.reset();
     }
 
@@ -57,6 +60,7 @@ public class BlockchainConfigApiHandlerTest {
     public void testHandleReturnsSepoliaConfig() throws Exception {
         System.setProperty(PROP_MODE, "sepolia");
         System.setProperty(PROP_RPC, "https://example.invalid/rpc");
+        System.setProperty(PROP_GAS_PRICE_GWEI, "3");
         BlockchainConfig.reset();
 
         StringWriter body = new StringWriter();
@@ -71,9 +75,13 @@ public class BlockchainConfigApiHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_OK);
         String json = body.toString();
-        assertTrue(json.contains("\"mode\": \"sepolia\""));
-        assertTrue(json.contains("\"chainId\": 11155111"));
-        assertTrue(json.contains("\"rpcUrl\": \"https://example.invalid/rpc\""));
-        assertTrue(json.contains("\"validatorUrl\": \"http://validator-1:8090\""));
+        assertTrue(json.contains("\"mode\":\"sepolia\""));
+        assertTrue(json.contains("\"chainId\":11155111"));
+        assertTrue(json.contains("\"rpcUrl\":\"https://example.invalid/rpc\""));
+        assertTrue(json.contains("\"validatorUrl\":\"http://validator-1:8090\""));
+        assertTrue(json.contains("\"configSource\":"));
+        assertTrue(json.contains("\"gasModel\":"));
+        assertTrue(json.contains("\"gasPriceGwei\":3"));
+        assertTrue(json.contains("\"estimatedTotalWei\":"));
     }
 }

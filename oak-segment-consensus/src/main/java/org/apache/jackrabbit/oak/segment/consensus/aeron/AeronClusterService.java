@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.server.AeronClusterBootstrapper;
 import org.apache.jackrabbit.oak.segment.consensus.server.AeronClusterStartupResult;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
@@ -54,6 +55,7 @@ public class AeronClusterService {
     @Activate
     protected void activate(AeronClusterConfig config) {
         this.config = config;
+        AeronClusterRuntimeRegistry.update(config);
         AeronClusterTuningSourceRegistry.markOsgiSource();
         logConfiguration("Activated");
     }
@@ -61,6 +63,7 @@ public class AeronClusterService {
     @Modified
     protected void modified(AeronClusterConfig config) {
         this.config = config;
+        AeronClusterRuntimeRegistry.update(config);
         AeronClusterTuningSourceRegistry.markOsgiSource();
         logConfiguration("Modified");
     }
@@ -68,6 +71,7 @@ public class AeronClusterService {
     @Deactivate
     protected void deactivate() {
         shutdown();
+        AeronClusterRuntimeRegistry.clear();
         log.info("AeronClusterService deactivated");
     }
 
@@ -156,7 +160,7 @@ public class AeronClusterService {
         }
         applyOptionalConfigProperties();
 
-        String existingHostnames = System.getProperty("aeron.cluster.hostnames", "");
+        String existingHostnames = RuntimeConfigValueResolver.readString("aeron.cluster.hostnames", "");
         if ((existingHostnames == null || existingHostnames.isEmpty())
                 && config.peerUrls() != null && config.peerUrls().length > 0) {
             List<String> hostnames = new ArrayList<>();

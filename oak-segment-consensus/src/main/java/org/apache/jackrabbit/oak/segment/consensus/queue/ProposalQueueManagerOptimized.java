@@ -466,6 +466,10 @@ public class ProposalQueueManagerOptimized {
         stats.put("backpressurePendingCount", backpressurePending);
         stats.put("backpressurePendingRawCount", backpressurePendingRaw);
         stats.put("backpressureMaxPending", backpressureMax);
+        stats.put("backpressureTimeoutCount", backpressureManager.getBackpressureTimeoutCount());
+        stats.put("backpressureReconciliationCount", backpressureManager.getStalePendingReconciliationCount());
+        stats.put("backpressurePendingOldestMs", backpressureManager.getPendingOldestMs(nowMs));
+        stats.put("backpressurePendingStalledMs", backpressureManager.getPendingStalledMs(nowMs));
         if (backpressurePending != backpressurePendingRaw) {
             stats.put("backpressureStats", String.format(
                 "BackpressureManager[sent=%d, acked=%d, pending=%d, rawPending=%d, max=%d, active=%s]",
@@ -1272,8 +1276,16 @@ public class ProposalQueueManagerOptimized {
                 try {
                     backpressureManager.applyBackpressureIfNeeded();
                 } catch (BackpressureTimeoutException e) {
+                    boolean reconciled = backpressureManager.reconcileIfStalled(
+                        backpressureManager.getBackpressureTimeoutMs(),
+                        "aeron-sender-timeout"
+                    );
                     batchQueue.offer(batch);
-                    log.warn("⚠️  Backpressure timeout - re-queuing batch ({} proposals)", batch.size());
+                    if (reconciled) {
+                        log.warn("⚠️  Backpressure timeout reconciled - re-queuing batch ({} proposals)", batch.size());
+                    } else {
+                        log.warn("⚠️  Backpressure timeout - re-queuing batch ({} proposals)", batch.size());
+                    }
                     break;
                 }
                 
