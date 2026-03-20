@@ -97,6 +97,7 @@ public class ProposalQueueManagerOptimized {
     private final long finalizationChunkDelayMs;
     private final AdaptiveReleaseMode releaseMode;
     private final AdaptiveReleaseGovernor adaptiveReleaseGovernor;
+    private final boolean priorityDirectReleaseEnabled;
     
     // Queues
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
@@ -247,6 +248,7 @@ public class ProposalQueueManagerOptimized {
         this.verifierThreads = resolved.getVerifierThreads();
         this.releaseMode = resolved.getReleaseMode();
         this.adaptiveReleaseGovernor = AdaptiveReleaseGovernor.fromTuning(resolved);
+        this.priorityDirectReleaseEnabled = resolved.isPriorityDirectReleaseEnabled();
         this.processedRetentionMs = resolved.getProcessedRetentionMs();
         this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
         this.persistenceFlushBatch = resolved.getPersistenceFlushBatch();
@@ -338,6 +340,7 @@ public class ProposalQueueManagerOptimized {
         log.info("   - Required payment confirmations: {}", requiredConfirmations);
         log.info("   - Legacy epoch delay: 2 epochs (~{} minutes) when release_mode=epoch", (2 * 384_000) / 60000.0);
         log.info("   - Release mode: {}", releaseMode.configValue());
+        log.info("   - Priority direct release: {}", priorityDirectReleaseEnabled);
         if (persistenceStore != null) {
             if (isAsyncPersistenceEnabled()) {
                 log.info("   - Proposal persistence: async (flush every {}ms or {} changes)",
@@ -571,6 +574,7 @@ public class ProposalQueueManagerOptimized {
         stats.put("runtimeStageCounts", runtimeStages);
         stats.put("releaseMode", releaseMode.configValue());
         stats.put("requiredConfirmations", requiredConfirmations);
+        stats.put("priorityDirectReleaseEnabled", priorityDirectReleaseEnabled);
         stats.put("adaptiveReleaseGovernorState", adaptiveDecision.getState().name());
         stats.put("adaptiveReleaseAction", adaptiveDecision.getAction().name());
         stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.getReasonCodes());
@@ -752,8 +756,8 @@ public class ProposalQueueManagerOptimized {
             proposal.setVerifiedTimestampMs(Math.max(proposal.getTimestamp(), nowMs));
         }
 
-        if (proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
-            queueReleaseBatch(java.util.Collections.singletonList(proposal), "restored-priority");
+        if (shouldDirectReleasePriority(proposal)) {
+            queueReleaseBatch(java.util.Collections.singletonList(proposal), "restored-priority-direct");
             return;
         }
 
@@ -764,6 +768,11 @@ public class ProposalQueueManagerOptimized {
             summarizeTxHash(proposal.getEthereumTxHash()),
             confirmedBlockNumber
         );
+    }
+
+    private boolean shouldDirectReleasePriority(QueuedProposal proposal) {
+        return priorityDirectReleaseEnabled
+            && proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY;
     }
 
     private String summarizeTxHash(String txHash) {
@@ -1198,7 +1207,7 @@ public class ProposalQueueManagerOptimized {
             if (proposal.getState() == ProposalState.VERIFIED) {
                 enqueueRestoredVerifiedProposal(proposal, nowMs);
                 restoredVerified++;
-                if (proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
+                if (shouldDirectReleasePriority(proposal)) {
                     restoredPriorityReady++;
                 }
                 continue;
@@ -1918,12 +1927,12 @@ public class ProposalQueueManagerOptimized {
                         continue;
                     }
                     
-                    // Verify payment amount is sufficient
-                    // For POC, we accept any amount > 0
-                    // In production, this would check against calculateRequiredPayment()
+                    // Verify payment amount is present and positive.
+                    // Tier-specific proof enforcement remains a follow-up because mock/runtime bridges
+                    // currently expose different payment units.
                     try {
-                        long amountWei = Long.parseLong(proof.getAmountWei());
-                        if (amountWei <= 0) {
+                        java.math.BigInteger amountWei = new java.math.BigInteger(proof.getAmountWei());
+                        if (amountWei.signum() <= 0) {
                             verifierRejectedCount.incrementAndGet();
                             rejectProposal(proposal, "Insufficient payment amount: " + amountWei + " wei");
                             continue;
@@ -2049,10 +2058,10 @@ public class ProposalQueueManagerOptimized {
                     updateMax(verifierQueueWaitMsMax, queueWaitMs);
                     
                     // ═══════════════════════════════════════════════════════════
-                    // PRIORITY TIER: Fast-path directly to Aeron (bypass epoch batching)
+                    // PRIORITY DIRECT RELEASE: Optional compatibility fast-path to Aeron
                     // ═══════════════════════════════════════════════════════════
-                    if (proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY) {
-                        log.debug("🚀 PRIORITY TIER: Fast-tracking proposal {} directly to Aeron (bypassing epoch queue, type: {})", 
+                    if (shouldDirectReleasePriority(proposal)) {
+                        log.debug("🚀 PRIORITY DIRECT RELEASE: Fast-tracking proposal {} directly to Aeron (type: {})",
                             proposal.getProposalId(), proposal.getType());
                         
                         try {
@@ -2178,7 +2187,7 @@ public class ProposalQueueManagerOptimized {
                 evmBridge.getContractAddress(),
                 proposalId,
                 "1000000000000000",
-                3
+                requiredConfirmations
             );
         } catch (Exception e) {
             log.error("Failed to create mock payment proof for proposal {}", proposal.getProposalId(), e);

@@ -162,6 +162,61 @@ public class DeleteProposalHandlerTest {
         assertTrue(json.contains("\"totalDebt\":\"0.10\""));
     }
 
+    @Test
+    public void testHandleDeleteProposalPrefersExplicitPaymentTierOverTxHashHeuristic() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedContent(nodeStore, VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.gcAccountManager = new GCAccountManager();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        when(request.getParameter("paymentTier")).thenReturn("standard");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        verify(context.proposalQueueManager).queueDeleteProposal(
+            anyString(),
+            eq(PRIORITY_TX_HASH),
+            eq(VALID_WALLET),
+            eq(contentPath),
+            eq(VALID_SIGNATURE),
+            eq(ValidatorEarningsTracker.PaymentTier.STANDARD)
+        );
+        assertTrue(body.toString().contains("\"tier\":\"STANDARD\""));
+    }
+
+    @Test
+    public void testHandleDeleteProposalRejectsInvalidPaymentTier() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedContent(nodeStore, VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        when(request.getParameter("paymentTier")).thenReturn("banana");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Invalid paymentTier"));
+    }
+
     private static ServerContext readyContext(MemoryNodeStore nodeStore) {
         ServerContext context = new ServerContext(
             mock(FileStore.class),

@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.evm.impl;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -129,7 +130,7 @@ public class SimpleEvmBridge implements EvmBridge {
                 contractAddress, // To address (contract)
                 proposalId,
                 "1000000000000000", // 0.001 ETH
-                3 // 3 confirmations (instant in mock)
+                ProposalQueuePolicy.requiredConfirmations()
             );
             
             payments.put(proposalId, mockPayment);

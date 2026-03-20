@@ -162,6 +162,7 @@ public class ProposalQueueIntegrationTest {
         System.clearProperty("oak.proposal.persistence.flush.batch");
         System.clearProperty("oak.consensus.max.pending.messages");
         System.clearProperty("oak.proposal.confirmation.required");
+        System.clearProperty("oak.proposal.priority.direct.release.enabled");
     }
     
     @Test
@@ -253,6 +254,49 @@ public class ProposalQueueIntegrationTest {
         assertTrue("Proposal should release once required confirmations are satisfied",
             raftAppendLatch.await(10, TimeUnit.SECONDS));
         assertEquals("Callback should have captured proposal", "captured", appendedProposalId);
+    }
+
+    @Test
+    public void testPriorityTierCanRouteThroughSchedulerWhenDirectReleaseDisabled() throws InterruptedException {
+        System.setProperty("oak.proposal.priority.direct.release.enabled", "false");
+        System.setProperty("oak.proposal.release.mode", "adaptive-active");
+        recreateQueueManager();
+
+        String proposalId = "test-priority-scheduled-001";
+        String ethereumTxHash = "0xtxpriorityscheduled001";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/page-priority-scheduled";
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "Priority routed through scheduler",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
+            null
+        );
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(1_000_000),
+            bridge.getCurrentBlockNumber(),
+            ethereumTxHash
+        );
+
+        assertTrue("Priority proposal should still process when direct release is disabled",
+            raftAppendLatch.await(10, TimeUnit.SECONDS));
+
+        Map<String, Object> stats = queueManager.getQueueStats();
+        assertEquals(Boolean.FALSE, stats.get("priorityDirectReleaseEnabled"));
+        assertEquals("Priority direct-send counter should remain zero when direct release is disabled",
+            0L, longStat(stats, "priorityProposalsSent"));
+        assertTrue("Proposal should drain through the scheduled/batched path instead",
+            longStat(stats, "batchedProposalsSent") >= 1L);
     }
     
     @Test

@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
@@ -540,9 +541,17 @@ public class WriteProposalHandler {
                 return;
             }
 
-            // ADR 059: Validator-hosted binary uploads require premium tier
+            // ADR 059: Validator-hosted binary uploads are governed by explicit backend policy.
             if (binaryBytes != null && binaryBytes.length > 0) {
-                if (paymentTier == null || !paymentTier.equalsIgnoreCase("priority")) {
+                if (!ProposalQueuePolicy.isValidatorHostedBinaryUploadEnabled()) {
+                    context.apiRejectedRequests.incrementAndGet();
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,
+                        "validator_binary_upload_disabled",
+                        "Validator-hosted binary upload is currently disabled. " +
+                        "For default client-side IPFS, upload to IPFS and pass ipfsCid instead.");
+                    return;
+                }
+                if (ProposalQueuePolicy.isValidatorHostedBinaryRequiresPriorityTier() && !isPriorityTier(paymentTier)) {
                     context.apiRejectedRequests.incrementAndGet();
                     ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_PAYMENT_REQUIRED,
                         "validator_binary_requires_priority",
@@ -727,7 +736,7 @@ public class WriteProposalHandler {
                         simpleEvmBridge.getContractAddress(),
                         proposalId,
                         paymentAmount.toString(), // Wei amount based on tier
-                        6 // 6 confirmations
+                        ProposalQueuePolicy.requiredConfirmations()
                     );
                 simpleEvmBridge.simulatePayment(mockPayment);
 
@@ -798,7 +807,7 @@ public class WriteProposalHandler {
             resultPayload.put("message", "Proposal queued, waiting for Ethereum confirmation");
             resultPayload.put("ethereumTxHash", ethereumTxHash);
             resultPayload.put("proposalIdSource", clientProposalId != null && !clientProposalId.trim().isEmpty() ? "client" : "server");
-            resultPayload.put("timeoutTimestamp", System.currentTimeMillis() + 300_000);
+            resultPayload.put("timeoutTimestamp", System.currentTimeMillis() + ProposalQueuePolicy.confirmationTimeoutMs());
             resultPayload.put("wallet", wallet);
             resultPayload.put("storagePath", fullPath);
             resultPayload.put("contentType", contentType);
@@ -820,6 +829,10 @@ public class WriteProposalHandler {
             return true;
         }
         return value.matches("(?i)^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
+    }
+
+    private static boolean isPriorityTier(String paymentTier) {
+        return paymentTier != null && paymentTier.trim().equalsIgnoreCase("priority");
     }
 
 }

@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.gc;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -266,11 +267,12 @@ public class GCProposalManager {
             log.warn("⚠️  GC proposal not found: {}", proposalId);
             return false;
         }
+        int requiredConfirmations = ProposalQueuePolicy.requiredConfirmations();
         
         // If payment proof already stored, verify it's still valid
         if (proposal.paymentProof != null && !proposal.paymentProof.isEmpty()) {
             PaymentProof proof = evmBridge.verifyPayment(proposalId);
-            if (proof != null && proof.isConfirmed(1)) {
+            if (proof != null && proof.isConfirmed(requiredConfirmations)) {
                 log.info("✅ Payment proof verified: proposal={}, tx={}, block={}", 
                     proposalId, proof.getTransactionHash(), proof.getBlockNumber());
                 return true;
@@ -279,7 +281,7 @@ public class GCProposalManager {
         
         // Verify payment on-chain
         PaymentProof proof = evmBridge.verifyPayment(proposalId);
-        if (proof != null && proof.isConfirmed(1)) {
+        if (proof != null && proof.isConfirmed(requiredConfirmations)) {
             // Store payment proof in proposal
             proposal.paymentProof = proof.getTransactionHash();
             log.info("✅ Payment verified on-chain: proposal={}, tx={}, block={}", 

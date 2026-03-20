@@ -34,6 +34,9 @@ final class ProposalQueueTuning {
     static final long DEFAULT_BACKPRESSURE_PARK_NANOS = 1_000_000L;
     static final long DEFAULT_COUNTER_ROTATION_INTERVAL_MS = 24L * 60L * 60L * 1000L;
     static final String DEFAULT_RELEASE_MODE = "epoch";
+    static final boolean DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED = true;
+    static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED = true;
+    static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER = true;
 
     private final long confirmationTimeoutMs;
     private final int requiredConfirmations;
@@ -52,6 +55,9 @@ final class ProposalQueueTuning {
     private final long backpressureParkNanos;
     private final long counterRotationIntervalMs;
     private final AdaptiveReleaseMode releaseMode;
+    private final boolean priorityDirectReleaseEnabled;
+    private final boolean validatorHostedBinaryUploadEnabled;
+    private final boolean validatorHostedBinaryRequiresPriorityTier;
 
     private ProposalQueueTuning(long confirmationTimeoutMs,
                                 int requiredConfirmations,
@@ -69,7 +75,10 @@ final class ProposalQueueTuning {
                                 long backpressureTimeoutMs,
                                 long backpressureParkNanos,
                                 long counterRotationIntervalMs,
-                                AdaptiveReleaseMode releaseMode) {
+                                AdaptiveReleaseMode releaseMode,
+                                boolean priorityDirectReleaseEnabled,
+                                boolean validatorHostedBinaryUploadEnabled,
+                                boolean validatorHostedBinaryRequiresPriorityTier) {
         this.confirmationTimeoutMs = confirmationTimeoutMs;
         this.requiredConfirmations = requiredConfirmations;
         this.restoreTimeoutMs = restoreTimeoutMs;
@@ -87,6 +96,9 @@ final class ProposalQueueTuning {
         this.backpressureParkNanos = backpressureParkNanos;
         this.counterRotationIntervalMs = counterRotationIntervalMs;
         this.releaseMode = releaseMode != null ? releaseMode : AdaptiveReleaseMode.EPOCH;
+        this.priorityDirectReleaseEnabled = priorityDirectReleaseEnabled;
+        this.validatorHostedBinaryUploadEnabled = validatorHostedBinaryUploadEnabled;
+        this.validatorHostedBinaryRequiresPriorityTier = validatorHostedBinaryRequiresPriorityTier;
     }
 
     static ProposalQueueTuning fromSystemProperties() {
@@ -151,6 +163,18 @@ final class ProposalQueueTuning {
         AdaptiveReleaseMode releaseMode = AdaptiveReleaseMode.fromValue(
             System.getProperty("oak.proposal.release.mode", DEFAULT_RELEASE_MODE)
         );
+        boolean priorityDirectReleaseEnabled = Boolean.parseBoolean(System.getProperty(
+            "oak.proposal.priority.direct.release.enabled",
+            String.valueOf(DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED)
+        ));
+        boolean validatorHostedBinaryUploadEnabled = Boolean.parseBoolean(System.getProperty(
+            "oak.proposal.validator.binary.upload.enabled",
+            String.valueOf(DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED)
+        ));
+        boolean validatorHostedBinaryRequiresPriorityTier = Boolean.parseBoolean(System.getProperty(
+            "oak.proposal.validator.binary.requires.priority",
+            String.valueOf(DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER)
+        ));
         return new ProposalQueueTuning(
             confirmationTimeoutMs,
             requiredConfirmations,
@@ -168,7 +192,10 @@ final class ProposalQueueTuning {
             backpressureTimeoutMs,
             backpressureParkNanos,
             counterRotationIntervalMs,
-            releaseMode
+            releaseMode,
+            priorityDirectReleaseEnabled,
+            validatorHostedBinaryUploadEnabled,
+            validatorHostedBinaryRequiresPriorityTier
         );
     }
 
@@ -200,7 +227,10 @@ final class ProposalQueueTuning {
             clampLong(config.backpressure_timeout_ms(), 1L),
             config.backpressure_park_nanos(),
             clampLong(config.counter_rotation_interval_ms(), 0L),
-            AdaptiveReleaseMode.fromValue(config.release_mode())
+            AdaptiveReleaseMode.fromValue(config.release_mode()),
+            config.priority_direct_release_enabled(),
+            config.validator_hosted_binary_upload_enabled(),
+            config.validator_hosted_binary_requires_priority_tier()
         );
     }
 
@@ -270,6 +300,18 @@ final class ProposalQueueTuning {
 
     AdaptiveReleaseMode getReleaseMode() {
         return releaseMode;
+    }
+
+    boolean isPriorityDirectReleaseEnabled() {
+        return priorityDirectReleaseEnabled;
+    }
+
+    boolean isValidatorHostedBinaryUploadEnabled() {
+        return validatorHostedBinaryUploadEnabled;
+    }
+
+    boolean isValidatorHostedBinaryRequiresPriorityTier() {
+        return validatorHostedBinaryRequiresPriorityTier;
     }
 
     private static int readIntProp(String key, int defaultValue, int minValue) {

@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
@@ -186,10 +188,19 @@ public class DeleteProposalHandler {
                 return;
             }
 
-            // Determine payment tier from Ethereum transaction
-            // For MVP: Simple heuristic based on tx hash (in production, query chain)
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier =
-                determineTierFromEthereumTx(ethereumTxHash);
+            String paymentTier = request.getParameter("paymentTier");
+            ValidatorEarningsTracker.PaymentTier tier;
+            if (paymentTier != null && !paymentTier.trim().isEmpty()) {
+                tier = parsePaymentTier(paymentTier);
+                if (tier == null) {
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "Invalid paymentTier: '" + paymentTier + "'. Must be 'standard', 'express', or 'priority'.");
+                    return;
+                }
+            } else {
+                // Compatibility fallback for older delete clients that only pass ethereumTxHash.
+                tier = determineTierFromEthereumTx(ethereumTxHash);
+            }
 
             // Generate unique proposal ID for this delete
             String proposalId = java.util.UUID.randomUUID().toString();
@@ -260,7 +271,7 @@ public class DeleteProposalHandler {
             payload.put("message", "Delete proposal queued, waiting for Ethereum confirmation");
             payload.put("ethereumTxHash", ethereumTxHash);
             payload.put("tier", String.valueOf(tier));
-            payload.put("timeoutTimestamp", System.currentTimeMillis() + 300_000);
+            payload.put("timeoutTimestamp", System.currentTimeMillis() + ProposalQueuePolicy.confirmationTimeoutMs());
             payload.put("wallet", wallet);
             payload.put("contentPath", contentPath);
             payload.put("gcDebtIncurred", gcDebtIncurred.toString());
@@ -379,8 +390,7 @@ public class DeleteProposalHandler {
      * @param ethereumTxHash Ethereum transaction hash
      * @return Payment tier (STANDARD, EXPRESS, or PRIORITY)
      */
-    private org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier
-    determineTierFromEthereumTx(String ethereumTxHash) {
+    private ValidatorEarningsTracker.PaymentTier determineTierFromEthereumTx(String ethereumTxHash) {
         // MVP heuristic: check tx hash pattern
         // In production, this would:
         // 1. Query Sepolia/mainnet for tx details
@@ -388,20 +398,34 @@ public class DeleteProposalHandler {
         // 3. Map amount to tier (e.g., 0.001 ETH = STANDARD, 0.005 = EXPRESS, 0.01 = PRIORITY)
 
         if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
-            return org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
+            return ValidatorEarningsTracker.PaymentTier.STANDARD;
         }
 
         // Simple heuristic for demo: last char determines tier
         char lastChar = ethereumTxHash.toLowerCase().charAt(ethereumTxHash.length() - 1);
         if (lastChar >= 'a' && lastChar <= 'f') {
             // High hex digit = PRIORITY
-            return org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY;
+            return ValidatorEarningsTracker.PaymentTier.PRIORITY;
         } else if (lastChar >= '5' && lastChar <= '9') {
             // Mid-range digit = EXPRESS
-            return org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS;
+            return ValidatorEarningsTracker.PaymentTier.EXPRESS;
         } else {
             // Low digit = STANDARD
-            return org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
+            return ValidatorEarningsTracker.PaymentTier.STANDARD;
+        }
+    }
+
+    private ValidatorEarningsTracker.PaymentTier parsePaymentTier(String paymentTier) {
+        String normalized = paymentTier.trim().toLowerCase();
+        switch (normalized) {
+            case "standard":
+                return ValidatorEarningsTracker.PaymentTier.STANDARD;
+            case "express":
+                return ValidatorEarningsTracker.PaymentTier.EXPRESS;
+            case "priority":
+                return ValidatorEarningsTracker.PaymentTier.PRIORITY;
+            default:
+                return null;
         }
     }
 

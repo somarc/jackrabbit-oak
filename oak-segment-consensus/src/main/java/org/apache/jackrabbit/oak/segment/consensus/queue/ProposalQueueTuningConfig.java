@@ -126,4 +126,22 @@ public @interface ProposalQueueTuningConfig {
         description = "Verified-to-Aeron release mode. Supported values: epoch, adaptive-shadow, adaptive-active."
     )
     String release_mode() default ProposalQueueTuning.DEFAULT_RELEASE_MODE;
+
+    @AttributeDefinition(
+        name = "Priority Direct Release Enabled",
+        description = "When enabled, PRIORITY proposals bypass the scheduler and release directly to Aeron after verification."
+    )
+    boolean priority_direct_release_enabled() default ProposalQueueTuning.DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED;
+
+    @AttributeDefinition(
+        name = "Validator-Hosted Binary Upload Enabled",
+        description = "Enable validator-hosted binary upload handling on write proposals."
+    )
+    boolean validator_hosted_binary_upload_enabled() default ProposalQueueTuning.DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED;
+
+    @AttributeDefinition(
+        name = "Validator Binary Requires Priority Tier",
+        description = "When enabled, validator-hosted binary upload requires paymentTier=priority as an entitlement policy."
+    )
+    boolean validator_hosted_binary_requires_priority_tier() default ProposalQueueTuning.DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER;
 }

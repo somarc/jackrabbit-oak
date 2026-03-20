@@ -32,6 +32,9 @@ public class ProposalQueueTuningTest {
         System.clearProperty("oak.proposal.persistence.flush.batch");
         System.clearProperty("oak.proposal.release.mode");
         System.clearProperty("oak.proposal.confirmation.required");
+        System.clearProperty("oak.proposal.priority.direct.release.enabled");
+        System.clearProperty("oak.proposal.validator.binary.upload.enabled");
+        System.clearProperty("oak.proposal.validator.binary.requires.priority");
     }
 
     @Test
@@ -108,5 +111,40 @@ public class ProposalQueueTuningTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
         assertEquals(AdaptiveReleaseMode.EPOCH, tuning.getReleaseMode());
+    }
+
+    @Test
+    public void testPriorityDirectReleaseDefaultsEnabled() {
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertTrue(tuning.isPriorityDirectReleaseEnabled());
+    }
+
+    @Test
+    public void testPriorityDirectReleaseOverrideApplies() {
+        System.setProperty("oak.proposal.priority.direct.release.enabled", "false");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertFalse(tuning.isPriorityDirectReleaseEnabled());
+    }
+
+    @Test
+    public void testValidatorHostedBinaryPolicyDefaultsPreserveCompatibility() {
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertTrue(tuning.isValidatorHostedBinaryUploadEnabled());
+        assertTrue(tuning.isValidatorHostedBinaryRequiresPriorityTier());
+    }
+
+    @Test
+    public void testValidatorHostedBinaryPolicyOverridesApply() {
+        System.setProperty("oak.proposal.validator.binary.upload.enabled", "false");
+        System.setProperty("oak.proposal.validator.binary.requires.priority", "false");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertFalse(tuning.isValidatorHostedBinaryUploadEnabled());
+        assertFalse(tuning.isValidatorHostedBinaryRequiresPriorityTier());
     }
 }

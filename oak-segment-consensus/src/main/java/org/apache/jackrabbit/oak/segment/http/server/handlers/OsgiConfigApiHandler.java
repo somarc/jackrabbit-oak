@@ -516,6 +516,30 @@ public class OsgiConfigApiHandler {
             "guarded",
             "Verified-to-Aeron release mode (epoch, adaptive-shadow, or adaptive-active)",
             "oak.proposal.release.mode"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.priority_direct_release_enabled",
+            "boolean",
+            true,
+            "runtime-readable",
+            "guarded",
+            "Enable direct Aeron release for PRIORITY proposals after verification",
+            "oak.proposal.priority.direct.release.enabled"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.validator_hosted_binary_upload_enabled",
+            "boolean",
+            true,
+            "runtime-readable",
+            "guarded",
+            "Enable validator-hosted binary upload handling",
+            "oak.proposal.validator.binary.upload.enabled"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.validator_hosted_binary_requires_priority_tier",
+            "boolean",
+            true,
+            "runtime-readable",
+            "guarded",
+            "Require paymentTier=priority for validator-hosted binary uploads",
+            "oak.proposal.validator.binary.requires.priority"));
 
         schema.add(schemaEntry(
             "rateLimiterTuning.enabled",

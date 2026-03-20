@@ -19,6 +19,8 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -49,6 +51,8 @@ public class WriteProposalHandlerTest {
     @After
     public void tearDown() {
         System.clearProperty("oak.blockchain.mode");
+        System.clearProperty("oak.proposal.validator.binary.upload.enabled");
+        System.clearProperty("oak.proposal.validator.binary.requires.priority");
         BlockchainConfig.reset();
     }
 
@@ -222,6 +226,93 @@ public class WriteProposalHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("Invalid paymentTier: 'gold'. Must be 'standard', 'express', or 'priority'."));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsValidatorHostedBinaryWithoutPriorityByDefault() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("paymentTier")).thenReturn("standard");
+        when(request.getParameter("binaryData")).thenReturn("AQID");
+        when(request.getParameter("mimeType")).thenReturn("application/octet-stream");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_PAYMENT_REQUIRED);
+        assertTrue(body.toString().contains("\"code\":\"validator_binary_requires_priority\""));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteAllowsValidatorHostedBinaryWhenPriorityRequirementDisabled() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        System.setProperty("oak.proposal.validator.binary.requires.priority", "false");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        when(queueManager.queueProposal(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+            org.mockito.ArgumentMatchers.any(), anyString()
+        )).thenReturn(new QueuedProposal(
+            "proposal-1",
+            VALID_TX_HASH,
+            null,
+            System.currentTimeMillis(),
+            System.currentTimeMillis() + 300_000L,
+            ProposalState.PENDING
+        ));
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("paymentTier")).thenReturn("standard");
+        when(request.getParameter("binaryData")).thenReturn("AQID");
+        when(request.getParameter("mimeType")).thenReturn("application/octet-stream");
+        when(request.getParameter("contentType")).thenReturn("page");
+        when(request.getParameter("message")).thenReturn("hello");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        assertTrue(body.toString().contains("\"status\":\"accepted\""));
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsValidatorHostedBinaryWhenCapabilityDisabled() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        System.setProperty("oak.proposal.validator.binary.upload.enabled", "false");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("paymentTier")).thenReturn("priority");
+        when(request.getParameter("binaryData")).thenReturn("AQID");
+        when(request.getParameter("mimeType")).thenReturn("application/octet-stream");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_FORBIDDEN);
+        assertTrue(body.toString().contains("\"code\":\"validator_binary_upload_disabled\""));
         assertEquals(1L, context.apiRejectedRequests.get());
     }
 
