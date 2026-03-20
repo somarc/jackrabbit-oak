@@ -101,6 +101,7 @@ public class ProposalQueueManagerOptimized {
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
     private final EpochBasedBatchQueue epochQueue; // NEW: Epoch-based batching for optimal segment packing
     private final AdaptivePackingBuffer adaptivePackingBuffer;
+    private final BackpressureOverflowBuffer backpressureOverflowBuffer;
     private final ConcurrentLinkedQueue<List<QueuedProposal>> batchQueue = new ConcurrentLinkedQueue<>(); // Batches ready to send
     private final ConcurrentHashMap<String, QueuedProposal> allProposals = new ConcurrentHashMap<>();
     private final ProposalPersistenceStore persistenceStore;
@@ -231,6 +232,7 @@ public class ProposalQueueManagerOptimized {
         this.backpressureManager = backpressureManager;
         this.epochQueue = new EpochBasedBatchQueue(beaconClient);
         this.adaptivePackingBuffer = new AdaptivePackingBuffer();
+        this.backpressureOverflowBuffer = new BackpressureOverflowBuffer();
         ProposalQueueTuning resolved = tuning != null ? tuning : ProposalQueueTuningRegistry.get();
         this.persistenceStore = createPersistenceStore(persistenceDir, resolved);
         this.counterStateStore = createCounterStateStore(persistenceDir);
@@ -372,19 +374,25 @@ public class ProposalQueueManagerOptimized {
         // Epoch queue stats
         java.util.Map<String, Object> epochStatsMap = epochQueue.getStatsMap();
         java.util.Map<String, Object> adaptiveStatsMap = adaptivePackingBuffer.getStatsMap();
+        java.util.Map<String, Object> overflowStatsMap = backpressureOverflowBuffer.getStatsMap();
         long currentEpoch = ((Number) epochStatsMap.get("currentEpoch")).longValue();
         long finalizedEpoch = epochQueue.getFinalizedEpoch();
         long epochVerifiedPackingBufferCount = getLongStat(epochStatsMap, "pendingProposals");
         long adaptiveVerifiedPackingBufferCount = getLongStat(adaptiveStatsMap, "pendingProposals");
         long verifiedPackingBufferCount = getVerifiedPackingBufferCount(epochStatsMap, adaptiveStatsMap);
+        long overflowProposalCount = getLongStat(overflowStatsMap, "pendingProposals");
+        long overflowBatchCount = getLongStat(overflowStatsMap, "pendingBatches");
         stats.put("currentEpoch", currentEpoch);
         stats.put("finalizedEpoch", finalizedEpoch);
         stats.put("epochsUntilFinality", currentEpoch - finalizedEpoch);
         stats.put("pendingEpochStats", epochQueue.getStats());
         stats.put("adaptivePackingBufferStats", adaptivePackingBuffer.getStats());
+        stats.put("backpressureOverflowStats", backpressureOverflowBuffer.getStats());
         stats.put("epochVerifiedPackingBufferCount", epochVerifiedPackingBufferCount);
         stats.put("adaptiveVerifiedPackingBufferCount", adaptiveVerifiedPackingBufferCount);
         stats.put("verifiedPackingBufferCount", verifiedPackingBufferCount);
+        stats.put("backpressureOverflowProposalCount", overflowProposalCount);
+        stats.put("backpressureOverflowBatchCount", overflowBatchCount);
         
         // Count proposals by state + mempool age stats
         long pending = 0;
@@ -420,8 +428,12 @@ public class ProposalQueueManagerOptimized {
         stats.put("mempoolAvgAgeMs", pending == 0 ? 0 : mempoolAgeTotalMs / pending);
         stats.put("mempoolOldestMs", mempoolOldestMs);
         long releaseReadyProposalCount = countQueuedProposals(batchQueue);
+        long releasePressureProposalCount = releaseReadyProposalCount + overflowProposalCount;
+        long releasePressureBatchCount = batchQueue.size() + overflowBatchCount;
         stats.put("releaseReadyProposalCount", releaseReadyProposalCount);
         stats.put("releaseReadyBatchCount", batchQueue.size());
+        stats.put("releasePressureProposalCount", releasePressureProposalCount);
+        stats.put("releasePressureBatchCount", releasePressureBatchCount);
         
         // Rotating counters: bounded current window + persisted lifetime totals
         long rejectedCurrent = totalRejectedCount.get();
@@ -479,6 +491,7 @@ public class ProposalQueueManagerOptimized {
         long backpressureMax = backpressureManager.getMaxPendingMessages();
         boolean backpressureActive = backpressureManager.isBackpressureActive();
         boolean queueIdle = batchQueue.isEmpty()
+            && backpressureOverflowBuffer.isEmpty()
             && unverifiedQueue.isEmpty()
             && pending == 0
             && verified == 0
@@ -518,8 +531,8 @@ public class ProposalQueueManagerOptimized {
             backpressurePendingOldestMs,
             backpressurePendingStalledMs,
             verifiedPackingBufferCount,
-            batchQueue.size(),
-            releaseReadyProposalCount
+            releasePressureBatchCount,
+            releasePressureProposalCount
         );
         AdaptiveReleaseGovernor.Decision adaptiveDecision = adaptiveReleaseGovernor.evaluate(adaptiveSignals);
 
@@ -530,8 +543,9 @@ public class ProposalQueueManagerOptimized {
         runtimeStages.put("adaptiveVerifiedPackingBufferCount", adaptiveVerifiedPackingBufferCount);
         runtimeStages.put("releaseReadyProposalCount", releaseReadyProposalCount);
         runtimeStages.put("releaseReadyBatchCount", batchQueue.size());
-        runtimeStages.put("backpressureOverflowProposalCount", 0L);
-        runtimeStages.put("backpressureOverflowSeparateBufferEnabled", false);
+        runtimeStages.put("backpressureOverflowProposalCount", overflowProposalCount);
+        runtimeStages.put("backpressureOverflowBatchCount", overflowBatchCount);
+        runtimeStages.put("backpressureOverflowSeparateBufferEnabled", true);
         stats.put("runtimeStageCounts", runtimeStages);
         stats.put("releaseMode", releaseMode.configValue());
         stats.put("adaptiveReleaseGovernorState", adaptiveDecision.getState().name());
@@ -621,8 +635,8 @@ public class ProposalQueueManagerOptimized {
             backpressureManager.getPendingOldestMs(nowMs),
             backpressureManager.getPendingStalledMs(nowMs),
             getVerifiedPackingBufferCount(epochStatsMap, adaptiveStatsMap),
-            batchQueue.size(),
-            countQueuedProposals(batchQueue)
+            getReleasePressureBatchCount(),
+            getReleasePressureProposalCount()
         );
         return adaptiveReleaseGovernor.evaluate(signals);
     }
@@ -638,7 +652,7 @@ public class ProposalQueueManagerOptimized {
                 decision.getReasonCodes(),
                 Math.max(0L, totalVerifiedCount.get() - totalFinalizedCount.get()),
                 getVerifiedPackingBufferCount(epochQueue.getStatsMap(), adaptivePackingBuffer.getStatsMap()),
-                countQueuedProposals(batchQueue),
+                getReleasePressureProposalCount(),
                 backpressureManager.getPendingCount(),
                 backpressureManager.getPendingOldestMs(nowMs),
                 backpressureManager.getPendingStalledMs(nowMs));
@@ -657,6 +671,14 @@ public class ProposalQueueManagerOptimized {
 
     private boolean isAdaptiveActive() {
         return releaseMode == AdaptiveReleaseMode.ADAPTIVE_ACTIVE;
+    }
+
+    private long getReleasePressureProposalCount() {
+        return countQueuedProposals(batchQueue) + backpressureOverflowBuffer.getPendingProposalCount();
+    }
+
+    private long getReleasePressureBatchCount() {
+        return batchQueue.size() + backpressureOverflowBuffer.getPendingBatchCount();
     }
 
     private void routeVerifiedProposal(QueuedProposal proposal,
@@ -746,6 +768,14 @@ public class ProposalQueueManagerOptimized {
         return workCount;
     }
 
+    private int bufferOverflowBatches(List<List<QueuedProposal>> batches, String sourceLabel) {
+        int buffered = 0;
+        for (List<QueuedProposal> batch : batches) {
+            buffered += bufferOverflowBatch(batch, sourceLabel);
+        }
+        return buffered;
+    }
+
     private int queueReleaseBatch(List<QueuedProposal> batch, String sourceLabel) {
         if (batch == null || batch.isEmpty()) {
             return 0;
@@ -790,6 +820,80 @@ public class ProposalQueueManagerOptimized {
         }
 
         return enqueued;
+    }
+
+    private int bufferOverflowBatch(List<QueuedProposal> batch, String sourceLabel) {
+        if (batch == null || batch.isEmpty()) {
+            return 0;
+        }
+
+        int buffered = 0;
+        if (batch.size() > finalizationChunkSize) {
+            log.debug("📦 Large {} batch detected ({} proposals), buffering overflow in {} chunks",
+                sourceLabel, batch.size(), finalizationChunkSize);
+
+            for (int i = 0; i < batch.size(); i += finalizationChunkSize) {
+                int endIdx = Math.min(i + finalizationChunkSize, batch.size());
+                List<QueuedProposal> chunk = new java.util.ArrayList<QueuedProposal>(batch.subList(i, endIdx));
+                backpressureOverflowBuffer.bufferBatch(chunk);
+                buffered++;
+
+                log.debug("  ↳ {} overflow chunk {}/{}: {} proposals, wallet: {}",
+                    sourceLabel,
+                    (i / finalizationChunkSize) + 1,
+                    (batch.size() + finalizationChunkSize - 1) / finalizationChunkSize,
+                    chunk.size(),
+                    chunk.get(0).getWalletAddress());
+            }
+        } else {
+            backpressureOverflowBuffer.bufferBatch(batch);
+            buffered++;
+
+            log.info("📦 {} batch buffered in overflow: {} proposals, wallet: {}, overflow depth: {}",
+                sourceLabel,
+                batch.size(),
+                batch.get(0).getWalletAddress(),
+                backpressureOverflowBuffer.getPendingBatchCount());
+        }
+
+        return buffered;
+    }
+
+    private boolean shouldRouteToOverflow(AdaptiveReleaseGovernor.Decision decision) {
+        if (decision == null) {
+            return false;
+        }
+        if (decision.getAction() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
+            return true;
+        }
+        return backpressureManager.isBackpressureActive()
+            || backpressureManager.getPendingCount() >= backpressureManager.getMaxPendingMessages();
+    }
+
+    private int promoteOverflowBatches(AdaptiveReleaseGovernor.Decision decision) {
+        if (backpressureOverflowBuffer.isEmpty()) {
+            return 0;
+        }
+        if (decision == null || decision.getAction() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
+            return 0;
+        }
+
+        int maxReleaseReadyBatches = Math.max(maxMessageBatch, maxMessageBatch * 2);
+        if (batchQueue.size() >= maxReleaseReadyBatches) {
+            return 0;
+        }
+
+        int maxPromotions = decision.getAction() == AdaptiveReleaseGovernor.ReleaseAction.DIRECT
+            ? maxMessageBatch
+            : Math.max(1, maxMessageBatch / 2);
+        int promoted = backpressureOverflowBuffer.promoteTo(batchQueue, maxPromotions, maxReleaseReadyBatches);
+        if (promoted > 0) {
+            log.info("♻️ Promoted {} overflow batches into release-ready queue (remaining overflow batches: {}, release-ready batches: {})",
+                promoted,
+                backpressureOverflowBuffer.getPendingBatchCount(),
+                batchQueue.size());
+        }
+        return promoted;
     }
 
     /**
@@ -1440,7 +1544,10 @@ public class ProposalQueueManagerOptimized {
      */
     public int getPendingCount() {
         long verifiedBufferCount = getVerifiedPackingBufferCount(epochQueue.getStatsMap(), adaptivePackingBuffer.getStatsMap());
-        long totalPending = unverifiedQueue.size() + batchQueue.size() + verifiedBufferCount;
+        long totalPending = unverifiedQueue.size()
+            + verifiedBufferCount
+            + countQueuedProposals(batchQueue)
+            + backpressureOverflowBuffer.getPendingProposalCount();
         return totalPending >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) totalPending;
     }
     
@@ -1448,13 +1555,15 @@ public class ProposalQueueManagerOptimized {
      * Get queue statistics (including epoch queue).
      */
     public String getStats() {
-        return String.format("Unverified: %d, Verified Buffer: %d, Batches Ready: %d, Total: %d | Epoch: %s | Adaptive: %s",
+        return String.format("Unverified: %d, Verified Buffer: %d, Batches Ready: %d, Overflow: %d, Total: %d | Epoch: %s | Adaptive: %s | Overflow Buffer: %s",
             unverifiedQueue.size(),
             getVerifiedPackingBufferCount(epochQueue.getStatsMap(), adaptivePackingBuffer.getStatsMap()),
             batchQueue.size(),
+            backpressureOverflowBuffer.getPendingBatchCount(),
             allProposals.size(),
             epochQueue.getStats(),
-            adaptivePackingBuffer.getStats());
+            adaptivePackingBuffer.getStats(),
+            backpressureOverflowBuffer.getStats());
     }
     
     // ============================================================================
@@ -1485,7 +1594,9 @@ public class ProposalQueueManagerOptimized {
             // Log queue activity periodically  
             if (queueDepth > 0) {
                 logRateLimitedInfo(lastQueueDepthLogMs, queueDepthSuppressed,
-                    "🔄 AeronSenderAgent: {} batches waiting in queue", queueDepth);
+                    "🔄 AeronSenderAgent: {} batches waiting in queue (overflow batches: {})",
+                    queueDepth,
+                    backpressureOverflowBuffer.getPendingBatchCount());
             }
             
             while (batchesProcessed < maxMessageBatch) {
@@ -1497,11 +1608,12 @@ public class ProposalQueueManagerOptimized {
                 batchesProcessed++;
                 QueuedProposal firstProposal = batch.get(0);
                 logRateLimitedInfo(lastDequeuedLogMs, dequeuedSuppressed,
-                    "📤 AeronSenderAgent: DEQUEUED batch {} of {} | {} proposals | wallet: {} | epoch: {} | remaining in queue: {}",
+                    "📤 AeronSenderAgent: DEQUEUED batch {} of {} | {} proposals | wallet: {} | epoch: {} | remaining ready: {}, overflow: {}",
                     batchesProcessed, queueDepth, batch.size(),
                     firstProposal.getWalletAddress().substring(0, 10),
                     firstProposal.getEpoch(),
-                    batchQueue.size());
+                    batchQueue.size(),
+                    backpressureOverflowBuffer.getPendingBatchCount());
                 
                 // Apply backpressure ONCE per batch (not per proposal)
                 try {
@@ -1511,11 +1623,11 @@ public class ProposalQueueManagerOptimized {
                         backpressureManager.getBackpressureTimeoutMs(),
                         "aeron-sender-timeout"
                     );
-                    batchQueue.offer(batch);
+                    bufferOverflowBatch(batch, "aeron-backpressure");
                     if (reconciled) {
-                        log.warn("⚠️  Backpressure timeout reconciled - re-queuing batch ({} proposals)", batch.size());
+                        log.warn("⚠️  Backpressure timeout reconciled - buffering batch in overflow ({} proposals)", batch.size());
                     } else {
-                        log.warn("⚠️  Backpressure timeout - re-queuing batch ({} proposals)", batch.size());
+                        log.warn("⚠️  Backpressure timeout - buffering batch in overflow ({} proposals)", batch.size());
                     }
                     break;
                 }
@@ -1588,8 +1700,8 @@ public class ProposalQueueManagerOptimized {
                     
                 } catch (BackpressureTimeoutException e) {
                     // Backpressure timeout - re-queue entire batch for next cycle
-                    batchQueue.offer(batch);
-                    log.warn("⚠️  Backpressure timeout - re-queuing batch ({} proposals)", batch.size());
+                    bufferOverflowBatch(batch, "aeron-backpressure");
+                    log.warn("⚠️  Backpressure timeout - buffering batch in overflow ({} proposals)", batch.size());
                     break;
                 } catch (Exception e) {
                     log.error("❌ Error sending batch to Aeron ({} proposals) - checking retry eligibility", batch.size(), e);
@@ -2102,18 +2214,23 @@ public class ProposalQueueManagerOptimized {
             java.util.Map<String, Object> adaptiveStats = adaptivePackingBuffer.getStatsMap();
             long pendingProposals = getLongStat(adaptiveStats, "pendingProposals");
             AdaptiveReleaseGovernor.Decision decision = evaluateAdaptiveReleaseDecision(now);
+            workCount += promoteOverflowBatches(decision);
 
             maybeLogQueueDepthAlert(pendingProposals, now);
 
             List<List<QueuedProposal>> batches = adaptivePackingBuffer.drainReadyBatches(now, decision);
             if (!batches.isEmpty()) {
                 int totalProposals = batches.stream().mapToInt(List::size).sum();
-                int totalChunks = queueReleaseBatches(batches, "adaptive");
+                boolean overflowed = shouldRouteToOverflow(decision);
+                int totalChunks = overflowed
+                    ? bufferOverflowBatches(batches, "adaptive-overflow")
+                    : queueReleaseBatches(batches, "adaptive");
                 workCount += totalChunks;
 
-                log.info("✅ Adaptive release drained {} proposals → {} batches/chunks (state={}, action={}, reasons={})",
+                log.info("✅ Adaptive release drained {} proposals → {} {} (state={}, action={}, reasons={})",
                     totalProposals,
                     totalChunks,
+                    overflowed ? "overflow batches/chunks" : "release batches/chunks",
                     decision.getState(),
                     decision.getAction(),
                     decision.getReasonCodes());
@@ -2258,35 +2375,43 @@ public class ProposalQueueManagerOptimized {
         }
 
         private void maybeLogQueueDepthAlert(long pendingProposals, long now) {
+            long releaseReadyProposals = countQueuedProposals(batchQueue);
+            long overflowProposals = backpressureOverflowBuffer.getPendingProposalCount();
+            long totalAdaptiveResidentProposals = pendingProposals + releaseReadyProposals + overflowProposals;
+            long alertDepth = isAdaptiveActive() ? totalAdaptiveResidentProposals : pendingProposals;
             if (now - lastQueueDepthAlert <= ALERT_INTERVAL_MS) {
                 return;
             }
-            if (pendingProposals >= QUEUE_DEPTH_CRITICAL) {
+            if (alertDepth >= QUEUE_DEPTH_CRITICAL) {
                 if (isAdaptiveActive()) {
-                    log.error("🚨 CRITICAL: Adaptive packing depth at {} proposals (threshold: {})! Release-ready={}, backpressurePending={}",
-                        pendingProposals,
+                    log.error("🚨 CRITICAL: Adaptive resident depth at {} proposals (threshold: {})! Packing={}, release-ready={}, overflow={}, backpressurePending={}",
+                        alertDepth,
                         QUEUE_DEPTH_CRITICAL,
-                        countQueuedProposals(batchQueue),
+                        pendingProposals,
+                        releaseReadyProposals,
+                        overflowProposals,
                         backpressureManager.getPendingCount());
                 } else {
                     log.error("🚨 CRITICAL: Queue depth at {} proposals (threshold: {})! Finalized epoch: {}, Current epoch: {}, Backlog: {} epochs",
-                        pendingProposals,
+                        alertDepth,
                         QUEUE_DEPTH_CRITICAL,
                         epochQueue.getFinalizedEpoch(),
                         epochQueue.getCurrentEpoch(),
                         epochQueue.getCurrentEpoch() - epochQueue.getFinalizedEpoch());
                 }
                 lastQueueDepthAlert = now;
-            } else if (pendingProposals >= QUEUE_DEPTH_WARNING) {
+            } else if (alertDepth >= QUEUE_DEPTH_WARNING) {
                 if (isAdaptiveActive()) {
-                    log.warn("⚠️  WARNING: Adaptive packing depth at {} proposals (threshold: {})! Release-ready={}, backpressurePending={}",
-                        pendingProposals,
+                    log.warn("⚠️  WARNING: Adaptive resident depth at {} proposals (threshold: {})! Packing={}, release-ready={}, overflow={}, backpressurePending={}",
+                        alertDepth,
                         QUEUE_DEPTH_WARNING,
-                        countQueuedProposals(batchQueue),
+                        pendingProposals,
+                        releaseReadyProposals,
+                        overflowProposals,
                         backpressureManager.getPendingCount());
                 } else {
                     log.warn("⚠️  WARNING: Queue depth at {} proposals (threshold: {})! Finalized epoch: {}, Current epoch: {}",
-                        pendingProposals,
+                        alertDepth,
                         QUEUE_DEPTH_WARNING,
                         epochQueue.getFinalizedEpoch(),
                         epochQueue.getCurrentEpoch());
@@ -2296,12 +2421,14 @@ public class ProposalQueueManagerOptimized {
         }
 
         private void maybeLogAdaptiveHealth(long pendingCount, java.util.Map<String, Object> adaptiveStats, long now) {
-            if (pendingCount <= 0 || now % 30000 >= 1000) {
+            if ((pendingCount <= 0 && backpressureOverflowBuffer.isEmpty()) || now % 30000 >= 1000) {
                 return;
             }
-            log.info("📊 Adaptive Queue Health: {} wallets, {} proposals pending, {} proposals drained, {} batches created",
+            log.info("📊 Adaptive Queue Health: {} wallets, packing={}, release-ready={}, overflow={}, proposals drained={}, batches created={}",
                 getLongStat(adaptiveStats, "walletCount"),
                 pendingCount,
+                countQueuedProposals(batchQueue),
+                backpressureOverflowBuffer.getPendingProposalCount(),
                 getLongStat(adaptiveStats, "totalProposalsDrained"),
                 getLongStat(adaptiveStats, "totalBatchesCreated"));
         }

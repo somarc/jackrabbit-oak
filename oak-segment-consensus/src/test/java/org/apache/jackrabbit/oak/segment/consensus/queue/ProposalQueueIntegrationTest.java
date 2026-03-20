@@ -346,6 +346,115 @@ public class ProposalQueueIntegrationTest {
     }
 
     @Test
+    public void testAdaptiveActiveBuffersOverflowAndPromotesAfterPressureClears() throws Exception {
+        queueManager.stop();
+
+        System.setProperty("oak.proposal.release.mode", "adaptive-active");
+        System.setProperty("oak.consensus.max.pending.messages", "1");
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        CountDownLatch latch = new CountDownLatch(1);
+
+        RaftAppendCallback callback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                appendedProposalId = "captured";
+                latch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature, String blobId, String mimeType) {
+                appendProposal(walletAddress, path, contentType, message, signature);
+            }
+
+            @Override
+            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                appendedProposalId = "delete-captured";
+                latch.countDown();
+            }
+
+            @Override
+            public int appendProposalBatch(java.util.List<QueuedProposal> batch) {
+                for (QueuedProposal proposal : batch) {
+                    appendedProposalId = proposal.getProposalId();
+                }
+                for (int i = 0; i < batch.size(); i++) {
+                    latch.countDown();
+                }
+                return batch.size();
+            }
+        };
+
+        BackpressureManager pressuredBackpressure = new BackpressureManager(
+            1L,
+            tuning.getBackpressureTimeoutMs(),
+            tuning.getBackpressureParkNanos()
+        );
+        pressuredBackpressure.incrementSent(2L);
+
+        queueManager = new ProposalQueueManagerOptimized(
+            bridge,
+            callback,
+            pressuredBackpressure,
+            beaconClient,
+            null,
+            tuning
+        );
+        queueManager.start();
+
+        String proposalId = "adaptive-overflow-standard-001";
+        String ethereumTxHash = "0xtx-adaptive-overflow-001";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/page-adaptive-overflow";
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "Adaptive overflow content",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            null
+        );
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(500_000),
+            12348L,
+            ethereumTxHash
+        );
+
+        assertTrue("Overloaded adaptive mode should buffer release debt in overflow",
+            waitForCondition(() -> {
+                Map<String, Object> stats = queueManager.getQueueStats();
+                @SuppressWarnings("unchecked")
+                Map<String, Object> runtimeStages = (Map<String, Object>) stats.get("runtimeStageCounts");
+                return longStat(stats, "backpressureOverflowProposalCount") >= 1L
+                    && longStat(stats, "releaseReadyProposalCount") == 0L
+                    && runtimeStages != null
+                    && Boolean.TRUE.equals(runtimeStages.get("backpressureOverflowSeparateBufferEnabled"));
+            }, 10_000, 25));
+
+        pressuredBackpressure.incrementAcknowledged(2L);
+
+        assertTrue("Overflowed proposal should drain after backpressure clears",
+            latch.await(10, TimeUnit.SECONDS));
+        assertTrue("Adaptive overflow proposal should be sent via single or batched callback",
+            "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
+        assertEquals("Overflowed adaptive proposal should reach PROCESSED state",
+            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+
+        assertTrue("Overflow buffer should eventually drain after promotion",
+            waitForCondition(() -> longStat(queueManager.getQueueStats(), "backpressureOverflowProposalCount") == 0L,
+                10_000, 25));
+    }
+
+    @Test
     public void testAdaptiveActiveRestoresVerifiedProposalAfterRestart() throws Exception {
         queueManager.stop();
         bridge.stop();
