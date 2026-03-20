@@ -39,14 +39,35 @@ public class ValidatorLifecycleManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(ValidatorLifecycleManager.class);
 
-    private final ValidatorFactory factory = new ValidatorFactory();
-    private final ComponentRegistry registry = new ComponentRegistry();
-    private final ShutdownHookHandler shutdownHookHandler = new ShutdownHookHandler();
+    @FunctionalInterface
+    interface StartupExecutor {
+        void start(String threadName, Runnable task);
+    }
+
+    private final ValidatorFactory factory;
+    private final ComponentRegistry registry;
+    private final ShutdownHookHandler shutdownHookHandler;
+    private final StartupExecutor startupExecutor;
     private GlobalStoreServer server;
     @Reference(cardinality = ReferenceCardinality.OPTIONAL, policyOption = ReferencePolicyOption.GREEDY)
     private volatile AeronClusterService aeronClusterService;
     @Reference(cardinality = ReferenceCardinality.OPTIONAL, policyOption = ReferencePolicyOption.GREEDY)
     private volatile GlobalStoreServerComponentFactory componentFactory;
+
+    public ValidatorLifecycleManager() {
+        this(new ValidatorFactory(), new ComponentRegistry(), new ShutdownHookHandler(),
+            (threadName, task) -> new Thread(task, threadName).start());
+    }
+
+    ValidatorLifecycleManager(ValidatorFactory factory,
+                              ComponentRegistry registry,
+                              ShutdownHookHandler shutdownHookHandler,
+                              StartupExecutor startupExecutor) {
+        this.factory = factory;
+        this.registry = registry;
+        this.shutdownHookHandler = shutdownHookHandler;
+        this.startupExecutor = startupExecutor;
+    }
 
     @Activate
     protected void activate(ValidatorConfig config) {
@@ -65,14 +86,14 @@ public class ValidatorLifecycleManager {
         shutdownHookHandler.register(server);
 
         // Start asynchronously to avoid blocking OSGi activate thread.
-        new Thread(() -> {
+        startupExecutor.start("validator-lifecycle-start", () -> {
             try {
                 server.start();
                 LOG.info("✅ Validator server started");
             } catch (Exception e) {
                 LOG.error("❌ Validator server failed to start", e);
             }
-        }, "validator-lifecycle-start").start();
+        });
     }
 
     @Deactivate
