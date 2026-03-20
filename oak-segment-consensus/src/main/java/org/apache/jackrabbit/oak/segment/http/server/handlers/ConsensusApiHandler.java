@@ -301,7 +301,15 @@ public class ConsensusApiHandler {
     }
 
     /**
-     * Get epoch-resident proposal flow with priority lanes.
+     * Get adaptive verified-release flow with compatibility epoch overlay.
+     * GET /v1/proposals/release-flow
+     */
+    public void handleGetProposalReleaseFlow(HttpServletResponse response) throws IOException {
+        proposalQueryHandler.handleGetProposalReleaseFlow(response);
+    }
+
+    /**
+     * Get compatibility epoch overlay for legacy dashboards.
      * GET /v1/proposals/epochs
      */
     public void handleGetProposalEpochs(HttpServletResponse response) throws IOException {

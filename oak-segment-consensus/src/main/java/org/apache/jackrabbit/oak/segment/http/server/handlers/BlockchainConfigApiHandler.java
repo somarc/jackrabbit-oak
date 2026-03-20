@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfigIntrospection;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueTuningIntrospection;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
@@ -73,14 +74,30 @@ public class BlockchainConfigApiHandler {
         gasModel.put("writeGasUnitsPriority", config.getWriteGasUnitsPriority());
         json.put("gasModel", gasModel);
 
+        Map<String, Object> queueTuning = ProposalQueueTuningIntrospection.effectiveValues();
+        Map<String, Object> releasePolicy = new LinkedHashMap<>();
+        releasePolicy.put("schedulerModel", "adaptive-capacity");
+        releasePolicy.put("releaseMode", queueTuning.get("release_mode"));
+        releasePolicy.put("requiredConfirmations", queueTuning.get("required_confirmations"));
+        releasePolicy.put("priorityDirectReleaseEnabled", queueTuning.get("priority_direct_release_enabled"));
+        releasePolicy.put("validatorHostedBinaryUploadEnabled", queueTuning.get("validator_hosted_binary_upload_enabled"));
+        releasePolicy.put("validatorHostedBinaryRequiresPriorityTier", queueTuning.get("validator_hosted_binary_requires_priority_tier"));
+        releasePolicy.put("normalPath", "Verified proposals enter an adaptive packing buffer and release immediately when Aeron is healthy.");
+        releasePolicy.put("underPressure", "Packing widens and verified work can spill into backpressure overflow before release.");
+        releasePolicy.put("fixedTierDelayDeprecated", true);
+        json.put("releasePolicy", releasePolicy);
+
         if (context.selfUrl != null) {
             json.put("validatorUrl", context.selfUrl);
         }
 
         Map<String, Object> tiers = new LinkedHashMap<>();
-        tiers.put("STANDARD", buildTier(config, 0, "13 min"));
-        tiers.put("EXPRESS", buildTier(config, 1, "6.5 min"));
-        tiers.put("PRIORITY", buildTier(config, 2, "45 sec"));
+        tiers.put("STANDARD", buildTier(config, 0, "Compatibility price class; adaptive release has no fixed delay."));
+        tiers.put("EXPRESS", buildTier(config, 1, "Compatibility price class; adaptive release has no fixed delay."));
+        tiers.put("PRIORITY", buildTier(config, 2,
+            Boolean.TRUE.equals(queueTuning.get("priority_direct_release_enabled"))
+                ? "Compatibility price class; direct release is currently enabled after verification."
+                : "Compatibility price class; direct release is disabled unless explicitly toggled."));
         json.put("tiers", tiers);
 
         // Send response
@@ -126,7 +143,7 @@ public class BlockchainConfigApiHandler {
         }
     }
 
-    private Map<String, Object> buildTier(BlockchainConfig config, int tier, String maxDelay) {
+    private Map<String, Object> buildTier(BlockchainConfig config, int tier, String releaseBehavior) {
         BigInteger baseFeeWei = config.getTierBasePriceWei(tier);
         long gasUnits = config.getWriteGasUnitsForTier(tier);
         BigInteger gasFeeWei = config.estimateWriteGasFeeWei(tier);
@@ -134,7 +151,8 @@ public class BlockchainConfigApiHandler {
 
         Map<String, Object> t = new LinkedHashMap<>();
         t.put("tier", tier);
-        t.put("maxDelay", maxDelay);
+        t.put("releaseBehavior", releaseBehavior);
+        t.put("maxDelay", "Adaptive (no fixed epoch wait)");
         t.put("baseFeeWei", baseFeeWei.toString());
         t.put("gasUnits", gasUnits);
         t.put("gasPriceGwei", config.getGasPriceGwei());

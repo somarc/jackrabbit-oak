@@ -583,6 +583,42 @@ public class ProposalQueueManagerOptimized {
         stats.put("adaptiveReleaseGovernorState", adaptiveDecision.getState().name());
         stats.put("adaptiveReleaseAction", adaptiveDecision.getAction().name());
         stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.getReasonCodes());
+        java.util.Map<String, Object> releasePolicy = new java.util.LinkedHashMap<>();
+        releasePolicy.put("scheduler", "adaptive");
+        releasePolicy.put("releaseMode", releaseMode.configValue());
+        releasePolicy.put("requiredConfirmations", requiredConfirmations);
+        releasePolicy.put("priorityDirectReleaseEnabled", priorityDirectReleaseEnabled);
+        releasePolicy.put("note", "Verified proposals drain through the adaptive governor. Tier-specific epoch delays are retired.");
+        stats.put("releasePolicy", releasePolicy);
+        java.util.Map<String, Object> releaseFlow = new java.util.LinkedHashMap<>();
+        releaseFlow.put("scheduler", "adaptive");
+        releaseFlow.put("stages", runtimeStages);
+        java.util.Map<String, Object> governor = new java.util.LinkedHashMap<>();
+        governor.put("state", adaptiveDecision.getState().name());
+        governor.put("action", adaptiveDecision.getAction().name());
+        governor.put("reasonCodes", adaptiveDecision.getReasonCodes());
+        releaseFlow.put("governor", governor);
+        java.util.Map<String, Object> backpressure = new java.util.LinkedHashMap<>();
+        backpressure.put("active", backpressureActive);
+        backpressure.put("pendingCount", backpressurePending);
+        backpressure.put("pendingRawCount", backpressurePendingRaw);
+        backpressure.put("maxPending", backpressureMax);
+        backpressure.put("pendingOldestMs", backpressurePendingOldestMs);
+        backpressure.put("pendingStalledMs", backpressurePendingStalledMs);
+        releaseFlow.put("backpressure", backpressure);
+        releaseFlow.put("adaptivePacking", adaptivePackingBuffer.getStats());
+        releaseFlow.put("overflow", backpressureOverflowBuffer.getStats());
+        stats.put("releaseFlow", releaseFlow);
+        java.util.Map<String, Object> compatibilityEpochOverlay = new java.util.LinkedHashMap<>();
+        compatibilityEpochOverlay.put("source", "compatibility-epoch-overlay");
+        compatibilityEpochOverlay.put("schedulerRetired", Boolean.TRUE);
+        compatibilityEpochOverlay.put("currentEpoch", currentEpoch);
+        compatibilityEpochOverlay.put("finalizedEpoch", finalizedEpoch);
+        compatibilityEpochOverlay.put("pendingEpochs", getPendingSubmissionEpochCount());
+        compatibilityEpochOverlay.put("epochsUntilFinality", currentEpoch >= 0 && finalizedEpoch >= 0 ? Math.max(0L, currentEpoch - finalizedEpoch) : -1L);
+        compatibilityEpochOverlay.put("pendingEpochStats", buildEpochOverlaySummary(currentEpoch, finalizedEpoch));
+        compatibilityEpochOverlay.put("replacementEndpoint", "/v1/proposals/release-flow");
+        stats.put("compatibilityEpochOverlay", compatibilityEpochOverlay);
         
         // Tier routing stats (current window + lifetime)
         stats.put("priorityProposalsSent", priorityCurrent);
@@ -952,8 +988,84 @@ public class ProposalQueueManagerOptimized {
     }
 
     /**
-     * Build epoch-resident proposal flow stats with priority lanes.
-     * This is the upstream source of truth for /v1/proposals/epochs.
+     * Build the canonical adaptive verified-release flow snapshot for operators.
+     * This is the upstream source of truth for /v1/proposals/release-flow.
+     */
+    public java.util.Map<String, Object> getProposalReleaseFlowStats() {
+        java.util.Map<String, Object> queueStats = getQueueStats();
+
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("contractVersion", "proposal.release-flow.v1");
+        payload.put("generatedAtMs", System.currentTimeMillis());
+        payload.put("source", "adaptive-release");
+        payload.put("schedulerModel", "adaptive-capacity");
+        payload.put("releaseMode", queueStats.get("releaseMode"));
+        payload.put("requiredConfirmations", queueStats.get("requiredConfirmations"));
+        payload.put("priorityDirectReleaseEnabled", queueStats.get("priorityDirectReleaseEnabled"));
+        payload.put("currentEpoch", queueStats.get("currentEpoch"));
+        payload.put("finalizedEpoch", queueStats.get("finalizedEpoch"));
+        payload.put("epochsUntilFinality", queueStats.get("epochsUntilFinality"));
+        payload.put("note",
+            "Verified proposals move through adaptive packing, release-ready, and overflow stages. "
+                + "Epoch data remains available only as a compatibility overlay for older dashboards.");
+
+        java.util.Map<String, Object> releaseStages = new java.util.LinkedHashMap<>();
+        releaseStages.put("unverifiedMempoolCount", queueStats.get("pendingCount"));
+        releaseStages.put("verifiedPackingBufferCount", queueStats.get("verifiedPackingBufferCount"));
+        releaseStages.put("releaseReadyProposalCount", queueStats.get("releaseReadyProposalCount"));
+        releaseStages.put("releaseReadyBatchCount", queueStats.get("releaseReadyBatchCount"));
+        releaseStages.put("backpressureOverflowProposalCount", queueStats.get("backpressureOverflowProposalCount"));
+        releaseStages.put("backpressureOverflowBatchCount", queueStats.get("backpressureOverflowBatchCount"));
+        releaseStages.put("verifiedResidentProposalCount", queueStats.get("verifiedResidentProposalCount"));
+        payload.put("releaseStages", releaseStages);
+
+        java.util.Map<String, Object> governor = new java.util.LinkedHashMap<>();
+        governor.put("state", queueStats.get("adaptiveReleaseGovernorState"));
+        governor.put("action", queueStats.get("adaptiveReleaseAction"));
+        governor.put("reasonCodes", queueStats.get("adaptiveReleaseReasonCodes"));
+        governor.put("backpressureActive", queueStats.get("backpressureActive"));
+        governor.put("backpressurePendingCount", queueStats.get("backpressurePendingCount"));
+        governor.put("backpressureMaxPending", queueStats.get("backpressureMaxPending"));
+        governor.put("pendingOldestMs", queueStats.get("backpressurePendingOldestMs"));
+        governor.put("pendingStalledMs", queueStats.get("backpressurePendingStalledMs"));
+        payload.put("governor", governor);
+
+        java.util.Map<String, Object> packing = new java.util.LinkedHashMap<>();
+        packing.put("walletCount", queueStats.get("adaptivePackingWalletCount"));
+        packing.put("queuedProposalCountTotal", queueStats.get("adaptivePackingQueuedProposalCountTotal"));
+        packing.put("drainedProposalCountTotal", queueStats.get("adaptivePackingDrainedProposalCountTotal"));
+        packing.put("createdBatchCountTotal", queueStats.get("adaptivePackingCreatedBatchCountTotal"));
+        payload.put("packing", packing);
+
+        java.util.Map<String, Object> overflow = new java.util.LinkedHashMap<>();
+        overflow.put("separateBufferEnabled", true);
+        overflow.put("bufferedBatchCountTotal", queueStats.get("backpressureOverflowBufferedBatchCountTotal"));
+        overflow.put("bufferedProposalCountTotal", queueStats.get("backpressureOverflowBufferedProposalCountTotal"));
+        overflow.put("promotedBatchCountTotal", queueStats.get("backpressureOverflowPromotedBatchCountTotal"));
+        overflow.put("promotedProposalCountTotal", queueStats.get("backpressureOverflowPromotedProposalCountTotal"));
+        payload.put("overflow", overflow);
+
+        java.util.Map<String, Object> throughput = new java.util.LinkedHashMap<>();
+        throughput.put("priorityProposalsSent", queueStats.get("priorityProposalsSent"));
+        throughput.put("batchedProposalsSent", queueStats.get("batchedProposalsSent"));
+        throughput.put("totalProposalsSent", queueStats.get("totalProposalsSent"));
+        throughput.put("totalFinalizedCount", queueStats.get("totalFinalizedCount"));
+        throughput.put("totalRejectedCount", queueStats.get("totalRejectedCount"));
+        payload.put("throughput", throughput);
+
+        java.util.Map<String, Object> epochCompatibility = new java.util.LinkedHashMap<>();
+        epochCompatibility.putAll((java.util.Map<String, Object>) queueStats.get("compatibilityEpochOverlay"));
+        epochCompatibility.put("deprecatedEndpoints", java.util.Arrays.asList("/v1/proposals/epochs", "/v1/explorer/epochs"));
+        epochCompatibility.put("contractReviewFollowUp",
+            "Pricing tiers remain contract-defined. Review smart-contract semantics separately from the adaptive Oak scheduler.");
+        payload.put("epochCompatibility", epochCompatibility);
+
+        return payload;
+    }
+
+    /**
+     * Build the legacy epoch-resident proposal flow overlay for compatibility routes.
+     * This remains available for /v1/proposals/epochs while external dashboards migrate.
      */
     public java.util.Map<String, Object> getProposalEpochFlowStats() {
         long currentEpoch = resolveCurrentEpoch();
@@ -961,11 +1073,15 @@ public class ProposalQueueManagerOptimized {
         long nextEpoch = Math.max(finalizedEpoch + 1, currentEpoch);
 
         java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("contractVersion", "proposal.epoch-overlay.v1");
+        payload.put("generatedAtMs", System.currentTimeMillis());
         payload.put("currentEpoch", currentEpoch);
         payload.put("finalizedEpoch", finalizedEpoch);
         payload.put("pendingEpochs", getPendingSubmissionEpochCount());
         payload.put("epochsUntilFinality", currentEpoch >= 0 && finalizedEpoch >= 0 ? Math.max(0L, currentEpoch - finalizedEpoch) : -1L);
         payload.put("source", "compatibility-epoch-overlay");
+        payload.put("deprecated", Boolean.TRUE);
+        payload.put("replacementEndpoint", "/v1/proposals/release-flow");
         payload.put("note", "Epoch counters are derived from beacon state and proposal submission epochs. They remain available for compatibility, but the verified release scheduler is adaptive-only.");
 
         java.util.List<java.util.Map<String, Object>> blocks = new java.util.ArrayList<>();

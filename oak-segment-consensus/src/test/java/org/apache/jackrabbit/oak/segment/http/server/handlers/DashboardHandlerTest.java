@@ -70,7 +70,9 @@ public class DashboardHandlerTest {
         assertTrue(json.contains("\"path\":\"/v1/config/osgi/coverage\""));
         assertTrue(json.contains("\"path\":\"/v1/config/osgi/delta\""));
         assertTrue(json.contains("\"path\":\"/v1/proposals/queue/stats\""));
+        assertTrue(json.contains("\"path\":\"/v1/proposals/release-flow\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/summary\""));
+        assertTrue(json.contains("\"path\":\"/v1/explorer/release-flow\""));
         assertTrue(json.contains("\"path\":\"/v1/consensus/status\""));
         assertTrue(json.contains("\"path\":\"/v1/aeron/cluster-state\""));
         assertTrue(json.contains("\"path\":\"/v1/events/stats\""));
@@ -100,6 +102,7 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("Oak Control Plane Home"));
         assertTrue(html.contains("/api-browser"));
         assertTrue(html.contains("/v1/proposals/queue/stats"));
+        assertTrue(html.contains("/v1/proposals/release-flow"));
         assertTrue(html.contains("API-first runtime"));
     }
 

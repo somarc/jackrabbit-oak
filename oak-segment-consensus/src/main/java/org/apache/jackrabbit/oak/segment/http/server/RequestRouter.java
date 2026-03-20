@@ -454,6 +454,12 @@ public class RequestRouter {
                 return;
             }
 
+            if ("/v1/explorer/release-flow".equals(path) && "GET".equals(method)) {
+                explorerApiV1Handler.handleReleaseFlow(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
             if ("/v1/explorer/epochs".equals(path) && "GET".equals(method)) {
                 explorerApiV1Handler.handleEpochs(response);
                 baseRequest.setHandled(true);
@@ -668,6 +674,12 @@ public class RequestRouter {
 
             if ("/v1/proposals/queue/stats".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGetQueueStats(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if ("/v1/proposals/release-flow".equals(path) && "GET".equals(method)) {
+                consensusApiHandler.handleGetProposalReleaseFlow(response);
                 baseRequest.setHandled(true);
                 return;
             }

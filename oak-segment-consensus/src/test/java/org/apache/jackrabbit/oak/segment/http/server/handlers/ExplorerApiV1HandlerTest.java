@@ -209,19 +209,40 @@ public class ExplorerApiV1HandlerTest {
     }
 
     @Test
-    public void testHandleEpochsRequiresProposalQueue() throws Exception {
+    public void testHandleReleaseFlowRequiresProposalQueue() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
 
         ExplorerApiV1Handler handler = new ExplorerApiV1Handler(newContext(new MemoryNodeStore()));
-        handler.handleEpochs(response);
+        handler.handleReleaseFlow(response);
 
         verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
         assertTrue(body.toString().contains("Proposal queue not available"));
     }
 
     @Test
-    public void testHandleEpochsReturnsFlowPayload() throws Exception {
+    public void testHandleReleaseFlowReturnsFlowPayload() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext(new MemoryNodeStore());
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        Map<String, Object> flow = new LinkedHashMap<>();
+        flow.put("releaseMode", "adaptive-active");
+        flow.put("releaseStages", new LinkedHashMap<String, Object>());
+        when(queueManager.getProposalReleaseFlowStats()).thenReturn(flow);
+        context.proposalQueueManager = queueManager;
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
+        handler.handleReleaseFlow(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"explorer.v1\""));
+        assertTrue(json.contains("\"releaseFlow\":{\"releaseMode\":\"adaptive-active\",\"releaseStages\":{}}"));
+    }
+
+    @Test
+    public void testHandleEpochsReturnsDeprecatedCompatibilityPayload() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
         ServerContext context = newContext(new MemoryNodeStore());
@@ -237,7 +258,8 @@ public class ExplorerApiV1HandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_OK);
         String json = body.toString();
-        assertTrue(json.contains("\"contractVersion\":\"explorer.v1\""));
+        assertTrue(json.contains("\"deprecated\":true"));
+        assertTrue(json.contains("\"canonicalPath\":\"/v1/explorer/release-flow\""));
         assertTrue(json.contains("\"epochs\":{\"currentEpoch\":42,\"finalizedEpoch\":40}"));
     }
 

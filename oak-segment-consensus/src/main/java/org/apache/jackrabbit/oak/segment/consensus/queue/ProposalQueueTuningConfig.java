@@ -57,13 +57,13 @@ public @interface ProposalQueueTuningConfig {
 
     @AttributeDefinition(
         name = "Finalization Chunk Size",
-        description = "Max proposals per chunk when finalizing an epoch (WAN-safe batching)."
+        description = "Max proposals per release chunk when draining verified work to Aeron (WAN-safe batching)."
     )
     int finalization_chunk_size() default ProposalQueueTuning.DEFAULT_FINALIZATION_CHUNK_SIZE;
 
     @AttributeDefinition(
         name = "Finalization Chunk Delay (ms)",
-        description = "Optional delay between finalized chunks. Set 0 to disable artificial pacing."
+        description = "Optional delay between verified release chunks. Set 0 to disable artificial pacing."
     )
     long finalization_chunk_delay_ms() default ProposalQueueTuning.DEFAULT_FINALIZATION_CHUNK_DELAY_MS;
 
@@ -123,13 +123,13 @@ public @interface ProposalQueueTuningConfig {
 
     @AttributeDefinition(
         name = "Release Mode",
-        description = "Verified-to-Aeron release mode. Supported values: adaptive-shadow, adaptive-active. The legacy value epoch is accepted as a deprecated alias for adaptive-active."
+        description = "Verified release pipeline mode. Supported values: adaptive-shadow, adaptive-active. The legacy value epoch is accepted as a deprecated alias for adaptive-active."
     )
     String release_mode() default ProposalQueueTuning.DEFAULT_RELEASE_MODE;
 
     @AttributeDefinition(
         name = "Priority Direct Release Enabled",
-        description = "When enabled, PRIORITY proposals bypass the scheduler and release directly to Aeron after verification."
+        description = "When enabled, PRIORITY proposals bypass the scheduler and release directly to Aeron after verification as a compatibility entitlement."
     )
     boolean priority_direct_release_enabled() default ProposalQueueTuning.DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED;
 
@@ -141,7 +141,7 @@ public @interface ProposalQueueTuningConfig {
 
     @AttributeDefinition(
         name = "Validator Binary Requires Priority Tier",
-        description = "When enabled, validator-hosted binary upload requires paymentTier=priority as an entitlement policy."
+        description = "Legacy entitlement policy. When enabled, validator-hosted binary upload requires paymentTier=priority."
     )
     boolean validator_hosted_binary_requires_priority_tier() default ProposalQueueTuning.DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER;
 }

@@ -200,7 +200,31 @@ public class ProposalQueryHandler {
     }
 
     /**
-     * Get epoch-resident proposal flow with priority lanes.
+     * Get adaptive verified-release flow with compatibility epoch overlay.
+     * GET /v1/proposals/release-flow
+     */
+    public void handleGetProposalReleaseFlow(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+
+        try {
+            if (context.proposalQueueManager == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
+                return;
+            }
+
+            Map<String, Object> flow = new LinkedHashMap<>(context.proposalQueueManager.getProposalReleaseFlowStats());
+            flow.put("contractVersion", "release-flow.v1");
+            flow.put("generatedAtMs", System.currentTimeMillis());
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(JsonOutputUtil.toJson(flow));
+        } catch (Exception e) {
+            log.error("Error getting proposal release flow", e);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Get compatibility epoch overlay for older dashboards.
      * GET /v1/proposals/epochs
      */
     public void handleGetProposalEpochs(HttpServletResponse response) throws IOException {
@@ -212,7 +236,13 @@ public class ProposalQueryHandler {
                 return;
             }
 
-            Map<String, Object> flow = context.proposalQueueManager.getProposalEpochFlowStats();
+            Map<String, Object> flow = new LinkedHashMap<>(context.proposalQueueManager.getProposalEpochFlowStats());
+            flow.put("contractVersion", "release-flow.v1");
+            flow.put("generatedAtMs", System.currentTimeMillis());
+            flow.put("deprecated", true);
+            flow.put("deprecatedReason",
+                "Legacy compatibility route. Use /v1/proposals/release-flow for the adaptive verified-release view.");
+            flow.put("canonicalPath", "/v1/proposals/release-flow");
             response.setStatus(HttpServletResponse.SC_OK);
             response.getWriter().write(JsonOutputUtil.toJson(flow));
         } catch (Exception e) {

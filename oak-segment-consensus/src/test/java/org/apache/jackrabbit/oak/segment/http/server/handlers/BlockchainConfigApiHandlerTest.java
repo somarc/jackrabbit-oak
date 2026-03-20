@@ -81,7 +81,11 @@ public class BlockchainConfigApiHandlerTest {
         assertTrue(json.contains("\"validatorUrl\":\"http://validator-1:8090\""));
         assertTrue(json.contains("\"configSource\":"));
         assertTrue(json.contains("\"gasModel\":"));
+        assertTrue(json.contains("\"releasePolicy\":"));
+        assertTrue(json.contains("\"schedulerModel\":\"adaptive-capacity\""));
         assertTrue(json.contains("\"gasPriceGwei\":3"));
         assertTrue(json.contains("\"estimatedTotalWei\":"));
+        assertTrue(json.contains("\"releaseBehavior\":\"Compatibility price class; adaptive release has no fixed delay.\""));
+        assertTrue(json.contains("\"maxDelay\":\"Adaptive (no fixed epoch wait)\""));
     }
 }

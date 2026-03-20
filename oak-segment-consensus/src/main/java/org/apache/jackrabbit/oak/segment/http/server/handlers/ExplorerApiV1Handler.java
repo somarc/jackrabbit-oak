@@ -41,7 +41,8 @@ import java.util.Map;
  *   <li>GET /v1/explorer/summary</li>
  *   <li>GET /v1/explorer/proposals/{proposalId}</li>
  *   <li>GET /v1/explorer/wallets/{walletAddress}</li>
- *   <li>GET /v1/explorer/epochs</li>
+ *   <li>GET /v1/explorer/release-flow</li>
+ *   <li>GET /v1/explorer/epochs (compatibility alias)</li>
  * </ul>
  */
 public class ExplorerApiV1Handler {
@@ -111,6 +112,17 @@ public class ExplorerApiV1Handler {
                 compact.put("backpressureMax", backpressureMax);
                 compact.put("backpressureActive", asBoolean(queue.get("backpressureActive")));
                 compact.put("routingDebt", routingDebt);
+                compact.put("releaseMode", queue.get("releaseMode"));
+                compact.put("requiredConfirmations", queue.get("requiredConfirmations"));
+                compact.put("verifiedResidentProposalCount", asLong(queue.get("verifiedResidentProposalCount")));
+                compact.put("releaseReadyProposalCount", asLong(queue.get("releaseReadyProposalCount")));
+                compact.put("backpressureOverflowProposalCount", asLong(queue.get("backpressureOverflowProposalCount")));
+                if (queue.get("adaptiveReleaseGovernorState") != null) {
+                    compact.put("adaptiveReleaseGovernorState", String.valueOf(queue.get("adaptiveReleaseGovernorState")));
+                }
+                if (queue.get("adaptiveReleaseAction") != null) {
+                    compact.put("adaptiveReleaseAction", String.valueOf(queue.get("adaptiveReleaseAction")));
+                }
                 compact.put("currentEpoch", asLong(queue.get("currentEpoch")));
                 compact.put("finalizedEpoch", asLong(queue.get("finalizedEpoch")));
                 compact.put("epochsUntilFinality", asLong(queue.get("epochsUntilFinality")));
@@ -257,6 +269,26 @@ public class ExplorerApiV1Handler {
         }
     }
 
+    public void handleReleaseFlow(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        if (context.proposalQueueManager == null) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
+            return;
+        }
+        try {
+            Map<String, Object> flow = context.proposalQueueManager.getProposalReleaseFlowStats();
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("contractVersion", "explorer.v1");
+            payload.put("generatedAtMs", System.currentTimeMillis());
+            payload.put("releaseFlow", flow);
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
+        } catch (Exception e) {
+            log.error("Failed explorer release flow", e);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer release flow: " + e.getMessage());
+        }
+    }
+
     public void handleEpochs(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
         if (context.proposalQueueManager == null) {
@@ -268,6 +300,10 @@ public class ExplorerApiV1Handler {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("contractVersion", "explorer.v1");
             payload.put("generatedAtMs", System.currentTimeMillis());
+            payload.put("deprecated", true);
+            payload.put("deprecatedReason",
+                "Legacy compatibility route. Use /v1/explorer/release-flow for adaptive release stages.");
+            payload.put("canonicalPath", "/v1/explorer/release-flow");
             payload.put("epochs", flow);
             response.setStatus(HttpServletResponse.SC_OK);
             response.getWriter().write(JsonOutputUtil.toJson(payload));

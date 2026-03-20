@@ -170,6 +170,39 @@ public class ProposalQueryHandlerTest {
         assertTrue(json.contains("\"pendingCount\":11"));
     }
 
+    @Test
+    public void testGetProposalReleaseFlowReturnsAdaptivePayload() throws Exception {
+        Map<String, Object> flow = new LinkedHashMap<>();
+        flow.put("releaseMode", "adaptive-active");
+        flow.put("releaseStages", new LinkedHashMap<String, Object>());
+        when(queueManager.getProposalReleaseFlowStats()).thenReturn(flow);
+
+        handler.handleGetProposalReleaseFlow(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"release-flow.v1\""));
+        assertTrue(json.contains("\"releaseMode\":\"adaptive-active\""));
+        assertTrue(json.contains("\"releaseStages\":{}"));
+    }
+
+    @Test
+    public void testGetProposalEpochsMarksCompatibilityRouteAsDeprecated() throws Exception {
+        Map<String, Object> flow = new LinkedHashMap<>();
+        flow.put("currentEpoch", 42L);
+        flow.put("finalizedEpoch", 40L);
+        when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
+
+        handler.handleGetProposalEpochs(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"release-flow.v1\""));
+        assertTrue(json.contains("\"deprecated\":true"));
+        assertTrue(json.contains("\"canonicalPath\":\"/v1/proposals/release-flow\""));
+        assertTrue(json.contains("\"currentEpoch\":42"));
+    }
+
     private static void ageQueueSnapshotCache(ProposalQueryHandler handler) throws Exception {
         Field field = ProposalQueryHandler.class.getDeclaredField("cachedQueueStatsSourceTimestampMs");
         field.setAccessible(true);

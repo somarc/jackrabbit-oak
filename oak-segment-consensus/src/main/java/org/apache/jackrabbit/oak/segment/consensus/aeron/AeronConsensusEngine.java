@@ -3342,7 +3342,7 @@ public class AeronConsensusEngine implements ClusteredService {
             consensus.setProperty("quorum", "Majority of validators must agree");
             consensus.setProperty("leader-election", "Automatic - leader handles all writes");
             consensus.setProperty("replication", "All writes replicated to all validators synchronously");
-            consensus.setProperty("finality", "Immediate local finality, Ethereum epoch for external finality");
+            consensus.setProperty("finality", "Immediate local finality with adaptive verified-release scheduling; Ethereum beacon state remains a compatibility and confirmation signal");
             
             // ═══════════════════════════════════════════════════════════════════════════════
             // 5. ECONOMICS - Pricing and payment
@@ -3357,21 +3357,21 @@ public class AeronConsensusEngine implements ClusteredService {
             org.apache.jackrabbit.oak.spi.state.NodeBuilder pricing = economics.child("pricing-tiers");
             pricing.setProperty("jcr:primaryType", "nt:unstructured");
             pricing.setProperty("priority-price", "0.01 ETH");
-            pricing.setProperty("priority-finality", "Immediate (~30 seconds)");
-            pricing.setProperty("priority-use-case", "Breaking news, live events");
+            pricing.setProperty("priority-release", "Compatibility price class; may use direct release if enabled");
+            pricing.setProperty("priority-use-case", "Premium routing / explicit entitlements");
             pricing.setProperty("express-price", "0.002 ETH");
-            pricing.setProperty("express-finality", "~6.4 minutes (1 Ethereum epoch)");
-            pricing.setProperty("express-use-case", "Time-sensitive updates");
+            pricing.setProperty("express-release", "Adaptive release with no fixed epoch wait");
+            pricing.setProperty("express-use-case", "Compatibility price class for time-sensitive updates");
             pricing.setProperty("standard-price", "0.001 ETH");
-            pricing.setProperty("standard-finality", "~12.8 minutes (2 Ethereum epochs)");
-            pricing.setProperty("standard-use-case", "Bulk content, scheduled updates");
+            pricing.setProperty("standard-release", "Adaptive release with no fixed epoch wait");
+            pricing.setProperty("standard-use-case", "Default economic class for bulk content and scheduled updates");
             
             // Payment Flow
             org.apache.jackrabbit.oak.spi.state.NodeBuilder paymentFlow = economics.child("payment-flow");
             paymentFlow.setProperty("jcr:primaryType", "nt:unstructured");
             paymentFlow.setProperty("step-1", "User signs write proposal with wallet");
-            paymentFlow.setProperty("step-2", "Validator verifies signature and queues proposal");
-            paymentFlow.setProperty("step-3", "At epoch boundary, batch is finalized");
+            paymentFlow.setProperty("step-2", "Validator verifies signature and stages proposal in the adaptive packing buffer");
+            paymentFlow.setProperty("step-3", "Release governor sends work immediately when Aeron is healthy or buffers under pressure");
             paymentFlow.setProperty("step-4", "Payment verified on Ethereum (ValidatorPayment contract)");
             paymentFlow.setProperty("step-5", "Content becomes permanent");
             

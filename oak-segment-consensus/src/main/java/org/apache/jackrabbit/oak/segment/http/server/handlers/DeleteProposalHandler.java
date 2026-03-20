@@ -183,7 +183,7 @@ public class DeleteProposalHandler {
             if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
                     "Missing ethereumTxHash parameter. Deletes require Ethereum payment (like writes). " +
-                    "Tiers: STANDARD (+2 epochs), EXPRESS (+1 epoch), PRIORITY (direct)."
+                    "Release is adaptive after verification; paymentTier remains a compatibility/economic selector."
                 );
                 return;
             }

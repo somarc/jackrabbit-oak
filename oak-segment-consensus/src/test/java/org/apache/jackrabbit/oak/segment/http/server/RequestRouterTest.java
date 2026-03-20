@@ -436,6 +436,53 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testExplorerReleaseFlowRouteReturnsAdaptivePayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            Map<String, Object> flow = new HashMap<>();
+            flow.put("releaseMode", "adaptive-active");
+            when(queueManager.getProposalReleaseFlowStats()).thenReturn(flow);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/explorer/release-flow");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"releaseFlow\":{\"releaseMode\":\"adaptive-active\"}"));
+        });
+    }
+
+    @Test
+    public void testProposalReleaseFlowRouteReturnsAdaptivePayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            Map<String, Object> flow = new HashMap<>();
+            flow.put("releaseMode", "adaptive-active");
+            when(queueManager.getProposalReleaseFlowStats()).thenReturn(flow);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/proposals/release-flow");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"release-flow.v1\""));
+            assertTrue(body.toString().contains("\"releaseMode\":\"adaptive-active\""));
+        });
+    }
+
+    @Test
     public void testExplorerProposalRouteReturnsProposalPayload() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();

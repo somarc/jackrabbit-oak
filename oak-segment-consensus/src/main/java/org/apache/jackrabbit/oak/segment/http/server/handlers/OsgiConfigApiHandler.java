@@ -402,7 +402,7 @@ public class OsgiConfigApiHandler {
             3,
             "runtime-readable",
             "guarded",
-            "Max proposals finalized per chunk",
+            "Max proposals released per chunk when draining verified work to Aeron",
             "oak.proposal.finalization.chunk.size"));
         schema.add(schemaEntry(
             "proposalQueueTuning.finalization_chunk_delay_ms",
@@ -410,7 +410,7 @@ public class OsgiConfigApiHandler {
             0L,
             "runtime-readable",
             "guarded",
-            "Optional delay between finalized chunks; 0 disables pacing",
+            "Optional delay between verified release chunks; 0 disables pacing",
             "oak.proposal.finalization.chunk.delay.ms"));
         schema.add(schemaEntry(
             "proposalQueueTuning.max_pending_messages",
@@ -514,7 +514,7 @@ public class OsgiConfigApiHandler {
             "adaptive-active",
             "runtime-readable",
             "guarded",
-            "Verified-to-Aeron release mode (adaptive-shadow or adaptive-active; epoch is accepted as a deprecated alias for adaptive-active)",
+            "Verified release pipeline mode (adaptive-shadow or adaptive-active; epoch is accepted as a deprecated alias for adaptive-active)",
             "oak.proposal.release.mode"));
         schema.add(schemaEntry(
             "proposalQueueTuning.priority_direct_release_enabled",
@@ -522,7 +522,7 @@ public class OsgiConfigApiHandler {
             false,
             "runtime-readable",
             "guarded",
-            "Enable direct Aeron release for PRIORITY proposals after verification",
+            "Enable direct Aeron release for PRIORITY proposals after verification as a compatibility entitlement",
             "oak.proposal.priority.direct.release.enabled"));
         schema.add(schemaEntry(
             "proposalQueueTuning.validator_hosted_binary_upload_enabled",
@@ -538,7 +538,7 @@ public class OsgiConfigApiHandler {
             true,
             "runtime-readable",
             "guarded",
-            "Require paymentTier=priority for validator-hosted binary uploads",
+            "Legacy entitlement policy: require paymentTier=priority for validator-hosted binary uploads",
             "oak.proposal.validator.binary.requires.priority"));
 
         schema.add(schemaEntry(
@@ -1122,11 +1122,11 @@ public class OsgiConfigApiHandler {
         }
         if ("proposalQueueTuning.finalization_chunk_size".equals(key)
             && !looselyEqual(currentValue, defaultValue)) {
-            return "Adjusted to increase per-cycle finalization throughput under backlog.";
+            return "Adjusted to increase per-cycle verified release throughput under backlog.";
         }
         if ("proposalQueueTuning.finalization_chunk_delay_ms".equals(key)
             && !looselyEqual(currentValue, defaultValue)) {
-            return "Adjusted to control optional pacing between finalization chunks.";
+            return "Adjusted to control optional pacing between verified release chunks.";
         }
         if ("proposalQueueTuning.max_message_batch".equals(key)
             && !looselyEqual(currentValue, defaultValue)) {

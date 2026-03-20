@@ -129,6 +129,7 @@ public class DashboardHandler {
         html.append("<a class='link' href='/api-browser'><strong>API Browser</strong><div class='muted'>Interactive endpoint catalog and tester.</div></a>");
         html.append("<a class='link' href='/v1/consensus/status'><strong>/v1/consensus/status</strong><div class='muted'>Consensus status and leader context.</div></a>");
         html.append("<a class='link' href='/v1/proposals/queue/stats'><strong>/v1/proposals/queue/stats</strong><div class='muted'>Queue/finality/backpressure counters.</div></a>");
+        html.append("<a class='link' href='/v1/proposals/release-flow'><strong>/v1/proposals/release-flow</strong><div class='muted'>Adaptive verified-release stages and governor state.</div></a>");
         html.append("<a class='link' href='/v1/config/osgi'><strong>/v1/config/osgi</strong><div class='muted'>Effective OSGi tuning values.</div></a>");
         html.append("<a class='link' href='/v1/config/osgi/schema'><strong>/v1/config/osgi/schema</strong><div class='muted'>Knob metadata: types, defaults, reload mode, and risk.</div></a>");
         html.append("<a class='link' href='/v1/config/osgi/sources'><strong>/v1/config/osgi/sources</strong><div class='muted'>Where each effective config group came from.</div></a>");
@@ -171,12 +172,14 @@ public class DashboardHandler {
         addIndexEntry(endpoints, "POST", "/v1/propose-delete", "Propose signed delete", "Consensus");
         addIndexEntry(endpoints, "GET", "/v1/proposals/pending/count", "Pending proposal count", "Consensus");
         addIndexEntry(endpoints, "GET", "/v1/proposals/queue/stats", "Queue and finality counters", "Consensus");
-        addIndexEntry(endpoints, "GET", "/v1/proposals/epochs", "Proposal epoch flow", "Consensus");
+        addIndexEntry(endpoints, "GET", "/v1/proposals/release-flow", "Adaptive proposal release flow", "Consensus");
+        addIndexEntry(endpoints, "GET", "/v1/proposals/epochs", "Proposal epoch flow compatibility overlay", "Consensus");
         addIndexEntry(endpoints, "GET", "/v1/proposals/{id}/status", "Proposal status by id", "Consensus");
         addIndexEntry(endpoints, "GET", "/v1/head", "Head status", "Consensus");
 
         addIndexEntry(endpoints, "GET", "/v1/explorer/summary", "Explorer summary contract", "Explorer");
-        addIndexEntry(endpoints, "GET", "/v1/explorer/epochs", "Explorer epoch flow", "Explorer");
+        addIndexEntry(endpoints, "GET", "/v1/explorer/release-flow", "Explorer adaptive release flow", "Explorer");
+        addIndexEntry(endpoints, "GET", "/v1/explorer/epochs", "Explorer epoch flow compatibility overlay", "Explorer");
         addIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail", "Explorer");
         addIndexEntry(endpoints, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail", "Explorer");
         addIndexEntry(endpoints, "GET", "/explorer", "Explorer UI", "Explorer");
@@ -1009,7 +1012,8 @@ public class DashboardHandler {
         addApiEndpoint(html, "GET", "/v1/explorer/summary", "Explorer summary for external blockscan UI", "explorer_summary");
         addApiEndpoint(html, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail by proposal ID", "explorer_proposal");
         addApiEndpoint(html, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail + recent content", "explorer_wallet");
-        addApiEndpoint(html, "GET", "/v1/explorer/epochs", "Explorer epoch flow snapshot", "explorer_epochs");
+        addApiEndpoint(html, "GET", "/v1/explorer/release-flow", "Explorer adaptive release flow snapshot", "explorer_release_flow");
+        addApiEndpoint(html, "GET", "/v1/explorer/epochs", "Explorer epoch flow compatibility overlay", "explorer_epochs");
         html.append("</div>\n");
         
         html.append("<div class='category'>\n");
@@ -1073,7 +1077,8 @@ public class DashboardHandler {
         html.append("<h2>📋 Proposal Management</h2>\n");
         addApiEndpoint(html, "GET", "/v1/proposals/pending/count", "Get count of pending proposals (JSON)", "proposals_count");
         addApiEndpoint(html, "GET", "/v1/proposals/queue/stats", "Get proposal queue stats (JSON)", "proposals_queue_stats");
-        addApiEndpoint(html, "GET", "/v1/proposals/epochs", "Get proposal epoch distribution and flow (JSON)", "proposals_epochs");
+        addApiEndpoint(html, "GET", "/v1/proposals/release-flow", "Get adaptive verified-release stages and governor state (JSON)", "proposals_release_flow");
+        addApiEndpoint(html, "GET", "/v1/proposals/epochs", "Get proposal epoch compatibility overlay (JSON)", "proposals_epochs");
         addApiEndpoint(html, "GET", "/v1/proposals/{id}/status", "Get status of specific proposal (JSON)", "proposal_status");
         html.append("</div>\n");
         

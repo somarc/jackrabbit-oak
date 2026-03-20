@@ -32,6 +32,10 @@ public final class ProposalQueuePolicy {
         return ProposalQueueTuningRegistry.get().getConfirmationTimeoutMs();
     }
 
+    public static String releaseMode() {
+        return ProposalQueueTuningRegistry.get().getReleaseMode().configValue();
+    }
+
     public static boolean isPriorityDirectReleaseEnabled() {
         return ProposalQueueTuningRegistry.get().isPriorityDirectReleaseEnabled();
     }
