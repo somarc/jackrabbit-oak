@@ -107,6 +107,7 @@ public class GlobalStoreServer {
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
     private final ConsensusStartupCoordinator consensusStartupCoordinator = new ConsensusStartupCoordinator();
+    private final GenesisStartupCoordinator genesisStartupCoordinator = new GenesisStartupCoordinator();
     
     // Bootstrap configuration (for organic peer discovery after promotion)
     private String bootstrapPrimaryHost;
@@ -829,58 +830,24 @@ public class GlobalStoreServer {
                 System.out.println("🌍 GENESIS MODE DEFERRED: Will create genesis AFTER Aeron cluster forms");
                 System.out.println("   Genesis will be created as the first replicated write through consensus");
                 System.out.println("   This ensures all validators start with identical state");
-                
-                // Start StandbyServerSync so other validators can bootstrap (empty-to-empty is valid)
-                if (bootstrap != null) {
-                    try {
-                        bootstrap.startStandbyServer();
-                        System.out.println("✅ StandbyServerSync started on port " + standbyPort);
-                        System.out.println("   Other validators can bootstrap from empty store (will sync genesis after creation)");
-                    } catch (Exception e) {
-                        System.err.println("⚠️  Failed to start StandbyServerSync: " + e.getMessage());
-                        System.err.println("   Other validators will not be able to bootstrap from this node");
-                        // Don't fail startup - genesis node can still operate
-                    }
-                }
-                
             } else {
-                // PRIMARY MODE: Check if genesis already exists before initializing
-                // Empty stores (no genesis) will have genesis created by elected leader via consensus
-                try {
-                    org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
-                    boolean genesisExists = root.getChildNode("oak-chain")
-                        .getChildNode("content")
-                        .getChildNode("00")
-                        .getChildNode("00")
-                        .getChildNode("00")
-                        .getChildNode("0x0000000000000000000000000000000000000000")
-                        .getChildNode("genesis")
-                        .exists();
-                    
-                    if (genesisExists) {
-                        // Genesis already exists - verify it
-                        System.out.println("   ℹ️  Genesis exists - verifying integrity...");
-                        components().createGenesisInitializer(nodeStore, fileStore, blobStore, selfUrl).initializeGenesisContent();
-                    } else {
-                        // No genesis - skip initialization (will be created by elected leader via consensus)
-                        System.out.println("   ⏭️  Genesis does not exist - will be created by elected leader via consensus");
-                        System.out.println("   ⏭️  Skipping genesis initialization at startup");
-                    }
-                } catch (Exception e) {
-                    // Fallback: check store size as backup
-                    try {
-                        long storeSize = fileStore.size();
-                        // Use a more meaningful threshold (empty stores have ~256KB of metadata)
-                        if (storeSize > 1024 * 1024) { // > 1 MB means likely has content
-                            System.out.println("   ℹ️  Store has data (" + (storeSize / (1024 * 1024)) + " MB) - verifying genesis...");
-                            components().createGenesisInitializer(nodeStore, fileStore, blobStore, selfUrl).initializeGenesisContent();
-                        } else {
-                            System.out.println("   ⏭️  Store is empty or minimal - skipping genesis (will be created by consensus)");
-                        }
-                    } catch (Exception e2) {
-                        System.out.println("   ⚠️  Could not check store state, skipping genesis init (will be created by consensus)");
-                    }
-                }
+                // PRIMARY MODE: Check if genesis already exists before initializing.
+                // Empty stores (no genesis) will have genesis created by elected leader via consensus.
+            }
+
+            if (detectedMode == BootstrapMode.GENESIS || detectedMode == BootstrapMode.PRIMARY) {
+                genesisStartupCoordinator.initialize(
+                    new GenesisStartupCoordinator.StartupContext(
+                        detectedMode,
+                        bootstrap,
+                        standbyPort,
+                        nodeStore,
+                        fileStore,
+                        blobStore,
+                        selfUrl,
+                        components()
+                    )
+                );
             }
             
         } catch (InvalidFileStoreVersionException e) {
