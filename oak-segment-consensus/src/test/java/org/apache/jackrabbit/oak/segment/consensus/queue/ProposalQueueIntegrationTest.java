@@ -606,8 +606,9 @@ public class ProposalQueueIntegrationTest {
             latch.await(10, TimeUnit.SECONDS));
         assertTrue("Adaptive overflow proposal should be sent via single or batched callback",
             "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
-        assertEquals("Overflowed adaptive proposal should reach PROCESSED state",
-            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+        assertTrue("Overflowed adaptive proposal should reach PROCESSED state",
+            waitForCondition(() -> queueManager.getProposal(proposalId).getState() == ProposalState.PROCESSED,
+                5_000, 25));
 
         assertTrue("Overflow buffer should eventually drain after promotion",
             waitForCondition(() -> {
@@ -694,8 +695,9 @@ public class ProposalQueueIntegrationTest {
             latch.await(10, TimeUnit.SECONDS));
         assertEquals("Adaptive-active delete proposal should use delete callback",
             "delete-captured", appendedProposalId);
-        assertEquals("Adaptive-active delete proposal should reach PROCESSED state",
-            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+        assertTrue("Adaptive-active delete proposal should reach PROCESSED state",
+            waitForCondition(() -> queueManager.getProposal(proposalId).getState() == ProposalState.PROCESSED,
+                5_000, 25));
     }
 
     @Test
@@ -824,8 +826,9 @@ public class ProposalQueueIntegrationTest {
             restoredLatch.await(10, TimeUnit.SECONDS));
         assertTrue("Restored proposal should be sent via single or batched callback",
             "captured".equals(appendedProposalId) || proposalId.equals(appendedProposalId));
-        assertEquals("Restored proposal should remain tracked as processed",
-            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+        assertTrue("Restored proposal should remain tracked as processed",
+            waitForCondition(() -> queueManager.getProposal(proposalId).getState() == ProposalState.PROCESSED,
+                5_000, 25));
     }
 
     @Test

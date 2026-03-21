@@ -136,7 +136,7 @@ public class HealthHandlerTest {
         when(engine.hasQuorum()).thenReturn(false);
         when(engine.getLastHeartbeatTime()).thenReturn(1234L);
         when(engine.getHeartbeatAgeMs()).thenReturn(5678L);
-        when(engine.getCurrentLeader()).thenReturn("http://leader:8090");
+        when(engine.getCurrentLeaderHint()).thenReturn("http://leader:8090");
         context.aeronConsensusEngine = engine;
 
         HealthHandler handler = newHandler(context);
@@ -177,7 +177,7 @@ public class HealthHandlerTest {
         when(engine.getQuorumSize()).thenReturn(2);
         when(engine.getCurrentRole()).thenReturn(ValidatorRole.LEADER);
         when(engine.getHeartbeatAgeMs()).thenReturn(11L);
-        when(engine.getCurrentLeader()).thenReturn("http://leader:8090");
+        when(engine.getCurrentLeaderHint()).thenReturn("http://leader:8090");
         when(engine.isLeader()).thenReturn(true);
         when(engine.getCurrentEpoch()).thenReturn(21);
         when(engine.getCurrentTerm()).thenReturn(8);
@@ -210,7 +210,7 @@ public class HealthHandlerTest {
         when(engine.getTotalMemberCount()).thenReturn(3);
         when(engine.getQuorumSize()).thenReturn(2);
         when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
-        when(engine.getCurrentLeader()).thenReturn("http://leader:8090");
+        when(engine.getCurrentLeaderHint()).thenReturn("http://leader:8090");
         context.aeronConsensusEngine = engine;
 
         HealthHandler handler = newHandler(context);
@@ -238,7 +238,7 @@ public class HealthHandlerTest {
         when(healthyEngine.getTotalMemberCount()).thenReturn(3);
         when(healthyEngine.getQuorumSize()).thenReturn(2);
         when(healthyEngine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
-        when(healthyEngine.getCurrentLeader()).thenReturn("http://leader:8090");
+        when(healthyEngine.getCurrentLeaderHint()).thenReturn("http://leader:8090");
         context.aeronConsensusEngine = healthyEngine;
 
         HealthHandler handler = newHandler(context);
