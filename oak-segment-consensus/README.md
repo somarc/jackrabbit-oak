@@ -2,26 +2,18 @@
 
 **Status**: Active fork / standalone validator baseline established / architecture cleanup and production hardening ongoing
 **Purpose**: Standalone validator runtime for Oak Segment Store with Aeron consensus, Ethereum-backed write enforcement, and IPFS-capable blob storage
-**Origin**: Blockchain AEM garage-week prototype, now maintained as a fork-first architecture track
+**Origin**: Blockchain AEM prototype track, now maintained as a fork-first architecture track
 
 **Current Phase**: Standalone validator build is the source of truth. Fragment-host coupling has been removed; boundary cleanup, test hardening, and chain-backed deployment paths remain active work.
 
-## 📖 Quick Links
+## Documentation
 
-### Module Documentation (This Repository)
-- **[CONFIGURATION.md](CONFIGURATION.md)** - Complete environment variables & system properties reference
-- **[QUICK-START.md](QUICK-START.md)** - Quick start guide for developers
-- **[IPFS-DATASTORE.md](IPFS-DATASTORE.md)** - IPFS binary storage guide (ADR 015)
-- **[DELETE-QUICK-REFERENCE.md](DELETE-QUICK-REFERENCE.md)** - Quick reference for delete/GC development
-- **[docs/api/osgi-config.md](docs/api/osgi-config.md)** - Read-only OSGi config control surface
+Canonical module docs live in the **Blockchain-AEM** docs project:
 
-### Comprehensive Documentation
+- [Module documentation home](../../Blockchain-AEM/implementation/oak-segment-consensus/README.md)
 
-For architecture deep dives, gap analysis, and detailed implementation docs, see the **Blockchain-AEM** documentation repository:
-- Architecture & implementation details
-- Gap analysis vs Oak Repository Service
-- Package structure maps
-- Technical deep dives
+This README stays code-centric. Quick start, configuration, IPFS, delete/GC,
+API, testing, troubleshooting, and integration docs now live in that doc tree.
 
 ## Overview
 
@@ -209,7 +201,7 @@ java -jar oak-segment-consensus.jar \
 
 ### Environment Variables
 
-**See [CONFIGURATION.md](CONFIGURATION.md) for complete reference.**
+**See the [module documentation home](../../Blockchain-AEM/implementation/oak-segment-consensus/README.md) for configuration and operator docs.**
 
 **Quick essentials:**
 - `OAK_BLOCKCHAIN_MODE`: `mock` | `sepolia` | `mainnet`
@@ -315,25 +307,10 @@ oak-segment-consensus/
 
 ## Documentation
 
-### Developer Documentation
+Canonical docs: [../../Blockchain-AEM/implementation/oak-segment-consensus/README.md](../../Blockchain-AEM/implementation/oak-segment-consensus/README.md)
 
-**Essential Guides**:
-- **[CONFIGURATION.md](CONFIGURATION.md)** - Environment variables and system properties
-- **[QUICK-START.md](QUICK-START.md)** - Quick start guide
-- **[IPFS-DATASTORE.md](IPFS-DATASTORE.md)** - IPFS binary storage setup
-- **[DELETE-QUICK-REFERENCE.md](DELETE-QUICK-REFERENCE.md)** - Delete/GC quick reference
-
-**Comprehensive Developer Docs** (`docs/`):
-- **[API Reference](docs/api/README.md)** - Complete HTTP API documentation
-- **[Architecture Overview](docs/architecture/README.md)** - How the system works
-- **[Development Guide](docs/development/README.md)** - How to extend the module
-- **[Testing Guide](docs/testing/README.md)** - How to test
-- **[Troubleshooting](docs/troubleshooting/README.md)** - Common issues and solutions
-- **[Integration Guide](docs/integration/README.md)** - Sling, Docker, Kubernetes integration
-
-### Project Documentation
-
-For architecture deep dives, gap analysis, package maps, and technical specifications, see the **Blockchain-AEM** documentation repository.
+This code-repo README intentionally avoids duplicating reference and operator
+docs that now live in `Blockchain-AEM`.
 
 ## Status
 
