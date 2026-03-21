@@ -18,7 +18,6 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
@@ -26,12 +25,7 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardDirectory;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingStrategy;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.WalletShardingStrategy;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
@@ -208,49 +202,8 @@ public final class AeronClusterBootstrapper {
 
         httpServer.setAeronWriteClient(aeronWriteClient);
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // SHARD ROUTER: Initialize shard routing (Phase 1)
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         try {
-            // Get number of shards from configuration (default: 1 for single-shard mode)
-            String numShardsConfig = System.getProperty("sharding.numShards", System.getenv("NUM_SHARDS"));
-            int numShards = 1; // Default: single shard
-            if (numShardsConfig != null && !numShardsConfig.isEmpty()) {
-                try {
-                    numShards = Integer.parseInt(numShardsConfig);
-                    if (numShards <= 0) {
-                        System.err.println("⚠️  Invalid NUM_SHARDS: " + numShardsConfig + ", using default: 1");
-                        numShards = 1;
-                    }
-                } catch (NumberFormatException e) {
-                    System.err.println("⚠️  Invalid NUM_SHARDS format: " + numShardsConfig + ", using default: 1");
-                    numShards = 1;
-                }
-            }
-
-            // Create shard directory: single shard (shard 0) with all peers
-            java.util.List<String> allPeerUrls = new java.util.ArrayList<>();
-            allPeerUrls.add(selfUrl);
-            allPeerUrls.addAll(peerUrls);
-
-            ShardDirectory shardDirectory = new ShardDirectory(allPeerUrls);
-
-            ShardingStrategy shardingStrategy = new WalletShardingStrategy(numShards);
-
-            ShardRouter shardRouter = new ShardRouter(shardDirectory, shardingStrategy);
-
-            httpServer.getContext().setShardRouter(shardRouter);
-
-            System.out.println("✅ Shard Router initialized");
-            System.out.println("   - Number of shards: " + numShards);
-            System.out.println("   - Shard directory: " + shardDirectory.getNumShards() + " shard(s)");
-            System.out.println("   - Sharding strategy: Wallet-based");
-            if (shardingStrategy instanceof WalletShardingStrategy
-                && ((WalletShardingStrategy) shardingStrategy).isPowerOfTwo()) {
-                System.out.println("   - Power-of-2: Yes (optimal)");
-            } else if (logClusterStateDetails) {
-                System.out.println("   - Power-of-2: No (consider using power-of-2 for optimal performance)");
-            }
+            new ShardRouterInitializer().initialize(httpServer, selfUrl, peerUrls, logClusterStateDetails);
         } catch (Exception e) {
             System.err.println("⚠️  WARNING: Failed to initialize Shard Router: " + e.getMessage());
             System.err.println("   → Shard routing disabled, requests will route directly");
