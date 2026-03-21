@@ -37,9 +37,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
@@ -81,6 +78,7 @@ public class AeronClusterLauncher {
     private final List<String> hostnames;
     private final File baseDir;
     private final ClusteredService clusteredService;
+    private final AeronClusterAddressResolver addressResolver;
     
     private ClusteredMediaDriver clusteredMediaDriver;
     private ClusteredServiceContainer container;
@@ -93,10 +91,19 @@ public class AeronClusterLauncher {
     private MediaDriverHealthMonitor healthMonitor;
     
     public AeronClusterLauncher(int nodeId, List<String> hostnames, File baseDir, ClusteredService clusteredService) {
+        this(nodeId, hostnames, baseDir, clusteredService, AeronClusterAddressResolver.system(nodeId, hostnames));
+    }
+
+    AeronClusterLauncher(int nodeId,
+                         List<String> hostnames,
+                         File baseDir,
+                         ClusteredService clusteredService,
+                         AeronClusterAddressResolver addressResolver) {
         this.nodeId = nodeId;
         this.hostnames = hostnames;
         this.baseDir = baseDir;
         this.clusteredService = clusteredService;
+        this.addressResolver = addressResolver;
     }
     
     /**
@@ -155,12 +162,12 @@ public class AeronClusterLauncher {
         
         // 🌐 P2P-ORGANIC: Get our IP address FIRST (before resolving peers)
         // This ensures we use the correct validator-network IP, not client-network IP
-        String myIPAddress = getMyIPAddress();
+        String myIPAddress = addressResolver.resolveLocalNodeAddress(getHostname());
         
         // Now resolve hostnames to IP addresses with resilient retry logic
         // Peers that aren't ready yet will use placeholder IPs - Aeron will retry DNS resolution
         // Using IPs avoids DNS caching issues when containers/nodes restart
-        List<String> ipAddresses = resolveHostnamesToIPs(myIPAddress);
+        List<String> ipAddresses = addressResolver.resolveClusterMemberAddresses(myIPAddress);
         log.info("   Using IP addresses for Aeron Cluster channels (P2P-organic mode)");
         log.info("   My IP: {} (hostname: {})", myIPAddress, getHostname());
         log.info("   Note: Unavailable peers use placeholder IPs - Aeron will retry DNS when peers come online");
@@ -451,209 +458,6 @@ public class AeronClusterLauncher {
     
     private String getHostname() {
         return hostnames.get(nodeId);
-    }
-    
-    /**
-     * Resolve hostname to IP address for Aeron Cluster channels.
-     * 
-     * <p>P2P-ORGANIC APPROACH: Aggressive retry logic for P2P startup where peers
-     * may not be ready immediately. Uses exponential backoff for better resilience.
-     * 
-     * <p>Uses IP addresses instead of hostnames to avoid DNS caching issues
-     * when containers or validator nodes restart.
-     * 
-     * @param hostname Hostname to resolve
-     * @return IP address as string
-     * @throws RuntimeException if hostname cannot be resolved after retries
-     */
-    private static String getIPAddress(String hostname) {
-        final int maxRetries = 20; // Increased for P2P organic startup
-        int retryDelayMs = 1000; // Start with 1 second, exponential backoff
-        
-        for (int attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                String ip = InetAddress.getByName(hostname).getHostAddress();
-                if (attempt > 1) {
-                    log.info("✅ Resolved hostname {} to IP {} (attempt {}/{})", hostname, ip, attempt, maxRetries);
-                } else {
-                    log.debug("✅ Resolved hostname {} to IP {}", hostname, ip);
-                }
-                return ip;
-            } catch (UnknownHostException e) {
-                if (attempt < maxRetries) {
-                    if (attempt <= 3 || attempt % 5 == 0) {
-                        // Log first few attempts and every 5th attempt
-                        log.debug("⚠️  Failed to resolve hostname {} (attempt {}/{}), retrying in {}ms...", 
-                            hostname, attempt, maxRetries, retryDelayMs);
-                    }
-                    try {
-                        Thread.sleep(retryDelayMs);
-                        // Exponential backoff: 1s, 2s, 4s, 8s, then cap at 10s
-                        retryDelayMs = Math.min(retryDelayMs * 2, 10000);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        throw new RuntimeException("IP resolution interrupted", ie);
-                    }
-                } else {
-                    log.warn("⚠️  Failed to resolve hostname: {} after {} attempts ({}s total)", 
-                        hostname, maxRetries, (maxRetries * retryDelayMs) / 1000);
-                    throw new RuntimeException("Failed to resolve hostname: " + hostname + " after " + maxRetries + " attempts", e);
-                }
-            }
-        }
-        throw new RuntimeException("Should not reach here");
-    }
-    
-    /**
-     * Get IP address for this node's hostname.
-     * 
-     * CRITICAL: When a container has multiple network interfaces (e.g., validator-network + client-network),
-     * DNS resolution might return the wrong IP. We need the IP from the validator-network for Aeron Cluster.
-     * 
-     * Strategy:
-     * 1. First, try to resolve a peer hostname to see what subnet they're on
-     * 2. Enumerate network interfaces and prefer IPs from the same subnet as peers
-     * 3. If no peer subnet match, prefer IPs on common Docker network subnets (172.x.x.x)
-     * 4. Fallback to hostname resolution
-     */
-    private String getMyIPAddress() {
-        // First, try to determine the validator-network subnet by resolving a peer
-        String peerSubnet = null;
-        if (hostnames.size() > 1) {
-            // Find a peer hostname (not self)
-            for (int i = 0; i < hostnames.size(); i++) {
-                if (i != nodeId) {
-                    try {
-                        String peerIP = getIPAddress(hostnames.get(i));
-                        if (peerIP != null && peerIP.startsWith("172.")) {
-                            // Extract subnet (first 3 octets)
-                            String[] parts = peerIP.split("\\.");
-                            if (parts.length >= 3) {
-                                peerSubnet = parts[0] + "." + parts[1] + "." + parts[2];
-                                log.info("   Detected validator-network subnet: {}.x (from peer {})", peerSubnet, hostnames.get(i));
-                                break;
-                            }
-                        }
-                    } catch (Exception e) {
-                        // Peer not resolvable yet - continue
-                    }
-                }
-            }
-        }
-        
-        // Enumerate network interfaces to find the IP on validator-network
-        // Prefer IPs from the same subnet as peers (validator-network)
-        try {
-            java.util.List<String> candidateIPs = new java.util.ArrayList<>();
-            java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
-            while (interfaces.hasMoreElements()) {
-                java.net.NetworkInterface iface = interfaces.nextElement();
-                if (iface.isLoopback() || !iface.isUp()) {
-                    continue;
-                }
-                java.util.Enumeration<java.net.InetAddress> addresses = iface.getInetAddresses();
-                while (addresses.hasMoreElements()) {
-                    java.net.InetAddress addr = addresses.nextElement();
-                    if (addr instanceof java.net.Inet4Address && !addr.isLoopbackAddress()) {
-                        String ip = addr.getHostAddress();
-                        if (ip.startsWith("172.")) {
-                            // If we know the peer subnet, prefer IPs from that subnet
-                            if (peerSubnet != null && ip.startsWith(peerSubnet + ".")) {
-                                log.info("   ✅ Found validator-network IP: {} (interface: {}, matches peer subnet)", ip, iface.getName());
-                                return ip; // Perfect match - return immediately
-                            }
-                            candidateIPs.add(ip);
-                            log.debug("   Found candidate IP: {} (interface: {})", ip, iface.getName());
-                        }
-                    }
-                }
-            }
-            
-            // If we found candidates but no perfect match, return the first one
-            if (!candidateIPs.isEmpty()) {
-                String selectedIP = candidateIPs.get(0);
-                log.info("   Using network interface IP: {} (interface: {}, {} candidates found)", 
-                    selectedIP, "unknown", candidateIPs.size());
-                return selectedIP;
-            }
-        } catch (Exception e) {
-            log.warn("Failed to enumerate network interfaces: {}", e.getMessage());
-        }
-        
-        // Fallback: Use hostname resolution (might work)
-        try {
-            return getIPAddress(getHostname());
-        } catch (Exception e) {
-            log.error("❌ CRITICAL: Failed to determine IP address for Aeron Cluster", e);
-            throw new RuntimeException("Cannot determine IP address for Aeron Cluster", e);
-        }
-    }
-    
-    /**
-     * Resolve all hostnames to IP addresses with retry logic.
-     * 
-     * <p>P2P-ORGANIC APPROACH: Nodes can start in any order. We resolve hostnames
-     * with aggressive retry logic, but if a peer isn't ready yet, we still include
-     * it in the cluster members list (Aeron Cluster will handle unavailable peers).
-     * 
-     * <p>This allows:
-     * - Any node to start first (no genesis ordering required)
-     * - Peers to join dynamically as they become available
-     * - Quorum to form organically as nodes come online
-     * 
-     * @param myIPAddress The IP address for self (already determined via getMyIPAddress())
-     * @return List of IP addresses corresponding to hostnames (may include hostnames if resolution fails)
-     */
-    private List<String> resolveHostnamesToIPs(String myIPAddress) {
-        List<String> ipAddresses = new ArrayList<>();
-        log.info("🌐 Resolving {} hostnames to IP addresses (P2P-organic, retry logic)...", hostnames.size());
-        
-        int resolved = 0;
-        int failed = 0;
-        
-        for (int i = 0; i < hostnames.size(); i++) {
-            String hostname = hostnames.get(i);
-            boolean isSelf = (i == nodeId);
-            
-            if (isSelf) {
-                // Use the IP we already determined (from getMyIPAddress())
-                // This ensures we use the validator-network IP, not client-network IP
-                ipAddresses.add(myIPAddress);
-                resolved++;
-                log.info("   ✅ Self (node {}): {} → {} (validator-network IP)", i, hostname, myIPAddress);
-            } else {
-                // For peers: Try to resolve, but don't fail if peer isn't ready yet
-                // Aeron Cluster can handle unavailable peers and will connect when they come online
-                try {
-                    String ip = getIPAddress(hostname);
-                    ipAddresses.add(ip);
-                    resolved++;
-                    log.info("   ✅ Peer (node {}): {} → {}", i, hostname, ip);
-                } catch (RuntimeException e) {
-                    // P2P-ORGANIC: If peer isn't ready after aggressive retries, we need to handle gracefully
-                    // Aeron Cluster requires all members to be specified, but we can't use invalid IPs
-                    // 
-                    // Strategy: Store hostname and retry DNS resolution in background thread
-                    // For now, use hostname - Aeron's UDP channel builder will handle DNS resolution
-                    // with its own retry logic when the peer comes online
-                    log.warn("   ⚠️  Peer (node {}) not resolvable yet: {} - using hostname (Aeron will retry DNS)", i, hostname);
-                    log.warn("      This is normal in P2P startup - Aeron Cluster will retry DNS resolution periodically");
-                    // Use hostname - Aeron Cluster's UDP channel builder has DNS retry logic
-                    // When peer comes online, DNS will resolve and Aeron will establish connection
-                    ipAddresses.add(hostname); // Aeron will handle DNS resolution with retry
-                    failed++;
-                }
-            }
-        }
-        
-        log.info("✅ Resolved {}/{} hostnames to IP addresses ({} pending peer startup)", 
-            resolved, hostnames.size(), failed);
-        
-        if (failed > 0) {
-            log.info("🌐 P2P Mode: {} peer(s) will connect when they come online", failed);
-        }
-        
-        return ipAddresses;
     }
     
     public static int calculatePort(int nodeId, int offset) {
