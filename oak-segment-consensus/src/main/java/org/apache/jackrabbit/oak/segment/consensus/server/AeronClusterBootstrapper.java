@@ -23,7 +23,6 @@ import java.util.List;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
-import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -166,41 +165,12 @@ public final class AeronClusterBootstrapper {
             }
         }
 
-        // Create AeronWriteClient for external write submissions
-        String aeronDirectoryName = aeronClusterLauncher.getAeronDirectoryName();
-        int clusterBasePort = AeronClusterLauncher.getPortBase();
-
-        AeronWriteClient aeronWriteClient =
-            new AeronWriteClient(0, aeronDirectoryName, hostnamesList, clusterBasePort, bootstrapPlan.clientHostname);
-
-        httpServer.setAeronClusterLauncher(aeronClusterLauncher);
-
-        if (httpServer.getContext().aeronPrometheusMetrics == null) {
-            java.util.concurrent.ScheduledExecutorService delayedInit =
-                java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
-            delayedInit.schedule(() -> {
-                try {
-                    io.aeron.Aeron aeron = aeronClusterLauncher.getAeron();
-                    if (aeron != null && httpServer.getContext().aeronPrometheusMetrics == null) {
-                        AeronPrometheusMetrics metrics = new AeronPrometheusMetrics(aeron);
-                        httpServer.getContext().setAeronPrometheusMetrics(metrics);
-                        System.out.println("✅ Aeron Prometheus metrics initialized (delayed)");
-                    }
-                } catch (Exception e) {
-                    System.err.println("⚠️  Failed to initialize Aeron Prometheus metrics: " + e.getMessage());
-                } finally {
-                    delayedInit.shutdown();
-                }
-            }, 5, java.util.concurrent.TimeUnit.SECONDS);
-        }
-
-        try {
-            aeronWriteClient.connect();
-        } catch (Exception e) {
-            System.err.println("   ⚠️  WARNING: Failed to connect AeronWriteClient: " + e.getMessage());
-        }
-
-        httpServer.setAeronWriteClient(aeronWriteClient);
+        AeronWriteClient aeronWriteClient = new AeronClusterRuntimeAttacher().attach(
+            httpServer,
+            aeronClusterLauncher,
+            hostnamesList,
+            bootstrapPlan.clientHostname
+        );
 
         try {
             new ShardRouterInitializer().initialize(httpServer, selfUrl, peerUrls, logClusterStateDetails);
