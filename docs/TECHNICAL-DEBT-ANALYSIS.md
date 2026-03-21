@@ -117,10 +117,13 @@
 **Review Checklist**:
 - [x] Dead code analysis ✅ Completed - 12 linter warnings identified
 - [x] Startup sequence documentation ✅ 3 state machines documented
+- [x] Clean startup evidence review ✅ See STARTUP-ARCHITECTURE-CLEANUP.md
+- [ ] Collapse Aeron-first boot path and demote standby to recovery-only
 - [ ] Error handling review 🔲 TODO
 - [ ] Unit test creation 🔲 TODO
 
 **Analysis Document**: [PHASE1-ANALYSIS-GLOBAL-STORE-SERVER.md](PHASE1-ANALYSIS-GLOBAL-STORE-SERVER.md)
+**Current Cleanup Task**: [STARTUP-ARCHITECTURE-CLEANUP.md](STARTUP-ARCHITECTURE-CLEANUP.md)
 
 ---
 
