@@ -104,6 +104,7 @@ public class GlobalStoreServer {
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
+    private final BootstrapModeCoordinator bootstrapModeCoordinator = new BootstrapModeCoordinator();
     private final ConsensusStartupCoordinator consensusStartupCoordinator = new ConsensusStartupCoordinator();
     private final GenesisStartupCoordinator genesisStartupCoordinator = new GenesisStartupCoordinator();
     private final ServerInfrastructureInitializer serverInfrastructureInitializer = new ServerInfrastructureInitializer();
@@ -365,97 +366,28 @@ public class GlobalStoreServer {
             // - If store is empty AND no peers → Create genesis, then start Aeron
             // - If store has data → Start Aeron directly (will replay Raft log)
             // ===========================================================================
-            if (isAeronMode) {
-                // Use directory emptiness check (done BEFORE FileStore build) instead of fileStore.size()
-                // This is more reliable - fileStore.size() might be > 0 even for a fresh FileStore
-                // if Oak creates initial segments, but directory emptiness is definitive
-                boolean storeIsEmpty = directoryIsEmpty;
-                
-                // Parse peer URLs for bootstrap
-                List<String> aeronPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(currentAeronConfig());
-                
-                // If bootstrap was needed before build, ensure it runs NOW (immediately after FileStore build)
-                // CRITICAL: Re-verify peer reachability AFTER FileStore build (peer might have come online)
-                // But use verified peer info from before build to avoid getting stuck
-                if (needsBootstrapBeforeBuild) {
-                    // ✈️ AERON MODE: Empty store + verified peers exist → Bootstrap Oak FileStore FIRST
-                    // This ensures all validators start with same genesis HEAD
-                    System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    System.out.println("✈️  AERON MODE: Empty store detected");
-                    System.out.println("   Bootstrapping Oak FileStore from verified peer BEFORE Aeron Cluster join");
-                    System.out.println("   This ensures deterministic genesis (all validators have same HEAD)");
-                    System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    
-                    // Store Aeron Cluster config for bootstrap callback
-                    // (Will be set later in start() method, but we need to mark as deferred)
-                    this.aeronClusterDeferred = true;
-                    // Store peer URLs for later use in bootstrap callback
-                    this.aeronPeerUrls = aeronPeers;
-                    
-                    // Use ValidatorBootstrap to sync Oak FileStore
-                    bootstrap = components().createValidatorBootstrap(fileStore, standbyPort);
-                    
-                    // Use verified bootstrap primary (from before FileStore build)
-                    String primaryHost = verifiedBootstrapPrimaryHost;
-                    int primaryPort = verifiedBootstrapPrimaryPort;
-                    
-                    // Fallback: If verified info not available, try system properties
-                    if (primaryHost.isEmpty()) {
-                        primaryHost = RuntimeConfigValueResolver.readString("bootstrap.primary.host", "");
-                        String bootstrapPrimaryPortStr = RuntimeConfigValueResolver.readString("bootstrap.primary.port", String.valueOf(port + 1));
-                        try {
-                            primaryPort = Integer.parseInt(bootstrapPrimaryPortStr);
-                        } catch (NumberFormatException e) {
-                            primaryPort = port + 1;
-                        }
-                    }
-                    
-                    // Final fallback: Use first peer from consensus.peers
-                    if (primaryHost.isEmpty() && !aeronPeers.isEmpty()) {
-                        String firstPeer = aeronPeers.get(0);
-                        primaryHost = firstPeer.replace("http://", "").replace("https://", "").split(":")[0];
-                        try {
-                            int httpPort = Integer.parseInt(firstPeer.split(":")[2]);
-                            primaryPort = httpPort + 1; // Standby port = HTTP port + 1
-                        } catch (Exception e) {
-                            primaryPort = port + 1; // Fallback
-                        }
-                        System.out.println("   Using first peer as bootstrap primary: " + primaryHost + ":" + primaryPort);
-                    }
-                    
-                    if (primaryHost.isEmpty()) {
-                        // CRITICAL: Don't get stuck - fall back to GENESIS mode
-                        System.err.println("❌ ERROR: Bootstrap needed but no primary host available");
-                        System.err.println("   Falling back to GENESIS mode (this node will create genesis state)");
-                        detectedMode = BootstrapMode.GENESIS;
-                        bootstrap = components().createValidatorBootstrap(fileStore, standbyPort);
-                    } else {
-                        // Store verified primary info for bootstrap
-                        this.bootstrapPrimaryHost = primaryHost;
-                        this.bootstrapPrimaryPort = primaryPort;
-                        detectedMode = BootstrapMode.STANDBY; // Will bootstrap Oak FileStore
-                        System.out.println("   Bootstrap mode: STANDBY (will sync Oak FileStore, then start Aeron Cluster)");
-                        System.out.println("   Bootstrap primary: " + primaryHost + ":" + primaryPort);
-                    }
-                } else if (storeIsEmpty) {
-                    // ✈️ AERON MODE (PARALLEL LAUNCH): Empty store → Start Aeron cluster, genesis created by elected leader
-                    System.out.println("✈️  AERON MODE: Empty store detected");
-                    System.out.println("   Starting Aeron Cluster in parallel with peers");
-                    System.out.println("   Genesis will be created by elected leader via consensus");
-                    System.out.println("   All validators will replicate genesis → identical HEADs");
-                    detectedMode = BootstrapMode.PRIMARY; // Start Aeron directly, let consensus handle genesis
-                    // Initialize bootstrap for StandbyServerSync (so late-joining validators can sync)
-                    bootstrap = components().createValidatorBootstrap(fileStore, standbyPort);
-                } else {
-                    // ✈️ AERON MODE: Store has data → Start Aeron directly
-                    // Aeron will handle Raft log bootstrap/replay
-                    System.out.println("✈️  AERON MODE: Existing store found");
-                    System.out.println("   Starting Aeron Cluster (will replay Raft log if needed)");
-                    detectedMode = BootstrapMode.PRIMARY;
-                    // Initialize bootstrap for StandbyServerSync (so late-joining validators can sync)
-                    bootstrap = components().createValidatorBootstrap(fileStore, standbyPort);
-                }
+            BootstrapModeCoordinator.Resolution bootstrapResolution = bootstrapModeCoordinator.resolve(
+                new BootstrapModeCoordinator.StartupContext(
+                    isAeronMode,
+                    directoryIsEmpty,
+                    needsBootstrapBeforeBuild,
+                    fileStore,
+                    port,
+                    standbyPort,
+                    verifiedBootstrapPrimaryHost,
+                    verifiedBootstrapPrimaryPort,
+                    currentAeronConfig(),
+                    components()
+                )
+            );
+            detectedMode = bootstrapResolution.getDetectedMode();
+            bootstrap = bootstrapResolution.getBootstrap();
+            this.aeronClusterDeferred = bootstrapResolution.isAeronClusterDeferred();
+            if (bootstrapResolution.isAeronClusterDeferred()) {
+                this.aeronPeerUrls = bootstrapResolution.getAeronPeerUrls();
             }
+            this.bootstrapPrimaryHost = bootstrapResolution.getBootstrapPrimaryHost();
+            this.bootstrapPrimaryPort = bootstrapResolution.getBootstrapPrimaryPort();
             
             // ✈️ AERON-ONLY: Handle STANDBY bootstrap (sync FileStore, then start Aeron Cluster)
             if (detectedMode == BootstrapMode.STANDBY) {
