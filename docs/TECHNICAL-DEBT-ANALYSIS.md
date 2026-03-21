@@ -26,7 +26,7 @@
 | Module | Total LOC | Files | Avg LOC/File | Largest File |
 |--------|-----------|-------|--------------|--------------|
 | **oak-segment-consensus** | ~25,000+ | 70+ | ~360 | AeronConsensusEngine (4,586) |
-| **oak-segment-http** | ~3,000+ | 14 | ~215 | HttpPersistenceService (336) |
+| **oak-segment-http** | ~1,700+ | 10 | ~175 | HttpPersistenceService (336) |
 | **oak-blob-cloud-ipfs** | ~590 | 2 | ~295 | IPFSBackend (422) |
 | **oak-auth-web3** | ~3,000 | 10 | ~300 | Web3BiometricLoginModule (536) |
 
@@ -58,7 +58,7 @@
 | 🟢 P2 | LocalP256Verifier | 413 | auth-web3 | 15 | 🔲 TODO |
 | 🟢 P2 | ChallengeService | 405 | auth-web3 | 28 | 🔲 TODO |
 | 🟢 P2 | HttpPersistenceService | 336 | http | 0 | 🔲 TODO |
-| 🟢 P2 | SlingAuthorRegistrationService | 335 | http | 0 | 🔲 TODO |
+| 🟢 P2 | HttpSegmentArchiveManager | 235 | http | 0 | 🔲 TODO |
 | 🟢 P2 | Web3BiometricLoginModuleFactory | 314 | auth-web3 | 0 | 🔲 TODO |
 
 ---
@@ -357,19 +357,19 @@
 | Class | LOC | Purpose | Tests | Review Status |
 |-------|-----|---------|-------|---------------|
 | HttpPersistenceService | 336 | OSGi service for HTTP persistence | 0 | 🔲 TODO |
-| SlingAuthorRegistrationService | 335 | Author registration with validator | 0 | 🔲 TODO |
-| EthereumWallet | 292 | Wallet management | 0 | 🔲 TODO |
-| SlingDeleteProposalService | 264 | Delete proposal client | 0 | 🔲 TODO |
-| SlingWriteProposalService | 250 | Write proposal client | 5 | 🔲 TODO |
 | HttpSegmentArchiveManager | 235 | Archive management | 0 | 🔲 TODO |
 | HttpClientPool | 209 | HTTP connection pooling | 0 | 🔲 TODO |
-| HttpSegmentArchiveReader | 175 | Segment reading | 0 | 🔲 TODO |
-| SlingAuthorWalletService | 170 | Wallet service | 0 | 🔲 TODO |
-| HttpJournalFile | 165 | Journal file access | 0 | 🔲 TODO |
-| HttpPersistence | 147 | Persistence factory | 15 | ✅ DONE |
-| ValidatorAuthHelper | 122 | Auth helper | 0 | 🔲 TODO |
-| HttpManifestFile | 97 | Manifest file access | 0 | 🔲 TODO |
-| HttpGCJournalFile | 83 | GC journal access | 0 | 🔲 TODO |
+| HttpSegmentArchiveReader | 144 | Segment reading | 0 | 🔲 TODO |
+| HttpClientPool.ConnectionPoolMonitor | 127 | Pool watchdog thread | 0 | 🔲 TODO |
+| ValidatorAuthHelper | 122 | Auth helper | 4 | ✅ DONE |
+| HttpJournalFile | 146 | Journal file access | 0 | 🔲 TODO |
+| HttpPersistence | 155 | Persistence factory | 16 | ✅ DONE |
+| HttpManifestFile | 83 | Manifest file access | 0 | 🔲 TODO |
+| HttpGCJournalFile | 80 | GC journal access | 0 | 🔲 TODO |
+| Http2ClientPool | 228 | HTTP/2 connection pooling | 0 | 🔲 TODO |
+
+**Scope Note**: Client-side wallet, registration, and write-proposal classes were removed from `oak-segment-http`.
+They now belong in `oak-segment-consensus` or `oak-chain-connector`, leaving this module focused on read-only transport and lazy mount behavior.
 
 ---
 

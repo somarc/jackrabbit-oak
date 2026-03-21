@@ -16,11 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.http;
 
-import org.apache.http.client.config.RequestConfig;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
 import org.apache.jackrabbit.oak.segment.spi.persistence.SegmentNodeStorePersistence;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceRegistration;
@@ -34,7 +29,6 @@ import org.osgi.service.metatype.annotations.ObjectClassDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.util.Dictionary;
 import java.util.Hashtable;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -100,6 +94,7 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
 
     private static final Logger log = LoggerFactory.getLogger(HttpPersistenceService.class);
 
+    private final ValidatorHealthProbe healthProbe;
     private HttpPersistence delegate;
     private String globalStoreUrl;
     private boolean lazyMount;
@@ -112,6 +107,14 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
     private Thread healthCheckThread;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicBoolean validatorAvailable = new AtomicBoolean(false);
+
+    public HttpPersistenceService() {
+        this(new HttpValidatorHealthProbe());
+    }
+
+    HttpPersistenceService(ValidatorHealthProbe healthProbe) {
+        this.healthProbe = healthProbe;
+    }
 
     @Activate
     protected void activate(BundleContext bundleContext, Configuration config) {
@@ -183,34 +186,7 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
      * Check if the validator is reachable by making a lightweight HTTP request.
      */
     private boolean checkValidatorHealth() {
-        // Use a short timeout for health checks
-        RequestConfig requestConfig = RequestConfig.custom()
-            .setConnectTimeout(connectionTimeoutMs)
-            .setSocketTimeout(connectionTimeoutMs)
-            .setConnectionRequestTimeout(connectionTimeoutMs)
-            .build();
-
-        try (CloseableHttpClient client = HttpClients.custom()
-                .setDefaultRequestConfig(requestConfig)
-                .build()) {
-            
-            // Try to fetch journal.log - this is what the mount will need
-            String url = globalStoreUrl + "/journal.log";
-            HttpGet request = new HttpGet(url);
-            
-            try (CloseableHttpResponse response = client.execute(request)) {
-                int status = response.getStatusLine().getStatusCode();
-                if (status == 200) {
-                    return true;
-                } else {
-                    log.debug("Health check failed: HTTP {} from {}", status, url);
-                    return false;
-                }
-            }
-        } catch (IOException e) {
-            log.debug("Health check failed: {} - {}", globalStoreUrl, e.getMessage());
-            return false;
-        }
+        return healthProbe.isAvailable(globalStoreUrl, connectionTimeoutMs);
     }
 
     /**
@@ -333,4 +309,3 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
         return delegate.lockRepository();
     }
 }
-

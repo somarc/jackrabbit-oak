@@ -84,22 +84,9 @@ public class AgentDiscoveryTool implements AgenticTool {
         if ("sling-author".equals(agentType)) {
             try {
                 Object bundleContext = getBundleContext();
-                if (bundleContext != null) {
-                    Object serviceRef = bundleContext.getClass()
-                        .getMethod("getServiceReference", String.class)
-                        .invoke(bundleContext, "org.apache.jackrabbit.oak.segment.http.wallet.SlingAuthorWalletService");
-                    if (serviceRef != null) {
-                        Object walletService = bundleContext.getClass()
-                            .getMethod("getService", Class.forName("org.osgi.framework.ServiceReference"))
-                            .invoke(bundleContext, serviceRef);
-                        if (walletService != null) {
-                            String address = (String) walletService.getClass()
-                                .getMethod("getWalletAddress").invoke(walletService);
-                            if (address != null && !address.isEmpty()) {
-                                return address;
-                            }
-                        }
-                    }
+                String address = getWalletAddressFromOsgi(bundleContext);
+                if (address != null && !address.isEmpty()) {
+                    return address;
                 }
             } catch (Exception e) {
                 log.debug("Could not get wallet address from OSGi service", e);
@@ -118,6 +105,36 @@ public class AgentDiscoveryTool implements AgenticTool {
         long pid = ProcessHandle.current().pid();
         long timestamp = System.currentTimeMillis();
         return String.format("temp-%s-%d-%d", hostname, pid, timestamp);
+    }
+
+    private String getWalletAddressFromOsgi(Object bundleContext) throws Exception {
+        if (bundleContext == null) {
+            return null;
+        }
+        String[] serviceNames = {
+            "com.oakchain.connector.wallet.SlingAuthorWalletService",
+            "org.apache.jackrabbit.oak.segment.http.wallet.SlingAuthorWalletService"
+        };
+        for (String serviceName : serviceNames) {
+            Object serviceRef = bundleContext.getClass()
+                .getMethod("getServiceReference", String.class)
+                .invoke(bundleContext, serviceName);
+            if (serviceRef == null) {
+                continue;
+            }
+            Object walletService = bundleContext.getClass()
+                .getMethod("getService", Class.forName("org.osgi.framework.ServiceReference"))
+                .invoke(bundleContext, serviceRef);
+            if (walletService == null) {
+                continue;
+            }
+            String address = (String) walletService.getClass()
+                .getMethod("getWalletAddress").invoke(walletService);
+            if (address != null && !address.isEmpty()) {
+                return address;
+            }
+        }
+        return null;
     }
     
     /**

@@ -75,8 +75,7 @@
               org.apache.jackrabbit.oak.segment.http,
               org.apache.jackrabbit.oak.segment.http.client,
               org.apache.jackrabbit.oak.segment.http.server,
-              org.apache.jackrabbit.oak.segment.http.osgi,
-              org.apache.jackrabbit.oak.segment.http.wallet
+              org.apache.jackrabbit.oak.segment.http.osgi
             </Export-Package>
           </instructions>
         </configuration>

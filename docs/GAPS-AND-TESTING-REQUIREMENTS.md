@@ -369,19 +369,19 @@ Biometric Authentication Flow:
 
 | Test Class | Tests | Coverage Area |
 |------------|-------|---------------|
-| `SlingWriteProposalServiceTest` | 5 | Write proposal client |
-| `EndToEndWriteFlowTest` | 3 | E2E write flow |
-| `HttpPersistenceTest` | 15 | HTTP persistence layer (NEW) |
-| **Total** | **~23** | |
+| `HttpPersistenceTest` | 16 | HTTP persistence layer |
+| `ValidatorAuthHelperTest` | 4 | Validator auth header behavior |
+| **Total** | **20** | |
 
 **Recent Improvements (January 2026):**
-- **NEW**: `HttpPersistenceTest` covers URL normalization, file creation, lock handling
+- `HttpPersistenceTest` covers URL normalization, file creation, and lock handling
+- `ValidatorAuthHelperTest` covers token resolution and auth-header injection
 
 **Missing Test Coverage:**
 - `HttpPersistenceService` - 0 tests (OSGi lifecycle)
 - `HttpSegmentArchiveReader` - 0 tests
-- `SlingDeleteProposalService` - 0 tests
-- `SlingAuthorWalletService` - 0 tests
+- `HttpSegmentArchiveManager` - 0 tests
+- `HttpClientPool` / `Http2ClientPool` - 0 tests
 
 ### oak-blob-cloud-ipfs
 
@@ -566,11 +566,11 @@ public class HttpPersistenceServiceTest {
     @Test void testDeactivate();
 }
 
-// SlingDeleteProposalServiceTest.java
-public class SlingDeleteProposalServiceTest {
-    @Test void testProposeDeleteSuccess();
-    @Test void testProposeDeleteOwnershipViolation();
-    @Test void testProposeDeleteWalletUnavailable();
+// HttpSegmentArchiveReaderTest.java
+public class HttpSegmentArchiveReaderTest {
+    @Test void testReadSegmentFromRemoteArchive();
+    @Test void testMissingSegmentReturnsNotFound();
+    @Test void testRemoteErrorSurfaceIsDeterministic();
 }
 ```
 

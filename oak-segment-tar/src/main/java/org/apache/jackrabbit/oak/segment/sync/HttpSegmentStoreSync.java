@@ -157,16 +157,16 @@ public class HttpSegmentStoreSync implements Runnable {
         log.info("  Running from oak-segment-tar (Cold Standby pattern)");
         log.info("  Direct access to ReadOnlyFileStore internals");
         
-        // Register with validator after successful activation
-        // Registration is now handled by SlingAuthorRegistrationService
-        // Only register here if wallet address is available (for backward compatibility)
-        // Otherwise, SlingAuthorRegistrationService will register once wallet is ready
+        // Register with validator after successful activation only when an
+        // explicit wallet address is configured on this sync component.
+        // Read-only HTTP mount behavior does not depend on a separate wallet
+        // service inside oak-segment-http.
         if (walletAddress != null && !walletAddress.isEmpty()) {
             log.debug("Calling registerWithValidator()");
             registerWithValidator();
         } else {
             log.debug("Skipping registration - wallet address not available");
-            log.debug("Registration will be handled by SlingAuthorRegistrationService when wallet is ready");
+            log.debug("Read-only sync will continue without validator registration");
         }
     }
     
@@ -473,4 +473,3 @@ public class HttpSegmentStoreSync implements Runnable {
         }
     }
 }
-
