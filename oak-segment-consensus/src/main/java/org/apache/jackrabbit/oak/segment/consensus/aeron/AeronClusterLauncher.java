@@ -26,7 +26,6 @@ import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
 import org.agrona.CloseHelper;
 import org.agrona.ErrorHandler;
-import org.agrona.IoUtil;
 import org.agrona.concurrent.ShutdownSignalBarrier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -130,10 +129,6 @@ public class AeronClusterLauncher {
         log.info("   Base Dir: {}", baseDir.getAbsolutePath());
         log.info("   Cluster Members: {}", hostnames.size());
         
-        // ✅ ADR 025: Aeron directory cleanup on startup (optional)
-        // Prevents "zombie Aeron directory" failures after unclean shutdown
-        cleanupAeronDirectoryIfRequested();
-        
         // Check if this is a fresh start (no cluster state)
         File clusterDir = new File(baseDir, "cluster");
         boolean isFreshStart = !clusterDir.exists() || (clusterDir.exists() && clusterDir.listFiles() == null || clusterDir.listFiles().length == 0);
@@ -186,53 +181,7 @@ public class AeronClusterLauncher {
             this::performShutdown,
             () -> shutdownCallback
         );
-        
-        // Check for crash markers from previous runs OR stale MediaDriver directory
-        // ActiveDriverException occurs when MediaDriver directory exists but process is dead
-        File aeronDir = new File(aeronDirName);
-        boolean hasCrashMarkers = crashHandler.hasCrashed();
-        boolean aeronDirExists = aeronDir.exists();
-        
-        if (hasCrashMarkers || aeronDirExists) {
-            if (hasCrashMarkers) {
-                log.warn("⚠️  Crash markers detected from previous run: {}", crashHandler.getState());
-            }
-            if (aeronDirExists) {
-                log.warn("⚠️  Stale MediaDriver directory detected: {}", aeronDirName);
-                log.warn("   This may cause ActiveDriverException if MediaDriver didn't shut down cleanly");
-            }
-            
-            // Check if MediaDriver process is actually running
-            boolean mediaDriverRunning = false;
-            try {
-                // Check for MediaDriver lock file (indicates active driver)
-                File lockFile = new File(aeronDir, "driver.lock");
-                if (lockFile.exists()) {
-                    // Try to read PID from lock file (if available)
-                    // If lock file exists but process is dead, we can safely delete
-                    log.debug("MediaDriver lock file exists: {}", lockFile.getAbsolutePath());
-                }
-            } catch (Exception e) {
-                log.debug("Could not check MediaDriver lock file: {}", e.getMessage());
-            }
-            
-            // Clean up stale MediaDriver directory
-            // This prevents ActiveDriverException from stale directories
-            if (aeronDir.exists()) {
-                log.warn("🧹 Cleaning up stale MediaDriver directory: {}", aeronDirName);
-                try {
-                    IoUtil.delete(aeronDir, true);
-                    log.info("✅ Cleaned up stale MediaDriver directory");
-                } catch (Exception e) {
-                    log.warn("⚠️  Failed to clean up MediaDriver directory: {}", e.getMessage());
-                    log.warn("   You may need to manually delete: {}", aeronDirName);
-                    // Continue anyway - MediaDriver might handle it or fail with clear error
-                }
-            }
-        }
-        if (crashHandler.shouldForceBootstrap()) {
-            log.warn("🚨 Force bootstrap marker detected - will bootstrap on startup");
-        }
+        new AeronClusterStartupPreflight(nodeId, crashHandler).run(aeronDirName);
         
         // Media Driver Context
         // ✈️ AERON RESILIENCE: Enhanced configuration for stability and performance
@@ -561,58 +510,6 @@ public class AeronClusterLauncher {
             this.timeoutNs = timeoutNs;
             this.source = source;
             this.environment = environment;
-        }
-    }
-    
-    /**
-     * ✅ ADR 025: Clean up stale Aeron directory on startup (optional).
-     * 
-     * <p>Prevents "zombie Aeron directory" failures after unclean shutdown (SIGKILL, host crash).
-     * Stale control files in /dev/shm can prevent nodes from rejoining cluster.
-     * 
-     * <p><strong>Configuration:</strong>
-     * <ul>
-     *   <li>Production: {@code -Daeron.delete.dirs.on.startup=false} (preserve state)</li>
-     *   <li>Dev/Test: {@code -Daeron.delete.dirs.on.startup=true} (clean slate)</li>
-     * </ul>
-     * 
-     * <p><strong>Pattern from oak-repository-service:</strong>
-     * Proven in Adobe's production AEM repository service.
-     */
-    private void cleanupAeronDirectoryIfRequested() {
-        boolean deleteDirsOnStartup = Boolean.getBoolean("aeron.delete.dirs.on.startup");
-        
-        if (!deleteDirsOnStartup) {
-            log.debug("Aeron directory cleanup disabled (aeron.delete.dirs.on.startup=false)");
-            return;
-        }
-        
-        // Determine Aeron directory path
-        String aeronDirPath = System.getProperty(
-            "aeron.dir.name",
-            CommonContext.getAeronDirectoryName() + "-node-" + nodeId
-        );
-        File aeronDir = new File(aeronDirPath);
-        
-        if (!aeronDir.exists()) {
-            log.debug("Aeron directory does not exist, nothing to clean: {}", aeronDir.getAbsolutePath());
-            return;
-        }
-        
-        log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.warn("🧹 Cleaning stale Aeron directory (aeron.delete.dirs.on.startup=true)");
-        log.warn("   Path: {}", aeronDir.getAbsolutePath());
-        log.warn("   ⚠️  This should be DISABLED in production!");
-        log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        
-        try {
-            IoUtil.delete(aeronDir, false);
-            log.info("✅ Aeron directory cleaned successfully");
-        } catch (Exception e) {
-            log.error("❌ Failed to clean Aeron directory - manual cleanup may be required", e);
-            log.error("   Path: {}", aeronDir.getAbsolutePath());
-            log.error("   Manual cleanup: rm -rf {}", aeronDir.getAbsolutePath());
-            throw new RuntimeException("Aeron directory cleanup failed - cannot proceed", e);
         }
     }
 }
