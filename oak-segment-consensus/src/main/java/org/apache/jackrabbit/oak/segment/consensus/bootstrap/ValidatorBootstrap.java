@@ -43,16 +43,26 @@ public class ValidatorBootstrap {
     
     private final FileStore fileStore;
     private final int standbyPort;
+    private final BootstrapRuntimeFactory runtimeFactory;
+    private final CatchupChecker catchupChecker;
     private String primaryUrl;  // HTTP endpoint of primary (for HEAD comparison)
-    private StandbyClientSync standbyClient;
-    private StandbyServerSync standbyServer;
+    private BootstrapRuntimeClient standbyClient;
+    private BootstrapRuntimeServer standbyServer;
     private ScheduledExecutorService syncScheduler;
     private final AtomicBoolean promoted = new AtomicBoolean(false);
-    private final BootstrapCatchupChecker catchupChecker = new BootstrapCatchupChecker();
     
     public ValidatorBootstrap(FileStore fileStore, int standbyPort) {
+        this(fileStore, standbyPort, new DefaultBootstrapRuntimeFactory(), new BootstrapCatchupChecker()::isCaughtUp);
+    }
+
+    ValidatorBootstrap(FileStore fileStore,
+                       int standbyPort,
+                       BootstrapRuntimeFactory runtimeFactory,
+                       CatchupChecker catchupChecker) {
         this.fileStore = fileStore;
         this.standbyPort = standbyPort;
+        this.runtimeFactory = runtimeFactory;
+        this.catchupChecker = catchupChecker;
     }
     
     /**
@@ -99,18 +109,11 @@ public class ValidatorBootstrap {
         
         try {
             // Create StandbyClientSync
-            standbyClient = StandbyClientSync.builder()
-                .withHost(primaryHost)
-                .withPort(primaryPort)
-                .withFileStore(fileStore)
-                .withReadTimeoutMs(30000)
-                .withAutoClean(true)
-                .withSpoolFolder(new File(System.getProperty("java.io.tmpdir"), "oak-standby"))
-                .build();
+            standbyClient = runtimeFactory.createStandbyClient(primaryHost, primaryPort, fileStore);
             
             // Run initial sync (blocking)
             log.info("🔄 Starting initial sync...");
-            standbyClient.run();
+            standbyClient.sync();
             
             long segmentCount = fileStore.size() / (256 * 1024);  // Rough estimate
             log.info("✅ Initial sync complete!");
@@ -126,15 +129,11 @@ public class ValidatorBootstrap {
             
             // Schedule periodic sync
             log.info("⏱️  Scheduling periodic sync (every 5 seconds)...");
-            syncScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "standby-sync");
-                t.setDaemon(true);
-                return t;
-            });
+            syncScheduler = runtimeFactory.createSyncScheduler();
             
             syncScheduler.scheduleAtFixedRate(() -> {
                 try {
-                    standbyClient.run();
+                    standbyClient.sync();
                     
                     long currentSize = fileStore.size() / (1024 * 1024);
                     log.info("   Sync progress: {} MB", currentSize);
@@ -213,11 +212,7 @@ public class ValidatorBootstrap {
         log.info("🔌 Starting StandbyServerSync on port {}...", standbyPort);
         
         try {
-            standbyServer = StandbyServerSync.builder()
-                .withPort(standbyPort)
-                .withFileStore(fileStore)
-                .withBlobChunkSize(1024 * 1024)  // 1 MB chunks
-                .build();
+            standbyServer = runtimeFactory.createStandbyServer(standbyPort, fileStore);
             
             standbyServer.start();
             log.info("✅ StandbyServerSync started (serving other standbys)");
@@ -323,5 +318,100 @@ public class ValidatorBootstrap {
         STANDBY,
         /** Existing validator - join consensus immediately */
         PRIMARY
+    }
+
+    interface CatchupChecker {
+        boolean isCaughtUp(FileStore fileStore, String primaryUrl);
+    }
+
+    interface BootstrapRuntimeClient {
+        void sync() throws Exception;
+
+        void close() throws Exception;
+    }
+
+    interface BootstrapRuntimeServer {
+        void start() throws Exception;
+
+        void close() throws Exception;
+    }
+
+    interface BootstrapRuntimeFactory {
+        BootstrapRuntimeClient createStandbyClient(String primaryHost, int primaryPort, FileStore fileStore) throws Exception;
+
+        BootstrapRuntimeServer createStandbyServer(int standbyPort, FileStore fileStore) throws Exception;
+
+        ScheduledExecutorService createSyncScheduler();
+    }
+
+    private static final class DefaultBootstrapRuntimeFactory implements BootstrapRuntimeFactory {
+        @Override
+        public BootstrapRuntimeClient createStandbyClient(String primaryHost, int primaryPort, FileStore fileStore)
+                throws Exception {
+            StandbyClientSync client = StandbyClientSync.builder()
+                .withHost(primaryHost)
+                .withPort(primaryPort)
+                .withFileStore(fileStore)
+                .withReadTimeoutMs(30000)
+                .withAutoClean(true)
+                .withSpoolFolder(new File(System.getProperty("java.io.tmpdir"), "oak-standby"))
+                .build();
+            return new DefaultBootstrapRuntimeClient(client);
+        }
+
+        @Override
+        public BootstrapRuntimeServer createStandbyServer(int standbyPort, FileStore fileStore) throws Exception {
+            StandbyServerSync server = StandbyServerSync.builder()
+                .withPort(standbyPort)
+                .withFileStore(fileStore)
+                .withBlobChunkSize(1024 * 1024)
+                .build();
+            return new DefaultBootstrapRuntimeServer(server);
+        }
+
+        @Override
+        public ScheduledExecutorService createSyncScheduler() {
+            return Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "standby-sync");
+                t.setDaemon(true);
+                return t;
+            });
+        }
+    }
+
+    private static final class DefaultBootstrapRuntimeClient implements BootstrapRuntimeClient {
+        private final StandbyClientSync delegate;
+
+        private DefaultBootstrapRuntimeClient(StandbyClientSync delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void sync() {
+            delegate.run();
+        }
+
+        @Override
+        public void close() throws Exception {
+            delegate.close();
+        }
+    }
+
+    private static final class DefaultBootstrapRuntimeServer implements BootstrapRuntimeServer {
+        private final StandbyServerSync delegate;
+
+        private DefaultBootstrapRuntimeServer(StandbyServerSync delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void start() throws Exception {
+            delegate.start();
+        }
+
+        @Override
+        public void close() throws Exception {
+            delegate.close();
+        }
     }
 }
