@@ -61,12 +61,18 @@ import java.util.concurrent.atomic.AtomicReference;
 public class LazyHttpNodeStore implements NodeStore, Closeable {
     
     private static final Logger LOG = LoggerFactory.getLogger(LazyHttpNodeStore.class);
+
+    @FunctionalInterface
+    interface RemoteNodeStoreFactory {
+        NodeStore create(String endpoint, String mountName, long connectTimeoutMs, long readTimeoutMs) throws Exception;
+    }
     
     private final String endpoint;
     private final String mountName;
     private final CircuitBreaker circuitBreaker;
     private final long connectTimeoutMs;
     private final long readTimeoutMs;
+    private final RemoteNodeStoreFactory remoteNodeStoreFactory;
     
     private final AtomicReference<NodeStore> delegate = new AtomicReference<>();
     private final AtomicBoolean initialized = new AtomicBoolean(false);
@@ -94,11 +100,21 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
      * @param readTimeoutMs Read timeout in milliseconds
      */
     public LazyHttpNodeStore(String endpoint, String mountName, long connectTimeoutMs, long readTimeoutMs) {
+        this(endpoint, mountName, connectTimeoutMs, readTimeoutMs, new CircuitBreaker(mountName), LazyHttpNodeStore::createRemoteNodeStore);
+    }
+
+    LazyHttpNodeStore(String endpoint,
+                      String mountName,
+                      long connectTimeoutMs,
+                      long readTimeoutMs,
+                      CircuitBreaker circuitBreaker,
+                      RemoteNodeStoreFactory remoteNodeStoreFactory) {
         this.endpoint = endpoint;
         this.mountName = mountName;
         this.connectTimeoutMs = connectTimeoutMs;
         this.readTimeoutMs = readTimeoutMs;
-        this.circuitBreaker = new CircuitBreaker(mountName);
+        this.circuitBreaker = circuitBreaker;
+        this.remoteNodeStoreFactory = remoteNodeStoreFactory;
         
         LOG.info("LazyHttpNodeStore[{}] created for {} (lazy init)", mountName, endpoint);
     }
@@ -133,21 +149,8 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
             
             try {
                 LOG.info("LazyHttpNodeStore[{}] initializing connection to {}...", mountName, endpoint);
-                
-                // Create HTTP persistence
-                HttpPersistence persistence = new HttpPersistence(endpoint);
-                
-                // Create a temp directory for the FileStoreBuilder (required but not used for HTTP)
-                java.io.File tempDir = java.nio.file.Files.createTempDirectory("oak-http-" + mountName).toFile();
-                tempDir.deleteOnExit();
-                
-                // Create read-only FileStore backed by HTTP persistence
-                ReadOnlyFileStore fileStore = fileStoreBuilder(tempDir)
-                    .withCustomPersistence(persistence)
-                    .buildReadOnly();
-                
-                // Create NodeStore
-                store = SegmentNodeStoreBuilders.builder(fileStore).build();
+
+                store = remoteNodeStoreFactory.create(endpoint, mountName, connectTimeoutMs, readTimeoutMs);
                 
                 delegate.set(store);
                 initialized.set(true);
@@ -460,5 +463,23 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
         public boolean compareAgainstBaseState(NodeState base, org.apache.jackrabbit.oak.spi.state.NodeStateDiff diff) {
             return true;
         }
+    }
+
+    private static NodeStore createRemoteNodeStore(
+            String endpoint,
+            String mountName,
+            long connectTimeoutMs,
+            long readTimeoutMs) throws Exception {
+        // Timeouts are reserved for future HTTP client wiring and retained as part of the constructor contract.
+        HttpPersistence persistence = new HttpPersistence(endpoint);
+
+        java.io.File tempDir = java.nio.file.Files.createTempDirectory("oak-http-" + mountName).toFile();
+        tempDir.deleteOnExit();
+
+        ReadOnlyFileStore fileStore = fileStoreBuilder(tempDir)
+            .withCustomPersistence(persistence)
+            .buildReadOnly();
+
+        return SegmentNodeStoreBuilders.builder(fileStore).build();
     }
 }
