@@ -17,21 +17,16 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import io.aeron.CommonContext;
-import io.aeron.archive.Archive;
-import io.aeron.archive.ArchiveThreadingMode;
 import io.aeron.archive.client.AeronArchive;
 import io.aeron.cluster.ClusteredMediaDriver;
 import io.aeron.cluster.ConsensusModule;
 import io.aeron.cluster.service.ClusteredService;
 import io.aeron.cluster.service.ClusteredServiceContainer;
 import io.aeron.driver.MediaDriver;
-import io.aeron.driver.MinMulticastFlowControlSupplier;
 import io.aeron.driver.ThreadingMode;
-import io.aeron.exceptions.AeronException;
 import org.agrona.CloseHelper;
 import org.agrona.ErrorHandler;
 import org.agrona.IoUtil;
-import org.agrona.concurrent.NoOpLock;
 import org.agrona.concurrent.ShutdownSignalBarrier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -269,49 +264,6 @@ public class AeronClusterLauncher {
             driverTimeoutMs
         );
         
-        MediaDriver.Context mediaDriverContext = new MediaDriver.Context()
-                .aeronDirectoryName(aeronDirName)
-                .threadingMode(ThreadingMode.SHARED)  // Balanced: good latency, efficient resource usage
-                .termBufferSparseFile(true)  // Reduces disk I/O, improves performance
-                .socketSndbufLength(socketSndbufLength)  // Configurable send buffer (default: 16KB for Mac)
-                .socketRcvbufLength(socketRcvbufLength)  // Configurable receive buffer (default: 16KB for Mac)
-                .multicastFlowControlSupplier(new MinMulticastFlowControlSupplier())
-                .terminationHook(barrier::signal)
-                .errorHandler(failureCoordinator.decorate(errorHandler("Media Driver")))
-                // ✈️ RESILIENCE: Increase term buffer size to reduce backpressure
-                // Default is 64MB, larger buffers handle bursts better
-                // Note: Aeron aims for garbage-free operation, so larger buffers don't increase GC pressure
-                .publicationTermBufferLength(publicationTermBufferLength)
-                // ✈️ RESILIENCE: Enable conductor idle strategy for better CPU efficiency
-                // Uses backoff strategy to reduce CPU spinning when idle
-                .conductorIdleStrategy(new org.agrona.concurrent.BackoffIdleStrategy(100, 100, 1000, 1000000))
-                // ✈️ RESILIENCE: Increase driver timeout for better resilience under load
-                // Default is 10s, increasing to 60s provides more tolerance for GC pauses and system load
-                // Production: 60s (tested - prevents false positives from macOS/system pauses)
-                // Note: This is a trade-off - longer timeout means slower failure detection
-                // But MediaDriver thread hangs need longer timeout to avoid false positives
-                .driverTimeoutMs(driverTimeoutMs);
-        
-        // Archive Context (use IP address for Aeron channels)
-        AeronArchive.Context replicationArchiveContext = new AeronArchive.Context()
-                .controlResponseChannel("aeron:udp?endpoint=" + myIPAddress + ":0");
-        
-        Archive.Context archiveContext = new Archive.Context()
-                .aeronDirectoryName(aeronDirName)
-                .archiveDir(new File(baseDir, "archive"))
-                .controlChannel(AeronClusterTopology.archiveControlChannel(nodeId, myIPAddress, clusterTermLengthBytes))
-                .replicationChannel(AeronClusterTopology.replicationChannel(myIPAddress))
-                .archiveClientContext(replicationArchiveContext)
-                .localControlChannel("aeron:ipc?term-length=64k")  // MUST be IPC (Aeron Archive requirement)
-                .recordingEventsEnabled(false)
-                .threadingMode(ArchiveThreadingMode.SHARED);
-        
-        AeronArchive.Context aeronArchiveContext = new AeronArchive.Context()
-                .lock(NoOpLock.INSTANCE)
-                .controlRequestChannel(archiveContext.localControlChannel())
-                .controlResponseChannel(archiveContext.localControlChannel())
-                .aeronDirectoryName(aeronDirName);
-        
         // Consensus Module Context (use IP addresses for cluster members)
         // Note: Aeron Cluster 1.49.1 automatically manages snapshot intervals based on log size
         // Snapshots are taken periodically by the leader to enable faster recovery
@@ -324,32 +276,31 @@ public class AeronClusterLauncher {
             sessionTimeoutConfig.source,
             sessionTimeoutConfig.environment
         );
-        
-        ConsensusModule.Context consensusModuleContext = new ConsensusModule.Context()
-                .errorHandler(failureCoordinator.decorate(errorHandler("Consensus Module")))
-                .clusterMemberId(nodeId)
-                .clusterMembers(AeronClusterTopology.clusterMembers(ipAddresses))  // Use IPs instead of hostnames
-                .clusterDir(new File(baseDir, "cluster"))
-                .ingressChannel("aeron:udp?term-length=" + clusterTermLengthBytes)
-                .logChannel(AeronClusterTopology.consensusLogChannel(nodeId, myIPAddress, clusterTermLengthBytes))
-                .replicationChannel(AeronClusterTopology.replicationChannel(myIPAddress))
-                .sessionTimeoutNs(sessionTimeoutConfig.timeoutNs)
-                .archiveContext(aeronArchiveContext.clone());
-        
-        // Clustered Service Container Context
-        ClusteredServiceContainer.Context clusteredServiceContext =
-                new ClusteredServiceContainer.Context()
-                        .aeronDirectoryName(aeronDirName)
-                        .archiveContext(aeronArchiveContext.clone())
-                        .clusterDir(new File(baseDir, "cluster"))
-                        .clusteredService(clusteredService)
-                        .errorHandler(failureCoordinator.decorate(errorHandler("Clustered Service")));
+
+        AeronClusterContextFactory.LaunchContexts contexts = AeronClusterContextFactory.create(
+            nodeId,
+            baseDir,
+            clusteredService,
+            aeronDirName,
+            myIPAddress,
+            ipAddresses,
+            barrier,
+            socketSndbufLength,
+            socketRcvbufLength,
+            publicationTermBufferLength,
+            driverTimeoutMs,
+            clusterTermLengthBytes,
+            sessionTimeoutConfig,
+            failureCoordinator.decorate(errorHandler("Media Driver")),
+            failureCoordinator.decorate(errorHandler("Consensus Module")),
+            failureCoordinator.decorate(errorHandler("Clustered Service"))
+        );
         
         // Launch cluster
         clusteredMediaDriver = ClusteredMediaDriver.launch(
-                mediaDriverContext, archiveContext, consensusModuleContext);
+                contexts.mediaDriverContext, contexts.archiveContext, contexts.consensusModuleContext);
         
-        container = ClusteredServiceContainer.launch(clusteredServiceContext);
+        container = ClusteredServiceContainer.launch(contexts.clusteredServiceContext);
         
         // ✈️ AERON RESILIENCE: Start MediaDriver health monitoring
         // Monitors system counters for errors, backpressure, timeouts
