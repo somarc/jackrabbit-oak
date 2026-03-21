@@ -18,13 +18,9 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
-import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
@@ -104,6 +100,7 @@ public class GlobalStoreServer {
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     private final WalletStartupCoordinator walletStartupCoordinator = new WalletStartupCoordinator();
+    private final StartupPreflightCoordinator startupPreflightCoordinator = new StartupPreflightCoordinator();
     private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
     private final BootstrapModeCoordinator bootstrapModeCoordinator = new BootstrapModeCoordinator();
     private final ConsensusStartupCoordinator consensusStartupCoordinator = new ConsensusStartupCoordinator();
@@ -149,13 +146,6 @@ public class GlobalStoreServer {
      * Start runtime components without blocking the calling thread.
      */
     protected void startRuntime() throws IOException {
-        // Create store directory if it doesn't exist
-        Path storePath = Paths.get(storeDirectory);
-        if (!Files.exists(storePath)) {
-            Files.createDirectories(storePath);
-            System.out.println("Created store directory: " + storePath);
-        }
-        
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // ETHEREUM WALLETS (ADR 046)
         // - Node wallet: This validator's identity (signing, consensus)
@@ -167,106 +157,18 @@ public class GlobalStoreServer {
         this.wallet = walletStartup.getWallet();
         final String finalClusterWallet = walletStartup.getClusterWalletAddress();
         
+        StartupPreflightCoordinator.PreflightResult preflight =
+            startupPreflightCoordinator.prepare(storeDirectory, port, currentAeronConfig());
+        File storeDir = preflight.getStoreDir();
+        boolean isAeronMode = preflight.isAeronMode();
+        boolean directoryIsEmpty = preflight.isDirectoryEmpty();
+        boolean needsBootstrapBeforeBuild = preflight.needsBootstrapBeforeBuild();
+        String verifiedBootstrapPrimaryHost = preflight.getVerifiedBootstrapPrimaryHost();
+        int verifiedBootstrapPrimaryPort = preflight.getVerifiedBootstrapPrimaryPort();
+        
         // Bootstrap mode (needs to be accessible throughout method)
         BootstrapMode detectedMode = BootstrapMode.PRIMARY;  // Default
         int standbyPort = port + 1;  // Standby port = HTTP port + 1 (used for Oak FileStore bootstrap)
-        
-        // ✈️ AERON-ONLY POC: This POC uses Aeron Cluster Raft consensus exclusively
-        // Check if Aeron mode is enabled (default: true for POC)
-        String consensusModeProp = RuntimeConfigValueResolver.readString("consensus.mode", "aeron");
-        boolean isAeronMode = "aeron".equalsIgnoreCase(consensusModeProp);
-        
-        if (!isAeronMode) {
-            throw new IllegalArgumentException("This POC only supports Aeron Cluster consensus. Set consensus.mode=aeron or omit it (defaults to aeron).");
-        }
-        
-        // Check if store directory is empty BEFORE building FileStore
-        // This prevents Oak from creating a new HEAD before we can bootstrap
-        File storeDir = new File(storeDirectory);
-        boolean directoryIsEmpty = false;
-        if (storeDir.exists() && storeDir.isDirectory()) {
-            File[] files = storeDir.listFiles((dir, name) -> 
-                name.startsWith("data") && name.endsWith(".tar") || 
-                name.equals("journal.log") || 
-                name.startsWith("journal.log"));
-            directoryIsEmpty = (files == null || files.length == 0);
-        } else {
-            directoryIsEmpty = true; // Directory doesn't exist = empty
-        }
-        
-        // Check if standby bootstrap is needed before FileStore build.
-        // NOTE: In Aeron mode, standby bootstrap is disabled by default to avoid
-        // deadlocks where peers are healthy on HTTP but standby sync port is not serving yet.
-        // Explicit opt-in is required via: -Dconsensus.aeron.standby.bootstrap.enabled=true
-        boolean needsBootstrapBeforeBuild = false;
-        boolean hasVerifiedReachablePeers = false;
-        boolean standbyBootstrapEnabled = RuntimeConfigValueResolver.readBoolean(
-            "consensus.aeron.standby.bootstrap.enabled",
-            false
-        );
-        String verifiedBootstrapPrimaryHost = "";
-        int verifiedBootstrapPrimaryPort = 0;
-        
-        if (isAeronMode && directoryIsEmpty) {
-            List<String> aeronPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(currentAeronConfig());
-            String bootstrapPrimaryHost = RuntimeConfigValueResolver.readString("bootstrap.primary.host", "");
-            String bootstrapPrimaryPortStr = RuntimeConfigValueResolver.readString("bootstrap.primary.port", "");
-            BootstrapPreflightPlanner.Decision preflightDecision = new BootstrapPreflightPlanner().plan(
-                isAeronMode,
-                directoryIsEmpty,
-                aeronPeers,
-                bootstrapPrimaryHost,
-                bootstrapPrimaryPortStr,
-                standbyBootstrapEnabled,
-                port + 1
-            );
-            needsBootstrapBeforeBuild = preflightDecision.needsBootstrapBeforeBuild();
-            hasVerifiedReachablePeers = preflightDecision.hasVerifiedReachablePeers();
-            verifiedBootstrapPrimaryHost = preflightDecision.verifiedBootstrapPrimaryHost();
-            verifiedBootstrapPrimaryPort = preflightDecision.verifiedBootstrapPrimaryPort();
-
-            if (hasVerifiedReachablePeers && !verifiedBootstrapPrimaryHost.isEmpty()) {
-                boolean matchedPeerUrl = false;
-                for (String peerUrl : aeronPeers) {
-                    try {
-                        java.net.URL url = new java.net.URL(peerUrl);
-                        if (verifiedBootstrapPrimaryHost.equals(url.getHost())) {
-                            System.out.println("✅ Verified reachable peer: " + peerUrl);
-                            matchedPeerUrl = true;
-                            break;
-                        }
-                    } catch (Exception e) {
-                        // Ignore malformed peer URL in startup logging.
-                    }
-                }
-                if (!matchedPeerUrl && !bootstrapPrimaryHost.isEmpty()) {
-                    System.out.println("✅ Verified bootstrap primary: " + verifiedBootstrapPrimaryHost + ":" + verifiedBootstrapPrimaryPort);
-                }
-            } else if (!bootstrapPrimaryHost.isEmpty()) {
-                System.out.println("⚠️  Bootstrap primary configured but not reachable: " + bootstrapPrimaryHost);
-                System.out.println("   Will fall back to GENESIS mode if store is empty");
-            }
-
-            if (needsBootstrapBeforeBuild) {
-                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.out.println("⚠️  CRITICAL: Empty store directory detected");
-                System.out.println("   Bootstrap needed - verified peer is reachable");
-                System.out.println("   This ensures all validators start with same genesis HEAD");
-                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.out.println("   Bootstrap primary: " + verifiedBootstrapPrimaryHost + ":" + verifiedBootstrapPrimaryPort);
-            } else if (hasVerifiedReachablePeers) {
-                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.out.println("ℹ️  Empty store directory with reachable peers detected");
-                System.out.println("   Aeron standby bootstrap disabled (default)");
-                System.out.println("   Starting Aeron cluster directly; consensus leader will create canonical genesis");
-                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            } else if (directoryIsEmpty) {
-                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.out.println("⚠️  Empty store directory detected, but no reachable peers");
-                System.out.println("   Will create genesis state (this node becomes genesis)");
-                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            }
-        }
         
         // Initialize Oak FileStore
         System.out.println("Initializing Oak FileStore...");
