@@ -72,6 +72,7 @@ public class AeronClusterLauncher {
     private final File baseDir;
     private final ClusteredService clusteredService;
     private final AeronClusterAddressResolver addressResolver;
+    private final AeronClusterErrorPolicy errorPolicy;
     
     private ClusteredMediaDriver clusteredMediaDriver;
     private ClusteredServiceContainer container;
@@ -85,19 +86,28 @@ public class AeronClusterLauncher {
     private AeronClusterFailureCoordinator failureCoordinator;
     
     public AeronClusterLauncher(int nodeId, List<String> hostnames, File baseDir, ClusteredService clusteredService) {
-        this(nodeId, hostnames, baseDir, clusteredService, AeronClusterAddressResolver.system(nodeId, hostnames));
+        this(
+            nodeId,
+            hostnames,
+            baseDir,
+            clusteredService,
+            AeronClusterAddressResolver.system(nodeId, hostnames),
+            new AeronClusterErrorPolicy()
+        );
     }
 
     AeronClusterLauncher(int nodeId,
                          List<String> hostnames,
                          File baseDir,
                          ClusteredService clusteredService,
-                         AeronClusterAddressResolver addressResolver) {
+                         AeronClusterAddressResolver addressResolver,
+                         AeronClusterErrorPolicy errorPolicy) {
         this.nodeId = nodeId;
         this.hostnames = hostnames;
         this.baseDir = baseDir;
         this.clusteredService = clusteredService;
         this.addressResolver = addressResolver;
+        this.errorPolicy = errorPolicy;
     }
     
     /**
@@ -331,35 +341,7 @@ public class AeronClusterLauncher {
      * These are informational events from Aeron Cluster, not actual errors.
      */
     private ErrorHandler errorHandler(String context) {
-        return throwable -> {
-            // Filter out expected DNS errors for unavailable peers (P2P-organic startup)
-            String message = throwable.getMessage();
-            if (message != null && message.contains("UnknownHostException") && message.contains("unresolved")) {
-                // This is expected when peers aren't ready yet - Aeron will retry DNS resolution
-                log.debug("🌐 P2P: DNS resolution pending for peer (will retry): {}", throwable.getClass().getSimpleName());
-                return;
-            }
-            
-            // ✈️ AERON CLUSTER: Filter out ClusterEvent warnings (heartbeat timeouts, etc.)
-            // These are informational events from Aeron Cluster, not actual errors
-            // Format: "io.aeron.cluster.client.ClusterEvent: WARN - leader heartbeat timeout"
-            if (message != null) {
-                if (message.contains("ClusterEvent") && message.contains("WARN")) {
-                    // This is a ClusterEvent warning (e.g., "leader heartbeat timeout")
-                    // These are informational - Aeron Cluster handles leader election automatically
-                    log.debug("✈️  Aeron Cluster warning (informational): {}", message);
-                    return;
-                }
-                if (message.contains("leader heartbeat timeout")) {
-                    // Leader heartbeat timeout is normal during leader election
-                    log.debug("✈️  Leader heartbeat timeout (normal during election): {}", message);
-                    return;
-                }
-            }
-            
-            // Log all other errors
-            log.error("{} error", context, throwable);
-        };
+        return errorPolicy.createHandler(context, log);
     }
     
     /**
