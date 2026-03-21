@@ -107,6 +107,7 @@ public class GlobalStoreServer {
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
     private final ConsensusStartupCoordinator consensusStartupCoordinator = new ConsensusStartupCoordinator();
+    private final BlobStoreStartupCoordinator blobStoreStartupCoordinator = new BlobStoreStartupCoordinator();
     private final GenesisStartupCoordinator genesisStartupCoordinator = new GenesisStartupCoordinator();
     
     // Bootstrap configuration (for organic peer discovery after promotion)
@@ -334,97 +335,13 @@ public class GlobalStoreServer {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // IPFS BLOBSTORE: Decentralized Binary Storage (ADR 015)
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // IPFS DataStore is REQUIRED - no FileDataStore fallback
-            String blobStoreType = RuntimeConfigValueResolver.readString("blobstore.type", "BLOBSTORE_TYPE", "");
-            
-            // FAIL-FAST: blobstore.type MUST be set to "ipfs"
-            if (blobStoreType.isEmpty()) {
-                System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.err.println("❌ FATAL: blobstore.type is not configured");
-                System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.err.println("");
-                System.err.println("Blockchain AEM requires IPFS DataStore for binary storage.");
-                System.err.println("FileDataStore is NOT supported (no fallback).");
-                System.err.println("");
-                System.err.println("FIX:");
-                System.err.println("  1. Ensure IPFS daemon is running:");
-                System.err.println("     $ ipfs daemon");
-                System.err.println("");
-                System.err.println("  2. Set blobstore.type=ipfs:");
-                System.err.println("     $ export BLOBSTORE_TYPE=ipfs");
-                System.err.println("     OR");
-                System.err.println("     $ java -Dblobstore.type=ipfs -jar oak-segment-consensus.jar");
-                System.err.println("");
-                System.err.println("  3. (Optional) Configure IPFS API endpoint:");
-                System.err.println("     $ export IPFS_API_ENDPOINT=/ip4/127.0.0.1/tcp/5001");
-                System.err.println("");
-                System.err.println("See: oak-segment-consensus/IPFS-DATASTORE.md");
-                System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                throw startupFailure("blobstore.type is not configured");
-            }
-            
-            if (!"ipfs".equalsIgnoreCase(blobStoreType)) {
-                System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.err.println("❌ FATAL: Invalid blobstore.type = \"" + blobStoreType + "\"");
-                System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.err.println("");
-                System.err.println("Only \"ipfs\" is supported.");
-                System.err.println("FileDataStore is NOT supported (blockchain-native storage required).");
-                System.err.println("");
-                System.err.println("FIX: Set blobstore.type=ipfs");
-                System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                throw startupFailure("Invalid blobstore.type: " + blobStoreType);
-            }
-            
-            // Initialize IPFS DataStore (REQUIRED)
-            System.out.println("📦 Configuring IPFS BlobStore for binaries...");
-            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
-            String activeBlobStoreType = "ipfs";
-            
-            try {
-                // Get IPFS API endpoint from environment (default: localhost:5001)
-                String ipfsEndpoint = RuntimeConfigValueResolver.readString(
-                    "ipfs.api.endpoint",
-                    "IPFS_API_ENDPOINT",
-                    "/ip4/127.0.0.1/tcp/5001"
-                );
-                
-                // Create IPFS DataStore BlobStore
-                blobStore = components().createIpfsBlobStore(ipfsEndpoint, storeDir);
-                this.blobStore = blobStore; // Store reference for genesis image upload
-                
-                System.out.println("✅ IPFS BlobStore initialized");
-                System.out.println("   - IPFS API: " + ipfsEndpoint);
-                System.out.println("   - Min size: 16 KB (smaller binaries inline in segments)");
-                System.out.println("   - Storage: Decentralized (P2P replication)");
-                System.out.println("   - Strategy: Oak segments (AEM compatible) + IPFS binaries (blockchain-native)");
-                
-            } catch (Exception e) {
-                System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.err.println("❌ FATAL: Failed to initialize IPFS BlobStore");
-                System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.err.println("");
-                System.err.println("Error: " + e.getMessage());
-                System.err.println("");
-                System.err.println("Common causes:");
-                System.err.println("  1. IPFS daemon not running");
-                System.err.println("     FIX: $ ipfs daemon");
-                System.err.println("");
-                System.err.println("  2. Wrong IPFS API endpoint");
-                System.err.println("     FIX: $ export IPFS_API_ENDPOINT=/ip4/127.0.0.1/tcp/5001");
-                System.err.println("");
-                System.err.println("  3. IPFS not initialized");
-                System.err.println("     FIX: $ ipfs init --profile server");
-                System.err.println("");
-                System.err.println("Verify IPFS:");
-                System.err.println("  $ ipfs version");
-                System.err.println("  $ ipfs id");
-                System.err.println("");
-                System.err.println("See: oak-segment-consensus/IPFS-DATASTORE.md");
-                System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                e.printStackTrace();
-                throw startupFailure("IPFS BlobStore initialization failed", e);
-            }
+            BlobStoreStartupCoordinator.StartupResult blobStoreStartup = blobStoreStartupCoordinator.initialize(
+                storeDir,
+                components()
+            );
+            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = blobStoreStartup.getBlobStore();
+            String activeBlobStoreType = blobStoreStartup.getBlobStoreType();
+            this.blobStore = blobStore; // Store reference for genesis image upload
             
             // Build FileStore with IPFS BlobStore (REQUIRED)
             FileStoreBuilder fsBuilder = FileStoreBuilder.fileStoreBuilder(storeDir)
