@@ -27,6 +27,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -174,14 +175,29 @@ public class CidApiHandlerTest {
         if (dir == null || !Files.exists(dir)) {
             return;
         }
-        try (java.util.stream.Stream<Path> stream = Files.walk(dir)) {
-            stream.sorted(Comparator.reverseOrder()).forEach(path -> {
-                try {
-                    Files.deleteIfExists(path);
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
+        IOException lastFailure = null;
+        for (int attempt = 0; attempt < 5; attempt++) {
+            try {
+                java.util.List<Path> paths;
+                try (java.util.stream.Stream<Path> stream = Files.walk(dir)) {
+                    paths = stream.sorted(Comparator.reverseOrder()).toList();
                 }
-            });
+                for (Path path : paths) {
+                    Files.deleteIfExists(path);
+                }
+                return;
+            } catch (DirectoryNotEmptyException e) {
+                lastFailure = e;
+                try {
+                    Thread.sleep(25L * (attempt + 1));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while deleting " + dir, interrupted);
+                }
+            }
+        }
+        if (lastFailure != null) {
+            throw lastFailure;
         }
     }
 }
