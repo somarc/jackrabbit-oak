@@ -28,6 +28,8 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -66,6 +68,7 @@ public class MockValidatorServer {
     
     // Mock handlers
     private Function<HttpServletRequest, MockResponse> proposeWriteHandler;
+    private Function<HttpServletRequest, MockResponse> proposeDeleteHandler;
     private Function<HttpServletRequest, MockResponse> proposalStatusHandler;
     private Function<HttpServletRequest, MockResponse> pendingCountHandler;
     
@@ -73,6 +76,7 @@ public class MockValidatorServer {
     private final Map<String, AtomicInteger> requestCounts = new ConcurrentHashMap<>();
     private final Map<String, HttpServletRequest> lastRequests = new ConcurrentHashMap<>();
     private final Map<String, Map<String, String[]>> lastRequestParams = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, String>> lastRequestHeaders = new ConcurrentHashMap<>();
     
     public MockValidatorServer() {
         this(0); // Random port
@@ -96,6 +100,7 @@ public class MockValidatorServer {
         
         // Register servlets
         context.addServlet(new ServletHolder(new ProposeWriteServlet()), "/v1/propose-write");
+        context.addServlet(new ServletHolder(new ProposeDeleteServlet()), "/v1/propose-delete");
         context.addServlet(new ServletHolder(new ProposalStatusServlet()), "/v1/proposals/*");
         context.addServlet(new ServletHolder(new PendingCountServlet()), "/v1/proposals/pending/count");
         
@@ -131,6 +136,13 @@ public class MockValidatorServer {
     public void mockProposeWrite(Function<HttpServletRequest, MockResponse> handler) {
         this.proposeWriteHandler = handler;
     }
+
+    /**
+     * Configure mock handler for POST /v1/propose-delete.
+     */
+    public void mockProposeDelete(Function<HttpServletRequest, MockResponse> handler) {
+        this.proposeDeleteHandler = handler;
+    }
     
     /**
      * Configure mock handler for GET /v1/proposals/{id}/status.
@@ -161,6 +173,14 @@ public class MockValidatorServer {
     }
 
     /**
+     * Get last request header value for an endpoint.
+     */
+    public String getLastRequestHeader(String endpoint, String name) {
+        Map<String, String> headers = lastRequestHeaders.get(endpoint);
+        return headers == null ? null : headers.get(name);
+    }
+
+    /**
      * Get last request parameters for an endpoint.
      */
     public Map<String, String[]> getLastRequestParams(String endpoint) {
@@ -185,6 +205,18 @@ public class MockValidatorServer {
     public void reset() {
         requestCounts.clear();
         lastRequests.clear();
+        lastRequestParams.clear();
+        lastRequestHeaders.clear();
+    }
+
+    private Map<String, String> copyHeaders(HttpServletRequest request) {
+        Map<String, String> headers = new HashMap<>();
+        Enumeration<String> names = request.getHeaderNames();
+        while (names.hasMoreElements()) {
+            String name = names.nextElement();
+            headers.put(name, request.getHeader(name));
+        }
+        return headers;
     }
     
     /**
@@ -216,6 +248,7 @@ public class MockValidatorServer {
             requestCounts.computeIfAbsent("/v1/propose-write", k -> new AtomicInteger(0)).incrementAndGet();
             lastRequests.put("/v1/propose-write", request);
             lastRequestParams.put("/v1/propose-write", new java.util.HashMap<>(request.getParameterMap()));
+            lastRequestHeaders.put("/v1/propose-write", copyHeaders(request));
             
             MockResponse mockResponse;
             if (proposeWriteHandler != null) {
@@ -235,6 +268,36 @@ public class MockValidatorServer {
             response.getWriter().write(mockResponse.body);
         }
     }
+
+    /**
+     * Servlet for POST /v1/propose-delete.
+     */
+    private class ProposeDeleteServlet extends HttpServlet {
+        @Override
+        protected void doPost(HttpServletRequest request, HttpServletResponse response)
+                throws ServletException, IOException {
+            requestCounts.computeIfAbsent("/v1/propose-delete", k -> new AtomicInteger(0)).incrementAndGet();
+            lastRequests.put("/v1/propose-delete", request);
+            lastRequestParams.put("/v1/propose-delete", new java.util.HashMap<>(request.getParameterMap()));
+            lastRequestHeaders.put("/v1/propose-delete", copyHeaders(request));
+
+            MockResponse mockResponse;
+            if (proposeDeleteHandler != null) {
+                mockResponse = proposeDeleteHandler.apply(request);
+            } else {
+                String proposalId = java.util.UUID.randomUUID().toString();
+                mockResponse = new MockResponse(200, String.format(
+                    "{\"proposalId\":\"%s\",\"state\":\"PENDING\",\"message\":\"Delete proposal queued\"}",
+                    proposalId
+                ));
+            }
+
+            response.setStatus(mockResponse.statusCode);
+            response.setContentType("application/json");
+            mockResponse.headers.forEach(response::setHeader);
+            response.getWriter().write(mockResponse.body);
+        }
+    }
     
     /**
      * Servlet for GET /v1/proposals/{id}/status.
@@ -246,6 +309,7 @@ public class MockValidatorServer {
             requestCounts.computeIfAbsent("/v1/proposals/*/status", k -> new AtomicInteger(0)).incrementAndGet();
             lastRequests.put("/v1/proposals/*/status", request);
             lastRequestParams.put("/v1/proposals/*/status", new java.util.HashMap<>(request.getParameterMap()));
+            lastRequestHeaders.put("/v1/proposals/*/status", copyHeaders(request));
             
             MockResponse mockResponse;
             if (!request.getRequestURI().endsWith("/status")) {
@@ -274,6 +338,7 @@ public class MockValidatorServer {
             requestCounts.computeIfAbsent("/v1/proposals/pending/count", k -> new AtomicInteger(0)).incrementAndGet();
             lastRequests.put("/v1/proposals/pending/count", request);
             lastRequestParams.put("/v1/proposals/pending/count", new java.util.HashMap<>(request.getParameterMap()));
+            lastRequestHeaders.put("/v1/proposals/pending/count", copyHeaders(request));
             
             MockResponse mockResponse;
             if (pendingCountHandler != null) {

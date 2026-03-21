@@ -26,12 +26,9 @@ import org.osgi.service.metatype.annotations.ObjectClassDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Service for Sling authors to propose signed write transactions to validators.
@@ -90,6 +87,7 @@ public class SlingWriteProposalService {
     private String validatorUrl;
     private String clientId;
     private boolean enabled;
+    private volatile ValidatorProposalClient proposalClient;
     
     @Activate
     protected void activate(Configuration config) {
@@ -120,6 +118,7 @@ public class SlingWriteProposalService {
         } else {
             log.warn("  Wallet Service: Not available (writes will fail)");
         }
+        proposalClient = new ValidatorProposalClient(validatorUrl, clientId);
     }
     
     /**
@@ -168,58 +167,22 @@ public class SlingWriteProposalService {
                 signature.substring(0, Math.min(10, signature.length())),
                 signature.length() > 10 ? signature.substring(signature.length() - 4) : "");
             
-            // Submit signed transaction to validator
-            String writeUrl = validatorUrl + "/v1/propose-write";
-            URL url = new URL(writeUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setRequestProperty("X-Client-Id", clientId);
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(30000);
-            
-            // Build form parameters
-            String params = String.format(
-                "wallet=%s&signature=%s&message=%s&contentType=%s&clientId=%s&timestamp=%d",
-                java.net.URLEncoder.encode(walletAddress, StandardCharsets.UTF_8),
-                java.net.URLEncoder.encode(signature, StandardCharsets.UTF_8),
-                java.net.URLEncoder.encode(message, StandardCharsets.UTF_8),
-                java.net.URLEncoder.encode(contentType, StandardCharsets.UTF_8),
-                java.net.URLEncoder.encode(clientId, StandardCharsets.UTF_8),
-                timestamp
-            );
-            
-            // Send request
-            try (OutputStream os = conn.getOutputStream()) {
-                byte[] input = params.getBytes(StandardCharsets.UTF_8);
-                os.write(input, 0, input.length);
-            }
-            
-            int responseCode = conn.getResponseCode();
-            String responseBody = "";
-            
-            // Read response
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(
-                        responseCode >= 200 && responseCode < 300 
-                            ? conn.getInputStream() 
-                            : conn.getErrorStream(),
-                        StandardCharsets.UTF_8))) {
-                String line;
-                StringBuilder response = new StringBuilder();
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
-                }
-                responseBody = response.toString();
-            }
-            
-            if (responseCode >= 200 && responseCode < 300) {
+            Map<String, String> params = new LinkedHashMap<>();
+            params.put("wallet", walletAddress);
+            params.put("signature", signature);
+            params.put("message", message);
+            params.put("contentType", contentType);
+            params.put("clientId", clientId);
+            params.put("timestamp", Long.toString(timestamp));
+
+            ValidatorProposalClient.Response response = getProposalClient().post("/v1/propose-write", params);
+
+            if (response.isSuccessStatus()) {
                 log.info("Write transaction accepted by validator");
-                return new WriteResult(true, "Write transaction accepted", responseBody);
+                return new WriteResult(true, "Write transaction accepted", response.body);
             } else {
-                log.warn("Write transaction rejected: HTTP {} - {}", responseCode, responseBody);
-                return new WriteResult(false, "Write transaction rejected: " + responseBody);
+                log.warn("Write transaction rejected: HTTP {} - {}", response.statusCode, response.body);
+                return new WriteResult(false, "Write transaction rejected: " + response.body);
             }
             
         } catch (Exception e) {
@@ -245,5 +208,14 @@ public class SlingWriteProposalService {
             this.message = message;
             this.responseBody = responseBody;
         }
+    }
+
+    private ValidatorProposalClient getProposalClient() {
+        ValidatorProposalClient client = proposalClient;
+        if (client == null) {
+            client = new ValidatorProposalClient(validatorUrl, clientId);
+            proposalClient = client;
+        }
+        return client;
     }
 }

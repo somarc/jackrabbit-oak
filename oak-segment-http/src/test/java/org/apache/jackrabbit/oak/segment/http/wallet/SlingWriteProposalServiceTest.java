@@ -16,11 +16,14 @@
  */
 package org.apache.jackrabbit.oak.segment.http.wallet;
 
+import org.apache.jackrabbit.oak.segment.http.ValidatorAuthHelper;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+
+import java.lang.reflect.Field;
 
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
@@ -39,6 +42,8 @@ public class SlingWriteProposalServiceTest {
     @Before
     public void setUp() throws Exception {
         MockitoAnnotations.openMocks(this);
+        resetValidatorAuthHelper();
+        System.clearProperty(ValidatorAuthHelper.TOKEN_PROPERTY_NAME);
         
         // Start mock validator server
         mockServer = new MockValidatorServer();
@@ -72,6 +77,8 @@ public class SlingWriteProposalServiceTest {
     
     @After
     public void tearDown() throws Exception {
+        System.clearProperty(ValidatorAuthHelper.TOKEN_PROPERTY_NAME);
+        resetValidatorAuthHelper();
         if (mockServer != null) {
             mockServer.stop();
         }
@@ -151,6 +158,23 @@ public class SlingWriteProposalServiceTest {
         assertFalse("Write should fail", result.success);
         assertTrue("Error should mention wallet", result.message.contains("Wallet"));
     }
+
+    @Test
+    public void testProposeWriteAddsAuthorizationHeaderWhenConfigured() throws Exception {
+        System.setProperty(ValidatorAuthHelper.TOKEN_PROPERTY_NAME, "Bearer write-token");
+        resetValidatorAuthHelper();
+
+        mockServer.mockProposeWrite(request -> new MockValidatorServer.MockResponse(
+            202,
+            "{\"proposalId\":\"test-789\",\"state\":\"PENDING\"}"
+        ));
+
+        SlingWriteProposalService.WriteResult result = service.proposeWrite("page", "Token test");
+
+        assertTrue(result.success);
+        assertEquals("Bearer write-token",
+            mockServer.getLastRequestHeader("/v1/propose-write", ValidatorAuthHelper.AUTHORIZATION_HEADER));
+    }
     
     /**
      * Extract JSON field value (simple parser for tests).
@@ -163,5 +187,14 @@ public class SlingWriteProposalServiceTest {
             return m.group(1);
         }
         return null;
+    }
+
+    private static void resetValidatorAuthHelper() throws Exception {
+        Field cachedToken = ValidatorAuthHelper.class.getDeclaredField("cachedToken");
+        cachedToken.setAccessible(true);
+        cachedToken.set(null, null);
+        Field tokenInitialized = ValidatorAuthHelper.class.getDeclaredField("tokenInitialized");
+        tokenInitialized.setAccessible(true);
+        tokenInitialized.setBoolean(null, false);
     }
 }

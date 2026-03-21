@@ -26,12 +26,8 @@ import org.osgi.service.metatype.annotations.ObjectClassDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Service for Sling authors to propose signed delete transactions.
@@ -97,6 +93,7 @@ public class SlingDeleteProposalService {
     private String validatorUrl;
     private String clientId;
     private boolean enabled;
+    private volatile ValidatorProposalClient proposalClient;
     
     @Activate
     protected void activate(Configuration config) {
@@ -127,6 +124,7 @@ public class SlingDeleteProposalService {
         } else {
             log.warn("  Wallet Service: Not available (deletes will fail)");
         }
+        proposalClient = new ValidatorProposalClient(validatorUrl, clientId);
     }
     
     /**
@@ -183,57 +181,21 @@ public class SlingDeleteProposalService {
                 signature.substring(0, Math.min(10, signature.length())),
                 signature.length() > 10 ? signature.substring(signature.length() - 4) : "");
             
-            // Submit signed transaction to validator
-            String deleteUrl = validatorUrl + "/v1/propose-delete";
-            URL url = new URL(deleteUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setRequestProperty("X-Client-Id", clientId);
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(30000);
-            
-            // Build form parameters
-            String params = String.format(
-                "wallet=%s&signature=%s&contentPath=%s&clientId=%s&timestamp=%d",
-                java.net.URLEncoder.encode(walletAddress, StandardCharsets.UTF_8),
-                java.net.URLEncoder.encode(signature, StandardCharsets.UTF_8),
-                java.net.URLEncoder.encode(contentPath, StandardCharsets.UTF_8),
-                java.net.URLEncoder.encode(clientId, StandardCharsets.UTF_8),
-                timestamp
-            );
-            
-            // Send request
-            try (OutputStream os = conn.getOutputStream()) {
-                byte[] input = params.getBytes(StandardCharsets.UTF_8);
-                os.write(input, 0, input.length);
-            }
-            
-            int responseCode = conn.getResponseCode();
-            String responseBody = "";
-            
-            // Read response
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(
-                        responseCode >= 200 && responseCode < 300 
-                            ? conn.getInputStream() 
-                            : conn.getErrorStream(),
-                        StandardCharsets.UTF_8))) {
-                String line;
-                StringBuilder response = new StringBuilder();
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
-                }
-                responseBody = response.toString();
-            }
-            
-            if (responseCode == 200) {
+            Map<String, String> params = new LinkedHashMap<>();
+            params.put("wallet", walletAddress);
+            params.put("signature", signature);
+            params.put("contentPath", contentPath);
+            params.put("clientId", clientId);
+            params.put("timestamp", Long.toString(timestamp));
+
+            ValidatorProposalClient.Response response = getProposalClient().post("/v1/propose-delete", params);
+
+            if (response.isSuccessStatus()) {
                 log.info("Delete transaction accepted by validator: {}", contentPath);
-                return new DeleteResult(true, "Delete transaction accepted", responseBody);
+                return new DeleteResult(true, "Delete transaction accepted", response.body);
             } else {
-                log.warn("Delete transaction rejected: HTTP {} - {}", responseCode, responseBody);
-                return new DeleteResult(false, "Delete transaction rejected: " + responseBody);
+                log.warn("Delete transaction rejected: HTTP {} - {}", response.statusCode, response.body);
+                return new DeleteResult(false, "Delete transaction rejected: " + response.body);
             }
             
         } catch (Exception e) {
@@ -260,5 +222,13 @@ public class SlingDeleteProposalService {
             this.responseBody = responseBody;
         }
     }
-}
 
+    private ValidatorProposalClient getProposalClient() {
+        ValidatorProposalClient client = proposalClient;
+        if (client == null) {
+            client = new ValidatorProposalClient(validatorUrl, clientId);
+            proposalClient = client;
+        }
+        return client;
+    }
+}
