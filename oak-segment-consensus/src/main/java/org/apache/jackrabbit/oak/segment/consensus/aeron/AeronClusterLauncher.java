@@ -89,6 +89,7 @@ public class AeronClusterLauncher {
     private AtomicBoolean shutdownScheduled = new AtomicBoolean(false);
     private volatile Runnable shutdownCallback;
     private MediaDriverHealthMonitor healthMonitor;
+    private AeronClusterFailureCoordinator failureCoordinator;
     
     public AeronClusterLauncher(int nodeId, List<String> hostnames, File baseDir, ClusteredService clusteredService) {
         this(nodeId, hostnames, baseDir, clusteredService, AeronClusterAddressResolver.system(nodeId, hostnames));
@@ -183,6 +184,13 @@ public class AeronClusterLauncher {
             t.setDaemon(true);
             return t;
         });
+        failureCoordinator = AeronClusterFailureCoordinator.system(
+            crashHandler,
+            shutdownExecutor,
+            shutdownScheduled,
+            this::performShutdown,
+            () -> shutdownCallback
+        );
         
         // Check for crash markers from previous runs OR stale MediaDriver directory
         // ActiveDriverException occurs when MediaDriver directory exists but process is dead
@@ -269,7 +277,7 @@ public class AeronClusterLauncher {
                 .socketRcvbufLength(socketRcvbufLength)  // Configurable receive buffer (default: 16KB for Mac)
                 .multicastFlowControlSupplier(new MinMulticastFlowControlSupplier())
                 .terminationHook(barrier::signal)
-                .errorHandler(closingErrorHandler(errorHandler("Media Driver")))
+                .errorHandler(failureCoordinator.decorate(errorHandler("Media Driver")))
                 // ✈️ RESILIENCE: Increase term buffer size to reduce backpressure
                 // Default is 64MB, larger buffers handle bursts better
                 // Note: Aeron aims for garbage-free operation, so larger buffers don't increase GC pressure
@@ -318,7 +326,7 @@ public class AeronClusterLauncher {
         );
         
         ConsensusModule.Context consensusModuleContext = new ConsensusModule.Context()
-                .errorHandler(closingErrorHandler(errorHandler("Consensus Module")))
+                .errorHandler(failureCoordinator.decorate(errorHandler("Consensus Module")))
                 .clusterMemberId(nodeId)
                 .clusterMembers(AeronClusterTopology.clusterMembers(ipAddresses))  // Use IPs instead of hostnames
                 .clusterDir(new File(baseDir, "cluster"))
@@ -335,7 +343,7 @@ public class AeronClusterLauncher {
                         .archiveContext(aeronArchiveContext.clone())
                         .clusterDir(new File(baseDir, "cluster"))
                         .clusteredService(clusteredService)
-                        .errorHandler(closingErrorHandler(errorHandler("Clustered Service")));
+                        .errorHandler(failureCoordinator.decorate(errorHandler("Clustered Service")));
         
         // Launch cluster
         clusteredMediaDriver = ClusteredMediaDriver.launch(
@@ -376,7 +384,7 @@ public class AeronClusterLauncher {
         log.info("   Node {} started on {}", nodeId, getHostname());
         
         // Schedule successful startup callback to reset crash markers after cluster stabilizes
-        scheduleSuccessfulStartupCallback();
+        failureCoordinator.scheduleSuccessfulStartupReset();
     }
     
     /**
@@ -402,33 +410,11 @@ public class AeronClusterLauncher {
      * Shutdown the Aeron Cluster gracefully.
      */
     public void shutdown() {
-        if (shutdownScheduled.compareAndSet(false, true)) {
-            log.info("🛑 Shutting down Aeron Cluster (node {})...", nodeId);
-            
-            // Close health monitor first
-            if (healthMonitor != null) {
-                try {
-                    healthMonitor.close();
-                } catch (Exception e) {
-                    log.warn("Error closing health monitor", e);
-                }
-            }
-            
-            CloseHelper.closeAll(
-                    errorHandler -> log.error("Error during shutdown", errorHandler),
-                    container,
-                    clusteredMediaDriver
-            );
-            
-            if (barrier != null) {
-                barrier.signal();
-            }
-            
-            if (shutdownExecutor != null) {
-                shutdownExecutor.shutdown();
-            }
-            
-            log.info("✅ Aeron Cluster shut down");
+        boolean shutdownAccepted = failureCoordinator != null
+            ? failureCoordinator.requestShutdown()
+            : shutdownScheduled.compareAndSet(false, true);
+        if (shutdownAccepted) {
+            performShutdown();
         }
     }
     
@@ -503,91 +489,6 @@ public class AeronClusterLauncher {
             // Log all other errors
             log.error("{} error", context, throwable);
         };
-    }
-    
-    /**
-     * Enhanced error handler that detects FATAL errors and triggers graceful shutdown.
-     * 
-     * <p>On FATAL MediaDriver errors (timeouts, crashes), schedules graceful shutdown
-     * to allow automatic restart and recovery of the Aeron cluster connection.
-     * 
-     * <p>Key behaviors:
-     * <ul>
-     *   <li>Detects FATAL AeronException (MediaDriver timeouts, crashes)</li>
-     *   <li>Tracks crashes via CrashHandler</li>
-     *   <li>Schedules graceful shutdown</li>
-     *   <li>Prevents multiple shutdown attempts</li>
-     * </ul>
-     */
-    private ErrorHandler closingErrorHandler(ErrorHandler handler) {
-        return throwable -> {
-            // First, call the base error handler
-            handler.onError(throwable);
-            
-            // Check if this is a FATAL AeronException that should trigger shutdown
-            if (throwable instanceof AeronException) {
-                AeronException ex = (AeronException) throwable;
-                if (crashHandler != null && crashHandler.shouldStop(ex)) {
-                    // Schedule shutdown (only once)
-                    if (shutdownScheduled.compareAndSet(false, true)) {
-                        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                        log.error("🚨 FATAL Aeron error detected - scheduling graceful shutdown");
-                        log.error("   Error: {} ({})", ex.getClass().getSimpleName(), ex.getMessage());
-                        log.error("   Category: {}", ex.category());
-                        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                        
-                        // Track crash
-                        crashHandler.handleCrash(ex);
-                        log.warn("📛 Crash state: {}", crashHandler.getState());
-                        
-                        // Schedule graceful shutdown in background thread
-                        shutdownExecutor.submit(() -> {
-                            try {
-                                log.info("⏳ Waiting 2 seconds before shutdown to allow error logging...");
-                                Thread.sleep(2000);
-                                
-                                log.info("🛑 Initiating graceful shutdown due to FATAL error...");
-                                shutdown();
-                                
-                                // Invoke shutdown callback if set (e.g., exit JVM)
-                                if (shutdownCallback != null) {
-                                    log.info("📞 Invoking shutdown callback...");
-                                    shutdownCallback.run();
-                                } else {
-                                    log.warn("⚠️  No shutdown callback set - process will continue running");
-                                    log.warn("   Set shutdown callback to exit JVM or restart container");
-                                }
-                            } catch (Exception e) {
-                                log.error("Error during shutdown", e);
-                            }
-                        });
-                    }
-                }
-            }
-        };
-    }
-    
-    /**
-     * Schedule callback to reset crash markers after successful startup.
-     * This is called after cluster stabilizes (election completes).
-     */
-    private void scheduleSuccessfulStartupCallback() {
-        shutdownExecutor.submit(() -> {
-            try {
-                // Wait for cluster to stabilize (election completes)
-                Thread.sleep(10000); // 10 seconds should be enough for election
-                
-                // Reset crash markers on successful startup
-                if (crashHandler != null) {
-                    crashHandler.reset();
-                    log.info("✅ Startup successful - crash markers reset");
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } catch (Exception e) {
-                log.warn("Failed to reset crash markers", e);
-            }
-        });
     }
     
     /**
@@ -668,6 +569,34 @@ public class AeronClusterLauncher {
             return second;
         }
         return null;
+    }
+
+    private void performShutdown() {
+        log.info("🛑 Shutting down Aeron Cluster (node {})...", nodeId);
+
+        if (healthMonitor != null) {
+            try {
+                healthMonitor.close();
+            } catch (Exception e) {
+                log.warn("Error closing health monitor", e);
+            }
+        }
+
+        CloseHelper.closeAll(
+                errorHandler -> log.error("Error during shutdown", errorHandler),
+                container,
+                clusteredMediaDriver
+        );
+
+        if (barrier != null) {
+            barrier.signal();
+        }
+
+        if (shutdownExecutor != null) {
+            shutdownExecutor.shutdown();
+        }
+
+        log.info("✅ Aeron Cluster shut down");
     }
 
     static final class SessionTimeoutConfig {
