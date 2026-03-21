@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import io.aeron.ChannelUriStringBuilder;
 import io.aeron.CommonContext;
 import io.aeron.archive.Archive;
 import io.aeron.archive.ArchiveThreadingMode;
@@ -60,14 +59,7 @@ public class AeronClusterLauncher {
     
     private static final Logger log = LoggerFactory.getLogger(AeronClusterLauncher.class);
     
-    private static final int PORT_BASE = 9000;
-    private static final int PORTS_PER_NODE = 100;
-    private static final int ARCHIVE_CONTROL_PORT_OFFSET = 1;
-    public static final int CLIENT_FACING_PORT_OFFSET = 2;
-    private static final int MEMBER_FACING_PORT_OFFSET = 3;
-    private static final int LOG_PORT_OFFSET = 4;
-    private static final int TRANSFER_PORT_OFFSET = 5;
-    private static final int LOG_CONTROL_PORT_OFFSET = 6;
+    public static final int CLIENT_FACING_PORT_OFFSET = AeronClusterTopology.CLIENT_FACING_PORT_OFFSET;
     private static final int REPLICATION_PORT_OFFSET = 7;
     private static final int DEFAULT_CLUSTER_TERM_LENGTH_BYTES = 128 * 1024 * 1024; // 128MB
     private static final int DEFAULT_PUBLICATION_TERM_BUFFER_LENGTH_BYTES = 64 * 1024 * 1024; // 64MB
@@ -292,8 +284,8 @@ public class AeronClusterLauncher {
         Archive.Context archiveContext = new Archive.Context()
                 .aeronDirectoryName(aeronDirName)
                 .archiveDir(new File(baseDir, "archive"))
-                .controlChannel(udpChannel(nodeId, myIPAddress, ARCHIVE_CONTROL_PORT_OFFSET))
-                .replicationChannel(logReplicationChannel(myIPAddress))
+                .controlChannel(AeronClusterTopology.archiveControlChannel(nodeId, myIPAddress, clusterTermLengthBytes))
+                .replicationChannel(AeronClusterTopology.replicationChannel(myIPAddress))
                 .archiveClientContext(replicationArchiveContext)
                 .localControlChannel("aeron:ipc?term-length=64k")  // MUST be IPC (Aeron Archive requirement)
                 .recordingEventsEnabled(false)
@@ -321,11 +313,11 @@ public class AeronClusterLauncher {
         ConsensusModule.Context consensusModuleContext = new ConsensusModule.Context()
                 .errorHandler(closingErrorHandler(errorHandler("Consensus Module")))
                 .clusterMemberId(nodeId)
-                .clusterMembers(clusterMembers(ipAddresses))  // Use IPs instead of hostnames
+                .clusterMembers(AeronClusterTopology.clusterMembers(ipAddresses))  // Use IPs instead of hostnames
                 .clusterDir(new File(baseDir, "cluster"))
                 .ingressChannel("aeron:udp?term-length=" + clusterTermLengthBytes)
-                .logChannel(logControlChannel(nodeId, myIPAddress, LOG_CONTROL_PORT_OFFSET))
-                .replicationChannel(logReplicationChannel(myIPAddress))
+                .logChannel(AeronClusterTopology.consensusLogChannel(nodeId, myIPAddress, clusterTermLengthBytes))
+                .replicationChannel(AeronClusterTopology.replicationChannel(myIPAddress))
                 .sessionTimeoutNs(sessionTimeoutConfig.timeoutNs)
                 .archiveContext(aeronArchiveContext.clone());
         
@@ -454,7 +446,7 @@ public class AeronClusterLauncher {
      * Get the cluster base port.
      */
     public static int getPortBase() {
-        return PORT_BASE;
+        return AeronClusterTopology.getPortBase();
     }
     
     private String getHostname() {
@@ -665,72 +657,7 @@ public class AeronClusterLauncher {
     }
     
     public static int calculatePort(int nodeId, int offset) {
-        return PORT_BASE + (nodeId * PORTS_PER_NODE) + offset;
-    }
-    
-    /**
-     * Create UDP channel using IP address (not hostname) for reliable DNS resolution.
-     */
-    private static String udpChannel(int nodeId, String ipAddress, int portOffset) {
-        int port = calculatePort(nodeId, portOffset);
-        return new ChannelUriStringBuilder()
-                .media("udp")
-                .termLength(resolveClusterTermLengthBytes())
-                .endpoint(ipAddress + ":" + port)
-                .build();
-    }
-    
-    /**
-     * Create log control channel using IP address (not hostname) for reliable DNS resolution.
-     */
-    private static String logControlChannel(int nodeId, String ipAddress, int portOffset) {
-        int port = calculatePort(nodeId, portOffset);
-        return new ChannelUriStringBuilder()
-                .media("udp")
-                .termLength(resolveClusterTermLengthBytes())
-                .controlMode(CommonContext.MDC_CONTROL_MODE_MANUAL)
-                .controlEndpoint(ipAddress + ":" + port)
-                .build();
-    }
-    
-    /**
-     * Create replication channel using IP address (not hostname) for reliable DNS resolution.
-     */
-    private static String logReplicationChannel(String ipAddress) {
-        return new ChannelUriStringBuilder()
-                .media("udp")
-                .endpoint(ipAddress + ":0")
-                .build();
-    }
-    
-    /**
-     * Build cluster members string using IP addresses (or hostnames if IP resolution failed).
-     * 
-     * <p>P2P-ORGANIC: Handles both IP addresses and hostnames. If a peer isn't ready yet
-     * and DNS resolution failed, we use the hostname and let Aeron Cluster's DNS resolver
-     * handle it when the peer comes online.
-     * 
-     * <p>Format: "nodeId,ip:port1,ip:port2,ip:port3,ip:port4,ip:port5|..."
-     * 
-     * <p>Note: Aeron Cluster will retry DNS resolution for hostnames, so using hostnames
-     * for unavailable peers allows them to connect when they come online.
-     * 
-     * @param ipAddresses List of IP addresses or hostnames (one per cluster member)
-     * @return Cluster members string for ConsensusModule
-     */
-    private static String clusterMembers(List<String> ipAddresses) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < ipAddresses.size(); i++) {
-            String address = ipAddresses.get(i); // May be IP or hostname
-            sb.append(i);
-            sb.append(',').append(address).append(':').append(calculatePort(i, CLIENT_FACING_PORT_OFFSET));
-            sb.append(',').append(address).append(':').append(calculatePort(i, MEMBER_FACING_PORT_OFFSET));
-            sb.append(',').append(address).append(':').append(calculatePort(i, LOG_PORT_OFFSET));
-            sb.append(',').append(address).append(':').append(calculatePort(i, TRANSFER_PORT_OFFSET));
-            sb.append(',').append(address).append(':').append(calculatePort(i, ARCHIVE_CONTROL_PORT_OFFSET));
-            sb.append('|');
-        }
-        return sb.toString();
+        return AeronClusterTopology.calculatePort(nodeId, offset);
     }
     
     /**
