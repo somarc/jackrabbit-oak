@@ -18,9 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.URL;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
@@ -71,51 +69,37 @@ public final class AeronClusterBootstrapper {
 
         // 🌐 DYNAMIC CLUSTER SIZE: Start with just self, discover peers organically
         String hostnamesConfig = RuntimeConfigValueResolver.readString("aeron.cluster.hostnames", "");
-        List<String> hostnamesList;
-
-        // Check if cluster state already exists (discover existing cluster members)
-        File clusterStateCheckDir = new File(storeDirectory, "aeron-cluster-node-" + nodeId);
-        File clusterDir = new File(clusterStateCheckDir, "cluster");
-        boolean hasExistingCluster = clusterDir.exists() && clusterDir.listFiles() != null && clusterDir.listFiles().length > 0;
+        AeronClusterBootstrapPlan bootstrapPlan = AeronClusterBootstrapPlan.create(
+            nodeId,
+            selfUrl,
+            peerUrls,
+            storeDirectory,
+            hostnamesConfig
+        );
+        List<String> hostnamesList = bootstrapPlan.hostnames;
+        boolean hasExistingCluster = bootstrapPlan.hasExistingCluster;
 
         if (logClusterStateDetails) {
             System.out.println("🔍 DEBUG: Cluster state check:");
-            System.out.println("   - Cluster dir exists: " + clusterDir.exists());
-            System.out.println("   - Cluster dir path: " + clusterDir.getAbsolutePath());
-            if (clusterDir.exists()) {
-                System.out.println("   - Cluster dir files: " + (clusterDir.listFiles() != null ? clusterDir.listFiles().length : "null"));
+            System.out.println("   - Cluster dir exists: " + bootstrapPlan.clusterDirExists);
+            System.out.println("   - Cluster dir path: " + bootstrapPlan.clusterDir.getAbsolutePath());
+            if (bootstrapPlan.clusterDirExists) {
+                System.out.println("   - Cluster dir files: " + bootstrapPlan.clusterDirFileCount);
             }
             System.out.println("   - hasExistingCluster: " + hasExistingCluster);
         }
 
-        if (hasExistingCluster) {
-            // Existing cluster: Use self + discovered peers (cluster state will have member info)
-            hostnamesList = new ArrayList<>();
-            hostnamesList.add(ServerNetworkUtil.extractHostname(selfUrl));
-            for (String peerUrl : peerUrls) {
-                String hostname = ServerNetworkUtil.extractHostname(peerUrl);
-                if (!hostnamesList.contains(hostname)) {
-                    hostnamesList.add(hostname);
-                }
-            }
-            if (!hostnamesConfig.isEmpty()) {
-                hostnamesList = new ArrayList<>(Arrays.asList(hostnamesConfig.split(",")));
-            }
+        if (bootstrapPlan.startupMode == AeronClusterBootstrapPlan.StartupMode.EXISTING_CLUSTER) {
             System.out.println("🌐 Existing cluster detected - will join with " + hostnamesList.size() + " members");
+        } else if (bootstrapPlan.startupMode == AeronClusterBootstrapPlan.StartupMode.FRESH_CONFIGURED) {
+            System.out.println("🌐 Fresh cluster start - using configured hostnames (" + hostnamesList.size() + " members)");
+            if (logClusterStateDetails) {
+                System.out.println("   → Starting with self only (quorum = 1), peers will join dynamically");
+            }
         } else {
-            if (!hostnamesConfig.isEmpty()) {
-                hostnamesList = new ArrayList<>(Arrays.asList(hostnamesConfig.split(",")));
-                System.out.println("🌐 Fresh cluster start - using configured hostnames (" + hostnamesList.size() + " members)");
-                if (logClusterStateDetails) {
-                    System.out.println("   → Starting with self only (quorum = 1), peers will join dynamically");
-                }
-            } else {
-                hostnamesList = new ArrayList<>();
-                hostnamesList.add(ServerNetworkUtil.extractHostname(selfUrl));
-                System.out.println("🌐 Fresh cluster start - starting with self only (quorum = 1)");
-                if (logClusterStateDetails) {
-                    System.out.println("   → Peers can join dynamically as they come online");
-                }
+            System.out.println("🌐 Fresh cluster start - starting with self only (quorum = 1)");
+            if (logClusterStateDetails) {
+                System.out.println("   → Peers can join dynamically as they come online");
             }
         }
 
@@ -127,28 +111,11 @@ public final class AeronClusterBootstrapper {
         aeronEngine.initializeEthereumIntegration(beaconApiUrl);
 
         // Create cluster base directory
-        File clusterBaseDir = new File(storeDirectory, "aeron-cluster-node-" + nodeId);
+        File clusterBaseDir = bootstrapPlan.clusterBaseDir;
         clusterBaseDir.mkdirs();
 
         // Build node ID to URL mapping for leader lookup
-        java.util.Map<Integer, String> nodeIdToUrl = new java.util.HashMap<>();
-        java.util.List<String> allUrls = new java.util.ArrayList<>();
-        allUrls.add(selfUrl);
-        allUrls.addAll(peerUrls);
-        // Sort by port first so mapping stays stable across localhost vs 127.0.0.1 host formatting.
-        // Fallback to full URL comparison for deterministic ordering when ports are equal.
-        java.util.Collections.sort(allUrls, (a, b) -> {
-            int portA = extractPort(a);
-            int portB = extractPort(b);
-            if (portA != portB) {
-                return Integer.compare(portA, portB);
-            }
-            return a.compareTo(b);
-        });
-        for (int i = 0; i < allUrls.size(); i++) {
-            nodeIdToUrl.put(i, allUrls.get(i));
-        }
-        aeronEngine.setNodeIdMapping(nodeIdToUrl);
+        aeronEngine.setNodeIdMapping(bootstrapPlan.nodeIdToUrl);
 
         // Set write/delete application callback BEFORE launching cluster
         aeronEngine.setWriteApplicationCallback(new AeronConsensusEngine.WriteApplicationCallback() {
@@ -273,16 +240,8 @@ public final class AeronClusterBootstrapper {
         String aeronDirectoryName = aeronClusterLauncher.getAeronDirectoryName();
         int clusterBasePort = AeronClusterLauncher.getPortBase();
 
-        String clientHostname;
-        try {
-            URL selfUrlParsed = new URL(selfUrl);
-            clientHostname = selfUrlParsed.getHost();
-        } catch (Exception e) {
-            clientHostname = "localhost";
-        }
-
         AeronWriteClient aeronWriteClient =
-            new AeronWriteClient(0, aeronDirectoryName, hostnamesList, clusterBasePort, clientHostname);
+            new AeronWriteClient(0, aeronDirectoryName, hostnamesList, clusterBasePort, bootstrapPlan.clientHostname);
 
         httpServer.setAeronClusterLauncher(aeronClusterLauncher);
 
@@ -413,14 +372,6 @@ public final class AeronClusterBootstrapper {
         } else if (changeCount > 3) {
             System.out.println("   ⚠️  WARNING: " + changeCount + " leadership changes detected");
             System.out.println("              This may indicate network instability");
-        }
-    }
-
-    private static int extractPort(String url) {
-        try {
-            return new URL(url).getPort();
-        } catch (Exception e) {
-            return -1;
         }
     }
 }
