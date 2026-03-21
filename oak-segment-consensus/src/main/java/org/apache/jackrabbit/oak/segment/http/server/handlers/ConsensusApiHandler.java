@@ -141,71 +141,71 @@ public class ConsensusApiHandler {
             });
         }
 
-        // Durability callback (ADR 026)
-        if (context.proposalQueueManager != null) {
-            writeApplicationService.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
-                @Override
-                public void onDurable(String proposalId, String durableHead) {
-                    if (context.aeronConsensusEngine != null) {
-                        context.aeronConsensusEngine.sendSegmentPersisted(
-                            proposalId, durableHead, true, null);
-                    } else {
-                        context.proposalQueueManager.updateDurability(
-                            proposalId, DurabilityState.ACKED, durableHead, null);
-                    }
-                }
+        // Durability callbacks must tolerate late context wiring during startup.
+        writeApplicationService.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
+            @Override
+            public void onDurable(String proposalId, String durableHead) {
+                forwardDurabilitySuccess(proposalId, durableHead);
+            }
 
-                @Override
-                public void onFailure(String proposalId, String error) {
-                    if (context.aeronConsensusEngine != null) {
-                        context.aeronConsensusEngine.sendSegmentPersisted(
-                            proposalId, null, false, error);
-                    } else {
-                        context.proposalQueueManager.updateDurability(
-                            proposalId, DurabilityState.FAILED, null, error);
-                    }
-                }
-            });
-            deleteApplicationService.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
-                @Override
-                public void onDurable(String proposalId, String durableHead) {
-                    if (context.aeronConsensusEngine != null) {
-                        context.aeronConsensusEngine.sendSegmentPersisted(
-                            proposalId, durableHead, true, null);
-                    } else {
-                        context.proposalQueueManager.updateDurability(
-                            proposalId, DurabilityState.ACKED, durableHead, null);
-                    }
-                }
+            @Override
+            public void onFailure(String proposalId, String error) {
+                forwardDurabilityFailure(proposalId, error);
+            }
+        });
+        deleteApplicationService.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+            @Override
+            public void onDurable(String proposalId, String durableHead) {
+                forwardDurabilitySuccess(proposalId, durableHead);
+            }
 
-                @Override
-                public void onFailure(String proposalId, String error) {
-                    if (context.aeronConsensusEngine != null) {
-                        context.aeronConsensusEngine.sendSegmentPersisted(
-                            proposalId, null, false, error);
-                    } else {
-                        context.proposalQueueManager.updateDurability(
-                            proposalId, DurabilityState.FAILED, null, error);
-                    }
-                }
-            });
-        }
+            @Override
+            public void onFailure(String proposalId, String error) {
+                forwardDurabilityFailure(proposalId, error);
+            }
+        });
 
-        if (context.aeronConsensusEngine != null && context.proposalQueueManager != null) {
+        if (context.aeronConsensusEngine != null) {
             context.aeronConsensusEngine.setDurabilityStatusCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.DurabilityStatusCallback() {
                 @Override
                 public void onDurable(String proposalId, String durableHead) {
-                    context.proposalQueueManager.updateDurability(
-                        proposalId, DurabilityState.ACKED, durableHead, null);
+                    applyDurabilityStatus(proposalId, DurabilityState.ACKED, durableHead, null);
                 }
 
                 @Override
                 public void onFailure(String proposalId, String error) {
-                    context.proposalQueueManager.updateDurability(
-                        proposalId, DurabilityState.FAILED, null, error);
+                    applyDurabilityStatus(proposalId, DurabilityState.FAILED, null, error);
                 }
             });
         }
+    }
+
+    public void refreshCallbacks() {
+        wireServiceCallbacks();
+    }
+
+    private void forwardDurabilitySuccess(String proposalId, String durableHead) {
+        if (context.aeronConsensusEngine != null) {
+            context.aeronConsensusEngine.sendSegmentPersisted(proposalId, durableHead, true, null);
+            return;
+        }
+        applyDurabilityStatus(proposalId, DurabilityState.ACKED, durableHead, null);
+    }
+
+    private void forwardDurabilityFailure(String proposalId, String error) {
+        if (context.aeronConsensusEngine != null) {
+            context.aeronConsensusEngine.sendSegmentPersisted(proposalId, null, false, error);
+            return;
+        }
+        applyDurabilityStatus(proposalId, DurabilityState.FAILED, null, error);
+    }
+
+    private void applyDurabilityStatus(String proposalId, DurabilityState state, String durableHead, String error) {
+        if (context.proposalQueueManager == null) {
+            log.warn("⚠️  Proposal queue unavailable - cannot update durability for {} ({})", proposalId, state);
+            return;
+        }
+        context.proposalQueueManager.updateDurability(proposalId, state, durableHead, error);
     }
 
     /**

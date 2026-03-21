@@ -16,10 +16,14 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.Rule;
 import org.junit.rules.TemporaryFolder;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
@@ -34,6 +38,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.*;
 
 /**
@@ -415,6 +420,69 @@ public class ConsensusApiHandlerTest {
         // Then: Rejected counter should be incremented
         assertEquals("Rejected counter should increment", 
             initialCount + 1, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testRefreshCallbacksBindsLateDurabilityStatusCallback() {
+        ServerContext lateContext = new ServerContext(
+            mock(FileStore.class, RETURNS_DEEP_STUBS),
+            mock(NodeStore.class),
+            tempFolder.getRoot().toPath(),
+            "http://localhost:8090"
+        );
+        ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        AeronConsensusEngine aeronEngine = mock(AeronConsensusEngine.class);
+
+        lateContext.setAeronConsensusEngine(aeronEngine);
+        lateHandler.refreshCallbacks();
+
+        ArgumentCaptor<AeronConsensusEngine.DurabilityStatusCallback> captor =
+            ArgumentCaptor.forClass(AeronConsensusEngine.DurabilityStatusCallback.class);
+        verify(aeronEngine).setDurabilityStatusCallback(captor.capture());
+
+        lateContext.setProposalQueueManager(queueManager);
+        captor.getValue().onDurable("proposal-1", "head-123");
+
+        verify(queueManager).updateDurability("proposal-1", DurabilityState.ACKED, "head-123", null);
+    }
+
+    @Test
+    public void testApplyReplicatedWriteSendsDurabilityAfterLateEngineBinding() {
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString10()).thenReturn("new-head");
+
+        ServerContext lateContext = new ServerContext(
+            fileStore,
+            new MemoryNodeStore(),
+            tempFolder.getRoot().toPath(),
+            "http://localhost:8090"
+        );
+        ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
+        AeronConsensusEngine aeronEngine = mock(AeronConsensusEngine.class);
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+
+        when(aeronEngine.isLeader()).thenReturn(true);
+        lateContext.setAeronConsensusEngine(aeronEngine);
+        lateHandler.refreshCallbacks();
+        lateContext.setProposalQueueManager(queueManager);
+
+        lateHandler.applyReplicatedWrite(
+            "0x1234567890abcdef1234567890abcdef12345678",
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
+            "page",
+            "{\"title\":\"Hello\"}",
+            "0xsig",
+            null,
+            null,
+            null,
+            null,
+            "proposal-1"
+        );
+
+        verify(aeronEngine).sendQueueSegment("proposal-1");
+        verify(aeronEngine).sendSegmentPersisted("proposal-1", "new-head", true, null);
+        verify(queueManager, never()).updateDurability("proposal-1", DurabilityState.ACKED, "new-head", null);
     }
 
     private void assertJsonErrorStatus(int status) {

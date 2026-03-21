@@ -152,6 +152,7 @@ public class SegmentHttpServer {
      */
     public void setAeronConsensusEngine(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine engine) {
         context.setAeronConsensusEngine(engine);
+        router.getConsensusApiHandler().refreshCallbacks();
         log.info("✈️  Aeron Cluster consensus engine configured");
     }
     
