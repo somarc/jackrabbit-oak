@@ -116,32 +116,7 @@ public final class AeronClusterBootstrapper {
         httpServer.setAeronConsensusEngine(aeronEngine);
 
         AeronClusterLauncher aeronClusterLauncher =
-            new AeronClusterLauncher(nodeId, hostnamesList, clusterBaseDir, aeronEngine);
-
-        // Set shutdown callback to exit JVM on FATAL MediaDriver errors
-        aeronClusterLauncher.setShutdownCallback(() -> {
-            System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.err.println("🚨 FATAL MediaDriver error - exiting JVM for restart");
-            System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-            System.exit(1);
-
-            new Thread(() -> {
-                try {
-                    Thread.sleep(5000);
-                    System.err.println("⚠️  JVM still running after System.exit() - forcing halt");
-                    Runtime.getRuntime().halt(1);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }, "force-exit-thread").start();
-        });
-
-        try {
-            aeronClusterLauncher.launch();
-        } catch (Exception e) {
-            throw new IOException("Failed to launch Aeron Cluster", e);
-        }
+            new AeronClusterLaunchCoordinator().launch(nodeId, hostnamesList, clusterBaseDir, aeronEngine);
 
         if (observeElections && !hasExistingCluster && hostnamesList.size() >= 3) {
             System.out.println();
