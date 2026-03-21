@@ -24,7 +24,6 @@ import io.aeron.cluster.service.ClusteredService;
 import io.aeron.cluster.service.ClusteredServiceContainer;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
-import org.agrona.CloseHelper;
 import org.agrona.ErrorHandler;
 import org.agrona.concurrent.ShutdownSignalBarrier;
 import org.slf4j.Logger;
@@ -444,31 +443,8 @@ public class AeronClusterLauncher {
     }
 
     private void performShutdown() {
-        log.info("🛑 Shutting down Aeron Cluster (node {})...", nodeId);
-
-        if (healthMonitor != null) {
-            try {
-                healthMonitor.close();
-            } catch (Exception e) {
-                log.warn("Error closing health monitor", e);
-            }
-        }
-
-        CloseHelper.closeAll(
-                errorHandler -> log.error("Error during shutdown", errorHandler),
-                container,
-                clusteredMediaDriver
-        );
-
-        if (barrier != null) {
-            barrier.signal();
-        }
-
-        if (shutdownExecutor != null) {
-            shutdownExecutor.shutdown();
-        }
-
-        log.info("✅ Aeron Cluster shut down");
+        new AeronClusterShutdownCoordinator(nodeId)
+            .shutdown(healthMonitor, container, clusteredMediaDriver, barrier, shutdownExecutor);
     }
 
     static final class SessionTimeoutConfig {
