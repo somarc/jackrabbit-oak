@@ -100,9 +100,9 @@ public class GlobalStoreServer {
     private final StartupPreflightCoordinator startupPreflightCoordinator = new StartupPreflightCoordinator();
     private final StandbyModeStartupCoordinator standbyModeStartupCoordinator = new StandbyModeStartupCoordinator();
     private final BootstrapModeCoordinator bootstrapModeCoordinator = new BootstrapModeCoordinator();
-    private final ConsensusStartupCoordinator consensusStartupCoordinator = new ConsensusStartupCoordinator();
     private final GenesisStartupCoordinator genesisStartupCoordinator = new GenesisStartupCoordinator();
     private final ServerInfrastructureInitializer serverInfrastructureInitializer = new ServerInfrastructureInitializer();
+    private final ServerActivationCoordinator serverActivationCoordinator = new ServerActivationCoordinator();
 
     public GlobalStoreServer(int port, String storeDirectory) {
         this.port = port;
@@ -291,73 +291,28 @@ public class GlobalStoreServer {
             throw new IOException("Invalid FileStore version", e);
         }
         
-        // Start HTTP server (deferred in STANDBY mode until bootstrap completes)
-        // Note: In real-world deployments, all validators use standardized ports (HTTP=8090, Standby=8091)
-        //       because they run on different hosts. For local dev, we use different ports (8091, 8092, 8093)
-        //       to avoid conflicts on the same machine.
-        if (detectedMode == BootstrapMode.STANDBY) {
-            // STANDBY mode: HTTP server starts after bootstrap completes (prevents port conflicts in local dev)
-            System.out.println("⏸️  HTTP server startup deferred (STANDBY mode - will start after bootstrap completes)");
-        } else {
-            // PRIMARY or GENESIS mode: Start HTTP server immediately
-            System.out.println("Starting HTTP server...");
-            try {
-                httpServer.start();
-                System.out.println("✅ HTTP server started on port " + port);
-            } catch (Exception e) {
-                throw new IOException("Failed to start HTTP server", e);
-            }
-        }
-        
-        org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig aeronConfig =
-            aeronClusterService != null ? aeronClusterService.getConfig() : null;
-        boolean isStandbyMode = (detectedMode == BootstrapMode.STANDBY);
+        ServerActivationCoordinator.ActivationResult activation =
+            serverActivationCoordinator.activate(
+                new ServerActivationCoordinator.ActivationContext(
+                    port,
+                    isAeronMode,
+                    detectedMode,
+                    fileStore,
+                    nodeStore,
+                    httpServer,
+                    wallet,
+                    storeDirectory,
+                    this.blobStore,
+                    aeronClusterService,
+                    aeronClusterLauncher,
+                    components(),
+                    finalClusterWallet,
+                    bootstrap
+                )
+            );
 
-        ConsensusStartupCoordinator.StartupOutcome consensusStartup = consensusStartupCoordinator.initialize(
-            new ConsensusStartupCoordinator.StartupContext(
-                port,
-                isAeronMode,
-                isStandbyMode,
-                fileStore,
-                nodeStore,
-                httpServer,
-                wallet,
-                storeDirectory,
-                this.blobStore,
-                aeronClusterService,
-                components(),
-                finalClusterWallet,
-                aeronConfig
-            )
-        );
-
-        this.aeronClusterService = consensusStartup.getAeronClusterService();
-        if (consensusStartup.getDisposition() != ConsensusStartupCoordinator.StartupDisposition.DEFERRED
-                || consensusStartup.getLauncher() != null) {
-            this.aeronClusterLauncher = consensusStartup.getLauncher();
-        }
-
-        if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DISABLED) {
-            // Only print this if NOT in standby mode (standby will init via callback)
-            System.out.println();
-            System.out.println("ℹ️  Consensus disabled (single-validator mode)");
-        } else if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DEFERRED) {
-            // STANDBY mode - consensus will be initialized after bootstrap
-            System.out.println();
-            System.out.println("ℹ️  Consensus initialization deferred (STANDBY mode → callback)");
-        }
-        
-        // Start StandbyServerSync for PRIMARY mode (serve other standbys)
-        if (detectedMode == BootstrapMode.PRIMARY || detectedMode == BootstrapMode.GENESIS) {
-            if (bootstrap != null) {
-                try {
-                    bootstrap.startStandbyServer();
-                } catch (Exception e) {
-                    System.err.println("⚠️  Failed to start StandbyServerSync: " + e.getMessage());
-                    // Non-fatal, continue without standby server
-                }
-            }
-        }
+        this.aeronClusterService = activation.getAeronClusterService();
+        this.aeronClusterLauncher = activation.getLauncher();
         
         // SEPOLIA_PHASE: Smart Contract Event Listener
         // This is where we'll listen to OakNetwork.sol contract events:
@@ -472,14 +427,6 @@ public class GlobalStoreServer {
         return aeronClusterService != null ? aeronClusterService.getConfig() : null;
     }
 
-    private static IOException startupFailure(String message) {
-        return new IOException(message);
-    }
-
-    private static IOException startupFailure(String message, Exception cause) {
-        return new IOException(message, cause);
-    }
-    
     /**
      * Get the NodeStore (for testing/debugging).
      */
