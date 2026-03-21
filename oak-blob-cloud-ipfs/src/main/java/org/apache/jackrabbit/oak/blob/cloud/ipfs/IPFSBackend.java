@@ -16,11 +16,8 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
-import io.ipfs.api.IPFS;
 import io.ipfs.api.MerkleNode;
 import io.ipfs.api.NamedStreamable;
-import io.ipfs.cid.Cid;
-import io.ipfs.multihash.Multihash;
 import org.apache.jackrabbit.core.data.DataIdentifier;
 import org.apache.jackrabbit.core.data.DataRecord;
 import org.apache.jackrabbit.core.data.DataStoreException;
@@ -52,10 +49,12 @@ public class IPFSBackend extends AbstractSharedBackend {
     
     private static final String KEY_PREFIX = "ipfs_";
     
+    private final IpfsClientFactory ipfsClientFactory;
+
     /**
      * IPFS HTTP API client
      */
-    private IPFS ipfs;
+    private IpfsClient ipfs;
     
     /**
      * IPFS API endpoint (e.g., "/ip4/127.0.0.1/tcp/5001")
@@ -72,6 +71,14 @@ public class IPFSBackend extends AbstractSharedBackend {
      */
     private Date startTime;
 
+    public IPFSBackend() {
+        this(DefaultIpfsClient::new);
+    }
+
+    IPFSBackend(IpfsClientFactory ipfsClientFactory) {
+        this.ipfsClientFactory = ipfsClientFactory;
+    }
+
     @Override
     public void init() throws DataStoreException {
         try {
@@ -83,7 +90,7 @@ public class IPFSBackend extends AbstractSharedBackend {
             }
             
             // Connect to IPFS node via HTTP API
-            ipfs = new IPFS(ipfsApiEndpoint);
+            ipfs = ipfsClientFactory.create(ipfsApiEndpoint);
             
             // Test connection (try a simple operation)
             try {
@@ -119,7 +126,7 @@ public class IPFSBackend extends AbstractSharedBackend {
             LOG.info("📦 Uploaded binary to IPFS: {} → CID: {}", identifier, cid);
             
             // Pin to ensure persistence (prevents garbage collection)
-            ipfs.pin.add(Multihash.fromBase58(cid));
+            ipfs.pinAdd(cid);
             LOG.debug("📌 Pinned CID: {}", cid);
             
             // Cache the mapping
@@ -149,7 +156,7 @@ public class IPFSBackend extends AbstractSharedBackend {
             LOG.debug("📥 Fetching binary from IPFS: CID: {}", cid);
             
             // Fetch from IPFS (local cache or network)
-            byte[] content = ipfs.cat(Multihash.fromBase58(cid));
+            byte[] content = ipfs.cat(cid);
             
             LOG.info("✅ Retrieved binary from IPFS: {} ({} bytes)", identifier, content.length);
             
@@ -202,7 +209,7 @@ public class IPFSBackend extends AbstractSharedBackend {
             }
             
             // Check if block exists in IPFS
-            Map<String, Object> stat = ipfs.block.stat(Multihash.fromBase58(cid));
+            Map<String, Object> stat = ipfs.blockStat(cid);
             return stat != null && stat.containsKey("Size");
             
         } catch (Exception e) {
@@ -231,7 +238,7 @@ public class IPFSBackend extends AbstractSharedBackend {
             LOG.debug("🗑️  Unpinning CID from IPFS: {}", cid);
             
             // Unpin from IPFS (allows garbage collection)
-            ipfs.pin.rm(Multihash.fromBase58(cid));
+            ipfs.pinRemove(cid);
             
             // Remove from cache
             cidCache.remove(identifier);
@@ -257,7 +264,7 @@ public class IPFSBackend extends AbstractSharedBackend {
             
             if (!nodes.isEmpty()) {
                 String cid = nodes.get(0).hash.toString();
-                ipfs.pin.add(Multihash.fromBase58(cid));
+                ipfs.pinAdd(cid);
                 LOG.info("📝 Added metadata: {} → CID: {}", name, cid);
                 
                 // Store metadata CID with special prefix
@@ -399,7 +406,7 @@ public class IPFSBackend extends AbstractSharedBackend {
                 try {
                     String cid = backend.getCID(identifier);
                     if (cid != null) {
-                        Map<String, Object> stat = backend.ipfs.block.stat(Multihash.fromBase58(cid));
+                        Map<String, Object> stat = backend.ipfs.blockStat(cid);
                         length = ((Number) stat.get("Size")).longValue();
                     }
                 } catch (Exception e) {
@@ -419,4 +426,3 @@ public class IPFSBackend extends AbstractSharedBackend {
         }
     }
 }
-
