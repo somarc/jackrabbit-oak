@@ -39,7 +39,7 @@ final class ConsensusStartupCoordinator {
         String peersConfig = RuntimeConfigValueResolver.readString("consensus.peers", "");
         AeronClusterConfig aeronConfig = context.aeronConfig;
         String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(context.port, aeronConfig);
-        List<String> peerUrls = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(aeronConfig);
+        List<String> peerUrls = resolvePeerUrls(aeronConfig, peersConfig);
 
         boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled)
             && (context.aeronMode || !peersConfig.isEmpty());
@@ -129,6 +129,14 @@ final class ConsensusStartupCoordinator {
             selfUrl,
             peerUrls
         );
+    }
+
+    private static List<String> resolvePeerUrls(AeronClusterConfig aeronConfig, String peersConfig) {
+        List<String> peerUrls = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(aeronConfig);
+        if (!peerUrls.isEmpty()) {
+            return peerUrls;
+        }
+        return ServerNetworkUtil.parsePeerUrls(peersConfig);
     }
 
     static final class StartupContext {
