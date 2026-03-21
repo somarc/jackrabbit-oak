@@ -17,15 +17,13 @@
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collections;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService;
+import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -34,6 +32,8 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
@@ -41,11 +41,64 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-public class GlobalStoreServerDeferredStartupTest {
+public class StandbyPromotionCoordinatorTest {
+
+    private final StandbyPromotionCoordinator coordinator = new StandbyPromotionCoordinator();
+
+    @Test
+    public void testResolveBootstrapTargetUsesConfiguredPrimary() {
+        StandbyPromotionCoordinator.BootstrapTarget target = coordinator.resolveBootstrapTarget(
+            "bootstrap-node",
+            9001,
+            Collections.singletonList("http://validator-1:8090"),
+            8090
+        );
+
+        assertNotNull(target);
+        assertEquals("bootstrap-node", target.getHost());
+        assertEquals(9001, target.getPort());
+    }
+
+    @Test
+    public void testResolveBootstrapTargetFallsBackToFirstPeer() {
+        StandbyPromotionCoordinator.BootstrapTarget target = coordinator.resolveBootstrapTarget(
+            "",
+            0,
+            Arrays.asList("http://validator-1:8090", "http://validator-2:8090"),
+            8090
+        );
+
+        assertNotNull(target);
+        assertEquals("validator-1", target.getHost());
+        assertEquals(8091, target.getPort());
+    }
+
+    @Test
+    public void testResolveBootstrapTargetReturnsNullWhenNoPrimaryExists() {
+        StandbyPromotionCoordinator.BootstrapTarget target = coordinator.resolveBootstrapTarget(
+            "",
+            0,
+            Collections.<String>emptyList(),
+            8090
+        );
+
+        assertNull(target);
+    }
+
+    @Test
+    public void testBootstrapAndPromoteDelegatesToValidatorBootstrap() throws Exception {
+        ValidatorBootstrap bootstrap = mock(ValidatorBootstrap.class);
+        Runnable onPromoted = mock(Runnable.class);
+        StandbyPromotionCoordinator.BootstrapTarget target =
+            new StandbyPromotionCoordinator.BootstrapTarget("validator-1", 8091);
+
+        coordinator.bootstrapAndPromote(bootstrap, target, onPromoted);
+
+        verify(bootstrap).bootstrapFromPrimary("validator-1", 8091, onPromoted);
+    }
 
     @Test
     public void testDeferredStartupUsesStoredConfigAndCapturesLauncher() throws Exception {
-        GlobalStoreServer server = new GlobalStoreServer(8090, "/tmp/test-store");
         FileStore fileStore = mock(FileStore.class);
         NodeStore nodeStore = mock(NodeStore.class);
         SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
@@ -78,16 +131,21 @@ public class GlobalStoreServerDeferredStartupTest {
             true
         )).thenReturn(startupResult);
 
-        setField(server, "fileStore", fileStore);
-        setField(server, "nodeStore", nodeStore);
-        setField(server, "httpServer", httpServer);
-        setField(server, "wallet", wallet);
-        setField(server, "blobStore", blobStore);
-        setField(server, "aeronClusterService", clusterService);
-        setField(server, "aeronSelfUrl", "http://validator-0:8090");
-        setField(server, "aeronPeerUrls", Arrays.asList("http://validator-1:8090", "http://validator-2:8090"));
-
-        invokeDeferredStartup(server);
+        StandbyPromotionCoordinator.DeferredAeronStartup deferredStartup =
+            coordinator.startDeferredCluster(
+                mock(GlobalStoreServerComponentFactory.class),
+                clusterService,
+                new StandbyPromotionCoordinator.DeferredAeronStartupContext(
+                    fileStore,
+                    nodeStore,
+                    httpServer,
+                    wallet,
+                    "/tmp/test-store",
+                    blobStore,
+                    "http://validator-0:8090",
+                    Arrays.asList("http://validator-1:8090", "http://validator-2:8090")
+                )
+            );
 
         verify(clusterService).startCluster(
             fileStore,
@@ -101,12 +159,13 @@ public class GlobalStoreServerDeferredStartupTest {
             true,
             true
         );
-        assertSame(launcher, getField(server, "aeronClusterLauncher"));
+        assertSame(clusterService, deferredStartup.getAeronClusterService());
+        assertSame(startupResult, deferredStartup.getStartupResult());
+        assertSame(launcher, deferredStartup.getStartupResult().getLauncher());
     }
 
     @Test
     public void testDeferredStartupBuildsStandaloneServiceWhenOsgiServiceIsMissing() throws Exception {
-        GlobalStoreServer server = new GlobalStoreServer(8090, "/tmp/test-store");
         FileStore fileStore = mock(FileStore.class);
         NodeStore nodeStore = mock(NodeStore.class);
         SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
@@ -137,15 +196,21 @@ public class GlobalStoreServerDeferredStartupTest {
             false
         )).thenReturn(startupResult);
 
-        server.setComponentFactory(componentFactory);
-        setField(server, "fileStore", fileStore);
-        setField(server, "nodeStore", nodeStore);
-        setField(server, "httpServer", httpServer);
-        setField(server, "wallet", wallet);
-        setField(server, "blobStore", blobStore);
-        setField(server, "aeronSelfUrl", "http://validator-0:8090");
-
-        invokeDeferredStartup(server);
+        StandbyPromotionCoordinator.DeferredAeronStartup deferredStartup =
+            coordinator.startDeferredCluster(
+                componentFactory,
+                null,
+                new StandbyPromotionCoordinator.DeferredAeronStartupContext(
+                    fileStore,
+                    nodeStore,
+                    httpServer,
+                    wallet,
+                    "/tmp/test-store",
+                    blobStore,
+                    "http://validator-0:8090",
+                    Collections.<String>emptyList()
+                )
+            );
 
         verify(componentFactory).createAeronClusterService();
         verify(clusterService).startCluster(
@@ -160,44 +225,34 @@ public class GlobalStoreServerDeferredStartupTest {
             false,
             false
         );
-        assertSame(clusterService, getField(server, "aeronClusterService"));
-        assertSame(launcher, getField(server, "aeronClusterLauncher"));
+        assertSame(clusterService, deferredStartup.getAeronClusterService());
+        assertSame(launcher, deferredStartup.getStartupResult().getLauncher());
     }
 
     @Test
     public void testDeferredStartupRejectsMissingSelfUrl() throws Exception {
-        GlobalStoreServer server = new GlobalStoreServer(8090, "/tmp/test-store");
         AeronClusterService clusterService = mock(AeronClusterService.class);
 
-        setField(server, "aeronClusterService", clusterService);
-
         try {
-            invokeDeferredStartup(server);
+            coordinator.startDeferredCluster(
+                mock(GlobalStoreServerComponentFactory.class),
+                clusterService,
+                new StandbyPromotionCoordinator.DeferredAeronStartupContext(
+                    mock(FileStore.class),
+                    mock(NodeStore.class),
+                    mock(SegmentHttpServer.class),
+                    mock(EthereumWallet.class),
+                    "/tmp/test-store",
+                    mock(BlobStore.class),
+                    null,
+                    Collections.<String>emptyList()
+                )
+            );
             fail("Expected IOException");
-        } catch (InvocationTargetException e) {
-            Throwable cause = e.getCause();
-            assertEquals(IOException.class, cause.getClass());
-            assertEquals("Aeron Cluster bootstrap: selfUrl not stored", cause.getMessage());
+        } catch (IOException e) {
+            assertEquals("Aeron Cluster bootstrap: selfUrl not stored", e.getMessage());
         }
 
         verifyNoInteractions(clusterService);
-    }
-
-    private static void invokeDeferredStartup(GlobalStoreServer server) throws Exception {
-        Method method = GlobalStoreServer.class.getDeclaredMethod("startAeronClusterAfterBootstrap");
-        method.setAccessible(true);
-        method.invoke(server);
-    }
-
-    private static void setField(Object target, String name, Object value) throws Exception {
-        Field field = GlobalStoreServer.class.getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(target, value);
-    }
-
-    private static Object getField(Object target, String name) throws Exception {
-        Field field = GlobalStoreServer.class.getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(target);
     }
 }
