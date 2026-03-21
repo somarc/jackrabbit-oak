@@ -129,7 +129,7 @@ public final class AeronClusterBootstrapper {
             System.out.println();
 
             try {
-                observeElections(aeronEngine, 15000);
+                new AeronClusterElectionObserver().observe(aeronEngine, 15000);
                 System.out.println("✅ Election observation complete - cluster verified healthy");
                 System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                 System.out.println();
@@ -156,56 +156,5 @@ public final class AeronClusterBootstrapper {
         }
 
         return new AeronClusterStartupResult(aeronEngine, aeronClusterLauncher, aeronWriteClient, hostnamesList, nodeId);
-    }
-
-    /**
-     * Observe elections for a period to verify cluster health.
-     * Passively watches leadership changes to ensure all nodes can participate.
-     */
-    private void observeElections(AeronConsensusEngine engine, long observationMs) throws Exception {
-        java.util.Set<Integer> observedLeaders = new java.util.HashSet<>();
-        long startTime = System.currentTimeMillis();
-        int lastLeaderId = -1;
-        int changeCount = 0;
-
-        System.out.println("   Observing elections for " + (observationMs / 1000) + " seconds...");
-        System.out.println();
-
-        while (System.currentTimeMillis() - startTime < observationMs) {
-            int currentLeaderId = engine.getLeaderMemberId();
-
-            if (currentLeaderId >= 0) {
-                observedLeaders.add(currentLeaderId);
-
-                if (currentLeaderId != lastLeaderId) {
-                    String role = engine.isLeader() ? "LEADER (this node)" : "FOLLOWER";
-                    System.out.println("   " + new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date()) +
-                        " - Leader is node " + currentLeaderId +
-                        " (role: " + role + ", changes: " + ++changeCount + ")");
-                    lastLeaderId = currentLeaderId;
-                }
-            }
-
-            Thread.sleep(1000); // Check every second
-        }
-
-        System.out.println();
-        System.out.println("   Observation Results:");
-        System.out.println("   - Duration: " + (observationMs / 1000) + " seconds");
-        System.out.println("   - Leadership changes: " + changeCount);
-        System.out.println("   - Unique leaders observed: " + observedLeaders.size() + " of " + engine.getClusterSize() + " nodes");
-        System.out.println("   - Final leader: node " + lastLeaderId);
-        System.out.println();
-
-        if (observedLeaders.isEmpty()) {
-            throw new Exception("No leader elected during observation period");
-        }
-
-        if (observedLeaders.size() == 1 && changeCount == 0) {
-            System.out.println("   ℹ️  Single stable leader throughout observation (healthy)");
-        } else if (changeCount > 3) {
-            System.out.println("   ⚠️  WARNING: " + changeCount + " leadership changes detected");
-            System.out.println("              This may indicate network instability");
-        }
     }
 }
