@@ -24,7 +24,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -249,66 +248,6 @@ public class ValidatorBootstrap {
         }
         
         log.info("ValidatorBootstrap shut down");
-    }
-    
-    /**
-     * Detect startup mode based on FileStore state and peer reachability.
-     * 
-     * Detection logic:
-     * - GENESIS: No genesis content + no reachable peers → Create genesis locally
-     * - STANDBY: No genesis content + has reachable peers → Bootstrap from peer
-     * - PRIMARY: Has genesis content → Join consensus immediately
-     */
-    public static BootstrapMode detectMode(FileStore fileStore, org.apache.jackrabbit.oak.spi.state.NodeStore nodeStore, List<String> peers) {
-        // Check if genesis content exists (the definitive test!)
-        boolean hasGenesisContent = false;
-        try {
-            org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
-            org.apache.jackrabbit.oak.spi.state.NodeState oakChain = root.getChildNode("oak-chain");
-            if (oakChain.exists()) {
-                org.apache.jackrabbit.oak.spi.state.NodeState content = oakChain.getChildNode("content");
-                if (content.exists()) {
-                    org.apache.jackrabbit.oak.spi.state.NodeState genesis = content.getChildNode("genesis");
-                    hasGenesisContent = genesis.exists();
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Failed to check for genesis content", e);
-        }
-        
-        // Check if any peers are reachable (have /health endpoint responding)
-        boolean hasReachablePeers = false;
-        if (peers != null && !peers.isEmpty()) {
-            for (String peerUrl : peers) {
-                try {
-                    java.net.URL url = new java.net.URL(peerUrl + "/health");
-                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-                    conn.setRequestMethod("GET");
-                    conn.setConnectTimeout(2000);  // 2 second timeout
-                    conn.setReadTimeout(2000);
-                    
-                    int responseCode = conn.getResponseCode();
-                    if (responseCode == 200) {
-                        log.info("✅ Found reachable peer: {}", peerUrl);
-                        hasReachablePeers = true;
-                        break;  // Found at least one reachable peer
-                    }
-                } catch (Exception e) {
-                    log.debug("Peer not reachable: {} - {}", peerUrl, e.getMessage());
-                }
-            }
-        }
-        
-        if (!hasGenesisContent && !hasReachablePeers) {
-            // Empty + no reachable peers = First validator (create genesis)
-            return BootstrapMode.GENESIS;
-        } else if (!hasGenesisContent && hasReachablePeers) {
-            // Empty + has reachable peers = New validator (bootstrap from peers)
-            return BootstrapMode.STANDBY;
-        } else {
-            // Has genesis content = Existing validator (resume)
-            return BootstrapMode.PRIMARY;
-        }
     }
     
     public enum BootstrapMode {
