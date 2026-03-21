@@ -103,6 +103,7 @@ public class GlobalStoreServer {
     private GlobalStoreServerComponentFactory componentFactory;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
+    private final WalletStartupCoordinator walletStartupCoordinator = new WalletStartupCoordinator();
     private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
     private final BootstrapModeCoordinator bootstrapModeCoordinator = new BootstrapModeCoordinator();
     private final ConsensusStartupCoordinator consensusStartupCoordinator = new ConsensusStartupCoordinator();
@@ -161,46 +162,10 @@ public class GlobalStoreServer {
         // - Cluster wallet: Payment destination (read-only awareness)
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         
-        // 1. Load/create NODE wallet (this validator's identity for signing)
-        String nodeKeystorePath = GlobalStoreRuntimeConfigUtil.resolveNodeKeystorePath(storeDirectory);
-        try {
-            this.wallet = components().createEthereumWallet(nodeKeystorePath);
-            System.out.println("🔑 Node wallet: " + this.wallet.getWalletAddress());
-        } catch (Exception e) {
-            System.err.println("❌ FATAL: Failed to load/generate node wallet");
-            System.err.println("   Keystore path: " + nodeKeystorePath);
-            System.err.println("   Error: " + e.getMessage());
-            throw new IOException("Node wallet initialization failed", e);
-        }
-        
-        // 2. Read CLUSTER wallet address (ADR 046: all payments go here)
-        // Validators only need awareness of the public address, not control
-        Path nodeStorePath = Paths.get(storeDirectory);
-        Path clusterPath = nodeStorePath.getParent();
-        String clusterWalletAddress = null;
-        if (clusterPath != null) {
-            Path clusterKeystorePath = clusterPath.resolve("cluster-keystore.properties");
-            if (Files.exists(clusterKeystorePath)) {
-                try {
-                    java.util.Properties props = new java.util.Properties();
-                    try (java.io.FileInputStream fis = new java.io.FileInputStream(clusterKeystorePath.toFile())) {
-                        props.load(fis);
-                    }
-                    clusterWalletAddress = props.getProperty("walletAddress");
-                    if (clusterWalletAddress != null) {
-                        System.out.println("💎 Cluster wallet: " + clusterWalletAddress + " (payments go here)");
-                    }
-                } catch (Exception e) {
-                    System.out.println("⚠️  Could not read cluster wallet: " + e.getMessage());
-                }
-            }
-        }
-        if (clusterWalletAddress == null) {
-            System.out.println("ℹ️  No cluster wallet configured - using node wallet for payments");
-            clusterWalletAddress = this.wallet.getWalletAddress();
-        }
-        // Store cluster wallet address for payment routing
-        final String finalClusterWallet = clusterWalletAddress;
+        WalletStartupCoordinator.StartupResult walletStartup =
+            walletStartupCoordinator.initialize(storeDirectory, components());
+        this.wallet = walletStartup.getWallet();
+        final String finalClusterWallet = walletStartup.getClusterWalletAddress();
         
         // Bootstrap mode (needs to be accessible throughout method)
         BootstrapMode detectedMode = BootstrapMode.PRIMARY;  // Default
