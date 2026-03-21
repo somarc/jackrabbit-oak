@@ -251,40 +251,12 @@ public class AeronClusterLauncher {
         
         container = ClusteredServiceContainer.launch(contexts.clusteredServiceContext);
         
-        // ✈️ AERON RESILIENCE: Start MediaDriver health monitoring
-        // Monitors system counters for errors, backpressure, timeouts
-        // Provides early warning of MediaDriver issues before they become fatal
-        try {
-            io.aeron.Aeron aeron = container.context().aeron();
-            if (aeron != null) {
-                healthMonitor = new MediaDriverHealthMonitor(aeron);
-                log.info("✅ MediaDriver health monitor started");
-            } else {
-                log.warn("⚠️  Aeron instance not available - health monitor not started");
-            }
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to start MediaDriver health monitor: {}", e.getMessage());
-            // Don't fail startup if health monitor fails
-        }
-        
-        // ✈️ AERON NATIVE: Set ingress channel URI and aeron directory for client connections
-        // For distributed cluster communication, use UDP for Raft consensus
-        // The ingress channel configured in ConsensusModule must match client connections
-        // UDP is required for multi-node cluster communication
-        String clientIngressChannel = "aeron:udp";
-        if (clusteredService instanceof AeronConsensusEngine) {
-            AeronConsensusEngine engine = (AeronConsensusEngine) clusteredService;
-            engine.setIngressChannelUri(clientIngressChannel);
-            engine.setAeronDirectoryName(aeronDirName);
-            log.info("✈️  Client ingress channel configured: {} (UDP for distributed cluster)", clientIngressChannel);
-            log.info("✈️  Aeron directory configured: {}", aeronDirName);
-        }
+        AeronClusterRuntimeBridge.RuntimeBridgeResult runtimeBridgeResult =
+            new AeronClusterRuntimeBridge(clusteredService).activate(container, aeronDirName, failureCoordinator);
+        healthMonitor = runtimeBridgeResult.healthMonitor;
         
         log.info("✅ Aeron Cluster launched successfully");
         log.info("   Node {} started on {}", nodeId, getHostname());
-        
-        // Schedule successful startup callback to reset crash markers after cluster stabilizes
-        failureCoordinator.scheduleSuccessfulStartupReset();
     }
     
     /**
