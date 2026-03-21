@@ -134,9 +134,7 @@ public class MultiClusterMounter {
             
             LOG.info("✅ Found {} remote clusters to mount", remoteClusters.size());
             
-            // Build mount configuration
-            Mounts.Builder mountBuilder = Mounts.newBuilder();
-            List<MountEntry> mountEntries = new ArrayList<>();
+            List<MountEntry> discoveredMounts = new ArrayList<>();
             
             for (ClusterRegistration cluster : remoteClusters) {
                 String mountName = cluster.getMountName();
@@ -149,23 +147,16 @@ public class MultiClusterMounter {
                     String.format("%03X", cluster.getShardRangeEnd())
                 );
                 
-                mountBuilder.readOnlyMount(mountName, mountPath);
-                mountEntries.add(new MountEntry(cluster, mountName, mountPath));
+                discoveredMounts.add(new MountEntry(cluster, mountName, mountPath));
             }
-            
-            MountInfoProvider mountInfo = mountBuilder.build();
-            
-            // Create composite builder
-            CompositeNodeStore.Builder compositeBuilder = new CompositeNodeStore.Builder(
-                mountInfo,
-                localNodeStore
-            );
             
             // Create NodeStore for each remote cluster
             LOG.info("");
             LOG.info("🔗 Creating HTTP-backed NodeStores for remote clusters...");
+
+            List<MountedCluster> mountedClusters = new ArrayList<>();
             
-            for (MountEntry entry : mountEntries) {
+            for (MountEntry entry : discoveredMounts) {
                 ClusterRegistration cluster = entry.cluster;
                 String endpoint = cluster.getEndpoint();
                 
@@ -178,7 +169,7 @@ public class MultiClusterMounter {
                 
                 try {
                     NodeStore remoteStore = nodeStoreFactory.create(endpoint, entry.mountName);
-                    compositeBuilder.addMount(entry.mountName, remoteStore);
+                    mountedClusters.add(new MountedCluster(entry.cluster, entry.mountName, entry.mountPath, remoteStore));
                     
                     // Track for cleanup
                     if (remoteStore instanceof Closeable) {
@@ -190,6 +181,27 @@ public class MultiClusterMounter {
                     LOG.warn("     ❌ Failed to connect: {}", e.getMessage());
                     // Continue with other mounts - graceful degradation
                 }
+            }
+
+            if (mountedClusters.isEmpty()) {
+                LOG.warn("⚠️  No remote clusters could be mounted - continuing as single cluster");
+                return;
+            }
+
+            // Build mount configuration only from successfully created mounts.
+            Mounts.Builder mountBuilder = Mounts.newBuilder();
+            for (MountedCluster mountedCluster : mountedClusters) {
+                mountBuilder.readOnlyMount(mountedCluster.mountName, mountedCluster.mountPath);
+            }
+            MountInfoProvider mountInfo = mountBuilder.build();
+            
+            // Create composite builder
+            CompositeNodeStore.Builder compositeBuilder = new CompositeNodeStore.Builder(
+                mountInfo,
+                localNodeStore
+            );
+            for (MountedCluster mountedCluster : mountedClusters) {
+                compositeBuilder.addMount(mountedCluster.mountName, mountedCluster.nodeStore);
             }
             
             // Build composite
@@ -203,7 +215,7 @@ public class MultiClusterMounter {
             props.put(Constants.SERVICE_RANKING, Integer.MAX_VALUE);
             props.put("oak.nodestore.description", "Blockchain AEM Multi-Cluster Composite");
             props.put("oak.cluster.wallet", localClusterWallet);
-            props.put("oak.cluster.remote.count", remoteClusters.size());
+            props.put("oak.cluster.remote.count", mountedClusters.size());
             
             compositeRegistration = bundleContext.registerService(
                 NodeStore.class,
@@ -220,8 +232,8 @@ public class MultiClusterMounter {
             LOG.info("");
             LOG.info("  Content paths:");
             LOG.info("    /                    - Local content");
-            for (MountEntry entry : mountEntries) {
-                LOG.info("    {}  - {}", entry.mountPath, abbreviate(entry.cluster.getClusterWallet()));
+            for (MountedCluster mountedCluster : mountedClusters) {
+                LOG.info("    {}  - {}", mountedCluster.mountPath, abbreviate(mountedCluster.cluster.getClusterWallet()));
             }
             LOG.info("===========================================");
             
@@ -313,6 +325,20 @@ public class MultiClusterMounter {
             this.cluster = cluster;
             this.mountName = mountName;
             this.mountPath = mountPath;
+        }
+    }
+
+    private static final class MountedCluster {
+        final ClusterRegistration cluster;
+        final String mountName;
+        final String mountPath;
+        final NodeStore nodeStore;
+
+        private MountedCluster(ClusterRegistration cluster, String mountName, String mountPath, NodeStore nodeStore) {
+            this.cluster = cluster;
+            this.mountName = mountName;
+            this.mountPath = mountPath;
+            this.nodeStore = nodeStore;
         }
     }
 }
