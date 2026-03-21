@@ -48,6 +48,7 @@ public class ValidatorBootstrap {
     private StandbyServerSync standbyServer;
     private ScheduledExecutorService syncScheduler;
     private final AtomicBoolean promoted = new AtomicBoolean(false);
+    private final BootstrapCatchupChecker catchupChecker = new BootstrapCatchupChecker();
     
     public ValidatorBootstrap(FileStore fileStore, int standbyPort) {
         this.fileStore = fileStore;
@@ -162,125 +163,7 @@ public class ValidatorBootstrap {
      * - Genesis will be created as first consensus write after cluster forms
      */
     private boolean isCaughtUp() {
-        if (primaryUrl == null) {
-            return true;  // No primary to sync from, already caught up
-        }
-        
-        try {
-            // Check if local store is empty
-            long localSize = fileStore.size();
-            boolean localIsEmpty = (localSize == 0);
-            
-            // Get local HEAD (may be null/invalid if empty)
-            String localHead = null;
-            try {
-                localHead = fileStore.getHead().getRecordId().toString10();
-            } catch (Exception e) {
-                // Empty store may not have valid HEAD - this is OK
-                log.debug("Local store has no valid HEAD (likely empty): {}", e.getMessage());
-            }
-            
-            // Get primary HEAD via HTTP
-            java.net.URL url = new java.net.URL(primaryUrl + "/v1/head");
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(3000);
-            conn.setReadTimeout(3000);
-            
-            int responseCode = conn.getResponseCode();
-            if (responseCode == 200) {
-                // Read full JSON response
-                java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(conn.getInputStream())
-                );
-                StringBuilder jsonResponse = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    jsonResponse.append(line);
-                }
-                reader.close();
-                
-                // Parse JSON to extract latestHead or committedHead
-                String json = jsonResponse.toString();
-                String primaryHead = null;
-                
-                // Simple JSON parsing: look for "latestHead" or "committedHead" field
-                // Format: {"latestHead": "uuid:offset", "committedHead": "uuid:offset"}
-                int latestHeadIdx = json.indexOf("\"latestHead\"");
-                if (latestHeadIdx >= 0) {
-                    int startIdx = json.indexOf("\"", latestHeadIdx + 12) + 1;
-                    int endIdx = json.indexOf("\"", startIdx);
-                    if (endIdx > startIdx) {
-                        primaryHead = json.substring(startIdx, endIdx);
-                    }
-                }
-                
-                // Fallback to committedHead if latestHead not found
-                if (primaryHead == null) {
-                    int committedHeadIdx = json.indexOf("\"committedHead\"");
-                    if (committedHeadIdx >= 0) {
-                        int startIdx = json.indexOf("\"", committedHeadIdx + 16) + 1;
-                        int endIdx = json.indexOf("\"", startIdx);
-                        if (endIdx > startIdx) {
-                            primaryHead = json.substring(startIdx, endIdx);
-                        }
-                    }
-                }
-                
-                // NEW GENESIS ARCHITECTURE: Handle empty-to-empty bootstrap
-                // If both stores are empty, we're caught up (waiting for genesis creation)
-                if (localIsEmpty && (primaryHead == null || primaryHead.isEmpty() || primaryHead.equals("null"))) {
-                    log.info("✅ EMPTY-TO-EMPTY BOOTSTRAP: Both stores empty (ready for genesis)");
-                    log.info("   Local: empty store ({} bytes)", localSize);
-                    log.info("   Primary: empty store (HEAD: {})", primaryHead);
-                    log.info("   Genesis will be created as first consensus write after cluster forms");
-                    return true;  // Caught up! Both empty is valid state
-                }
-                
-                // If local is empty but primary has data, not caught up yet
-                if (localIsEmpty && primaryHead != null && !primaryHead.isEmpty() && !primaryHead.equals("null")) {
-                    log.debug("   Local empty, primary has data: {} - syncing...", primaryHead.substring(0, Math.min(20, primaryHead.length())));
-                    return false;
-                }
-                
-                // If local has HEAD but primary doesn't, something's wrong
-                if (localHead != null && (primaryHead == null || primaryHead.isEmpty() || primaryHead.equals("null"))) {
-                    log.warn("Local has HEAD but primary doesn't - unusual state");
-                    return false;
-                }
-                
-                // Both have HEADs - compare them
-                if (localHead == null) {
-                    log.warn("Local HEAD is null but primary has: {}", primaryHead);
-                    return false;
-                }
-                
-                // Compare HEADs (extract UUID part before : or . for comparison)
-                // Format can be "uuid:offset" or "uuid.offset" - compare UUID part
-                String localUuid = localHead.split("[:.]")[0];
-                String primaryUuid = primaryHead.split("[:.]")[0];
-                
-                boolean caughtUp = localUuid.equals(primaryUuid);
-                
-                if (caughtUp) {
-                    log.info("✅ CAUGHT UP! Local HEAD matches primary");
-                    log.info("   Local HEAD: {}", localHead);
-                    log.info("   Primary HEAD: {}", primaryHead);
-                } else {
-                    log.debug("   Still syncing... Local: {} vs Primary: {}", 
-                        localHead.substring(0, Math.min(20, localHead.length())),
-                        primaryHead.substring(0, Math.min(20, primaryHead.length())));
-                }
-                
-                return caughtUp;
-            } else {
-                log.warn("Failed to get primary HEAD: HTTP {}", responseCode);
-                return false;
-            }
-        } catch (Exception e) {
-            log.debug("Failed to check sync status: {}", e.getMessage());
-            return false;
-        }
+        return catchupChecker.isCaughtUp(fileStore, primaryUrl);
     }
     
     /**
@@ -442,4 +325,3 @@ public class ValidatorBootstrap {
         PRIMARY
     }
 }
-
