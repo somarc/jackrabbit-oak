@@ -16,10 +16,12 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.util.function.Supplier;
 
+import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics;
@@ -30,6 +32,8 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
+import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.file.tar.TarFiles;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
@@ -47,6 +51,23 @@ public interface GlobalStoreServerComponentFactory {
     GCCostEstimator createGCCostEstimator(FileStore fileStore, TarFiles tarFiles, BigDecimal usdcPerMB);
 
     SegmentHttpServer createHttpServer(java.io.File storeDir, int port, FileStore fileStore, NodeStore nodeStore);
+
+    default ServerStorageRuntime createStorageRuntime(java.io.File storeDir, BlobStore blobStore)
+            throws IOException, InvalidFileStoreVersionException {
+        FileStore fileStore = FileStoreBuilder.fileStoreBuilder(storeDir)
+            .withMaxFileSize(256)
+            .withMemoryMapping(false)
+            .withBlobStore(blobStore)
+            .build();
+        NodeStore nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
+        return new ServerStorageRuntime(fileStore, nodeStore);
+    }
+
+    default TarFiles extractTarFiles(FileStore fileStore) throws Exception {
+        java.lang.reflect.Method getTarFilesMethod = FileStore.class.getDeclaredMethod("getTarFiles");
+        getTarFilesMethod.setAccessible(true);
+        return (TarFiles) getTarFilesMethod.invoke(fileStore);
+    }
 
     CidMappingService createCidMappingService(Path storeDir) throws Exception;
 

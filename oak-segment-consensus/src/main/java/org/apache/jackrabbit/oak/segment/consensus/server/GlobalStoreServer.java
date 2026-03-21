@@ -22,13 +22,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
-import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -107,8 +105,8 @@ public class GlobalStoreServer {
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
     private final ConsensusStartupCoordinator consensusStartupCoordinator = new ConsensusStartupCoordinator();
-    private final BlobStoreStartupCoordinator blobStoreStartupCoordinator = new BlobStoreStartupCoordinator();
     private final GenesisStartupCoordinator genesisStartupCoordinator = new GenesisStartupCoordinator();
+    private final ServerInfrastructureInitializer serverInfrastructureInitializer = new ServerInfrastructureInitializer();
     
     // Bootstrap configuration (for organic peer discovery after promotion)
     private String bootstrapPrimaryHost;
@@ -332,231 +330,26 @@ public class GlobalStoreServer {
             // FUTURE: Could be eliminated by modifying Oak core to support
             //         "deferred genesis" mode, but out of scope for POC.
             
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // IPFS BLOBSTORE: Decentralized Binary Storage (ADR 015)
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            BlobStoreStartupCoordinator.StartupResult blobStoreStartup = blobStoreStartupCoordinator.initialize(
-                storeDir,
-                components()
-            );
-            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = blobStoreStartup.getBlobStore();
-            String activeBlobStoreType = blobStoreStartup.getBlobStoreType();
+            ServerInfrastructureInitializer.InitializationResult infrastructure =
+                serverInfrastructureInitializer.initialize(
+                    storeDir,
+                    port,
+                    currentAeronConfig(),
+                    components()
+                );
+            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = infrastructure.getBlobStore();
             this.blobStore = blobStore; // Store reference for genesis image upload
-            
-            // Build FileStore with IPFS BlobStore (REQUIRED)
-            FileStoreBuilder fsBuilder = FileStoreBuilder.fileStoreBuilder(storeDir)
-                .withMaxFileSize(256)  // 256 MB per TAR file
-                .withMemoryMapping(false)  // Disable for Docker
-                .withBlobStore(blobStore);  // IPFS BlobStore (always present)
-            
-            fileStore = fsBuilder.build();
-            
-            // Build SegmentNodeStore
-            nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
-            
-            System.out.println("✅ Oak FileStore initialized");
-            System.out.println("   - Store version: " + fileStore.getHead().getRecordId());
-            System.out.println("   - Segments: " + storeDir.getAbsolutePath());
+            this.fileStore = infrastructure.getFileStore();
+            this.nodeStore = infrastructure.getNodeStore();
+            this.httpServer = infrastructure.getHttpServer();
+            this.gcCostEstimator = infrastructure.getGcCostEstimator();
+            String selfUrl = this.httpServer.getContext().selfUrl;
             
             // If bootstrap is needed, mark for immediate sync (before any other initialization)
             if (needsBootstrapBeforeBuild) {
                 System.out.println("   ⚠️  Initial HEAD created (will be replaced by bootstrap sync)");
             }
             
-            // ===========================================================================
-            // Initialize GC Cost Estimator (for GC operations)
-            System.out.println("Initializing GC Cost Estimator...");
-            try {
-                // Access TarFiles via reflection (getTarFiles() is not public)
-                java.lang.reflect.Method getTarFilesMethod = FileStore.class.getDeclaredMethod("getTarFiles");
-                getTarFilesMethod.setAccessible(true);
-                org.apache.jackrabbit.oak.segment.file.tar.TarFiles tarFiles = 
-                    (org.apache.jackrabbit.oak.segment.file.tar.TarFiles) getTarFilesMethod.invoke(fileStore);
-                
-                // Create GC Cost Estimator with default USDC rate ($0.10 per MB)
-                // Can be configured via system property: gc.usdc.per.mb
-                String usdcRateStr = RuntimeConfigValueResolver.readString("gc.usdc.per.mb", "0.10");
-                java.math.BigDecimal usdcPerMB = new java.math.BigDecimal(usdcRateStr);
-                org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator =
-                    components().createGCCostEstimator(fileStore, tarFiles, usdcPerMB);
-                
-                System.out.println("✅ GC Cost Estimator initialized");
-                System.out.println("   - USDC rate: $" + usdcPerMB + " per MB");
-                
-                // Store for later access (will be set in ServerContext after HTTP server is created)
-                this.gcCostEstimator = gcCostEstimator;
-            } catch (Exception e) {
-                System.err.println("⚠️  Failed to initialize GC Cost Estimator: " + e.getMessage());
-                System.err.println("   GC cost estimation will not be available");
-                // Don't fail startup - GC estimation is optional
-            }
-            
-            // ===========================================================================
-            // Initialize HTTP server FIRST (needed for startConsensusPrimary callback)
-            System.out.println("Initializing HTTP server on port " + port + "...");
-            httpServer = components().createHttpServer(storeDir, port, fileStore, nodeStore);
-            // Get self URL from system property, or resolve localhost to IP
-            String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(port, currentAeronConfig());
-            if (GlobalStoreRuntimeConfigUtil.isConfiguredSelfUrl(currentAeronConfig())) {
-                System.out.println("   Using configured self URL: " + selfUrl);
-            } else {
-                System.out.println("   Resolved self URL to IP: " + selfUrl);
-            }
-            httpServer.setSelfUrl(selfUrl);
-            
-            // Set GC Cost Estimator in ServerContext (if initialized)
-            if (gcCostEstimator != null) {
-                httpServer.getContext().setGCCostEstimator(gcCostEstimator);
-            }
-            
-            // Set BlobStore type and reference for binary uploads
-            httpServer.getContext().blobStoreType = activeBlobStoreType;
-            httpServer.getContext().blobStore = blobStore; // For eager binary uploads
-            
-            // ===========================================================================
-            // Initialize CID Mapping Service (Oak blob ID ↔ IPFS CID coordination)
-            if ("ipfs".equalsIgnoreCase(activeBlobStoreType)) {
-                System.out.println("Initializing CID Mapping Service...");
-                try {
-                    org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService cidMappingService =
-                        components().createCidMappingService(storeDir.toPath());
-                    httpServer.getContext().cidMappingService = cidMappingService;
-                    System.out.println("✅ CID Mapping Service initialized");
-                    System.out.println("   - Maps Oak blob IDs ↔ IPFS CIDs");
-                    System.out.println("   - Persistence: " + storeDir.getAbsolutePath() + "/cid-mappings.properties");
-                    System.out.println("   - API: /api/cid/{oakBlobId} → IPFS CID lookup");
-                } catch (Exception e) {
-                    System.err.println("⚠️  Failed to initialize CID Mapping Service: " + e.getMessage());
-                }
-            }
-            
-            // ===========================================================================
-            // Initialize Fragmentation Tracker (for fragmentation metrics and tax)
-            System.out.println("Initializing Fragmentation Tracker...");
-            org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker fragmentationTracker = null;
-            try {
-                fragmentationTracker = components().createFragmentationTracker();
-                
-                httpServer.getContext().setFragmentationTracker(fragmentationTracker);
-                
-                System.out.println("✅ Fragmentation Tracker initialized");
-                System.out.println("   - Tracks TAR file creation per entity");
-                System.out.println("   - Calculates fragmentation scores and taxes");
-            } catch (Exception e) {
-                System.err.println("⚠️  Failed to initialize Fragmentation Tracker: " + e.getMessage());
-                System.err.println("   Fragmentation tracking will not be available");
-                // Don't fail startup - fragmentation tracking is optional
-            }
-            
-            // ===========================================================================
-            // Initialize Wallet Storage Metrics (for tokenomics)
-            System.out.println("Initializing Wallet Storage Metrics...");
-            org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics = null;
-            try {
-                walletStorageMetrics = components().createWalletStorageMetrics(fileStore);
-                
-                httpServer.getContext().setWalletStorageMetrics(walletStorageMetrics);
-                
-                System.out.println("✅ Wallet Storage Metrics initialized");
-                System.out.println("   - Tracks per-wallet storage ownership %");
-                System.out.println("   - Calculates storage tax and delete tax");
-                System.out.println("   - Monitors capacity (2 TB upper bound)");
-            } catch (Exception e) {
-                System.err.println("⚠️  Failed to initialize Wallet Storage Metrics: " + e.getMessage());
-                System.err.println("   Storage metrics will not be available");
-                // Don't fail startup - storage metrics are optional
-            }
-            
-            // ===========================================================================
-            // Initialize GC Proposal Manager (for GC consensus)
-            System.out.println("Initializing GC Proposal Manager...");
-            try {
-                // Determine total validators (from peers + self)
-                int totalValidators = 1; // Default: just self
-                List<String> configuredPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(currentAeronConfig());
-                if (!configuredPeers.isEmpty()) {
-                    totalValidators = configuredPeers.size() + 1; // Peers + self
-                }
-                
-                // Create executor ID supplier (gets current node ID from Aeron if available)
-                // Access from ServerContext since aeronConsensusEngine is initialized later
-                java.util.function.Supplier<Integer> executorIdSupplier = () -> {
-                    // Try to get from Aeron cluster via ServerContext
-                    org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = 
-                        httpServer.getContext().aeronConsensusEngine;
-                    if (aeronEngine != null && aeronEngine.getCluster() != null) {
-                        try {
-                            return aeronEngine.getCluster().memberId();
-                        } catch (Exception e) {
-                            // Fallback to 0
-                        }
-                    }
-                    return 0; // Default fallback
-                };
-                
-                // Create leader check supplier (only leader should execute GC)
-                // Access from ServerContext since aeronConsensusEngine is initialized later
-                java.util.function.Supplier<Boolean> isLeaderSupplier = () -> {
-                    org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = 
-                        httpServer.getContext().aeronConsensusEngine;
-                    if (aeronEngine != null) {
-                        return aeronEngine.isLeader();
-                    }
-                    return true; // Default: allow execution (for single-node setups)
-                };
-                
-                // Get EvmBridge from ServerContext (set earlier during ProposalQueueManager initialization)
-                org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge gcEvmBridge = httpServer.getContext().evmBridge;
-                
-                org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager gcProposalManager =
-                    components().createGCProposalManager(
-                        fileStore,
-                        gcCostEstimator,
-                        fragmentationTracker,
-                        gcEvmBridge, // 🔒 CRITICAL: Pass EvmBridge for payment verification (tokenomics)
-                        totalValidators,
-                        executorIdSupplier,
-                        isLeaderSupplier
-                    );
-                
-                httpServer.getContext().setGCProposalManager(gcProposalManager);
-                
-                System.out.println("✅ GC Proposal Manager initialized");
-                System.out.println("   - Total validators: " + totalValidators);
-                System.out.println("   - Quorum required: " + ((totalValidators * 2 / 3) + 1) + "/" + totalValidators);
-                System.out.println("   - Tracks GC proposals, voting, and execution");
-                
-                // Initialize GC Account Manager (Account Tax Model)
-                org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager gcAccountManager =
-                    components().createGCAccountManager();
-                
-                httpServer.getContext().gcAccountManager = gcAccountManager;
-                
-                System.out.println("✅ GC Account Manager initialized");
-                System.out.println("   - Tracks GC debt per entity (wallet address)");
-                System.out.println("   - Default debt limit: $100.00");
-                System.out.println("   - Enforces write blocking when debt exceeds limit");
-                
-                // Initialize Periodic GC Job (Account Tax Model)
-                org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob periodicGCJob =
-                    components().createPeriodicGCJob(gcAccountManager);
-                
-                periodicGCJob.start();
-                httpServer.getContext().periodicGCJob = periodicGCJob;
-                
-                System.out.println("✅ Periodic GC Job started");
-                System.out.println("   - Interval: " + periodicGCJob.getIntervalSeconds() + "s");
-                System.out.println("   - Initial delay: " + periodicGCJob.getInitialDelaySeconds() + "s");
-                System.out.println("   - Action: Converts pending debt → executed debt");
-                System.out.println("   - Blocks writes when executed debt > limit");
-                
-            } catch (Exception e) {
-                System.err.println("⚠️  Failed to initialize GC Proposal Manager: " + e.getMessage());
-                System.err.println("   GC consensus will not be available");
-                // Don't fail startup - GC consensus is optional
-            }
-            
-            System.out.println("✅ HTTP server initialized (not yet started)");
             
             // ✈️ AERON-ONLY: Bootstrap logic is handled above in Aeron mode detection
             // No separate mode-specific bootstrap logic needed
