@@ -27,9 +27,6 @@ import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 
-import java.util.ArrayList;
-import java.util.List;
-
 /**
  * Distributed validator server for the global Blockchain AEM repository.
  * 
@@ -101,22 +98,12 @@ public class GlobalStoreServer {
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     private final WalletStartupCoordinator walletStartupCoordinator = new WalletStartupCoordinator();
     private final StartupPreflightCoordinator startupPreflightCoordinator = new StartupPreflightCoordinator();
-    private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
+    private final StandbyModeStartupCoordinator standbyModeStartupCoordinator = new StandbyModeStartupCoordinator();
     private final BootstrapModeCoordinator bootstrapModeCoordinator = new BootstrapModeCoordinator();
     private final ConsensusStartupCoordinator consensusStartupCoordinator = new ConsensusStartupCoordinator();
     private final GenesisStartupCoordinator genesisStartupCoordinator = new GenesisStartupCoordinator();
     private final ServerInfrastructureInitializer serverInfrastructureInitializer = new ServerInfrastructureInitializer();
-    
-    // Bootstrap configuration (for organic peer discovery after promotion)
-    private String bootstrapPrimaryHost;
-    private int bootstrapPrimaryPort;
-    
-    // Aeron Cluster initialization state (for deferred startup after bootstrap)
-    @SuppressWarnings("unused") // Used to track bootstrap state, read by bootstrap callback
-    private volatile boolean aeronClusterDeferred = false;
-    private String aeronSelfUrl; // Stored for bootstrap callback
-    private List<String> aeronPeerUrls; // Stored for bootstrap callback
-    
+
     public GlobalStoreServer(int port, String storeDirectory) {
         this.port = port;
         this.storeDirectory = storeDirectory;
@@ -249,89 +236,30 @@ public class GlobalStoreServer {
             );
             detectedMode = bootstrapResolution.getDetectedMode();
             bootstrap = bootstrapResolution.getBootstrap();
-            this.aeronClusterDeferred = bootstrapResolution.isAeronClusterDeferred();
-            if (bootstrapResolution.isAeronClusterDeferred()) {
-                this.aeronPeerUrls = bootstrapResolution.getAeronPeerUrls();
-            }
-            this.bootstrapPrimaryHost = bootstrapResolution.getBootstrapPrimaryHost();
-            this.bootstrapPrimaryPort = bootstrapResolution.getBootstrapPrimaryPort();
             
             // ✈️ AERON-ONLY: Handle STANDBY bootstrap (sync FileStore, then start Aeron Cluster)
             if (detectedMode == BootstrapMode.STANDBY) {
-                // STANDBY MODE: Bootstrap Oak FileStore from existing validator
-                // After bootstrap completes, start Aeron Cluster
-                
-                // CRITICAL: Store Aeron configuration BEFORE bootstrap starts (needed for callback)
-                // Get self URL from system property, or resolve localhost to IP
-                String selfUrlStandy = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(port, currentAeronConfig());
-                List<String> peerUrlsStandy = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(currentAeronConfig());
-                
-                // Store for bootstrap callback
-                this.aeronSelfUrl = selfUrlStandy;
-                this.aeronPeerUrls = peerUrlsStandy;
-                
-                // Determine which peer to bootstrap from
-                String primaryHostInitial = bootstrapPrimaryHost;
-                int primaryPortInitial = bootstrapPrimaryPort;
-                
-                // Use Aeron peer URLs (already verified earlier)
-                List<String> bootstrapPeers = this.aeronPeerUrls != null ? this.aeronPeerUrls : new ArrayList<>();
-                
-                StandbyPromotionCoordinator.BootstrapTarget bootstrapTarget =
-                    standbyPromotionCoordinator.resolveBootstrapTarget(
-                        primaryHostInitial,
-                        primaryPortInitial,
-                        bootstrapPeers,
-                        port
-                    );
-
-                if (bootstrapTarget == null) {
-                    throw new IOException("STANDBY mode requires bootstrap.primary.host or consensus.peers");
-                }
-
-                if ((primaryHostInitial == null || primaryHostInitial.isEmpty()) && !bootstrapPeers.isEmpty()) {
-                    System.out.println("🔍 Using first peer as bootstrap primary: "
-                        + bootstrapTarget.getHost() + ":" + bootstrapTarget.getPort());
-                }
-                
-                // Bootstrap from primary (this will block until initial sync, then schedule periodic sync)
-                standbyPromotionCoordinator.bootstrapAndPromote(bootstrap, bootstrapTarget, () -> {
-                    System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    System.out.println("🎖️  PROMOTED TO PRIMARY - Oak FileStore bootstrap complete");
-                    System.out.println("   Local HEAD: " + fileStore.getHead().getRecordId());
-                    System.out.println("   Starting Aeron Cluster...");
-                    System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    try {
-                        // ✈️ AERON-ONLY: Start Aeron Cluster after Oak FileStore bootstrap
-                        System.out.println("✈️  Starting Aeron Cluster (Oak FileStore already synced)");
-                        StandbyPromotionCoordinator.DeferredAeronStartup deferredStartup =
-                            standbyPromotionCoordinator.startDeferredCluster(
-                                components(),
-                                aeronClusterService,
-                                new StandbyPromotionCoordinator.DeferredAeronStartupContext(
-                                    fileStore,
-                                    nodeStore,
-                                    httpServer,
-                                    wallet,
-                                    storeDirectory,
-                                    blobStore,
-                                    aeronSelfUrl,
-                                    aeronPeerUrls
-                                )
-                            );
-                        aeronClusterService = deferredStartup.getAeronClusterService();
-                        aeronClusterLauncher = deferredStartup.getStartupResult().getLauncher();
-                        
-                        // Start HTTP server (was deferred in STANDBY mode)
-                        System.out.println("Starting HTTP server (deferred from STANDBY mode)...");
-                        httpServer.start();
-                        System.out.println("✅ HTTP server started on port " + port);
-                    } catch (Exception e) {
-                        System.err.println("❌ Failed to start Aeron Cluster after promotion: " + e.getMessage());
-                        e.printStackTrace();
-                    }
-                });
-                
+                standbyModeStartupCoordinator.initialize(
+                    new StandbyModeStartupCoordinator.StartupContext(
+                        port,
+                        storeDirectory,
+                        bootstrapResolution.getBootstrapPrimaryHost(),
+                        bootstrapResolution.getBootstrapPrimaryPort(),
+                        currentAeronConfig(),
+                        bootstrap,
+                        fileStore,
+                        nodeStore,
+                        httpServer,
+                        wallet,
+                        blobStore,
+                        aeronClusterService,
+                        components(),
+                        deferredStartup -> {
+                            aeronClusterService = deferredStartup.getAeronClusterService();
+                            aeronClusterLauncher = deferredStartup.getStartupResult().getLauncher();
+                        }
+                    )
+                );
             } else if (detectedMode == BootstrapMode.GENESIS) {
                 // GENESIS MODE: DEFER genesis creation until Aeron cluster reaches quorum
                 // NEW ARCHITECTURE: Genesis should be the FIRST consensus write, not a pre-consensus local write
@@ -403,12 +331,11 @@ public class GlobalStoreServer {
             )
         );
 
-        if (isAeronMode && !isStandbyMode) {
-            this.aeronSelfUrl = consensusStartup.getSelfUrl();
-            this.aeronPeerUrls = consensusStartup.getPeerUrls();
-        }
         this.aeronClusterService = consensusStartup.getAeronClusterService();
-        this.aeronClusterLauncher = consensusStartup.getLauncher();
+        if (consensusStartup.getDisposition() != ConsensusStartupCoordinator.StartupDisposition.DEFERRED
+                || consensusStartup.getLauncher() != null) {
+            this.aeronClusterLauncher = consensusStartup.getLauncher();
+        }
 
         if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DISABLED) {
             // Only print this if NOT in standby mode (standby will init via callback)
