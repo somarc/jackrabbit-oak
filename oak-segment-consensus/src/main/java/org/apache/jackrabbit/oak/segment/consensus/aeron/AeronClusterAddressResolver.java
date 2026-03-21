@@ -47,9 +47,13 @@ final class AeronClusterAddressResolver {
             nodeId,
             hostnames,
             hostname -> InetAddress.getByName(hostname).getHostAddress(),
-            new SystemLocalAddressProvider(),
+            systemLocalAddressProvider(),
             Thread::sleep
         );
+    }
+
+    static LocalAddressProvider systemLocalAddressProvider() {
+        return new SystemLocalAddressProvider();
     }
 
     AeronClusterAddressResolver(int nodeId,

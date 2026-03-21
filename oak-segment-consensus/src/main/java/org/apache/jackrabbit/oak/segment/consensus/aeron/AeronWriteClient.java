@@ -83,85 +83,8 @@ public class AeronWriteClient {
         
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             try {
-                // Detect validator-network subnet by resolving a peer (like AeronClusterLauncher does)
-                final String validatorSubnet;
-                String detectedSubnet = null;
-                if (clusterHostnames.size() > 1) {
-                    try {
-                        String peerHostname = clusterHostnames.get(1); // Use first peer
-                        String peerIP = java.net.InetAddress.getByName(peerHostname).getHostAddress();
-                        if (peerIP.startsWith("172.")) {
-                            String[] parts = peerIP.split("\\.");
-                            if (parts.length >= 3) {
-                                detectedSubnet = parts[0] + "." + parts[1] + "." + parts[2];
-                                log.info("   Detected validator-network subnet: {}.x (from peer {})", detectedSubnet, peerHostname);
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.debug("Could not detect validator-network subnet: {}", e.getMessage());
-                    }
-                }
-                validatorSubnet = detectedSubnet; // Make final for lambda
-                
-                // Helper to resolve hostname to validator-network IP
-                java.util.function.Function<String, String> resolveToValidatorNetworkIP = (hostname) -> {
-                    try {
-                        // First try simple resolution
-                        String ip = java.net.InetAddress.getByName(hostname).getHostAddress();
-                        
-                        // If we detected validator-network subnet, prefer IPs from that subnet
-                        if (validatorSubnet != null && ip.startsWith(validatorSubnet + ".")) {
-                            log.debug("   Resolved {} → {} (validator-network)", hostname, ip);
-                            return ip;
-                        }
-                        
-                        // If not from validator-network, try to find validator-network IP via interface enumeration
-                        if (validatorSubnet != null) {
-                            try {
-                                java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
-                                while (interfaces.hasMoreElements()) {
-                                    java.net.NetworkInterface iface = interfaces.nextElement();
-                                    if (iface.isLoopback() || !iface.isUp()) continue;
-                                    java.util.Enumeration<java.net.InetAddress> addresses = iface.getInetAddresses();
-                                    while (addresses.hasMoreElements()) {
-                                        java.net.InetAddress addr = addresses.nextElement();
-                                        if (addr instanceof java.net.Inet4Address && !addr.isLoopbackAddress()) {
-                                            String candidateIP = addr.getHostAddress();
-                                            if (candidateIP.startsWith(validatorSubnet + ".")) {
-                                                log.info("   Resolved {} → {} (validator-network IP from interface {})", hostname, candidateIP, iface.getName());
-                                                return candidateIP;
-                                            }
-                                        }
-                                    }
-                                }
-                            } catch (Exception e) {
-                                log.debug("Interface enumeration failed: {}", e.getMessage());
-                            }
-                        }
-                        
-                        log.debug("   Resolved {} → {} (may not be validator-network)", hostname, ip);
-                        return ip;
-                    } catch (java.net.UnknownHostException e) {
-                        log.warn("Failed to resolve hostname {} to IP: {}", hostname, e.getMessage());
-                        return hostname; // Fallback to hostname
-                    }
-                };
-                
-                // Build ingress endpoints (like production) - use validator-network IPs
-                StringBuilder ingressEndpoints = new StringBuilder();
-                for (int i = 0; i < clusterHostnames.size(); i++) {
-                    if (i > 0) ingressEndpoints.append(",");
-                    String hostname = clusterHostnames.get(i);
-                    // Resolve to validator-network IP
-                    String ip = resolveToValidatorNetworkIP.apply(hostname);
-                    int clientPort = AeronClusterLauncher.calculatePort(i, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET);
-                    ingressEndpoints.append(i).append("=").append(ip).append(":").append(clientPort);
-                    log.info("   Node {} ingress endpoint: {}:{}", i, ip, clientPort);
-                }
-                
-                // Resolve client hostname to validator-network IP for egress channel
-                String clientIp = resolveToValidatorNetworkIP.apply(clientHostname);
-                log.info("   Client egress endpoint: {}:0", clientIp);
+                AeronIngressEndpointPlanner.Plan ingressPlan =
+                    AeronIngressEndpointPlanner.system(clusterHostnames, clientHostname).plan();
                 
                 // Create egress listener (like production)
                 io.aeron.cluster.client.EgressListener egressListener = (clusterSessionId, timestamp, message, header, offset, length) -> {
@@ -172,8 +95,8 @@ public class AeronWriteClient {
                     new AeronCluster.Context()
                         .aeronDirectoryName(aeronDirectoryName)
                         .ingressChannel("aeron:udp")  // UDP like production
-                        .ingressEndpoints(ingressEndpoints.toString())  // Required for UDP
-                        .egressChannel("aeron:udp?endpoint=" + clientIp + ":0")  // UDP egress like production
+                        .ingressEndpoints(ingressPlan.ingressEndpoints)  // Required for UDP
+                        .egressChannel("aeron:udp?endpoint=" + ingressPlan.clientIp + ":0")  // UDP egress like production
                         .egressListener(egressListener)  // Egress listener like production
                         .idleStrategy(idleStrategy)
                         .errorHandler(e -> log.error("Error in AeronWriteClient", e))
@@ -181,7 +104,7 @@ public class AeronWriteClient {
                 
                 connected = true;
                 log.info("✅ AeronWriteClient connected successfully (clientId: {}, ingressEndpoints: {})", 
-                    clientId, ingressEndpoints.toString());
+                    clientId, ingressPlan.ingressEndpoints);
                 return;
                 
             } catch (Exception e) {
@@ -268,4 +191,3 @@ public class AeronWriteClient {
         return connected && clusterClient != null;
     }
 }
-
