@@ -106,6 +106,7 @@ public class GlobalStoreServer {
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
+    private final ConsensusStartupCoordinator consensusStartupCoordinator = new ConsensusStartupCoordinator();
     
     // Bootstrap configuration (for organic peer discovery after promotion)
     private String bootstrapPrimaryHost;
@@ -128,13 +129,6 @@ public class GlobalStoreServer {
 
     public void setComponentFactory(GlobalStoreServerComponentFactory componentFactory) {
         this.componentFactory = componentFactory;
-    }
-
-    private void ensureAeronClusterService() {
-        if (aeronClusterService == null) {
-            System.out.println("⚠️  AeronClusterService not configured (OSGi) - using standalone instance");
-            aeronClusterService = components().createAeronClusterService();
-        }
     }
 
     private GlobalStoreServerComponentFactory components() {
@@ -911,103 +905,40 @@ public class GlobalStoreServer {
             }
         }
         
-        // Initialize Consensus Engine (Multi-Validator)
-        // CRITICAL: Skip this if we're in STANDBY mode (bootstrap will initialize via callback)
-        String consensusEnabled = RuntimeConfigValueResolver.readString("consensus.enabled", "false");
-        // Reuse consensusMode and isAeronMode variables declared earlier (before FileStore build)
-        // Get self URL from system property, or resolve localhost to IP
         org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig aeronConfig =
             aeronClusterService != null ? aeronClusterService.getConfig() : null;
-        String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(port, currentAeronConfig());
-        String peersConfig = RuntimeConfigValueResolver.readString("consensus.peers", "");
-        List<String> peerUrlsFromConfig = new ArrayList<>();
-        if (aeronConfig != null && aeronConfig.peerUrls() != null && aeronConfig.peerUrls().length > 0) {
-            for (String peerUrl : aeronConfig.peerUrls()) {
-                if (peerUrl != null && !peerUrl.trim().isEmpty()) {
-                    peerUrlsFromConfig.add(peerUrl.trim());
-                }
-            }
-        }
-        
-        // ✈️ AERON-ONLY: Allow consensus even with no peers (single validator can start cluster as genesis node)
-        boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled) &&
-                                 (isAeronMode || !peersConfig.isEmpty());
-        if (aeronConfig != null && !aeronConfig.enabled()) {
-            enableConsensus = false;
-        }
-        
-        // CRITICAL: Don't initialize consensus here if we're in STANDBY mode
-        // The standby promotion coordinator callback will initialize it after bootstrap promotion
         boolean isStandbyMode = (detectedMode == BootstrapMode.STANDBY);
-        
-        // Store selfUrl and peerUrls for bootstrap callback (if Aeron mode with bootstrap)
-        // Note: For STANDBY mode, these are already stored in the STANDBY block above
-        // This block handles other modes (PRIMARY/GENESIS) that also need Aeron config stored
+
+        ConsensusStartupCoordinator.StartupOutcome consensusStartup = consensusStartupCoordinator.initialize(
+            new ConsensusStartupCoordinator.StartupContext(
+                port,
+                isAeronMode,
+                isStandbyMode,
+                fileStore,
+                nodeStore,
+                httpServer,
+                wallet,
+                storeDirectory,
+                this.blobStore,
+                aeronClusterService,
+                components(),
+                finalClusterWallet,
+                aeronConfig
+            )
+        );
+
         if (isAeronMode && !isStandbyMode) {
-            List<String> peerUrlsForStorage = peerUrlsFromConfig.isEmpty()
-                ? ServerNetworkUtil.parsePeerUrls(peersConfig)
-                : new ArrayList<>(peerUrlsFromConfig);
-            this.aeronSelfUrl = selfUrl;
-            this.aeronPeerUrls = peerUrlsForStorage;
+            this.aeronSelfUrl = consensusStartup.getSelfUrl();
+            this.aeronPeerUrls = consensusStartup.getPeerUrls();
         }
-        
-        if (enableConsensus && !isStandbyMode) {
-            System.out.println();
-            System.out.println("Initializing Consensus Engine...");
-            System.out.println("   Mode: AERON (Aeron Cluster Raft)");
+        this.aeronClusterService = consensusStartup.getAeronClusterService();
+        this.aeronClusterLauncher = consensusStartup.getLauncher();
 
-            List<String> peerUrls = peerUrlsFromConfig.isEmpty()
-                ? ServerNetworkUtil.parsePeerUrls(peersConfig)
-                : new ArrayList<>(peerUrlsFromConfig);
-
-            if (isAeronMode) {
-                System.out.println("   ✈️  Using Aeron Cluster Consensus (Raft)");
-                System.out.println("      - Proven Raft consensus algorithm");
-                System.out.println("      - Election safety guarantees");
-                System.out.println("      - Majority quorum requirements");
-                System.out.println("      - High performance, low latency");
-
-                String beaconApiUrl = GlobalStoreRuntimeConfigUtil.resolveBeaconApiUrl(currentAeronConfig());
-
-                ensureAeronClusterService();
-                boolean observeElections = aeronConfig != null && aeronConfig.observeElections();
-                boolean logClusterStateDetails = aeronConfig != null && aeronConfig.logClusterStateDetails();
-                AeronClusterStartupResult startupResult = aeronClusterService.startCluster(
-                    fileStore, nodeStore, httpServer, wallet, storeDirectory, this.blobStore,
-                    selfUrl, peerUrls, observeElections, logClusterStateDetails
-                );
-
-                this.aeronClusterLauncher = startupResult.getLauncher();
-
-                org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine aeronEngine = startupResult.getAeronEngine();
-                List<String> hostnamesList = startupResult.getHostnames();
-                int nodeId = startupResult.getNodeId();
-
-                System.out.println("✅ Aeron Cluster Consensus engine initialized");
-                System.out.println("   - Model: Raft-based consensus (Aeron Cluster)");
-                System.out.println("   - Node ID: " + nodeId);
-                System.out.println("   - Total validators: " + hostnamesList.size());
-                System.out.println("   - Current role: " + aeronEngine.getCurrentRole());
-                System.out.println("   - Current leader: " + aeronEngine.getCurrentLeader());
-                System.out.println("   - Ethereum epoch: " + aeronEngine.getCurrentEthereumEpoch());
-
-                components().createConsensusServicesInitializer().initialize(
-                    aeronEngine,
-                    httpServer,
-                    wallet,
-                    storeDirectory,
-                    beaconApiUrl,
-                    finalClusterWallet,
-                    hostnamesList
-                );
-            } else {
-                throw new IllegalStateException("Aeron mode validation failed - this should not happen");
-            }
-        } else if (!isStandbyMode) {
+        if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DISABLED) {
             // Only print this if NOT in standby mode (standby will init via callback)
             System.out.println();
             System.out.println("ℹ️  Consensus disabled (single-validator mode)");
-        } else {
+        } else if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DEFERRED) {
             // STANDBY mode - consensus will be initialized after bootstrap
             System.out.println();
             System.out.println("ℹ️  Consensus initialization deferred (STANDBY mode → callback)");
