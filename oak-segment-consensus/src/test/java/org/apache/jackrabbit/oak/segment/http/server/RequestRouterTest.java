@@ -16,13 +16,21 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import io.aeron.cluster.service.Cluster;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.Segment;
 import org.apache.jackrabbit.oak.segment.SegmentId;
 import org.apache.jackrabbit.oak.segment.SegmentIdProvider;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCExecutionResult;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -52,6 +60,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.io.BufferedReader;
+import java.io.StringReader;
 import java.nio.file.Files;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -1537,6 +1547,276 @@ public class RequestRouterTest {
             assertTrue(body.toString().contains("\"connectedClients\":0"));
             assertTrue(body.toString().contains("\"eventBufferSize\":0"));
             assertTrue(body.toString().contains("\"totalEventsBroadcast\":0"));
+        });
+    }
+
+    @Test
+    public void testHealthRouteReturnsUpPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/health");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"status\":\"UP\""));
+        });
+    }
+
+    @Test
+    public void testBlockchainConfigRouteReturnsConfigPayload() throws Exception {
+        String previousMode = System.getProperty("oak.blockchain.mode");
+        try {
+            System.clearProperty("oak.blockchain.mode");
+            BlockchainConfig.reset();
+            withRoutingProperties(true, () -> {
+                RequestRouter router = new RequestRouter(newContext());
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/v1/blockchain/config");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"mode\":\"mock\""));
+                assertTrue(body.toString().contains("\"validatorUrl\":\"http://localhost:8090\""));
+            });
+        } finally {
+            restoreProperty("oak.blockchain.mode", previousMode);
+            BlockchainConfig.reset();
+        }
+    }
+
+    @Test
+    public void testExplorerEpochsRouteReturnsExplorerEpochPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            Map<String, Object> flow = new java.util.LinkedHashMap<>();
+            flow.put("currentEpoch", 42L);
+            flow.put("finalizedEpoch", 40L);
+            when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/explorer/epochs");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"deprecated\":true"));
+            assertTrue(body.toString().contains("\"currentEpoch\":42"));
+        });
+    }
+
+    @Test
+    public void testPendingCountRouteReturnsQueueCount() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            when(queueManager.getPendingCount()).thenReturn(7);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/proposals/pending/count");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"pendingCount\":7"));
+        });
+    }
+
+    @Test
+    public void testQueueStatsRouteReturnsStatsPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            Map<String, Object> stats = new HashMap<>();
+            stats.put("pendingCount", 3);
+            stats.put("oldestAgeMs", 55L);
+            when(queueManager.getQueueStats()).thenReturn(stats);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/proposals/queue/stats");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"pendingCount\":3"));
+            assertTrue(body.toString().contains("\"oldestAgeMs\":55"));
+        });
+    }
+
+    @Test
+    public void testProposalEpochsRouteReturnsDeprecatedEpochPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            Map<String, Object> flow = new HashMap<>();
+            flow.put("currentEpoch", 42L);
+            flow.put("finalizedEpoch", 40L);
+            when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/proposals/epochs");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"deprecated\":true"));
+            assertTrue(body.toString().contains("\"canonicalPath\":\"/v1/proposals/release-flow\""));
+        });
+    }
+
+    @Test
+    public void testOpsQueueSnapshotRouteReturnsOpsEnvelope() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            Map<String, Object> stats = new HashMap<>();
+            stats.put("pendingCount", 7);
+            when(queueManager.getQueueStats()).thenReturn(stats);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/ops/snapshots/queue");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
+            assertTrue(body.toString().contains("\"pendingCount\":7"));
+        });
+    }
+
+    @Test
+    public void testOpsReplicationSnapshotRouteReturnsOpsEnvelope() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = baseEngine();
+            Map<String, Object> lagStatus = new HashMap<>();
+            lagStatus.put("healthy", true);
+            lagStatus.put("replicationLag", 4);
+            when(engine.getReplicationLagStatus()).thenReturn(lagStatus);
+            context.aeronConsensusEngine = engine;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/ops/snapshots/replication");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
+            assertTrue(body.toString().contains("\"replicationLag\":4"));
+        });
+    }
+
+    @Test
+    public void testAeronRaftMetricsRouteReturnsPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = baseEngine();
+            when(engine.getCurrentTerm()).thenReturn(8);
+            when(engine.isLeader()).thenReturn(true);
+            when(engine.getCurrentLeader()).thenReturn("http://validator-1:8090");
+            when(engine.getAllFollowers()).thenReturn(Arrays.asList("http://validator-1:8090", "http://validator-3:8090"));
+            when(engine.getCurrentEpoch()).thenReturn(21);
+            when(engine.getCurrentEthereumEpoch()).thenReturn(34);
+            context.aeronConsensusEngine = engine;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/aeron/raft-metrics");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"currentTerm\":8"));
+            assertTrue(body.toString().contains("\"ethereumEpoch\":34"));
+        });
+    }
+
+    @Test
+    public void testAeronNodeStatusRouteReturnsLeaderPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = baseEngine();
+            when(engine.getCurrentLeader()).thenReturn("http://validator-1:8090");
+            when(engine.getAllFollowers()).thenReturn(Arrays.asList("http://validator-1:8090", "http://validator-3:8090"));
+            when(engine.getLastHeartbeatTime()).thenReturn(9876L);
+            context.aeronConsensusEngine = engine;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/aeron/node-status");
+            when(request.getParameter("nodeId")).thenReturn("1");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"nodeId\":1"));
+            assertTrue(body.toString().contains("\"role\":\"LEADER\""));
+        });
+    }
+
+    @Test
+    public void testAeronLeadershipHistoryRouteReturnsHistoryPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = baseEngine();
+            when(engine.getLeadershipHistory(100)).thenReturn(Arrays.asList(
+                new LeadershipChange(
+                    1234L,
+                    Cluster.Role.LEADER,
+                    Cluster.Role.FOLLOWER,
+                    7,
+                    2,
+                    "http://validator-2:8090"
+                )
+            ));
+            context.aeronConsensusEngine = engine;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/aeron/leadership-history");
+            when(request.getParameter("limit")).thenReturn("500");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"limit\":100"));
+            assertTrue(body.toString().contains("\"memberUrl\":\"http://validator-2:8090\""));
         });
     }
 
