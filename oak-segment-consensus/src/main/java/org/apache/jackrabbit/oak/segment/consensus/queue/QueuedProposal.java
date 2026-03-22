@@ -21,13 +21,13 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
  */
 public class QueuedProposal implements java.io.Serializable {
     private static final long serialVersionUID = 1L;
-    
+
     /** Proposal type (WRITE or DELETE) */
     public enum ProposalType {
         WRITE,
         DELETE
     }
-    
+
     private final String proposalId;
     private final String ethereumTxHash;
     private final long timestamp;
@@ -35,16 +35,19 @@ public class QueuedProposal implements java.io.Serializable {
     private volatile ProposalState state;
     private volatile Long confirmedBlock;
     private volatile String rejectionReason;
-    
+
     // Wallet-based write/delete fields
     private volatile ProposalType type = ProposalType.WRITE; // Default to WRITE for backward compatibility
     private volatile String walletAddress;
     private volatile String path;
     private volatile String contentType;
     private volatile String message;
+    private volatile String payloadRef;
+    private volatile long payloadSizeBytes = 0L;
+    private volatile String payloadSha256;
     private volatile String signature;
     private volatile long epoch; // Ethereum epoch when transaction was seen
-    private volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier = 
+    private volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier =
         org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD; // Payment tier for priority handling
     private volatile String intentToken; // Intent token for lazy binary upload (ADR 020)
     private volatile String blobId; // Oak blob ID for eager binary upload
@@ -59,7 +62,7 @@ public class QueuedProposal implements java.io.Serializable {
     private volatile long durabilityTimestamp = 0;
     private volatile String durabilityError;
     private volatile String durableHead;
-    
+
     public QueuedProposal(
             String proposalId,
             String ethereumTxHash,
@@ -73,55 +76,83 @@ public class QueuedProposal implements java.io.Serializable {
         this.timeoutTimestamp = timeoutTimestamp;
         this.state = state;
     }
-    
+
     public String getProposalId() {
         return proposalId;
     }
-    
+
     public String getEthereumTxHash() {
         return ethereumTxHash;
     }
-    
+
     public long getTimestamp() {
         return timestamp;
     }
-    
+
     public String getWalletAddress() {
         return walletAddress;
     }
-    
+
     public void setWalletAddress(String walletAddress) {
         this.walletAddress = walletAddress;
     }
-    
+
     public String getPath() {
         return path;
     }
-    
+
     public void setPath(String path) {
         this.path = path;
     }
-    
+
     public String getContentType() {
         return contentType;
     }
-    
+
     public void setContentType(String contentType) {
         this.contentType = contentType;
     }
-    
+
     public String getMessage() {
         return message;
     }
-    
+
     public void setMessage(String message) {
         this.message = message;
     }
-    
+
+    public void clearMessage() {
+        this.message = null;
+    }
+
+    public String getPayloadRef() {
+        return payloadRef;
+    }
+
+    public void setPayloadRef(String payloadRef) {
+        this.payloadRef = payloadRef;
+    }
+
+    public long getPayloadSizeBytes() {
+        return payloadSizeBytes;
+    }
+
+    public void setPayloadSizeBytes(long payloadSizeBytes) {
+        this.payloadSizeBytes = payloadSizeBytes;
+    }
+
+    public String getPayloadSha256() {
+        return payloadSha256;
+    }
+
+    public void setPayloadSha256(String payloadSha256) {
+        this.payloadSha256 = payloadSha256;
+    }
+
     public String getSignature() {
         return signature;
     }
-    
+
     public void setSignature(String signature) {
         this.signature = signature;
     }
@@ -148,15 +179,25 @@ public class QueuedProposal implements java.io.Serializable {
         this.durabilityError = durabilityError;
         this.durabilityTimestamp = System.currentTimeMillis();
     }
-    
+
+    void restoreDurabilityState(DurabilityState durabilityState,
+                                long durabilityTimestamp,
+                                String durableHead,
+                                String durabilityError) {
+        this.durabilityState = durabilityState != null ? durabilityState : DurabilityState.PENDING;
+        this.durableHead = durableHead;
+        this.durabilityError = durabilityError;
+        this.durabilityTimestamp = durabilityTimestamp;
+    }
+
     public long getEpoch() {
         return epoch;
     }
-    
+
     public void setEpoch(long epoch) {
         this.epoch = epoch;
     }
-    
+
     public long getTimeoutTimestamp() {
         return timeoutTimestamp;
     }
@@ -164,92 +205,92 @@ public class QueuedProposal implements java.io.Serializable {
     public void overrideTimeoutTimestamp(long timeoutTimestamp) {
         this.timeoutTimestamp = timeoutTimestamp;
     }
-    
+
     public ProposalState getState() {
         return state;
     }
-    
+
     public void setState(ProposalState state) {
         this.state = state;
     }
-    
+
     public Long getConfirmedBlock() {
         return confirmedBlock;
     }
-    
+
     public void setConfirmedBlock(Long confirmedBlock) {
         this.confirmedBlock = confirmedBlock;
     }
-    
+
     public String getRejectionReason() {
         return rejectionReason;
     }
-    
+
     public void setRejectionReason(String rejectionReason) {
         this.rejectionReason = rejectionReason;
     }
-    
+
     public org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier getTier() {
         return tier;
     }
-    
+
     public void setTier(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
         this.tier = tier;
     }
-    
+
     public ProposalType getType() {
         return type;
     }
-    
+
     public void setType(ProposalType type) {
         this.type = type;
     }
-    
+
     public String getIntentToken() {
         return intentToken;
     }
-    
+
     public void setIntentToken(String intentToken) {
         this.intentToken = intentToken;
     }
-    
+
     public String getBlobId() {
         return blobId;
     }
-    
+
     public void setBlobId(String blobId) {
         this.blobId = blobId;
     }
-    
+
     public String getMimeType() {
         return mimeType;
     }
-    
+
     public void setMimeType(String mimeType) {
         this.mimeType = mimeType;
     }
-    
+
     /**
      * Get the IPFS CID from client-side upload (ADR 016).
-     * 
+     *
      * @return IPFS CID string, or null if not provided
      */
     public String getIpfsCid() {
         return ipfsCid;
     }
-    
+
     /**
      * Set the IPFS CID from client-side upload (ADR 016).
-     * 
+     *
      * @param ipfsCid IPFS CID string
      */
     public void setIpfsCid(String ipfsCid) {
         this.ipfsCid = ipfsCid;
     }
-    
+
     /**
      * Get the number of times this proposal has been retried.
-     * 
+     *
      * @return retry count (0 = first attempt)
      */
     public int getRetryCount() {
@@ -263,23 +304,28 @@ public class QueuedProposal implements java.io.Serializable {
     public void setVerifiedTimestampMs(long verifiedTimestampMs) {
         this.verifiedTimestampMs = verifiedTimestampMs;
     }
-    
+
     /**
      * Increment the retry count and update the last retry timestamp.
-     * 
+     *
      * @return the new retry count
      */
     public int incrementRetryCount() {
         this.lastRetryTimestamp = System.currentTimeMillis();
         return ++this.retryCount;
     }
-    
+
     /**
      * Get the timestamp of the last retry attempt.
-     * 
+     *
      * @return timestamp in milliseconds, or 0 if never retried
      */
     public long getLastRetryTimestamp() {
         return lastRetryTimestamp;
+    }
+
+    void restoreRetryState(int retryCount, long lastRetryTimestamp) {
+        this.retryCount = Math.max(0, retryCount);
+        this.lastRetryTimestamp = Math.max(0L, lastRetryTimestamp);
     }
 }

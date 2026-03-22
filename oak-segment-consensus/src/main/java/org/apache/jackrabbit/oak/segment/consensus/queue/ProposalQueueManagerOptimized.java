@@ -107,10 +107,15 @@ public class ProposalQueueManagerOptimized {
     private final ConcurrentLinkedQueue<List<QueuedProposal>> batchQueue = new ConcurrentLinkedQueue<>(); // Batches ready to send
     private final ConcurrentHashMap<String, QueuedProposal> allProposals = new ConcurrentHashMap<>();
     private final ProposalPersistenceStore persistenceStore;
+    private final ProposalPayloadStore payloadStore;
     private final QueueCounterStateStore counterStateStore;
     private final Object persistenceLock = new Object();
     private final long persistenceFlushIntervalMs;
     private final int persistenceFlushBatch;
+    private final long payloadInlineMaxBytes;
+    private final long payloadSpillSoftPending;
+    private final long payloadSpillMaxBytes;
+    private final long hardMaxPendingProposals;
     private final java.util.concurrent.atomic.AtomicLong persistencePendingChanges =
         new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicBoolean persistenceFlushInProgress =
@@ -183,6 +188,13 @@ public class ProposalQueueManagerOptimized {
     private final java.util.concurrent.atomic.AtomicLong persistenceFlushNanos = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong persistenceFlushCount = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong persistenceFlushLastMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong payloadInlineRetainedCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong payloadDiskOnlyCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong payloadRestoreMissingCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong payloadOverloadRejectCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong payloadResolveCount = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong payloadResolveNanos = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong payloadResolveLastMs = new java.util.concurrent.atomic.AtomicLong(0);
     private volatile String lastAdaptiveDecisionSignature =
         AdaptiveReleaseGovernor.Decision.healthyDirect().signature();
     
@@ -237,6 +249,7 @@ public class ProposalQueueManagerOptimized {
         this.backpressureOverflowBuffer = new BackpressureOverflowBuffer();
         ProposalQueueTuning resolved = tuning != null ? tuning : ProposalQueueTuningRegistry.get();
         this.persistenceStore = createPersistenceStore(persistenceDir, resolved);
+        this.payloadStore = createPayloadStore(persistenceDir, resolved);
         this.counterStateStore = createCounterStateStore(persistenceDir);
         this.confirmationTimeoutMs = resolved.getConfirmationTimeoutMs();
         this.requiredConfirmations = resolved.getRequiredConfirmations();
@@ -253,6 +266,10 @@ public class ProposalQueueManagerOptimized {
         this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
         this.persistenceFlushBatch = resolved.getPersistenceFlushBatch();
         this.counterRotationIntervalMs = resolved.getCounterRotationIntervalMs();
+        this.payloadInlineMaxBytes = resolved.getPayloadInlineMaxBytes();
+        this.payloadSpillSoftPending = resolved.getPayloadSpillSoftPending();
+        this.payloadSpillMaxBytes = resolved.getPayloadSpillMaxBytes();
+        this.hardMaxPendingProposals = resolved.getHardMaxPendingProposals();
         restoreCounterState();
     }
     
@@ -670,6 +687,19 @@ public class ProposalQueueManagerOptimized {
         stats.put("persistenceFlushCount", persistenceFlushCount.get());
         stats.put("persistencePendingChanges", persistencePendingChanges.get());
         stats.put("persistenceAsyncEnabled", isAsyncPersistenceEnabled());
+        stats.put("payloadInlineMaxBytes", payloadInlineMaxBytes);
+        stats.put("payloadSpillSoftPending", payloadSpillSoftPending);
+        stats.put("payloadSpillMaxBytes", payloadSpillMaxBytes);
+        stats.put("hardMaxPendingProposals", hardMaxPendingProposals);
+        stats.put("payloadSpoolBytes", payloadStore != null ? payloadStore.getTotalBytes() : 0L);
+        stats.put("payloadInlineRetainedCount", payloadInlineRetainedCount.get());
+        stats.put("payloadDiskOnlyCount", payloadDiskOnlyCount.get());
+        stats.put("payloadRestoreMissingCount", payloadRestoreMissingCount.get());
+        stats.put("payloadOverloadRejectCount", payloadOverloadRejectCount.get());
+        stats.put("payloadResolveCount", payloadResolveCount.get());
+        stats.put("payloadResolveAvgMs", payloadResolveCount.get() == 0 ? 0 :
+            (payloadResolveNanos.get() / 1_000_000.0) / payloadResolveCount.get());
+        stats.put("payloadResolveLastMs", payloadResolveLastMs.get());
         
         return stats;
     }
@@ -1222,6 +1252,19 @@ public class ProposalQueueManagerOptimized {
         return new ProposalPersistenceStore(java.nio.file.Path.of(resolved));
     }
 
+    private ProposalPayloadStore createPayloadStore(String persistenceDir, ProposalQueueTuning tuning) {
+        java.nio.file.Path payloadDir = resolvePayloadSpillDirectory(persistenceDir, tuning);
+        boolean ephemeral = payloadDir == null;
+        if (payloadDir == null) {
+            try {
+                payloadDir = java.nio.file.Files.createTempDirectory("oak-proposal-payloads");
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException("Failed to create temporary payload spill directory", e);
+            }
+        }
+        return new ProposalPayloadStore(payloadDir, ephemeral);
+    }
+
     private QueueCounterStateStore createCounterStateStore(String persistenceDir) {
         String resolved = resolvePersistenceDirectory(persistenceDir);
         if (resolved == null || resolved.isEmpty()) {
@@ -1239,6 +1282,24 @@ public class ProposalQueueManagerOptimized {
             resolved = System.getenv("OAK_PROPOSAL_PERSISTENCE_DIR");
         }
         return resolved;
+    }
+
+    private java.nio.file.Path resolvePayloadSpillDirectory(String persistenceDir, ProposalQueueTuning tuning) {
+        if (tuning != null && tuning.getPayloadSpillDir() != null && !tuning.getPayloadSpillDir().trim().isEmpty()) {
+            return java.nio.file.Path.of(tuning.getPayloadSpillDir().trim());
+        }
+        String configured = System.getProperty("oak.proposal.payload.spill.dir");
+        if (configured == null || configured.trim().isEmpty()) {
+            configured = System.getenv("OAK_PROPOSAL_PAYLOAD_SPILL_DIR");
+        }
+        if (configured != null && !configured.trim().isEmpty()) {
+            return java.nio.file.Path.of(configured.trim());
+        }
+        String resolvedPersistenceDir = resolvePersistenceDirectory(persistenceDir);
+        if (resolvedPersistenceDir != null && !resolvedPersistenceDir.isEmpty()) {
+            return java.nio.file.Path.of(resolvedPersistenceDir).resolve("payloads");
+        }
+        return null;
     }
 
     private void restoreCounterState() {
@@ -1327,12 +1388,18 @@ public class ProposalQueueManagerOptimized {
         int restoredVerified = 0;
         int restoredPriorityReady = 0;
         int skippedTerminal = 0;
+        int skippedMissingPayload = 0;
         for (QueuedProposal proposal : proposals) {
             if (proposal == null) {
                 continue;
             }
             if (proposal.getState() == ProposalState.PROCESSED || proposal.getState() == ProposalState.REJECTED) {
+                cleanupPayload(proposal);
                 skippedTerminal++;
+                continue;
+            }
+            if (!hasRestorablePayload(proposal)) {
+                skippedMissingPayload++;
                 continue;
             }
             allProposals.put(proposal.getProposalId(), proposal);
@@ -1354,13 +1421,17 @@ public class ProposalQueueManagerOptimized {
             unverifiedQueue.offer(proposal);
             restoredPending++;
         }
-        if (restoredPending > 0 || restoredVerified > 0 || skippedTerminal > 0) {
-            log.info("🔁 Restored persisted proposals: pending={} verified={} priorityReady={} releaseMode={} skippedTerminal={}",
+        if (skippedTerminal > 0 || skippedMissingPayload > 0) {
+            persistProposalsNow();
+        }
+        if (restoredPending > 0 || restoredVerified > 0 || skippedTerminal > 0 || skippedMissingPayload > 0) {
+            log.info("🔁 Restored persisted proposals: pending={} verified={} priorityReady={} releaseMode={} skippedTerminal={} skippedMissingPayload={}",
                 restoredPending,
                 restoredVerified,
                 restoredPriorityReady,
                 releaseMode.configValue(),
-                skippedTerminal);
+                skippedTerminal,
+                skippedMissingPayload);
         }
     }
     
@@ -1468,6 +1539,9 @@ public class ProposalQueueManagerOptimized {
             flushPersistedProposals();
         }
         persistCounterState();
+        if (payloadStore != null) {
+            payloadStore.close();
+        }
         
         log.info("✅ ProposalQueueManager stopped");
     }
@@ -1495,8 +1569,9 @@ public class ProposalQueueManagerOptimized {
             String signature) {
         // Calculate current epoch automatically
         long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch, 
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD, null);
+        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD, null,
+            null, null, null);
     }
     
     /**
@@ -1525,7 +1600,26 @@ public class ProposalQueueManagerOptimized {
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
             String intentToken) {
         long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch, tier, intentToken);
+        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch,
+            tier, intentToken, null, null, null);
+    }
+
+    public QueuedProposal queueProposal(
+            String proposalId,
+            String ethereumTxHash,
+            String walletAddress,
+            String path,
+            String contentType,
+            String message,
+            String signature,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
+            String intentToken,
+            String blobId,
+            String mimeType,
+            String ipfsCid) {
+        long currentEpoch = resolveCurrentEpoch();
+        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch,
+            tier, intentToken, blobId, mimeType, ipfsCid);
     }
     
     /**
@@ -1554,7 +1648,26 @@ public class ProposalQueueManagerOptimized {
             long epoch,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
             String intentToken) {
-        
+        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, epoch,
+            tier, intentToken, null, null, null);
+    }
+
+    public QueuedProposal queueProposal(
+            String proposalId,
+            String walletAddress,
+            String path,
+            String contentType,
+            String message,
+            String signature,
+            String ethereumTxHash,
+            long epoch,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
+            String intentToken,
+            String blobId,
+            String mimeType,
+            String ipfsCid) {
+        enforceAdmissionCapacity();
+        long pendingCount = getPendingCount();
         long now = System.currentTimeMillis();
         QueuedProposal proposal = new QueuedProposal(
             proposalId,
@@ -1569,12 +1682,15 @@ public class ProposalQueueManagerOptimized {
         proposal.setWalletAddress(walletAddress);
         proposal.setPath(path);
         proposal.setContentType(contentType);
-        proposal.setMessage(message);
         proposal.setSignature(signature);
         proposal.setEpoch(epoch);
         proposal.setTier(tier); // Set payment tier for priority handling
         proposal.setIntentToken(intentToken); // Set intent token for lazy binary upload (ADR 020)
+        proposal.setBlobId(blobId);
+        proposal.setMimeType(mimeType);
+        proposal.setIpfsCid(ipfsCid);
         proposal.setDurabilityState(DurabilityState.PENDING, null, null);
+        attachPayloadState(proposal, message, pendingCount);
         
         // Add to tracking map.
         allProposals.put(proposalId, proposal);
@@ -1616,7 +1732,7 @@ public class ProposalQueueManagerOptimized {
             String path,
             String signature,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
-        
+        enforceAdmissionCapacity();
         long currentEpoch = resolveCurrentEpoch();
         
         long now = System.currentTimeMillis();
@@ -1729,6 +1845,176 @@ public class ProposalQueueManagerOptimized {
             adaptivePackingBuffer.getStats(),
             backpressureOverflowBuffer.getStats());
     }
+
+    private void enforceAdmissionCapacity() {
+        if (getPendingCount() >= hardMaxPendingProposals) {
+            payloadOverloadRejectCount.incrementAndGet();
+            throw new RejectedExecutionException("queue_overloaded");
+        }
+    }
+
+    private void attachPayloadState(QueuedProposal proposal, String message, long pendingCount) {
+        String normalizedMessage = message != null ? message : "";
+        long messageSizeBytes = normalizedMessage.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        boolean keepInline = messageSizeBytes <= payloadInlineMaxBytes
+            && pendingCount < payloadSpillSoftPending;
+        boolean mustPersistForRecovery = persistenceStore != null;
+
+        if (!mustPersistForRecovery && keepInline) {
+            proposal.setMessage(normalizedMessage);
+            proposal.setPayloadRef(null);
+            proposal.setPayloadSizeBytes(0L);
+            proposal.setPayloadSha256(null);
+            if (messageSizeBytes > 0L) {
+                payloadInlineRetainedCount.incrementAndGet();
+            }
+            return;
+        }
+
+        ProposalPayloadStore.StoredPayload storedPayload;
+        try {
+            storedPayload = payloadStore.storePayload(
+                proposal.getProposalId(),
+                normalizedMessage,
+                payloadSpillMaxBytes
+            );
+        } catch (RejectedExecutionException e) {
+            payloadOverloadRejectCount.incrementAndGet();
+            throw new RejectedExecutionException("queue_overloaded", e);
+        }
+
+        proposal.setPayloadRef(storedPayload.getPayloadRef());
+        proposal.setPayloadSizeBytes(storedPayload.getSizeBytes());
+        proposal.setPayloadSha256(storedPayload.getSha256());
+
+        if (keepInline || storedPayload.getPayloadRef() == null) {
+            proposal.setMessage(normalizedMessage);
+            if (storedPayload.getSizeBytes() > 0L) {
+                payloadInlineRetainedCount.incrementAndGet();
+            }
+        } else {
+            proposal.clearMessage();
+            payloadDiskOnlyCount.incrementAndGet();
+        }
+    }
+
+    private String resolveProposalMessage(QueuedProposal proposal) {
+        if (proposal == null) {
+            return "";
+        }
+        String message = proposal.getMessage();
+        if (message != null) {
+            return message;
+        }
+        String payloadRef = proposal.getPayloadRef();
+        if (payloadRef == null || payloadRef.isEmpty()) {
+            return "";
+        }
+
+        long start = System.nanoTime();
+        try {
+            String resolved = payloadStore.loadPayload(payloadRef, proposal.getPayloadSha256());
+            long nanos = System.nanoTime() - start;
+            payloadResolveCount.incrementAndGet();
+            payloadResolveNanos.addAndGet(nanos);
+            payloadResolveLastMs.set(nanos / 1_000_000L);
+            return resolved;
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(
+                "Failed to resolve payload for proposal " + proposal.getProposalId(),
+                e
+            );
+        }
+    }
+
+    private java.util.List<QueuedProposal> hydrateBatchMessages(List<QueuedProposal> batch) {
+        java.util.List<QueuedProposal> hydrated = new java.util.ArrayList<>();
+        if (batch == null || batch.isEmpty()) {
+            return hydrated;
+        }
+        for (QueuedProposal proposal : batch) {
+            if (proposal == null
+                || proposal.getType() == QueuedProposal.ProposalType.DELETE
+                || proposal.getMessage() != null) {
+                continue;
+            }
+            proposal.setMessage(resolveProposalMessage(proposal));
+            hydrated.add(proposal);
+        }
+        return hydrated;
+    }
+
+    private void clearHydratedMessages(java.util.List<QueuedProposal> hydrated) {
+        if (hydrated == null || hydrated.isEmpty()) {
+            return;
+        }
+        for (QueuedProposal proposal : hydrated) {
+            if (proposal != null) {
+                proposal.clearMessage();
+            }
+        }
+    }
+
+    private void clearPayloadState(QueuedProposal proposal) {
+        if (proposal == null) {
+            return;
+        }
+        proposal.clearMessage();
+        proposal.setPayloadRef(null);
+        proposal.setPayloadSizeBytes(0L);
+        proposal.setPayloadSha256(null);
+    }
+
+    private void cleanupPayload(QueuedProposal proposal) {
+        if (proposal == null) {
+            return;
+        }
+        String payloadRef = proposal.getPayloadRef();
+        long payloadSizeBytes = proposal.getPayloadSizeBytes();
+        if (payloadRef != null && !payloadRef.isEmpty()) {
+            payloadStore.deletePayload(payloadRef, payloadSizeBytes);
+        }
+        clearPayloadState(proposal);
+    }
+
+    private boolean hasRestorablePayload(QueuedProposal proposal) {
+        if (proposal == null) {
+            return false;
+        }
+        String payloadRef = proposal.getPayloadRef();
+        if (payloadRef == null || payloadRef.isEmpty()) {
+            return true;
+        }
+        if (payloadStore.hasPayload(payloadRef)) {
+            return true;
+        }
+        payloadRestoreMissingCount.incrementAndGet();
+        log.warn("Skipping restored proposal {} because payload sidecar {} is missing",
+            proposal.getProposalId(), payloadRef);
+        return false;
+    }
+
+    private void transitionProposalToProcessed(QueuedProposal proposal) {
+        if (proposal == null) {
+            return;
+        }
+        proposal.setState(ProposalState.PROCESSED);
+        cleanupPayload(proposal);
+        totalFinalizedCount.incrementAndGet();
+        recordTerminalState(proposal, ProposalState.PROCESSED);
+    }
+
+    private void transitionProposalToRejected(QueuedProposal proposal, String reason) {
+        if (proposal == null) {
+            return;
+        }
+        proposal.setState(ProposalState.REJECTED);
+        proposal.setRejectionReason(reason);
+        cleanupPayload(proposal);
+        allProposals.remove(proposal.getProposalId());
+        totalRejectedCount.incrementAndGet();
+        recordTerminalState(proposal, ProposalState.REJECTED);
+    }
     
     // ============================================================================
     // AGENT 1: Aeron Sender (FAST PATH)
@@ -1817,6 +2103,7 @@ public class ProposalQueueManagerOptimized {
                                 proposal.getSignature()
                             );
                         } else {
+                            String resolvedMessage = resolveProposalMessage(proposal);
                             log.debug("📝 Sending WRITE proposal (templateId 100) blobId={}, ipfsCid={}", 
                                 proposal.getBlobId(), proposal.getIpfsCid());
                             raftAppendCallback.appendProposalWithId(
@@ -1824,7 +2111,7 @@ public class ProposalQueueManagerOptimized {
                                 proposal.getWalletAddress(),
                                 proposal.getPath(),
                                 proposal.getContentType(),
-                                proposal.getMessage(),
+                                resolvedMessage,
                                 proposal.getSignature(),
                                 proposal.getBlobId(),
                                 proposal.getMimeType(),
@@ -1834,19 +2121,21 @@ public class ProposalQueueManagerOptimized {
                         sent = 1; // appendProposal/appendDeleteProposal returns void, assume success
                     } else {
                         // Multi-proposal batch: use templateId 106
-                        log.debug("🔥 CALLING appendProposalBatch on instance of: {}", 
-                            raftAppendCallback.getClass().getName());
-                        sent = raftAppendCallback.appendProposalBatch(batch);
-                        log.debug("🔥 appendProposalBatch RETURNED: {}", sent);
+                        java.util.List<QueuedProposal> hydrated = hydrateBatchMessages(batch);
+                        try {
+                            log.debug("🔥 CALLING appendProposalBatch on instance of: {}", 
+                                raftAppendCallback.getClass().getName());
+                            sent = raftAppendCallback.appendProposalBatch(batch);
+                            log.debug("🔥 appendProposalBatch RETURNED: {}", sent);
+                        } finally {
+                            clearHydratedMessages(hydrated);
+                        }
                     }
                     
                     if (sent > 0) {
                         // Mark all proposals in batch as processed
                         for (QueuedProposal queued : batch) {
-                            queued.setState(ProposalState.PROCESSED);
-                            totalFinalizedCount.incrementAndGet();
-                            recordTerminalState(queued, ProposalState.PROCESSED);
-                            
+                            transitionProposalToProcessed(queued);
                             batchedProposalsSent.incrementAndGet();
                             workCount++;
                         }
@@ -1886,11 +2175,11 @@ public class ProposalQueueManagerOptimized {
                         log.error("❌ Batch exceeded max retries ({}) - rejecting {} proposals", 
                             maxRetryCount, batch.size());
                         for (QueuedProposal proposal : batch) {
-                            proposal.setState(ProposalState.REJECTED);
-                            proposal.setRejectionReason("Exceeded max retry count (" + maxRetryCount + 
-                                ") after Aeron send failures: " + e.getMessage());
-                            totalRejectedCount.incrementAndGet();
-                            recordTerminalState(proposal, ProposalState.REJECTED);
+                            transitionProposalToRejected(
+                                proposal,
+                                "Exceeded max retry count (" + maxRetryCount + ") after Aeron send failures: "
+                                    + e.getMessage()
+                            );
                         }
                         persistProposals();
                     } else {
@@ -2112,7 +2401,7 @@ public class ProposalQueueManagerOptimized {
                     boolean isMockMode = org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance().isMockMode();
                     
                     if (!isMockMode) {
-                        String signedMessage = proposal.getMessage() != null ? proposal.getMessage() : "";
+                        String signedMessage = resolveProposalMessage(proposal);
                         String proposalSignature = proposal.getSignature();
                         
                         if (proposalSignature != null && !proposalSignature.isEmpty() && 
@@ -2218,13 +2507,14 @@ public class ProposalQueueManagerOptimized {
                                     proposal.getSignature()
                                 );
                             } else {
+                                String resolvedMessage = resolveProposalMessage(proposal);
                                 log.debug("📝 PRIORITY WRITE: Sending directly to Aeron (ipfsCid={})", proposal.getIpfsCid());
                                 raftAppendCallback.appendProposalWithId(
                                     proposal.getProposalId(),
                                     proposal.getWalletAddress(),
                                     proposal.getPath(),
                                     proposal.getContentType(),
-                                    proposal.getMessage(),
+                                    resolvedMessage,
                                     proposal.getSignature(),
                                     proposal.getBlobId(),
                                     proposal.getMimeType(),
@@ -2232,10 +2522,7 @@ public class ProposalQueueManagerOptimized {
                                 );
                             }
                             
-                            proposal.setState(ProposalState.PROCESSED);
-                            allProposals.remove(proposal.getProposalId());
-                            totalFinalizedCount.incrementAndGet();
-                            recordTerminalState(proposal, ProposalState.PROCESSED);
+                            transitionProposalToProcessed(proposal);
                             long priorityPersistStartNs = System.nanoTime();
                             persistProposals();
                             long priorityPersistNanos = System.nanoTime() - priorityPersistStartNs;
@@ -2279,13 +2566,7 @@ public class ProposalQueueManagerOptimized {
          * Reject a proposal and remove it from tracking.
          */
         private void rejectProposal(QueuedProposal proposal, String reason) {
-            proposal.setState(ProposalState.REJECTED);
-            proposal.setRejectionReason(reason);
-            allProposals.remove(proposal.getProposalId());
-            
-            // Track rejection persistently (survives proposal removal)
-            totalRejectedCount.incrementAndGet();
-            recordTerminalState(proposal, ProposalState.REJECTED);
+            transitionProposalToRejected(proposal, reason);
             persistProposals();
             
             log.warn("❌ REJECTED proposal {}: {} (total rejected: {})", 

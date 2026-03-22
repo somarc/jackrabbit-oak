@@ -35,6 +35,11 @@ public class ProposalQueueTuningTest {
         System.clearProperty("oak.proposal.priority.direct.release.enabled");
         System.clearProperty("oak.proposal.validator.binary.upload.enabled");
         System.clearProperty("oak.proposal.validator.binary.requires.priority");
+        System.clearProperty("oak.proposal.payload.inline.max.bytes");
+        System.clearProperty("oak.proposal.payload.spill.soft.pending");
+        System.clearProperty("oak.proposal.payload.spill.max.bytes");
+        System.clearProperty("oak.proposal.hard.max.pending");
+        System.clearProperty("oak.proposal.payload.spill.dir");
     }
 
     @Test
@@ -155,5 +160,33 @@ public class ProposalQueueTuningTest {
 
         assertFalse(tuning.isValidatorHostedBinaryUploadEnabled());
         assertFalse(tuning.isValidatorHostedBinaryRequiresPriorityTier());
+    }
+
+    @Test
+    public void testPayloadSpillDefaultsApply() {
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_INLINE_MAX_BYTES, tuning.getPayloadInlineMaxBytes());
+        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_SOFT_PENDING, tuning.getPayloadSpillSoftPending());
+        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_MAX_BYTES, tuning.getPayloadSpillMaxBytes());
+        assertEquals(ProposalQueueTuning.DEFAULT_HARD_MAX_PENDING_PROPOSALS, tuning.getHardMaxPendingProposals());
+        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_DIR, tuning.getPayloadSpillDir());
+    }
+
+    @Test
+    public void testPayloadSpillOverridesApply() {
+        System.setProperty("oak.proposal.payload.inline.max.bytes", "64");
+        System.setProperty("oak.proposal.payload.spill.soft.pending", "32");
+        System.setProperty("oak.proposal.payload.spill.max.bytes", "2048");
+        System.setProperty("oak.proposal.hard.max.pending", "48");
+        System.setProperty("oak.proposal.payload.spill.dir", "/tmp/oak-spill");
+
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+
+        assertEquals(64L, tuning.getPayloadInlineMaxBytes());
+        assertEquals(32L, tuning.getPayloadSpillSoftPending());
+        assertEquals(2048L, tuning.getPayloadSpillMaxBytes());
+        assertEquals(48L, tuning.getHardMaxPendingProposals());
+        assertEquals("/tmp/oak-spill", tuning.getPayloadSpillDir());
     }
 }

@@ -37,6 +37,11 @@ final class ProposalQueueTuning {
     static final boolean DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED = false;
     static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED = true;
     static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER = true;
+    static final long DEFAULT_PAYLOAD_INLINE_MAX_BYTES = 8L * 1024L;
+    static final long DEFAULT_PAYLOAD_SPILL_SOFT_PENDING = DEFAULT_MAX_PENDING_MESSAGES;
+    static final long DEFAULT_PAYLOAD_SPILL_MAX_BYTES = 2L * 1024L * 1024L * 1024L;
+    static final long DEFAULT_HARD_MAX_PENDING_PROPOSALS = DEFAULT_MAX_PENDING_MESSAGES * 2L;
+    static final String DEFAULT_PAYLOAD_SPILL_DIR = "";
 
     private final long confirmationTimeoutMs;
     private final int requiredConfirmations;
@@ -58,6 +63,11 @@ final class ProposalQueueTuning {
     private final boolean priorityDirectReleaseEnabled;
     private final boolean validatorHostedBinaryUploadEnabled;
     private final boolean validatorHostedBinaryRequiresPriorityTier;
+    private final long payloadInlineMaxBytes;
+    private final long payloadSpillSoftPending;
+    private final long payloadSpillMaxBytes;
+    private final long hardMaxPendingProposals;
+    private final String payloadSpillDir;
 
     private ProposalQueueTuning(long confirmationTimeoutMs,
                                 int requiredConfirmations,
@@ -78,7 +88,12 @@ final class ProposalQueueTuning {
                                 AdaptiveReleaseMode releaseMode,
                                 boolean priorityDirectReleaseEnabled,
                                 boolean validatorHostedBinaryUploadEnabled,
-                                boolean validatorHostedBinaryRequiresPriorityTier) {
+                                boolean validatorHostedBinaryRequiresPriorityTier,
+                                long payloadInlineMaxBytes,
+                                long payloadSpillSoftPending,
+                                long payloadSpillMaxBytes,
+                                long hardMaxPendingProposals,
+                                String payloadSpillDir) {
         this.confirmationTimeoutMs = confirmationTimeoutMs;
         this.requiredConfirmations = requiredConfirmations;
         this.restoreTimeoutMs = restoreTimeoutMs;
@@ -99,6 +114,11 @@ final class ProposalQueueTuning {
         this.priorityDirectReleaseEnabled = priorityDirectReleaseEnabled;
         this.validatorHostedBinaryUploadEnabled = validatorHostedBinaryUploadEnabled;
         this.validatorHostedBinaryRequiresPriorityTier = validatorHostedBinaryRequiresPriorityTier;
+        this.payloadInlineMaxBytes = payloadInlineMaxBytes;
+        this.payloadSpillSoftPending = payloadSpillSoftPending;
+        this.payloadSpillMaxBytes = payloadSpillMaxBytes;
+        this.hardMaxPendingProposals = hardMaxPendingProposals;
+        this.payloadSpillDir = payloadSpillDir != null ? payloadSpillDir : "";
     }
 
     static ProposalQueueTuning fromSystemProperties() {
@@ -175,6 +195,26 @@ final class ProposalQueueTuning {
             "oak.proposal.validator.binary.requires.priority",
             String.valueOf(DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER)
         ));
+        long payloadInlineMaxBytes = Long.getLong(
+            "oak.proposal.payload.inline.max.bytes",
+            DEFAULT_PAYLOAD_INLINE_MAX_BYTES
+        );
+        long payloadSpillSoftPending = Long.getLong(
+            "oak.proposal.payload.spill.soft.pending",
+            maxPendingMessages
+        );
+        long payloadSpillMaxBytes = Long.getLong(
+            "oak.proposal.payload.spill.max.bytes",
+            DEFAULT_PAYLOAD_SPILL_MAX_BYTES
+        );
+        long hardMaxPendingProposals = Long.getLong(
+            "oak.proposal.hard.max.pending",
+            Math.max(DEFAULT_HARD_MAX_PENDING_PROPOSALS, maxPendingMessages)
+        );
+        String payloadSpillDir = System.getProperty(
+            "oak.proposal.payload.spill.dir",
+            DEFAULT_PAYLOAD_SPILL_DIR
+        );
         return new ProposalQueueTuning(
             confirmationTimeoutMs,
             requiredConfirmations,
@@ -195,7 +235,12 @@ final class ProposalQueueTuning {
             releaseMode,
             priorityDirectReleaseEnabled,
             validatorHostedBinaryUploadEnabled,
-            validatorHostedBinaryRequiresPriorityTier
+            validatorHostedBinaryRequiresPriorityTier,
+            clampLong(payloadInlineMaxBytes, 0L),
+            clampLong(payloadSpillSoftPending, 1L),
+            clampLong(payloadSpillMaxBytes, 1L),
+            clampLong(hardMaxPendingProposals, 1L),
+            payloadSpillDir
         );
     }
 
@@ -230,7 +275,12 @@ final class ProposalQueueTuning {
             AdaptiveReleaseMode.fromValue(config.release_mode()),
             config.priority_direct_release_enabled(),
             config.validator_hosted_binary_upload_enabled(),
-            config.validator_hosted_binary_requires_priority_tier()
+            config.validator_hosted_binary_requires_priority_tier(),
+            clampLong(config.payload_inline_max_bytes(), 0L),
+            clampLong(config.payload_spill_soft_pending(), 1L),
+            clampLong(config.payload_spill_max_bytes(), 1L),
+            clampLong(config.hard_max_pending_proposals(), 1L),
+            config.payload_spill_dir()
         );
     }
 
@@ -312,6 +362,26 @@ final class ProposalQueueTuning {
 
     boolean isValidatorHostedBinaryRequiresPriorityTier() {
         return validatorHostedBinaryRequiresPriorityTier;
+    }
+
+    long getPayloadInlineMaxBytes() {
+        return payloadInlineMaxBytes;
+    }
+
+    long getPayloadSpillSoftPending() {
+        return payloadSpillSoftPending;
+    }
+
+    long getPayloadSpillMaxBytes() {
+        return payloadSpillMaxBytes;
+    }
+
+    long getHardMaxPendingProposals() {
+        return hardMaxPendingProposals;
+    }
+
+    String getPayloadSpillDir() {
+        return payloadSpillDir;
     }
 
     private static int readIntProp(String key, int defaultValue, int minValue) {

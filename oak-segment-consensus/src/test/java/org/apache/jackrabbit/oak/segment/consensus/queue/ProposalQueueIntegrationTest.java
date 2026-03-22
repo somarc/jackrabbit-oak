@@ -163,6 +163,11 @@ public class ProposalQueueIntegrationTest {
         System.clearProperty("oak.consensus.max.pending.messages");
         System.clearProperty("oak.proposal.confirmation.required");
         System.clearProperty("oak.proposal.priority.direct.release.enabled");
+        System.clearProperty("oak.proposal.payload.inline.max.bytes");
+        System.clearProperty("oak.proposal.payload.spill.soft.pending");
+        System.clearProperty("oak.proposal.payload.spill.max.bytes");
+        System.clearProperty("oak.proposal.hard.max.pending");
+        System.clearProperty("oak.proposal.payload.spill.dir");
     }
     
     @Test
@@ -975,6 +980,216 @@ public class ProposalQueueIntegrationTest {
             waitForCondition(() -> queueManager.getProposal(proposalId).getState() == ProposalState.PROCESSED,
                 5_000, 25));
     }
+
+    @Test
+    public void testLargePayloadSpillsToDiskAndCleansUpAfterProcessing() throws Exception {
+        queueManager.stop();
+
+        System.setProperty("oak.proposal.payload.inline.max.bytes", "4");
+        System.setProperty("oak.proposal.priority.direct.release.enabled", "true");
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        Path persistenceDir = Files.createTempDirectory("proposal-payload-spill");
+        CountDownLatch latch = new CountDownLatch(1);
+        final String message = "payload that is much larger than four bytes";
+        final String[] capturedMessage = {null};
+
+        RaftAppendCallback callback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String resolvedMessage, String signature) {
+                capturedMessage[0] = resolvedMessage;
+                appendedProposalId = "captured";
+                latch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String resolvedMessage, String signature, String blobId, String mimeType) {
+                appendProposal(walletAddress, path, contentType, resolvedMessage, signature);
+            }
+        };
+
+        queueManager = new ProposalQueueManagerOptimized(
+            bridge,
+            callback,
+            new BackpressureManager(),
+            beaconClient,
+            persistenceDir.toString(),
+            tuning
+        );
+        queueManager.start();
+
+        String proposalId = "spill-large-payload-001";
+        String ethereumTxHash = "0xtxspillpayload001";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/spill-large";
+
+        QueuedProposal proposal = queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            message,
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
+            null
+        );
+
+        assertNull("Large payload should not remain inline in steady queue state", proposal.getMessage());
+        assertNotNull("Large payload should have durable spill reference", proposal.getPayloadRef());
+        assertTrue("Payload file should exist on disk",
+            Files.exists(persistenceDir.resolve("payloads").resolve(proposal.getPayloadRef())));
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(1_000_000),
+            bridge.getCurrentBlockNumber(),
+            ethereumTxHash
+        );
+
+        assertTrue("Spilled proposal should still process", latch.await(10, TimeUnit.SECONDS));
+        assertEquals("Resolved message should round-trip through spill store", message, capturedMessage[0]);
+        assertTrue("Payload spool should drain after terminal cleanup",
+            waitForCondition(() -> longStat(queueManager.getQueueStats(), "payloadSpoolBytes") == 0L, 10_000, 25));
+        assertEquals("Processed proposal should clear payload reference", null, proposal.getPayloadRef());
+        assertEquals("Processed proposal should clear inline message cache", null, proposal.getMessage());
+        assertTrue("Disk-only payload counter should increment",
+            longStat(queueManager.getQueueStats(), "payloadDiskOnlyCount") >= 1L);
+        assertTrue("Payload resolve counter should increment on lazy load",
+            longStat(queueManager.getQueueStats(), "payloadResolveCount") >= 1L);
+    }
+
+    @Test
+    public void testHardPendingLimitRejectsNewProposal() throws Exception {
+        queueManager.stop();
+
+        System.setProperty("oak.proposal.hard.max.pending", "1");
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        ProposalQueueManagerOptimized testQueue = new ProposalQueueManagerOptimized(
+            bridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient,
+            null,
+            tuning
+        );
+        testQueue.start();
+
+        try {
+            String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+            String basePath = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/";
+
+            testQueue.queueProposal(
+                "hard-limit-first",
+                "0xhardlimit1",
+                walletAddress,
+                basePath + "first",
+                "page",
+                "first",
+                "0xsig...",
+                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+                null
+            );
+
+            try {
+                testQueue.queueProposal(
+                    "hard-limit-second",
+                    "0xhardlimit2",
+                    walletAddress,
+                    basePath + "second",
+                    "page",
+                    "second",
+                    "0xsig...",
+                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+                    null
+                );
+                fail("Second proposal should be rejected once hard pending limit is reached");
+            } catch (java.util.concurrent.RejectedExecutionException expected) {
+                assertEquals("queue_overloaded", expected.getMessage());
+            }
+
+            assertEquals("Overload counter should track rejected admissions",
+                1L, longStat(testQueue.getQueueStats(), "payloadOverloadRejectCount"));
+        } finally {
+            testQueue.stop();
+        }
+    }
+
+    @Test
+    public void testRestoreSkipsProposalWhenPayloadSidecarMissing() throws Exception {
+        queueManager.stop();
+        bridge.stop();
+
+        System.setProperty("oak.proposal.persistence.flush.ms", "0");
+        System.setProperty("oak.proposal.persistence.flush.batch", "1");
+        System.setProperty("oak.proposal.payload.inline.max.bytes", "4");
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        Path persistenceDir = Files.createTempDirectory("proposal-missing-payload-restore");
+
+        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        firstBridge.start();
+        bridge = firstBridge;
+
+        queueManager = new ProposalQueueManagerOptimized(
+            firstBridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient,
+            persistenceDir.toString(),
+            tuning
+        );
+        queueManager.start();
+
+        String proposalId = "restore-missing-payload-001";
+        QueuedProposal queuedProposal = queueManager.queueProposal(
+            proposalId,
+            "0xmissingpayload001",
+            "0x742d35cc6634c0532925a3b844bc9e7595f0beb0",
+            "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/missing-payload",
+            "page",
+            "restore me from disk",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            null
+        );
+        assertNotNull("Proposal should spill to disk before restart", queuedProposal.getPayloadRef());
+
+        Path payloadPath = persistenceDir.resolve("payloads").resolve(queuedProposal.getPayloadRef());
+        assertTrue(Files.exists(payloadPath));
+
+        queueManager.stop();
+        Files.delete(payloadPath);
+
+        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        restoredBridge.start();
+        bridge = restoredBridge;
+
+        queueManager = new ProposalQueueManagerOptimized(
+            restoredBridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient,
+            persistenceDir.toString(),
+            tuning
+        );
+        queueManager.start();
+
+        assertEquals("Proposal with missing payload should be skipped during restore",
+            null, queueManager.getProposal(proposalId));
+        assertEquals("Missing payload restore counter should increment",
+            1L, longStat(queueManager.getQueueStats(), "payloadRestoreMissingCount"));
+    }
     
     @Test
     public void testMultipleProposals() throws InterruptedException {
@@ -1120,6 +1335,10 @@ public class ProposalQueueIntegrationTest {
         assertTrue("Should expose adaptive packing totals", stats.containsKey("adaptivePackingQueuedProposalCountTotal"));
         assertTrue("Should expose overflow totals", stats.containsKey("backpressureOverflowBufferedProposalCountTotal"));
         assertTrue("Should expose verified resident count", stats.containsKey("verifiedResidentProposalCount"));
+        assertTrue("Should expose payload spool bytes", stats.containsKey("payloadSpoolBytes"));
+        assertTrue("Should expose payload inline counter", stats.containsKey("payloadInlineRetainedCount"));
+        assertTrue("Should expose payload disk-only counter", stats.containsKey("payloadDiskOnlyCount"));
+        assertTrue("Should expose overload counter", stats.containsKey("payloadOverloadRejectCount"));
         
         // Verify retry limit is configured
         assertEquals("Max retry limit should be 5", 5, stats.get("maxRetryLimit"));

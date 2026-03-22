@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
-import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
@@ -760,7 +759,7 @@ public class WriteProposalHandler {
             log.debug("📥 Queuing proposal {} (tx: {}, tier: {}, intentToken: {}, blobId: {}), waiting for Ethereum confirmation",
                 proposalId, ethereumTxHash, tier, intentToken != null ? intentToken : "none", blobId != null ? blobId : "none");
 
-            QueuedProposal queuedProposal = context.proposalQueueManager.queueProposal(
+            context.proposalQueueManager.queueProposal(
                 proposalId,
                 ethereumTxHash,
                 normalizedWallet,
@@ -769,22 +768,18 @@ public class WriteProposalHandler {
                 message != null ? message : "",  // Keep message clean, no blob embedding
                 signature, // Already validated - no fallback needed
                 tier,  // Pass payment tier for priority handling
-                intentToken  // Pass intentToken for lazy binary upload (ADR 020)
+                intentToken,  // Pass intentToken for lazy binary upload (ADR 020)
+                blobId,
+                mimeType != null ? mimeType : "application/octet-stream",
+                ipfsCid
             );
-
-            // Set binary info directly on proposal (for Aeron serialization)
             if (blobId != null && !blobId.isEmpty()) {
-                queuedProposal.setBlobId(blobId);
-                queuedProposal.setMimeType(mimeType != null ? mimeType : "application/octet-stream");
                 log.debug("📎 Binary blob attached to proposal {}: blobId={}, mimeType={}",
                     proposalId, blobId, mimeType);
             } else {
                 log.debug("📝 Text-only proposal {} (no binary)", proposalId);
             }
-
-            // ADR 016: Set IPFS CID from client-side upload
             if (ipfsCid != null && !ipfsCid.isEmpty()) {
-                queuedProposal.setIpfsCid(ipfsCid);
                 log.debug("🔗 IPFS CID attached to proposal {}: ipfsCid={}", proposalId, ipfsCid);
             }
 
@@ -815,6 +810,15 @@ public class WriteProposalHandler {
             response.getWriter().write(JsonOutputUtil.toJson(resultPayload));
             log.debug("✅ Proposal {} queued successfully", proposalId);
 
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            context.apiRejectedRequests.incrementAndGet();
+            log.warn("❌ Proposal queue overloaded: {}", e.getMessage());
+            ApiErrorUtil.sendJsonError(
+                response,
+                HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                "queue_overloaded",
+                "Proposal queue overloaded. Retry in a few seconds."
+            );
         } catch (Exception e) {
             log.error("❌ Test write failed", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Test write failed: " + e.getMessage());

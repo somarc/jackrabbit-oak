@@ -230,6 +230,34 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
+    public void testHandleProposeWriteReturnsQueueOverloadedWhenAdmissionRejected() throws Exception {
+        ServerContext context = readyContext();
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        when(queueManager.queueProposal(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.nullable(String.class),
+            org.mockito.ArgumentMatchers.nullable(String.class), anyString(),
+            org.mockito.ArgumentMatchers.nullable(String.class)
+        )).thenThrow(new java.util.concurrent.RejectedExecutionException("queue_overloaded"));
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("message")).thenReturn("hello");
+        when(request.getParameter("contentType")).thenReturn("page");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"code\":\"queue_overloaded\""));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
     public void testHandleProposeWriteRejectsValidatorHostedBinaryWithoutPriorityByDefault() throws Exception {
         System.setProperty("oak.blockchain.mode", "mock");
         BlockchainConfig.reset();
@@ -263,7 +291,9 @@ public class WriteProposalHandlerTest {
         context.proposalQueueManager = queueManager;
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            org.mockito.ArgumentMatchers.any(), anyString()
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.nullable(String.class),
+            org.mockito.ArgumentMatchers.nullable(String.class), anyString(),
+            org.mockito.ArgumentMatchers.nullable(String.class)
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,

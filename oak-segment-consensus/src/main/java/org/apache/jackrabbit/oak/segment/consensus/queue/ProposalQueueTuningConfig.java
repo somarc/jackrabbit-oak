@@ -144,4 +144,34 @@ public @interface ProposalQueueTuningConfig {
         description = "Legacy entitlement policy. When enabled, validator-hosted binary upload requires paymentTier=priority."
     )
     boolean validator_hosted_binary_requires_priority_tier() default ProposalQueueTuning.DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER;
+
+    @AttributeDefinition(
+        name = "Payload Inline Max Bytes",
+        description = "Maximum UTF-8 payload size to retain inline in memory when queue depth is healthy."
+    )
+    long payload_inline_max_bytes() default ProposalQueueTuning.DEFAULT_PAYLOAD_INLINE_MAX_BYTES;
+
+    @AttributeDefinition(
+        name = "Payload Spill Soft Pending Threshold",
+        description = "Once pending proposal count reaches this threshold, new write payloads spill to disk-only mode."
+    )
+    long payload_spill_soft_pending() default ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_SOFT_PENDING;
+
+    @AttributeDefinition(
+        name = "Payload Spill Max Bytes",
+        description = "Maximum total bytes allowed in the payload spill store before new writes are rejected."
+    )
+    long payload_spill_max_bytes() default ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_MAX_BYTES;
+
+    @AttributeDefinition(
+        name = "Hard Max Pending Proposals",
+        description = "Hard limit for pending proposals across queue stages before new writes are rejected."
+    )
+    long hard_max_pending_proposals() default ProposalQueueTuning.DEFAULT_HARD_MAX_PENDING_PROPOSALS;
+
+    @AttributeDefinition(
+        name = "Payload Spill Directory",
+        description = "Optional directory override for spilled proposal payloads. Empty uses the proposal persistence directory or an ephemeral temp directory."
+    )
+    String payload_spill_dir() default ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_DIR;
 }
