@@ -39,16 +39,13 @@ public class EthereumSignatureVerifierTest {
     
     @BeforeClass
     public static void checkBouncyCastle() {
-        // Log whether full verification is available
-        System.out.println("Bouncy Castle available: " + 
-            EthereumSignatureVerifier.isFullVerificationAvailable());
+        EthereumSignatureVerifier.isFullVerificationAvailable();
     }
     
     @Test
     public void testIsFullVerificationAvailable() {
         // This test just verifies the method doesn't throw
-        boolean available = EthereumSignatureVerifier.isFullVerificationAvailable();
-        System.out.println("Full verification available: " + available);
+        EthereumSignatureVerifier.isFullVerificationAvailable();
         // We don't assert true because BC might not be on classpath in all environments
     }
     
@@ -169,9 +166,7 @@ public class EthereumSignatureVerifierTest {
         // When you have real test vectors, this should pass
         boolean result = EthereumSignatureVerifier.verifySignature(message, signature, address);
         
-        // For now, we just verify it doesn't throw
-        System.out.println("Real signature test result: " + result);
-        // assertFalse for placeholder, assertTrue when you have real vectors
+        assertFalse("Placeholder MetaMask vector should fail verification", result);
     }
     
     @Test

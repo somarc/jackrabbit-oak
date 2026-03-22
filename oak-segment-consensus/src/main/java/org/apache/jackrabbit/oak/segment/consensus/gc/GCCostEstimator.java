@@ -41,8 +41,8 @@ import java.util.*;
  * <pre>
  * GCCostEstimator estimator = new GCCostEstimator(fileStore, tarFiles);
  * GCCostEstimate estimate = estimator.estimateCost(null); // Use HEAD
- * System.out.println("Reclaimable: " + estimate.getReclaimableSizeMB() + " MB");
- * System.out.println("Cost: " + estimate.getEstimatedCostUSDC() + " USDC");
+ * long reclaimableMb = estimate.getReclaimableSizeMB();
+ * BigDecimal estimatedCost = estimate.getEstimatedCostUSDC();
  * </pre>
  */
 public class GCCostEstimator {

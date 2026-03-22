@@ -21,6 +21,8 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 
@@ -36,47 +38,41 @@ import java.io.IOException;
  * from segments, which is complex. This test proves HTTP segment transfer works.
  */
 public class VerifyGenesisReadable {
+    private static final Logger log = LoggerFactory.getLogger(VerifyGenesisReadable.class);
 
     private static final String HTTP_BASE_URL = "http://localhost:8090";
 
     public static void main(String[] args) {
-        System.out.println("╔═══════════════════════════════════════════════════════════════════╗");
-        System.out.println("║           Verify Genesis Content is Readable via HTTP            ║");
-        System.out.println("║              Blockchain AEM Proof of Concept Test                 ║");
-        System.out.println("╚═══════════════════════════════════════════════════════════════════╝");
-        System.out.println();
+        log.info(
+            "\n╔═══════════════════════════════════════════════════════════════════╗\n"
+                + "║           Verify Genesis Content is Readable via HTTP            ║\n"
+                + "║              Blockchain AEM Proof of Concept Test                ║\n"
+                + "╚═══════════════════════════════════════════════════════════════════╝");
 
         VerifyGenesisReadable test = new VerifyGenesisReadable();
         try {
             test.run();
-            System.out.println();
-            System.out.println("╔═══════════════════════════════════════════════════════════════════╗");
-            System.out.println("║                    ✅ VERIFICATION PASSED!                         ║");
-            System.out.println("║         HTTP Segment Transfer is Working End-to-End!             ║");
-            System.out.println("║       Genesis content is readable by any participant!            ║");
-            System.out.println("╚═══════════════════════════════════════════════════════════════════╝");
+            log.info(
+                "\n╔═══════════════════════════════════════════════════════════════════╗\n"
+                    + "║                    VERIFICATION PASSED                            ║\n"
+                    + "║         HTTP Segment Transfer is Working End-to-End!             ║\n"
+                    + "║       Genesis content is readable by any participant!            ║\n"
+                    + "╚═══════════════════════════════════════════════════════════════════╝");
             System.exit(0);
         } catch (Exception e) {
-            System.err.println();
-            System.err.println("╔═══════════════════════════════════════════════════════════════════╗");
-            System.err.println("║                    ❌ VERIFICATION FAILED!                         ║");
-            System.err.println("╚═══════════════════════════════════════════════════════════════════╝");
-            System.err.println("Error: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Verification failed", e);
             System.exit(1);
         }
     }
 
     public void run() throws Exception {
-        System.out.println("📝 Test 1: Verify HTTP Segment Server is responding...");
+        log.info("Test 1: verify HTTP Segment Server is responding");
         verifyHealthEndpoint();
 
-        System.out.println();
-        System.out.println("📝 Test 2: Verify segment archives are accessible...");
+        log.info("Test 2: verify segment archives are accessible");
         verifySegmentArchiveAccess();
 
-        System.out.println();
-        System.out.println("📝 Test 3: Verify HTTP protocol is working...");
+        log.info("Test 3: verify HTTP protocol is working");
         verifyHttpProtocol();
     }
 
@@ -93,8 +89,8 @@ public class VerifyGenesisReadable {
                 String body = EntityUtils.toString(response.getEntity());
 
                 if (statusCode == 200) {
-                    System.out.println("   ✅ Health endpoint responding: " + statusCode);
-                    System.out.println("   📄 Response: " + body);
+                    log.info("Health endpoint responding: {}", statusCode);
+                    log.info("Health response: {}", body);
                 } else {
                     throw new IOException("Health endpoint returned: " + statusCode);
                 }
@@ -125,14 +121,14 @@ public class VerifyGenesisReadable {
                 // We expect 404 (no segment ID provided), 400 (bad request), or 500 (empty path)
                 // All of these prove the server is responding
                 if (statusCode == 404 || statusCode == 400 || statusCode == 200 || statusCode == 500) {
-                    System.out.println("   ✅ Segment endpoint is accessible: " + statusCode);
+                    log.info("Segment endpoint is accessible: {}", statusCode);
                     if (statusCode == 500) {
-                        System.out.println("   ℹ️  Server requires valid segment ID (empty path returns 500)");
+                        log.info("Server requires valid segment ID (empty path returns 500)");
                     } else {
-                        System.out.println("   ℹ️  Server is ready to serve segments on demand");
+                        log.info("Server is ready to serve segments on demand");
                     }
                 } else {
-                    System.out.println("   ✅ Segment endpoint responding: " + statusCode);
+                    log.info("Segment endpoint responding: {}", statusCode);
                 }
             } finally {
                 response.close();
@@ -160,27 +156,26 @@ public class VerifyGenesisReadable {
                 int statusCode = response.getStatusLine().getStatusCode();
                 
                 if (statusCode == 404) {
-                    System.out.println("   ✅ HTTP protocol working correctly (404 for non-existent segment)");
+                    log.info("HTTP protocol working correctly (404 for non-existent segment)");
                 } else if (statusCode == 200) {
-                    System.out.println("   ✅ HTTP protocol working correctly (200 - segment found!)");
-                    System.out.println("   🎉 Bonus: The test segment ID actually exists!");
+                    log.info("HTTP protocol working correctly (200 - segment found)");
+                    log.info("Bonus: the test segment ID actually exists");
                 } else {
-                    System.out.println("   ✅ HTTP protocol responding: " + statusCode);
+                    log.info("HTTP protocol responding: {}", statusCode);
                 }
 
-                System.out.println();
-                System.out.println("   📊 HTTP Segment Transfer Summary:");
-                System.out.println("      • Server: " + HTTP_BASE_URL);
-                System.out.println("      • Protocol: HTTP/1.1");
-                System.out.println("      • Endpoints: /health, /segments/{id}");
-                System.out.println("      • Status: Operational");
-                System.out.println();
-                System.out.println("   ℹ️  Genesis content (/oak-chain/content/genesis) is stored in:");
-                System.out.println("      • FileStore: /var/oak-chain/segmentstore");
-                System.out.println("      • Archive: data00001a.tar (2.0K)");
-                System.out.println("      • Accessible via HTTP segment transfer protocol");
-                System.out.println();
-                System.out.println("   ✅ Any participant can mount /oak-chain and read the genesis content!");
+                log.info(
+                    "HTTP Segment Transfer Summary:\n"
+                        + "  Server: {}\n"
+                        + "  Protocol: HTTP/1.1\n"
+                        + "  Endpoints: /health, /segments/{id}\n"
+                        + "  Status: Operational\n"
+                        + "  Genesis content (/oak-chain/content/genesis) is stored in:\n"
+                        + "    FileStore: /var/oak-chain/segmentstore\n"
+                        + "    Archive: data00001a.tar (2.0K)\n"
+                        + "    Accessible via HTTP segment transfer protocol\n"
+                        + "  Any participant can mount /oak-chain and read the genesis content",
+                    HTTP_BASE_URL);
 
             } finally {
                 response.close();
@@ -190,4 +185,3 @@ public class VerifyGenesisReadable {
         }
     }
 }
-

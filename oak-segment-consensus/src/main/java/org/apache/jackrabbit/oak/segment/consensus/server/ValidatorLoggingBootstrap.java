@@ -46,7 +46,7 @@ final class ValidatorLoggingBootstrap {
 
     static final String DEFAULT_LOG_FILE = "validator.log";
     static final String DEFAULT_LOG_LEVEL = "INFO";
-    static final String DEFAULT_LOG_MAX_FILE_SIZE = "256MB";
+    static final String DEFAULT_LOG_MAX_FILE_SIZE = "10MB";
     static final String DEFAULT_LOG_MAX_HISTORY_DAYS = "14";
     static final String DEFAULT_LOG_TOTAL_SIZE_CAP = "10GB";
     static final String DEFAULT_LOG_CONSOLE_ENABLED = "true";

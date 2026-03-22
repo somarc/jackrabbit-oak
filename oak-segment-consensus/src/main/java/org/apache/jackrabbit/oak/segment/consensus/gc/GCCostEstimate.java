@@ -28,8 +28,8 @@ import java.util.Map;
  * <p>Example usage:
  * <pre>
  * GCCostEstimate estimate = gcCostEstimator.estimateCost(null);
- * System.out.println("Reclaimable: " + estimate.getReclaimableSizeMB() + " MB");
- * System.out.println("Cost: " + estimate.getEstimatedCostUSDC() + " USDC");
+ * long reclaimableMb = estimate.getReclaimableSizeMB();
+ * BigDecimal estimatedCost = estimate.getEstimatedCostUSDC();
  * </pre>
  */
 public class GCCostEstimate {
@@ -173,4 +173,3 @@ public class GCCostEstimate {
         return result;
     }
 }
-

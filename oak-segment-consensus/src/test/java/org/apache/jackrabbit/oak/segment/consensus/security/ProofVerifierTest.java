@@ -23,6 +23,7 @@ import org.junit.Before;
 import org.junit.Test;
 
 import static org.junit.Assert.*;
+import static org.junit.Assume.assumeTrue;
 import static org.mockito.Mockito.*;
 
 /**
@@ -357,10 +358,7 @@ public class ProofVerifierTest {
     @Test
     public void testSignatureMismatchRejected() {
         // This test only runs if Bouncy Castle is available
-        if (!EthereumSignatureVerifier.isFullVerificationAvailable()) {
-            System.out.println("Skipping signature mismatch test - Bouncy Castle not available");
-            return;
-        }
+        assumeTrue("Requires Bouncy Castle", EthereumSignatureVerifier.isFullVerificationAvailable());
         
         JoinProof proof = createValidProof();
         proof.setChallengeNonce("test-nonce-12345");

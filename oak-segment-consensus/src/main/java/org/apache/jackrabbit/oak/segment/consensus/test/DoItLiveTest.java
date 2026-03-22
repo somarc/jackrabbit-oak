@@ -31,6 +31,9 @@ import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import java.io.File;
 import java.io.IOException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * DO IT LIVE! Test for Blockchain AEM HTTP Segment Transfer.
  * 
@@ -43,40 +46,39 @@ import java.io.IOException;
  * in the global chain, only node structure with URI references.
  */
 public class DoItLiveTest {
+    private static final Logger log = LoggerFactory.getLogger(DoItLiveTest.class);
 
     private static final String GLOBAL_STORE_PATH = "/var/oak-chain/segmentstore";
     private static final String HTTP_BASE_URL = "http://localhost:8090";
 
     public static void main(String[] args) {
-        System.out.println("╔═══════════════════════════════════════════════════════════════════╗");
-        System.out.println("║                    DO IT LIVE! - HTTP SEGMENT TEST                ║");
-        System.out.println("║              Blockchain AEM Proof of Concept Demo                 ║");
-        System.out.println("╚═══════════════════════════════════════════════════════════════════╝");
-        System.out.println();
+        log.info(
+            "\n╔═══════════════════════════════════════════════════════════════════╗\n"
+                + "║                    DO IT LIVE! - HTTP SEGMENT TEST                ║\n"
+                + "║              Blockchain AEM Proof of Concept Demo                 ║\n"
+                + "╚═══════════════════════════════════════════════════════════════════╝");
 
         DoItLiveTest test = new DoItLiveTest();
         try {
             test.run();
         } catch (Exception e) {
-            System.err.println("❌ Test failed: " + e.getMessage());
-            e.printStackTrace();
+            log.error("DO IT LIVE test failed", e);
             System.exit(1);
         }
     }
 
     public void run() throws Exception {
-        System.out.println("📝 Phase 1: Writing genesis content to GlobalStoreServer FileStore...");
+        log.info("Phase 1: writing genesis content to GlobalStoreServer FileStore");
         writeGenesisContent();
         
-        System.out.println();
-        System.out.println("📖 Phase 2: Reading segments via HTTP...");
+        log.info("Phase 2: reading segments via HTTP");
         readSegmentsViaHttp();
         
-        System.out.println();
-        System.out.println("╔═══════════════════════════════════════════════════════════════════╗");
-        System.out.println("║                    ✅ TEST PASSED!                                 ║");
-        System.out.println("║     HTTP Segment Transfer Works! Blockchain AEM is Viable!       ║");
-        System.out.println("╚═══════════════════════════════════════════════════════════════════╝");
+        log.info(
+            "\n╔═══════════════════════════════════════════════════════════════════╗\n"
+                + "║                    TEST PASSED                                    ║\n"
+                + "║     HTTP Segment Transfer Works! Blockchain AEM is Viable!       ║\n"
+                + "╚═══════════════════════════════════════════════════════════════════╝");
     }
 
     /**
@@ -89,18 +91,19 @@ public class DoItLiveTest {
     private void writeGenesisContent() throws IOException, InvalidFileStoreVersionException, CommitFailedException {
         File storeDir = new File(GLOBAL_STORE_PATH);
         if (!storeDir.exists()) {
-            System.err.println("❌ Global store directory not found: " + GLOBAL_STORE_PATH);
-            System.err.println("   Make sure the oak-global-store Docker container is running!");
+            log.error("Global store directory not found: {}. Make sure the oak-global-store Docker container is running!",
+                GLOBAL_STORE_PATH);
             throw new IOException("Global store not found");
         }
 
-        System.out.println("   📂 Opening FileStore at: " + GLOBAL_STORE_PATH);
+        log.info("Opening FileStore at {}", GLOBAL_STORE_PATH);
         
         FileStore fileStore = FileStoreBuilder.fileStoreBuilder(storeDir).build();
         SegmentNodeStore nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
 
         try {
             NodeBuilder rootBuilder = nodeStore.getRoot().builder();
+            long timestamp = System.currentTimeMillis();
             
             // Create /oak-chain/content path if it doesn't exist
             NodeBuilder oakChain = rootBuilder.child("oak-chain");
@@ -111,7 +114,7 @@ public class DoItLiveTest {
             genesis.setProperty("jcr:primaryType", "nt:unstructured");
             genesis.setProperty("message", "DO IT LIVE!");
             genesis.setProperty("description", "Blockchain AEM - Genesis block of the global TarMK chain");
-            genesis.setProperty("timestamp", System.currentTimeMillis());
+            genesis.setProperty("timestamp", timestamp);
             genesis.setProperty("author", "Blockchain AEM");
             genesis.setProperty("version", "1.0.0");
             
@@ -132,25 +135,27 @@ public class DoItLiveTest {
             // Commit the changes
             nodeStore.merge(rootBuilder, EmptyHook.INSTANCE, CommitInfo.EMPTY);
             
-            System.out.println("   ✅ Committed genesis node: /oak-chain/content/genesis");
-            System.out.println("   📊 Node structure:");
-            System.out.println("      /oak-chain");
-            System.out.println("        └─ content");
-            System.out.println("           └─ genesis (nt:unstructured)");
-            System.out.println("              ├─ message = \"DO IT LIVE!\"");
-            System.out.println("              ├─ description = \"Blockchain AEM - Genesis block...\"");
-            System.out.println("              ├─ timestamp = " + System.currentTimeMillis());
-            System.out.println("              ├─ author = \"Blockchain AEM POC\"");
-            System.out.println("              ├─ imageUri = \"https://participant-cdn.example.com/...\"");
-            System.out.println("              ├─ binaryDataNote = \"Binaries stored in participant-owned datastore...\"");
-            System.out.println("              └─ metadata (child node)");
-            System.out.println("                 ├─ poc = true");
-            System.out.println("                 ├─ consensusProtocol = \"HTTP Segment Transfer\"");
-            System.out.println("                 └─ mountPath = \"/oak-chain\"");
+            log.info("Committed genesis node: /oak-chain/content/genesis");
+            log.info(
+                "Node structure:\n"
+                    + "  /oak-chain\n"
+                    + "    content\n"
+                    + "      genesis (nt:unstructured)\n"
+                    + "        message = \"DO IT LIVE!\"\n"
+                    + "        description = \"Blockchain AEM - Genesis block...\"\n"
+                    + "        timestamp = {}\n"
+                    + "        author = \"Blockchain AEM POC\"\n"
+                    + "        imageUri = \"https://participant-cdn.example.com/...\"\n"
+                    + "        binaryDataNote = \"Binaries stored in participant-owned datastore...\"\n"
+                    + "        metadata\n"
+                    + "          poc = true\n"
+                    + "          consensusProtocol = \"HTTP Segment Transfer\"\n"
+                    + "          mountPath = \"/oak-chain\"",
+                timestamp);
 
         } finally {
             fileStore.close();
-            System.out.println("   🔒 Closed FileStore");
+            log.info("Closed FileStore");
         }
     }
 
@@ -158,7 +163,7 @@ public class DoItLiveTest {
      * Phase 2: Read segments via HTTP using HttpSegmentArchiveManager
      */
     private void readSegmentsViaHttp() throws Exception {
-        System.out.println("   🌐 Connecting to HTTP Segment Server: " + HTTP_BASE_URL);
+        log.info("Connecting to HTTP Segment Server: {}", HTTP_BASE_URL);
         
         // Create HTTP client pool for connection reuse
         HttpClientPool httpClientPool = new HttpClientPool();
@@ -170,35 +175,34 @@ public class DoItLiveTest {
             httpClientPool
         );
         
-        System.out.println("   ✅ Created HttpSegmentArchiveManager with connection pooling");
+        log.info("Created HttpSegmentArchiveManager with connection pooling");
         
         // List available archives
-        System.out.println("   📚 Listing segment archives...");
+        log.info("Listing segment archives");
         java.util.List<String> archives = httpManager.listArchives();
-        System.out.println("   Found " + archives.size() + " archive(s):");
+        log.info("Found {} archive(s)", archives.size());
         for (String archive : archives) {
-            System.out.println("      - " + archive);
+            log.info("Archive: {}", archive);
         }
         
         if (archives.isEmpty()) {
-            System.out.println("   ⚠️  No archives found (POC limitation - listArchives is hardcoded)");
-            System.out.println("   ℹ️  This is expected - archives are discovered on-demand via segment IDs");
+            log.warn("No archives found (POC limitation - listArchives is hardcoded)");
+            log.info("This is expected - archives are discovered on-demand via segment IDs");
         }
         
         // Check if an archive exists
         String testArchive = "data00000a.tar";
         boolean exists = httpManager.exists(testArchive);
-        System.out.println("   📦 Archive '" + testArchive + "' exists: " + exists);
+        log.info("Archive '{}' exists: {}", testArchive, exists);
         
         if (exists) {
-            System.out.println("   ✅ Successfully communicated with HTTP Segment Server!");
-            System.out.println("   ℹ️  Segments are served on-demand via HTTP GET/HEAD");
-            System.out.println("   ℹ️  Full segment reading would require SegmentId from FileStore");
+            log.info("Successfully communicated with HTTP Segment Server");
+            log.info("Segments are served on-demand via HTTP GET/HEAD");
+            log.info("Full segment reading would require SegmentId from FileStore");
         } else {
-            System.out.println("   ℹ️  Archive not found via HEAD request (POC uses hardcoded archive name)");
+            log.info("Archive not found via HEAD request (POC uses hardcoded archive name)");
         }
         
-        System.out.println("   ✅ HTTP Segment Protocol is functional!");
+        log.info("HTTP Segment Protocol is functional");
     }
 }
-

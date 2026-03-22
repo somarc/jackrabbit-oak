@@ -453,6 +453,7 @@ public class GlobalStoreServer {
     public static void main(String[] args) {
         int port = 8090;
         String storeDir = "/var/oak-chain/segmentstore-composite-mount-oak-chain";
+        boolean showHelp = false;
         
         // Parse arguments
         for (int i = 0; i < args.length; i++) {
@@ -463,16 +464,19 @@ public class GlobalStoreServer {
                 storeDir = args[i + 1];
                 i++;
             } else if ("--help".equals(args[i]) || "-h".equals(args[i])) {
-                printUsage();
-                return;
+                showHelp = true;
             }
         }
 
         try {
             new ValidatorLoggingBootstrap().initialize(port, storeDir);
         } catch (IOException e) {
-            System.err.println("Failed to initialize validator logging: " + e.getMessage());
-            e.printStackTrace();
+            LoggerFactory.getLogger(GlobalStoreServer.class).error("Failed to initialize validator logging", e);
+        }
+
+        if (showHelp) {
+            LoggerFactory.getLogger(GlobalStoreServer.class).info(buildUsageText());
+            return;
         }
         
         final GlobalStoreServer server = new GlobalStoreServer(port, storeDir);
@@ -490,17 +494,18 @@ public class GlobalStoreServer {
         }
     }
     
-    private static void printUsage() {
-        System.out.println("Blockchain AEM - Global Store Server");
-        System.out.println();
-        System.out.println("Usage: java -jar oak-segment-consensus.jar [options]");
-        System.out.println();
-        System.out.println("Options:");
-        System.out.println("  --port <port>        Server port (default: 8090)");
-        System.out.println("  --store <directory>  Segment store directory (default: /var/oak-chain/segmentstore-composite-mount-oak-chain)");
-        System.out.println("  --help, -h           Show this help message");
-        System.out.println();
-        System.out.println("Example:");
-        System.out.println("  java -jar oak-segment-consensus.jar --port 8090 --store /var/oak-chain");
+    private static String buildUsageText() {
+        String lineSeparator = System.lineSeparator();
+        return "Blockchain AEM - Global Store Server" + lineSeparator
+            + lineSeparator
+            + "Usage: java -jar oak-segment-consensus.jar [options]" + lineSeparator
+            + lineSeparator
+            + "Options:" + lineSeparator
+            + "  --port <port>        Server port (default: 8090)" + lineSeparator
+            + "  --store <directory>  Segment store directory (default: /var/oak-chain/segmentstore-composite-mount-oak-chain)" + lineSeparator
+            + "  --help, -h           Show this help message" + lineSeparator
+            + lineSeparator
+            + "Example:" + lineSeparator
+            + "  java -jar oak-segment-consensus.jar --port 8090 --store /var/oak-chain";
     }
 }

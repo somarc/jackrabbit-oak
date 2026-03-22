@@ -94,7 +94,7 @@ public class ValidatorLoggingBootstrapTest {
         assertEquals(14, policy.getMaxHistory());
         assertTrue(policy.getFileNamePattern().contains("archive/validator.log"));
         assertEquals("10GB", System.getProperty(ValidatorLoggingBootstrap.PROP_LOG_TOTAL_SIZE_CAP));
-        assertEquals("256MB", System.getProperty(ValidatorLoggingBootstrap.PROP_LOG_MAX_FILE_SIZE));
+        assertEquals("10MB", System.getProperty(ValidatorLoggingBootstrap.PROP_LOG_MAX_FILE_SIZE));
     }
 
     @Test
