@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import io.aeron.cluster.service.Cluster;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
@@ -41,6 +42,7 @@ import java.util.Collections;
 
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -134,6 +136,27 @@ public class FragmentationApiHandlerTest {
     }
 
     @Test
+    public void testGetTopFragmentedHonorsExplicitLimit() throws Exception {
+        FragmentationTracker tracker = new FragmentationTracker();
+        tracker.recordWrite("0xabc", "data00001a.tar", 1024L);
+        context.fragmentationTracker = tracker;
+        when(request.getParameter("limit")).thenReturn("1");
+
+        handler.handleGetTopFragmented(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        assertTrue(body.toString().contains("\"limit\":1"));
+    }
+
+    @Test
+    public void testGetGcStatusReturns503WhenManagerMissing() throws Exception {
+        handler.handleGetGcStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"GC Proposal Manager not initialized\""));
+    }
+
+    @Test
     public void testGetGcStatusReturnsSummary() throws Exception {
         GCProposalManager gcManager = mock(GCProposalManager.class);
         GCProposal proposal = new GCProposal();
@@ -154,6 +177,14 @@ public class FragmentationApiHandlerTest {
         assertTrue(json.contains("\"lastGcRun\":12345"));
         assertTrue(json.contains("\"lastGcReclaimedMB\":42"));
         assertTrue(json.contains("\"lastGcCostUSDC\":\"4.25\""));
+    }
+
+    @Test
+    public void testGetCompactionProposalsReturns503WhenManagerMissing() throws Exception {
+        handler.handleGetCompactionProposals(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"GC Proposal Manager not initialized\""));
     }
 
     @Test
@@ -190,6 +221,27 @@ public class FragmentationApiHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("walletAddress parameter required"));
+    }
+
+    @Test
+    public void testProposeGcAcceptsJsonNullTargetRevision() throws Exception {
+        GCProposalManager gcManager = mock(GCProposalManager.class);
+        GCProposal proposal = new GCProposal();
+        proposal.proposalId = "gc-proposal-null";
+        proposal.proposerWallet = "0xabc";
+        proposal.targetRevision = null;
+        proposal.estimatedReclaimableSizeMB = 32L;
+        proposal.estimatedCostUSDC = new BigDecimal("3.20");
+        context.gcProposalManager = gcManager;
+        when(request.getContentType()).thenReturn("application/json");
+        when(request.getReader()).thenReturn(readerFor("{\"walletAddress\":\"0xabc\",\"targetRevision\":null}"));
+        when(gcManager.proposeGC("0xabc", null)).thenReturn(proposal);
+
+        handler.handleProposeGC(request, response);
+
+        verify(gcManager).proposeGC("0xabc", null);
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        assertTrue(body.toString().contains("\"proposalId\":\"gc-proposal-null\""));
     }
 
     @Test
@@ -246,6 +298,37 @@ public class FragmentationApiHandlerTest {
     }
 
     @Test
+    public void testExecuteGcAcceptsJsonBodyAndUsesClusterMemberId() throws Exception {
+        GCProposalManager gcManager = mock(GCProposalManager.class);
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        Cluster cluster = mock(Cluster.class);
+        GCExecutionResult result = new GCExecutionResult();
+        result.proposalId = "gc-proposal-3";
+        result.executorId = 2;
+        result.success = true;
+        result.timestamp = 4567L;
+        result.actualReclaimedSizeMB = 18L;
+        result.actualCostUSDC = new BigDecimal("1.80");
+        result.filesRemoved = Collections.singletonList("data00001a.tar");
+        context.gcProposalManager = gcManager;
+        context.aeronConsensusEngine = engine;
+        when(engine.getCluster()).thenReturn(cluster);
+        when(cluster.memberId()).thenReturn(2);
+        when(request.getContentType()).thenReturn("application/json");
+        when(request.getReader()).thenReturn(readerFor("{\"proposalId\":\"gc-proposal-3\"}"));
+        when(gcManager.executeGC("gc-proposal-3", 2)).thenReturn(result);
+
+        handler.handleExecuteGC(request, response);
+
+        verify(gcManager).executeGC("gc-proposal-3", 2);
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"proposalId\":\"gc-proposal-3\""));
+        assertTrue(json.contains("\"executorId\":2"));
+        assertTrue(json.contains("\"filesRemoved\":1"));
+    }
+
+    @Test
     public void testExecuteGcRejectsMissingProposalId() throws Exception {
         context.gcProposalManager = mock(GCProposalManager.class);
         when(request.getContentType()).thenReturn("application/x-www-form-urlencoded");
@@ -269,6 +352,20 @@ public class FragmentationApiHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
         assertTrue(body.toString().contains("\"error\":\"Proposal not found\""));
+    }
+
+    @Test
+    public void testExecuteGcReturnsBadRequestWhenProposalNotApproved() throws Exception {
+        GCProposalManager gcManager = mock(GCProposalManager.class);
+        context.gcProposalManager = gcManager;
+        when(request.getContentType()).thenReturn("application/x-www-form-urlencoded");
+        when(request.getParameter("proposalId")).thenReturn("gc-pending");
+        when(gcManager.executeGC("gc-pending", 0)).thenThrow(new IllegalStateException("Proposal not approved"));
+
+        handler.handleExecuteGC(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("\"error\":\"Proposal not approved\""));
     }
 
     @Test
@@ -308,6 +405,40 @@ public class FragmentationApiHandlerTest {
     }
 
     @Test
+    public void testVoteGcAcceptsJsonBodyAndReplicatesThroughAeron() throws Exception {
+        GCProposalManager gcManager = mock(GCProposalManager.class);
+        GCProposal proposal = new GCProposal();
+        proposal.proposalId = "gc-json";
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        Cluster cluster = mock(Cluster.class);
+        context.gcProposalManager = gcManager;
+        context.aeronConsensusEngine = engine;
+        when(engine.getCluster()).thenReturn(cluster);
+        when(request.getContentType()).thenReturn("application/json");
+        when(request.getReader()).thenReturn(readerFor("{\"proposalId\":\"gc-json\",\"validatorId\":4,\"approve\":true,\"reason\":\"ship it\"}"));
+        when(engine.sendGCVoteThroughIngress("gc-json", 4, true, "ship it")).thenReturn(true);
+        when(gcManager.getProposal("gc-json")).thenReturn(proposal);
+
+        handler.handleVoteGC(request, response);
+
+        verify(engine).sendGCVoteThroughIngress("gc-json", 4, true, "ship it");
+        verify(gcManager, never()).voteOnProposal("gc-json", 4, true, "ship it");
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"replicated\":true"));
+        assertTrue(json.contains("\"replicationAttempted\":true"));
+        assertTrue(json.contains("\"validatorId\":4"));
+    }
+
+    @Test
+    public void testGetGcAccountReturns503WhenAccountManagerMissing() throws Exception {
+        handler.handleGetGCAccount(request, response, "0xwallet");
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"GC Account Manager not initialized\""));
+    }
+
+    @Test
     public void testGetGcAccountReturnsAccountState() throws Exception {
         GCAccountManager accountManager = new GCAccountManager();
         accountManager.addDebt("0xwallet", "/oak-chain/test", 5L);
@@ -324,6 +455,24 @@ public class FragmentationApiHandlerTest {
     }
 
     @Test
+    public void testPayGcDebtRecordsPaymentAndReturnsUpdatedBalance() throws Exception {
+        GCAccountManager accountManager = new GCAccountManager();
+        accountManager.addDebt("0xwallet", "/oak-chain/test", 5L);
+        accountManager.convertAllPendingToExecuted();
+        context.gcAccountManager = accountManager;
+        when(request.getParameter("amount")).thenReturn("0.25");
+        when(request.getParameter("txHash")).thenReturn("0xpay");
+
+        handler.handlePayGCDebt(request, response, "0xwallet");
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"success\":true"));
+        assertTrue(json.contains("\"amountPaid\":\"0.25\""));
+        assertTrue(json.contains("\"remainingDebt\":\"0.25\""));
+    }
+
+    @Test
     public void testPayGcDebtRejectsMissingAmount() throws Exception {
         context.gcAccountManager = new GCAccountManager();
         when(request.getParameter("amount")).thenReturn(null);
@@ -332,6 +481,17 @@ public class FragmentationApiHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("\"error\":\"amount parameter required\""));
+    }
+
+    @Test
+    public void testSetDebtLimitRejectsMissingLimit() throws Exception {
+        context.gcAccountManager = new GCAccountManager();
+        when(request.getParameter("limit")).thenReturn(null);
+
+        handler.handleSetDebtLimit(request, response, "0xwallet");
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("\"error\":\"limit parameter required\""));
     }
 
     @Test
@@ -359,6 +519,14 @@ public class FragmentationApiHandlerTest {
         String json = body.toString();
         assertTrue(json.contains("\"converted\":\"0.50\""));
         assertTrue(json.contains("\"executedDebt\":\"0.50\""));
+    }
+
+    @Test
+    public void testTriggerGcReturns503WhenAccountManagerMissing() throws Exception {
+        handler.handleTriggerGC(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"GC Account Manager not initialized\""));
     }
 
     @Test
