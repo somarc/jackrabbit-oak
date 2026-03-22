@@ -16,7 +16,12 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 final class FatalMediaDriverExitHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(FatalMediaDriverExitHandler.class);
 
     interface ExitRuntime {
         void exit(int statusCode);
@@ -56,16 +61,16 @@ final class FatalMediaDriverExitHandler {
     }
 
     void handleFatalDriverError() {
-        System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        System.err.println("🚨 FATAL MediaDriver error - exiting JVM for restart");
-        System.err.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.error("🚨 FATAL MediaDriver error - exiting JVM for restart");
+        log.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         exitRuntime.exit(1);
 
         exitRuntime.startThread("force-exit-thread", () -> {
             try {
                 exitRuntime.sleep(5000);
-                System.err.println("⚠️  JVM still running after System.exit() - forcing halt");
+                log.error("⚠️  JVM still running after System.exit() - forcing halt");
                 exitRuntime.halt(1);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

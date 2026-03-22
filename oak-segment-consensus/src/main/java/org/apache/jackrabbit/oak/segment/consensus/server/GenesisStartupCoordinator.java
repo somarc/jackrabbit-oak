@@ -22,10 +22,13 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class GenesisStartupCoordinator {
 
     private static final long GENESIS_FALLBACK_SIZE_THRESHOLD_BYTES = 1024L * 1024L;
+    private static final Logger log = LoggerFactory.getLogger(GenesisStartupCoordinator.class);
 
     void initialize(StartupContext context) {
         if (context.mode == BootstrapMode.GENESIS) {
@@ -40,13 +43,13 @@ final class GenesisStartupCoordinator {
     private void verifyOrDeferGenesis(StartupContext context) {
         try {
             if (genesisExists(context.nodeStore)) {
-                System.out.println("   ℹ️  Genesis exists - verifying integrity...");
+                log.info("   ℹ️  Genesis exists - verifying integrity...");
                 context.componentFactory
                     .createGenesisInitializer(context.nodeStore, context.fileStore, context.blobStore, context.selfUrl)
                     .initializeGenesisContent();
             } else {
-                System.out.println("   ⏭️  Genesis does not exist - will be created by elected leader via consensus");
-                System.out.println("   ⏭️  Skipping genesis initialization at startup");
+                log.info("   ⏭️  Genesis does not exist - will be created by elected leader via consensus");
+                log.info("   ⏭️  Skipping genesis initialization at startup");
             }
         } catch (Exception e) {
             fallbackToStoreSizeHeuristic(context);
@@ -71,11 +74,11 @@ final class GenesisStartupCoordinator {
         }
         try {
             bootstrap.startStandbyServer();
-            System.out.println("✅ StandbyServerSync started on port " + standbyPort);
-            System.out.println("   Other validators can bootstrap from empty store (will sync genesis after creation)");
+            log.info("✅ StandbyServerSync started on port {}", standbyPort);
+            log.info("   Other validators can bootstrap from empty store (will sync genesis after creation)");
         } catch (Exception e) {
-            System.err.println("⚠️  Failed to start StandbyServerSync: " + e.getMessage());
-            System.err.println("   Other validators will not be able to bootstrap from this node");
+            log.warn("⚠️  Failed to start StandbyServerSync: {}", e.getMessage());
+            log.warn("   Other validators will not be able to bootstrap from this node");
         }
     }
 
@@ -83,15 +86,15 @@ final class GenesisStartupCoordinator {
         try {
             long storeSize = context.fileStore.size();
             if (storeSize > GENESIS_FALLBACK_SIZE_THRESHOLD_BYTES) {
-                System.out.println("   ℹ️  Store has data (" + (storeSize / (1024 * 1024)) + " MB) - verifying genesis...");
+                log.info("   ℹ️  Store has data ({} MB) - verifying genesis...", storeSize / (1024 * 1024));
                 context.componentFactory
                     .createGenesisInitializer(context.nodeStore, context.fileStore, context.blobStore, context.selfUrl)
                     .initializeGenesisContent();
             } else {
-                System.out.println("   ⏭️  Store is empty or minimal - skipping genesis (will be created by consensus)");
+                log.info("   ⏭️  Store is empty or minimal - skipping genesis (will be created by consensus)");
             }
         } catch (Exception ignored) {
-            System.out.println("   ⚠️  Could not check store state, skipping genesis init (will be created by consensus)");
+            log.warn("   ⚠️  Could not check store state, skipping genesis init (will be created by consensus)");
         }
     }
 

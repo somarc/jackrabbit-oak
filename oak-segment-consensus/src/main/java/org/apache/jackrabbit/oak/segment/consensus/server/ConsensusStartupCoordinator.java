@@ -31,8 +31,12 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class ConsensusStartupCoordinator {
+
+    private static final Logger log = LoggerFactory.getLogger(ConsensusStartupCoordinator.class);
 
     StartupOutcome initialize(StartupContext context) throws IOException {
         String consensusEnabled = RuntimeConfigValueResolver.readString("consensus.enabled", "false");
@@ -71,18 +75,17 @@ final class ConsensusStartupCoordinator {
             throw new IllegalStateException("Aeron mode validation failed - this should not happen");
         }
 
-        System.out.println();
-        System.out.println("Initializing Consensus Engine...");
-        System.out.println("   Mode: AERON (Aeron Cluster Raft)");
-        System.out.println("   ✈️  Using Aeron Cluster Consensus (Raft)");
-        System.out.println("      - Proven Raft consensus algorithm");
-        System.out.println("      - Election safety guarantees");
-        System.out.println("      - Majority quorum requirements");
-        System.out.println("      - High performance, low latency");
+        log.info("Initializing Consensus Engine...");
+        log.info("   Mode: AERON (Aeron Cluster Raft)");
+        log.info("   ✈️  Using Aeron Cluster Consensus (Raft)");
+        log.info("      - Proven Raft consensus algorithm");
+        log.info("      - Election safety guarantees");
+        log.info("      - Majority quorum requirements");
+        log.info("      - High performance, low latency");
 
         AeronClusterService clusterService = context.aeronClusterService;
         if (clusterService == null) {
-            System.out.println("⚠️  AeronClusterService not configured (OSGi) - using standalone instance");
+            log.warn("⚠️  AeronClusterService not configured (OSGi) - using standalone instance");
             clusterService = context.componentFactory.createAeronClusterService();
         }
 
@@ -114,13 +117,13 @@ final class ConsensusStartupCoordinator {
             startupResult.getHostnames()
         );
 
-        System.out.println("✅ Aeron Cluster Consensus engine initialized");
-        System.out.println("   - Model: Raft-based consensus (Aeron Cluster)");
-        System.out.println("   - Node ID: " + startupResult.getNodeId());
-        System.out.println("   - Total validators: " + startupResult.getHostnames().size());
-        System.out.println("   - Current role: " + aeronEngine.getCurrentRole());
-        System.out.println("   - Current leader: " + aeronEngine.getCurrentLeader());
-        System.out.println("   - Ethereum epoch: " + aeronEngine.getCurrentEthereumEpoch());
+        log.info("✅ Aeron Cluster Consensus engine initialized");
+        log.info("   - Model: Raft-based consensus (Aeron Cluster)");
+        log.info("   - Node ID: {}", startupResult.getNodeId());
+        log.info("   - Total validators: {}", startupResult.getHostnames().size());
+        log.info("   - Current role: {}", aeronEngine.getCurrentRole());
+        log.info("   - Current leader: {}", aeronEngine.getCurrentLeader());
+        log.info("   - Ethereum epoch: {}", aeronEngine.getCurrentEthereumEpoch());
 
         return new StartupOutcome(
             StartupDisposition.INITIALIZED,

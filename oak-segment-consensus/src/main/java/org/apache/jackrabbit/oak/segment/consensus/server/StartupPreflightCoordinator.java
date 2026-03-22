@@ -25,8 +25,12 @@ import java.util.List;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class StartupPreflightCoordinator {
+
+    private static final Logger log = LoggerFactory.getLogger(StartupPreflightCoordinator.class);
 
     private final BootstrapPreflightPlanner bootstrapPreflightPlanner;
 
@@ -42,7 +46,7 @@ final class StartupPreflightCoordinator {
         Path storePath = Paths.get(storeDirectory);
         if (!Files.exists(storePath)) {
             Files.createDirectories(storePath);
-            System.out.println("Created store directory: " + storePath);
+            log.info("Created store directory: {}", storePath);
         }
 
         boolean isAeronMode = "aeron".equalsIgnoreCase(
@@ -132,7 +136,7 @@ final class StartupPreflightCoordinator {
                 try {
                     java.net.URL url = new java.net.URL(peerUrl);
                     if (verifiedBootstrapPrimaryHost.equals(url.getHost())) {
-                        System.out.println("✅ Verified reachable peer: " + peerUrl);
+                        log.info("✅ Verified reachable peer: {}", peerUrl);
                         matchedPeerUrl = true;
                         break;
                     }
@@ -141,32 +145,32 @@ final class StartupPreflightCoordinator {
                 }
             }
             if (!matchedPeerUrl && !bootstrapPrimaryHost.isEmpty()) {
-                System.out.println("✅ Verified bootstrap primary: "
-                    + verifiedBootstrapPrimaryHost + ":" + verifiedBootstrapPrimaryPort);
+                log.info("✅ Verified bootstrap primary: {}:{}",
+                    verifiedBootstrapPrimaryHost, verifiedBootstrapPrimaryPort);
             }
         } else if (!bootstrapPrimaryHost.isEmpty()) {
-            System.out.println("⚠️  Bootstrap primary configured but not reachable: " + bootstrapPrimaryHost);
-            System.out.println("   Will fall back to GENESIS mode if store is empty");
+            log.warn("⚠️  Bootstrap primary configured but not reachable: {}", bootstrapPrimaryHost);
+            log.warn("   Will fall back to GENESIS mode if store is empty");
         }
 
         if (needsBootstrapBeforeBuild) {
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("⚠️  CRITICAL: Empty store directory detected");
-            System.out.println("   Bootstrap needed - verified peer is reachable");
-            System.out.println("   This ensures all validators start with same genesis HEAD");
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("   Bootstrap primary: " + verifiedBootstrapPrimaryHost + ":" + verifiedBootstrapPrimaryPort);
+            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.warn("⚠️  CRITICAL: Empty store directory detected");
+            log.warn("   Bootstrap needed - verified peer is reachable");
+            log.warn("   This ensures all validators start with same genesis HEAD");
+            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.warn("   Bootstrap primary: {}:{}", verifiedBootstrapPrimaryHost, verifiedBootstrapPrimaryPort);
         } else if (hasVerifiedReachablePeers) {
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("ℹ️  Empty store directory with reachable peers detected");
-            System.out.println("   Aeron standby bootstrap disabled (default)");
-            System.out.println("   Starting Aeron cluster directly; consensus leader will create canonical genesis");
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("ℹ️  Empty store directory with reachable peers detected");
+            log.info("   Aeron standby bootstrap disabled (default)");
+            log.info("   Starting Aeron cluster directly; consensus leader will create canonical genesis");
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         } else if (directoryIsEmpty) {
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("⚠️  Empty store directory detected, but no reachable peers");
-            System.out.println("   Will create genesis state (this node becomes genesis)");
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.warn("⚠️  Empty store directory detected, but no reachable peers");
+            log.warn("   Will create genesis state (this node becomes genesis)");
+            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         }
     }
 

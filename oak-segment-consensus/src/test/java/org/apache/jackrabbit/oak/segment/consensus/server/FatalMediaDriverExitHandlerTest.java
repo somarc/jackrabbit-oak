@@ -19,9 +19,12 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 import java.util.ArrayList;
 import java.util.List;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public class FatalMediaDriverExitHandlerTest {
 
@@ -51,11 +54,18 @@ public class FatalMediaDriverExitHandlerTest {
             }
         });
 
-        handler.handleFatalDriverError();
+        ListAppender<ILoggingEvent> appender = TestLogAppenderSupport.attach(FatalMediaDriverExitHandler.class);
+        try {
+            handler.handleFatalDriverError();
 
-        assertEquals("exit:1", events.get(0));
-        assertEquals("thread:force-exit-thread", events.get(1));
-        assertEquals("sleep:5000", events.get(2));
-        assertEquals("halt:1", events.get(3));
+            assertEquals("exit:1", events.get(0));
+            assertEquals("thread:force-exit-thread", events.get(1));
+            assertEquals("sleep:5000", events.get(2));
+            assertEquals("halt:1", events.get(3));
+            assertTrue(TestLogAppenderSupport.contains(appender, "FATAL MediaDriver error"));
+            assertTrue(TestLogAppenderSupport.contains(appender, "forcing halt"));
+        } finally {
+            TestLogAppenderSupport.detach(FatalMediaDriverExitHandler.class, appender);
+        }
     }
 }

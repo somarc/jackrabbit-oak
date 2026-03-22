@@ -46,6 +46,12 @@
                 org.apache.jackrabbit.oak.segment.consensus.servlets
               </Export-Package>
               <Import-Package>
+                ch.qos.logback.classic;resolution:=optional,
+                ch.qos.logback.classic.joran;resolution:=optional,
+                ch.qos.logback.classic.util;resolution:=optional,
+                ch.qos.logback.core.joran.spi;resolution:=optional,
+                ch.qos.logback.core.util;resolution:=optional,
+                org.slf4j.bridge;resolution:=optional,
                 org.bouncycastle.*;resolution:=optional,
                 *
               </Import-Package>
@@ -283,12 +289,19 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>
-        
-        <!-- SLF4J Simple implementation for standalone JAR -->
+
+        <!-- Standalone validator logging -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-core</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
-            <version>1.7.36</version>
+            <artifactId>jul-to-slf4j</artifactId>
         </dependency>
         
         <!-- Dropwizard Metrics (required by Oak SegmentNodeStore) -->
@@ -348,11 +361,6 @@
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <scope>test</scope>
-        </dependency>
-        <dependency>
-          <groupId>ch.qos.logback</groupId>
-          <artifactId>logback-classic</artifactId>
-          <scope>test</scope>
         </dependency>
         <!-- Testcontainers for integration tests -->
         <dependency>

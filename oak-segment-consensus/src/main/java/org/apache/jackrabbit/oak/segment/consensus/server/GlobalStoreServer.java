@@ -26,6 +26,8 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Distributed validator server for the global Blockchain AEM repository.
@@ -84,6 +86,7 @@ public class GlobalStoreServer {
     
     private final int port;
     private final String storeDirectory;
+    private final Logger log;
     private volatile boolean running = false;
     private FileStore fileStore;
     private NodeStore nodeStore;
@@ -107,6 +110,7 @@ public class GlobalStoreServer {
     public GlobalStoreServer(int port, String storeDirectory) {
         this.port = port;
         this.storeDirectory = storeDirectory;
+        this.log = LoggerFactory.getLogger(GlobalStoreServer.class);
     }
 
     public void setAeronClusterService(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService service) {
@@ -158,7 +162,7 @@ public class GlobalStoreServer {
         int standbyPort = port + 1;  // Standby port = HTTP port + 1 (used for Oak FileStore bootstrap)
         
         // Initialize Oak FileStore
-        System.out.println("Initializing Oak FileStore...");
+        log.info("Initializing Oak FileStore...");
         try {
             
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -202,7 +206,7 @@ public class GlobalStoreServer {
             
             // If bootstrap is needed, mark for immediate sync (before any other initialization)
             if (needsBootstrapBeforeBuild) {
-                System.out.println("   ⚠️  Initial HEAD created (will be replaced by bootstrap sync)");
+                log.warn("   ⚠️  Initial HEAD created (will be replaced by bootstrap sync)");
             }
             
             
@@ -264,9 +268,9 @@ public class GlobalStoreServer {
                 // GENESIS MODE: DEFER genesis creation until Aeron cluster reaches quorum
                 // NEW ARCHITECTURE: Genesis should be the FIRST consensus write, not a pre-consensus local write
                 // This ensures all validators have identical segment history from genesis
-                System.out.println("🌍 GENESIS MODE DEFERRED: Will create genesis AFTER Aeron cluster forms");
-                System.out.println("   Genesis will be created as the first replicated write through consensus");
-                System.out.println("   This ensures all validators start with identical state");
+                log.info("🌍 GENESIS MODE DEFERRED: Will create genesis AFTER Aeron cluster forms");
+                log.info("   Genesis will be created as the first replicated write through consensus");
+                log.info("   This ensures all validators start with identical state");
             } else {
                 // PRIMARY MODE: Check if genesis already exists before initializing.
                 // Empty stores (no genesis) will have genesis created by elected leader via consensus.
@@ -320,28 +324,31 @@ public class GlobalStoreServer {
         //   - WriteFinalized(bytes32 indexed writeId, bool approved)
         // 
         // Use the /v1/propose-write API for signed write transactions.
-        System.out.println();
-        System.out.println("📝 Smart Contract Listener: NOT IMPLEMENTED");
-        System.out.println("   Future: Listen to OakNetwork.sol events");
-        System.out.println("   Current: Use /v1/propose-write API for signed write transactions");
-        System.out.println("   Write Pattern: Wallet-based storage at /oak-chain/content/<address>/");
+        log.info(
+            "📝 Smart Contract Listener: NOT IMPLEMENTED\n"
+                + "   Future: Listen to OakNetwork.sol events\n"
+                + "   Current: Use /v1/propose-write API for signed write transactions\n"
+                + "   Write Pattern: Wallet-based storage at /oak-chain/content/<address>/"
+        );
         
         running = true;
         
-        System.out.println();
-        System.out.println("===========================================");
-        System.out.println("  Blockchain AEM - Global Store Server");
-        System.out.println("===========================================");
-        System.out.println();
-        System.out.println("Port:           " + port + " (HTTP)");
-        System.out.println("Store:          " + storeDirectory);
-        System.out.println("Mount Path:     /oak-chain");
-        System.out.println("Access:         READ-WRITE (for consensus)");
-        System.out.println("Protocol:       HTTP segment transfer (Cold Standby pattern)");
-        System.out.println();
-        System.out.println("Server started successfully!");
-        System.out.println("Waiting for client connections...");
-        System.out.println();
+        log.info(
+            "===========================================\n"
+                + "  Blockchain AEM - Global Store Server\n"
+                + "===========================================\n"
+                + "\n"
+                + "Port:           {} (HTTP)\n"
+                + "Store:          {}\n"
+                + "Mount Path:     /oak-chain\n"
+                + "Access:         READ-WRITE (for consensus)\n"
+                + "Protocol:       HTTP segment transfer (Cold Standby pattern)\n"
+                + "\n"
+                + "Server started successfully!\n"
+                + "Waiting for client connections...",
+            port,
+            storeDirectory
+        );
     }
 
     /**
@@ -362,16 +369,16 @@ public class GlobalStoreServer {
      * Stop the server.
      */
     public void stop() {
-        System.out.println("Shutting down global store server...");
+        log.info("Shutting down global store server...");
         running = false;
         
         // Stop bootstrap (StandbyClientSync + StandbyServerSync)
         if (bootstrap != null) {
             try {
                 bootstrap.shutdown();
-                System.out.println("✅ Bootstrap services stopped");
+                log.info("✅ Bootstrap services stopped");
             } catch (Exception e) {
-                System.err.println("Error stopping bootstrap: " + e.getMessage());
+                log.warn("Error stopping bootstrap: {}", e.getMessage());
             }
         }
         
@@ -379,16 +386,16 @@ public class GlobalStoreServer {
         if (aeronClusterService != null) {
             try {
                 aeronClusterService.shutdown();
-                System.out.println("✅ Aeron Cluster stopped");
+                log.info("✅ Aeron Cluster stopped");
             } catch (Exception e) {
-                System.err.println("Error stopping Aeron Cluster: " + e.getMessage());
+                log.warn("Error stopping Aeron Cluster: {}", e.getMessage());
             }
         } else if (aeronClusterLauncher != null) {
             try {
                 aeronClusterLauncher.shutdown();
-                System.out.println("✅ Aeron Cluster stopped");
+                log.info("✅ Aeron Cluster stopped");
             } catch (Exception e) {
-                System.err.println("Error stopping Aeron Cluster: " + e.getMessage());
+                log.warn("Error stopping Aeron Cluster: {}", e.getMessage());
             }
         }
         
@@ -396,9 +403,9 @@ public class GlobalStoreServer {
         if (epochListener != null) {
             try {
                 epochListener.stop();
-                System.out.println("✅ Epoch listener stopped");
+                log.info("✅ Epoch listener stopped");
             } catch (Exception e) {
-                System.err.println("Error stopping epoch listener: " + e.getMessage());
+                log.warn("Error stopping epoch listener: {}", e.getMessage());
             }
         }
         
@@ -406,9 +413,9 @@ public class GlobalStoreServer {
         if (httpServer != null) {
             try {
                 httpServer.stop();
-                System.out.println("✅ HTTP server stopped");
+                log.info("✅ HTTP server stopped");
             } catch (Exception e) {
-                System.err.println("Error stopping HTTP server: " + e.getMessage());
+                log.warn("Error stopping HTTP server: {}", e.getMessage());
             }
         }
         
@@ -416,9 +423,9 @@ public class GlobalStoreServer {
         if (fileStore != null) {
             try {
                 fileStore.close();
-                System.out.println("✅ FileStore closed");
+                log.info("✅ FileStore closed");
             } catch (Exception e) {
-                System.err.println("Error closing FileStore: " + e.getMessage());
+                log.warn("Error closing FileStore: {}", e.getMessage());
             }
         }
     }
@@ -460,6 +467,13 @@ public class GlobalStoreServer {
                 return;
             }
         }
+
+        try {
+            new ValidatorLoggingBootstrap().initialize(port, storeDir);
+        } catch (IOException e) {
+            System.err.println("Failed to initialize validator logging: " + e.getMessage());
+            e.printStackTrace();
+        }
         
         final GlobalStoreServer server = new GlobalStoreServer(port, storeDir);
         
@@ -471,8 +485,7 @@ public class GlobalStoreServer {
         try {
             server.start();
         } catch (IOException e) {
-            System.err.println("Failed to start server: " + e.getMessage());
-            e.printStackTrace();
+            LoggerFactory.getLogger(GlobalStoreServer.class).error("Failed to start server", e);
             System.exit(1);
         }
     }

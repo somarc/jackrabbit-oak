@@ -24,8 +24,12 @@ import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class BootstrapModeCoordinator {
+
+    private static final Logger log = LoggerFactory.getLogger(BootstrapModeCoordinator.class);
 
     Resolution resolve(StartupContext context) {
         if (!context.isAeronMode()) {
@@ -41,11 +45,11 @@ final class BootstrapModeCoordinator {
         int bootstrapPrimaryPort = 0;
 
         if (context.needsBootstrapBeforeBuild()) {
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("✈️  AERON MODE: Empty store detected");
-            System.out.println("   Bootstrapping Oak FileStore from verified peer BEFORE Aeron Cluster join");
-            System.out.println("   This ensures deterministic genesis (all validators have same HEAD)");
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("✈️  AERON MODE: Empty store detected");
+            log.info("   Bootstrapping Oak FileStore from verified peer BEFORE Aeron Cluster join");
+            log.info("   This ensures deterministic genesis (all validators have same HEAD)");
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             aeronClusterDeferred = true;
             bootstrapPrimaryHost = context.getVerifiedBootstrapPrimaryHost();
@@ -60,28 +64,28 @@ final class BootstrapModeCoordinator {
                 BootstrapTarget firstPeer = resolveFirstPeer(aeronPeers.get(0), context.getPort());
                 bootstrapPrimaryHost = firstPeer.getHost();
                 bootstrapPrimaryPort = firstPeer.getPort();
-                System.out.println("   Using first peer as bootstrap primary: "
-                    + bootstrapPrimaryHost + ":" + bootstrapPrimaryPort);
+                log.info("   Using first peer as bootstrap primary: {}:{}",
+                    bootstrapPrimaryHost, bootstrapPrimaryPort);
             }
 
             if (bootstrapPrimaryHost.isEmpty()) {
-                System.err.println("❌ ERROR: Bootstrap needed but no primary host available");
-                System.err.println("   Falling back to GENESIS mode (this node will create genesis state)");
+                log.error("❌ ERROR: Bootstrap needed but no primary host available");
+                log.error("   Falling back to GENESIS mode (this node will create genesis state)");
                 detectedMode = BootstrapMode.GENESIS;
             } else {
                 detectedMode = BootstrapMode.STANDBY;
-                System.out.println("   Bootstrap mode: STANDBY (will sync Oak FileStore, then start Aeron Cluster)");
-                System.out.println("   Bootstrap primary: " + bootstrapPrimaryHost + ":" + bootstrapPrimaryPort);
+                log.info("   Bootstrap mode: STANDBY (will sync Oak FileStore, then start Aeron Cluster)");
+                log.info("   Bootstrap primary: {}:{}", bootstrapPrimaryHost, bootstrapPrimaryPort);
             }
         } else if (context.isDirectoryEmpty()) {
-            System.out.println("✈️  AERON MODE: Empty store detected");
-            System.out.println("   Starting Aeron Cluster in parallel with peers");
-            System.out.println("   Genesis will be created by elected leader via consensus");
-            System.out.println("   All validators will replicate genesis → identical HEADs");
+            log.info("✈️  AERON MODE: Empty store detected");
+            log.info("   Starting Aeron Cluster in parallel with peers");
+            log.info("   Genesis will be created by elected leader via consensus");
+            log.info("   All validators will replicate genesis -> identical HEADs");
             detectedMode = BootstrapMode.PRIMARY;
         } else {
-            System.out.println("✈️  AERON MODE: Existing store found");
-            System.out.println("   Starting Aeron Cluster (will replay Raft log if needed)");
+            log.info("✈️  AERON MODE: Existing store found");
+            log.info("   Starting Aeron Cluster (will replay Raft log if needed)");
             detectedMode = BootstrapMode.PRIMARY;
         }
 

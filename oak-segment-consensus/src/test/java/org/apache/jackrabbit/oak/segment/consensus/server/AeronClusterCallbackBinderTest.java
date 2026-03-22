@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -24,6 +26,7 @@ import org.apache.jackrabbit.oak.segment.http.server.handlers.ConsensusApiHandle
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -92,16 +95,23 @@ public class AeronClusterCallbackBinderTest {
         when(httpServer.getContext()).thenReturn(context);
         when(httpServer.getConsensusApiHandler()).thenReturn(mock(ConsensusApiHandler.class));
 
-        new AeronClusterCallbackBinder().bind(engine, httpServer);
+        ListAppender<ILoggingEvent> appender = TestLogAppenderSupport.attach(AeronClusterCallbackBinder.class);
+        try {
+            new AeronClusterCallbackBinder().bind(engine, httpServer);
 
-        ArgumentCaptor<AeronConsensusEngine.GCApplicationCallback> gcCaptor =
-            ArgumentCaptor.forClass(AeronConsensusEngine.GCApplicationCallback.class);
-        verify(engine).setGCCallback(gcCaptor.capture());
+            ArgumentCaptor<AeronConsensusEngine.GCApplicationCallback> gcCaptor =
+                ArgumentCaptor.forClass(AeronConsensusEngine.GCApplicationCallback.class);
+            verify(engine).setGCCallback(gcCaptor.capture());
 
-        AeronConsensusEngine.GCApplicationCallback callback = gcCaptor.getValue();
-        callback.applyGCProposal("proposal-1", "wallet", "r42", 64L, "2.50");
-        callback.applyGCVote("proposal-1", 2, true, "ok");
-        callback.applyGCExecute("proposal-1", 3);
+            AeronConsensusEngine.GCApplicationCallback callback = gcCaptor.getValue();
+            callback.applyGCProposal("proposal-1", "wallet", "r42", 64L, "2.50");
+            callback.applyGCVote("proposal-1", 2, true, "ok");
+            callback.applyGCExecute("proposal-1", 3);
+
+            assertTrue(TestLogAppenderSupport.contains(appender, "GC proposal manager not initialized"));
+        } finally {
+            TestLogAppenderSupport.detach(AeronClusterCallbackBinder.class, appender);
+        }
     }
 
     @Test

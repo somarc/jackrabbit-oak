@@ -29,9 +29,12 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class StandbyModeStartupCoordinator {
 
+    private static final Logger log = LoggerFactory.getLogger(StandbyModeStartupCoordinator.class);
     private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
 
     StartupResult initialize(StartupContext context) throws IOException {
@@ -53,8 +56,8 @@ final class StandbyModeStartupCoordinator {
         }
 
         if (!context.hasConfiguredBootstrapPrimary() && !peerUrls.isEmpty()) {
-            System.out.println("🔍 Using first peer as bootstrap primary: "
-                + bootstrapTarget.getHost() + ":" + bootstrapTarget.getPort());
+            log.info("🔍 Using first peer as bootstrap primary: {}:{}",
+                bootstrapTarget.getHost(), bootstrapTarget.getPort());
         }
 
         standbyPromotionCoordinator.bootstrapAndPromote(
@@ -67,13 +70,13 @@ final class StandbyModeStartupCoordinator {
     }
 
     private void promote(StartupContext context, String selfUrl, List<String> peerUrls) {
-        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        System.out.println("🎖️  PROMOTED TO PRIMARY - Oak FileStore bootstrap complete");
-        System.out.println("   Local HEAD: " + context.getFileStore().getHead().getRecordId());
-        System.out.println("   Starting Aeron Cluster...");
-        System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        log.info("🎖️  PROMOTED TO PRIMARY - Oak FileStore bootstrap complete");
+        log.info("   Local HEAD: {}", context.getFileStore().getHead().getRecordId());
+        log.info("   Starting Aeron Cluster...");
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         try {
-            System.out.println("✈️  Starting Aeron Cluster (Oak FileStore already synced)");
+            log.info("✈️  Starting Aeron Cluster (Oak FileStore already synced)");
             StandbyPromotionCoordinator.DeferredAeronStartup deferredStartup =
                 standbyPromotionCoordinator.startDeferredCluster(
                     context.getComponentFactory(),
@@ -91,12 +94,11 @@ final class StandbyModeStartupCoordinator {
                 );
             context.getDeferredStartupListener().onDeferredStartup(deferredStartup);
 
-            System.out.println("Starting HTTP server (deferred from STANDBY mode)...");
+            log.info("Starting HTTP server (deferred from STANDBY mode)...");
             context.getHttpServer().start();
-            System.out.println("✅ HTTP server started on port " + context.getPort());
+            log.info("✅ HTTP server started on port {}", context.getPort());
         } catch (Exception e) {
-            System.err.println("❌ Failed to start Aeron Cluster after promotion: " + e.getMessage());
-            e.printStackTrace();
+            log.error("❌ Failed to start Aeron Cluster after promotion: {}", e.getMessage(), e);
         }
     }
 

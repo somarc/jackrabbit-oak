@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
@@ -31,6 +33,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -77,13 +80,20 @@ public class GlobalStoreServerLifecycleTest {
         setField(server, "httpServer", httpServer);
         setField(server, "fileStore", fileStore);
 
-        server.stop();
+        ListAppender<ILoggingEvent> appender = TestLogAppenderSupport.attach(GlobalStoreServer.class);
+        try {
+            server.stop();
 
-        verify(bootstrap).shutdown();
-        verify(aeronClusterService).shutdown();
-        verify(epochListener).stop();
-        verify(httpServer).stop();
-        verify(fileStore).close();
+            verify(bootstrap).shutdown();
+            verify(aeronClusterService).shutdown();
+            verify(epochListener).stop();
+            verify(httpServer).stop();
+            verify(fileStore).close();
+            assertTrue(TestLogAppenderSupport.contains(appender, "Shutting down global store server"));
+            assertTrue(TestLogAppenderSupport.contains(appender, "Bootstrap services stopped"));
+        } finally {
+            TestLogAppenderSupport.detach(GlobalStoreServer.class, appender);
+        }
     }
 
     @Test

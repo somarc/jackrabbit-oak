@@ -24,8 +24,12 @@ import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingStrategy;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.WalletShardingStrategy;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class ShardRouterInitializer {
+
+    private static final Logger log = LoggerFactory.getLogger(ShardRouterInitializer.class);
 
     void initialize(SegmentHttpServer httpServer, String selfUrl, List<String> peerUrls, boolean logClusterStateDetails) {
         initialize(
@@ -56,15 +60,15 @@ final class ShardRouterInitializer {
 
         httpServer.getContext().setShardRouter(shardRouter);
 
-        System.out.println("✅ Shard Router initialized");
-        System.out.println("   - Number of shards: " + numShards);
-        System.out.println("   - Shard directory: " + shardDirectory.getNumShards() + " shard(s)");
-        System.out.println("   - Sharding strategy: Wallet-based");
+        log.info("✅ Shard Router initialized");
+        log.info("   - Number of shards: {}", numShards);
+        log.info("   - Shard directory: {} shard(s)", shardDirectory.getNumShards());
+        log.info("   - Sharding strategy: Wallet-based");
         if (shardingStrategy instanceof WalletShardingStrategy
             && ((WalletShardingStrategy) shardingStrategy).isPowerOfTwo()) {
-            System.out.println("   - Power-of-2: Yes (optimal)");
+            log.info("   - Power-of-2: Yes (optimal)");
         } else if (logClusterStateDetails) {
-            System.out.println("   - Power-of-2: No (consider using power-of-2 for optimal performance)");
+            log.info("   - Power-of-2: No (consider using power-of-2 for optimal performance)");
         }
     }
 
@@ -74,11 +78,11 @@ final class ShardRouterInitializer {
             try {
                 numShards = Integer.parseInt(numShardsConfig);
                 if (numShards <= 0) {
-                    System.err.println("⚠️  Invalid NUM_SHARDS: " + numShardsConfig + ", using default: 1");
+                    log.warn("⚠️  Invalid NUM_SHARDS: {}, using default: 1", numShardsConfig);
                     numShards = 1;
                 }
             } catch (NumberFormatException e) {
-                System.err.println("⚠️  Invalid NUM_SHARDS format: " + numShardsConfig + ", using default: 1");
+                log.warn("⚠️  Invalid NUM_SHARDS format: {}, using default: 1", numShardsConfig);
                 numShards = 1;
             }
         }

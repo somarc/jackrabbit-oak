@@ -24,8 +24,12 @@ import java.nio.file.Paths;
 import java.util.Properties;
 
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class WalletStartupCoordinator {
+
+    private static final Logger log = LoggerFactory.getLogger(WalletStartupCoordinator.class);
 
     StartupResult initialize(String storeDirectory, GlobalStoreServerComponentFactory componentFactory) throws IOException {
         String nodeKeystorePath = GlobalStoreRuntimeConfigUtil.resolveNodeKeystorePath(storeDirectory);
@@ -38,12 +42,12 @@ final class WalletStartupCoordinator {
                                                    GlobalStoreServerComponentFactory componentFactory) throws IOException {
         try {
             EthereumWallet wallet = componentFactory.createEthereumWallet(nodeKeystorePath);
-            System.out.println("🔑 Node wallet: " + wallet.getWalletAddress());
+            log.info("🔑 Node wallet: {}", wallet.getWalletAddress());
             return wallet;
         } catch (Exception e) {
-            System.err.println("❌ FATAL: Failed to load/generate node wallet");
-            System.err.println("   Keystore path: " + nodeKeystorePath);
-            System.err.println("   Error: " + e.getMessage());
+            log.error("❌ FATAL: Failed to load/generate node wallet");
+            log.error("   Keystore path: {}", nodeKeystorePath);
+            log.error("   Error: {}", e.getMessage());
             throw new IOException("Node wallet initialization failed", e);
         }
     }
@@ -61,15 +65,15 @@ final class WalletStartupCoordinator {
                     }
                     clusterWalletAddress = props.getProperty("walletAddress");
                     if (clusterWalletAddress != null) {
-                        System.out.println("💎 Cluster wallet: " + clusterWalletAddress + " (payments go here)");
+                        log.info("💎 Cluster wallet: {} (payments go here)", clusterWalletAddress);
                     }
                 } catch (Exception e) {
-                    System.out.println("⚠️  Could not read cluster wallet: " + e.getMessage());
+                    log.warn("⚠️  Could not read cluster wallet: {}", e.getMessage());
                 }
             }
         }
         if (clusterWalletAddress == null) {
-            System.out.println("ℹ️  No cluster wallet configured - using node wallet for payments");
+            log.info("ℹ️  No cluster wallet configured - using node wallet for payments");
             clusterWalletAddress = wallet.getWalletAddress();
         }
         return clusterWalletAddress;

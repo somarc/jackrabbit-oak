@@ -20,8 +20,12 @@ import org.apache.jackrabbit.oak.segment.RecordId;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class GenesisInitializer {
+
+    private static final Logger log = LoggerFactory.getLogger(GenesisInitializer.class);
 
     private final NodeStore nodeStore;
     private final FileStore fileStore;
@@ -73,7 +77,7 @@ final class GenesisInitializer {
                             if (level3.exists()) {
                                 org.apache.jackrabbit.oak.spi.state.NodeState genesisWallet = level3.getChildNode(GENESIS_ADDRESS);
                                 if (genesisWallet.exists() && genesisWallet.getChildNode("genesis").exists()) {
-                                    System.out.println("   ℹ️  Genesis already exists - verifying integrity...");
+                                    log.info("   ℹ️  Genesis already exists - verifying integrity...");
 
                                     // Verify genesis message (like Ethereum verifies Block 0 hash)
                                     // Check both old flat structure (backward compatibility) and new hierarchical structure
@@ -95,11 +99,11 @@ final class GenesisInitializer {
                                         throw new IllegalStateException("❌ GENESIS CORRUPTION! This node has invalid genesis state.");
                                     }
 
-                                    System.out.println("   ✅ Genesis integrity verified");
+                                    log.info("   ✅ Genesis integrity verified");
 
                                     // Log genesis HEAD for script detection
                                     RecordId genesisHead = fileStore.getHead().getRecordId();
-                                    System.out.println("   Genesis HEAD: " + genesisHead.toString10());
+                                    log.info("   Genesis HEAD: {}", genesisHead.toString10());
                                     return;
                                 }
                             }
@@ -109,10 +113,10 @@ final class GenesisInitializer {
             }
 
             // Create IMMORTAL GENESIS with sharded path
-            System.out.println("   🎂 Creating IMMORTAL GENESIS NODE...");
-            System.out.println("      The Birth Certificate of This Network");
-            System.out.println("      Address: " + GENESIS_ADDRESS + " (Zero Address)");
-            System.out.println("      Sharded Path: " + genesisShardedPath);
+            log.info("   🎂 Creating IMMORTAL GENESIS NODE...");
+            log.info("      The Birth Certificate of This Network");
+            log.info("      Address: {} (Zero Address)", GENESIS_ADDRESS);
+            log.info("      Sharded Path: {}", genesisShardedPath);
 
             org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = root.builder();
             org.apache.jackrabbit.oak.spi.state.NodeBuilder oakChainBuilder = rootBuilder.child("oak-chain");
@@ -284,8 +288,8 @@ final class GenesisInitializer {
                     imageStream.close();
                     byte[] imageBytes = baos.toByteArray();
 
-                    System.out.println("   📸 Storing genesis image in IPFS...");
-                    System.out.println("      Size: " + imageBytes.length + " bytes");
+                    log.info("   📸 Storing genesis image in IPFS...");
+                    log.info("      Size: {} bytes", imageBytes.length);
 
                     // Store via BlobStore (IPFS backend will pin it)
                     BlobStore bStore = this.blobStore;
@@ -302,16 +306,16 @@ final class GenesisInitializer {
                         if (blobId.startsWith("Qm") || blobId.startsWith("bafy")) {
                             ipfsCid = blobId.split("#")[0]; // Remove size suffix if present
                             imageContent.setProperty("ipfs:cid", ipfsCid);
-                            System.out.println("      ✅ IPFS CID: " + ipfsCid);
+                            log.info("      ✅ IPFS CID: {}", ipfsCid);
                         } else {
                             // Use blobId as fallback for non-IPFS blobs
                             ipfsCid = blobId;
-                            System.out.println("      ✅ Blob ID: " + blobId);
+                            log.info("      ✅ Blob ID: {}", blobId);
                         }
                     }
                 } else if (imageStream != null) {
                     // No BlobStore, store as inline binary (not recommended for production)
-                    System.out.println("   ⚠️  No BlobStore configured - storing image inline (demo mode)");
+                    log.warn("   ⚠️  No BlobStore configured - storing image inline (demo mode)");
                     java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
                     byte[] buffer = new byte[8192];
                     int bytesRead;
@@ -325,13 +329,13 @@ final class GenesisInitializer {
                     org.apache.jackrabbit.oak.api.Blob blob =
                         nodeStore.createBlob(new java.io.ByteArrayInputStream(imageBytes));
                     imageContent.setProperty("jcr:data", blob);
-                    System.out.println("      Size: " + imageBytes.length + " bytes (inline)");
+                    log.info("      Size: {} bytes (inline)", imageBytes.length);
                 } else {
-                    System.out.println("   ⚠️  Genesis image not found in resources");
+                    log.warn("   ⚠️  Genesis image not found in resources");
                     imageContent.setProperty("jcr:data", "DO IT LIVE! (image placeholder)");
                 }
             } catch (Exception e) {
-                System.out.println("   ⚠️  Failed to store genesis image: " + e.getMessage());
+                log.warn("   ⚠️  Failed to store genesis image: {}", e.getMessage());
                 imageContent.setProperty("jcr:data", "DO IT LIVE! (image error: " + e.getMessage() + ")");
             }
 
@@ -348,82 +352,86 @@ final class GenesisInitializer {
             nodeStore.merge(rootBuilder, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE,
                 org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY);
 
-            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("   🎊 IMMORTAL GENESIS NODE CREATED");
-            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("");
-            System.out.println("   📍 LOCATION:");
-            System.out.println("      Path: " + genesisShardedPath + "/genesis");
-            System.out.println("      Bucket: 00/00/00 (Genesis bucket - fault isolated)");
-            System.out.println("      Address: " + GENESIS_ADDRESS + " (Ethereum Zero Address)");
-            System.out.println("");
-            System.out.println("   🔐 PROTOCOL:");
-            System.out.println("      Chain ID: oak-blockchain-aem-poc");
-            System.out.println("      Message: \"DO IT LIVE!\"");
-            System.out.println("      Version: 1.0.0");
-            System.out.println("      Birth: " + genesisDate);
-            System.out.println("");
-            System.out.println("   📦 IPFS (Decentralized Binary Storage):");
+            String ipfsSection;
             if (ipfsCid != null) {
-                System.out.println("      ✅ Genesis Image: do-it-live.jpeg");
-                System.out.println("      ✅ IPFS CID: " + ipfsCid);
-                System.out.println("      ✅ Public Gateway: https://ipfs.io/ipfs/" + ipfsCid);
-                System.out.println("      ✅ Local Gateway: http://localhost:8080/ipfs/" + ipfsCid);
+                ipfsSection =
+                    "      ✅ Genesis Image: do-it-live.jpeg\n"
+                        + "      ✅ IPFS CID: " + ipfsCid + "\n"
+                        + "      ✅ Public Gateway: https://ipfs.io/ipfs/" + ipfsCid + "\n"
+                        + "      ✅ Local Gateway: http://localhost:8080/ipfs/" + ipfsCid;
             } else if (blobStore != null) {
-                System.out.println("      ✅ Genesis Image: do-it-live.jpeg (via BlobStore)");
+                ipfsSection = "      ✅ Genesis Image: do-it-live.jpeg (via BlobStore)";
             } else {
-                System.out.println("      ⚠️ IPFS not configured (demo mode - inline binaries)");
+                ipfsSection = "      ⚠️ IPFS not configured (demo mode - inline binaries)";
             }
-            System.out.println("");
-            System.out.println("   🎖️  CONSENSUS:");
-            System.out.println("      Model: aeron-raft");
-            System.out.println("      Quorum: (totalMembers / 2) + 1");
-            System.out.println("      Note: All cluster members are voting members (Raft consensus)");
-            System.out.println("      Note: Terms and heartbeats handled internally by Aeron Cluster");
-            System.out.println("");
-            System.out.println("   🌐 NETWORK:");
-            System.out.println("      Genesis Validator: " + genesisValidator);
-            System.out.println("      Bootstrap Host: " + genesisHost);
-            System.out.println("      Bootstrap Port: 8091");
-            System.out.println("      Consensus Port: 8090");
-            System.out.println("");
-            System.out.println("   🛡️  SECURITY:");
-            System.out.println("      ✅ Split-Brain Detection (Raft quorum enforcement)");
-            System.out.println("      ✅ Genesis Verification (state integrity)");
-            System.out.println("      ✅ Raft guarantees: Election safety, log matching, leader completeness");
-            System.out.println("");
-            System.out.println("   🚀 TO JOIN THIS NETWORK:");
-            System.out.println("      1. BOOTSTRAP_PRIMARY_HOST=" + genesisHost);
-            System.out.println("      2. BOOTSTRAP_PRIMARY_PORT=8091");
-            System.out.println("      3. CONSENSUS_ENABLED=true");
-            System.out.println("      4. CONSENSUS_MODE=aeron");
-            System.out.println("      5. CONSENSUS_SELF_URL=http://your-validator:8090");
-            System.out.println("      6. AERON_CLUSTER_NODE_ID=<unique-id> (0, 1, 2, ...)");
-            System.out.println("");
-            System.out.println("      → You'll join as a voting member of the Aeron Cluster");
-            System.out.println("      → Raft consensus ensures safety and liveness guarantees");
-            System.out.println("");
-            System.out.println("   📊 QUERY GENESIS:");
-            System.out.println("      GET /api/explore?path=" + genesisShardedPath + "/genesis");
-            System.out.println("");
-            System.out.println("   ℹ️  ARCHITECTURE:");
-            System.out.println("      • Sharded paths for fault isolation");
-            System.out.println("      • Max 256 children/node = stable DAG");
-            System.out.println("      • Pattern: /content/{L1}/{L2}/{L3}/0x{wallet}/");
-            System.out.println("      • SNFE contained to 0.0004% of chain");
-            System.out.println("");
-            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("   🎉 Network initialized and ready for validators!");
-            System.out.println("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+            log.info(
+                "   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    + "   🎊 IMMORTAL GENESIS NODE CREATED\n"
+                    + "   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    + "\n"
+                    + "   📍 LOCATION:\n"
+                    + "      Path: " + genesisShardedPath + "/genesis\n"
+                    + "      Bucket: 00/00/00 (Genesis bucket - fault isolated)\n"
+                    + "      Address: " + GENESIS_ADDRESS + " (Ethereum Zero Address)\n"
+                    + "\n"
+                    + "   🔐 PROTOCOL:\n"
+                    + "      Chain ID: oak-blockchain-aem-poc\n"
+                    + "      Message: \"DO IT LIVE!\"\n"
+                    + "      Version: 1.0.0\n"
+                    + "      Birth: " + genesisDate + "\n"
+                    + "\n"
+                    + "   📦 IPFS (Decentralized Binary Storage):\n"
+                    + ipfsSection + "\n"
+                    + "\n"
+                    + "   🎖️  CONSENSUS:\n"
+                    + "      Model: aeron-raft\n"
+                    + "      Quorum: (totalMembers / 2) + 1\n"
+                    + "      Note: All cluster members are voting members (Raft consensus)\n"
+                    + "      Note: Terms and heartbeats handled internally by Aeron Cluster\n"
+                    + "\n"
+                    + "   🌐 NETWORK:\n"
+                    + "      Genesis Validator: " + genesisValidator + "\n"
+                    + "      Bootstrap Host: " + genesisHost + "\n"
+                    + "      Bootstrap Port: 8091\n"
+                    + "      Consensus Port: 8090\n"
+                    + "\n"
+                    + "   🛡️  SECURITY:\n"
+                    + "      ✅ Split-Brain Detection (Raft quorum enforcement)\n"
+                    + "      ✅ Genesis Verification (state integrity)\n"
+                    + "      ✅ Raft guarantees: Election safety, log matching, leader completeness\n"
+                    + "\n"
+                    + "   🚀 TO JOIN THIS NETWORK:\n"
+                    + "      1. BOOTSTRAP_PRIMARY_HOST=" + genesisHost + "\n"
+                    + "      2. BOOTSTRAP_PRIMARY_PORT=8091\n"
+                    + "      3. CONSENSUS_ENABLED=true\n"
+                    + "      4. CONSENSUS_MODE=aeron\n"
+                    + "      5. CONSENSUS_SELF_URL=http://your-validator:8090\n"
+                    + "      6. AERON_CLUSTER_NODE_ID=<unique-id> (0, 1, 2, ...)\n"
+                    + "\n"
+                    + "      -> You'll join as a voting member of the Aeron Cluster\n"
+                    + "      -> Raft consensus ensures safety and liveness guarantees\n"
+                    + "\n"
+                    + "   📊 QUERY GENESIS:\n"
+                    + "      GET /api/explore?path=" + genesisShardedPath + "/genesis\n"
+                    + "\n"
+                    + "   ℹ️  ARCHITECTURE:\n"
+                    + "      • Sharded paths for fault isolation\n"
+                    + "      • Max 256 children/node = stable DAG\n"
+                    + "      • Pattern: /content/{L1}/{L2}/{L3}/0x{wallet}/\n"
+                    + "      • SNFE contained to 0.0004% of chain\n"
+                    + "\n"
+                    + "   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    + "   🎉 Network initialized and ready for validators!\n"
+                    + "   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            );
 
             // Log genesis HEAD for script detection
             RecordId genesisHead = fileStore.getHead().getRecordId();
-            System.out.println("   Genesis HEAD: " + genesisHead.toString10());
-            System.out.println("");
+            log.info("   Genesis HEAD: {}", genesisHead.toString10());
 
         } catch (Exception e) {
-            System.err.println("   ❌ FATAL: Failed to create genesis: " + e.getMessage());
-            e.printStackTrace();
+            log.error("   ❌ FATAL: Failed to create genesis: {}", e.getMessage(), e);
             throw new RuntimeException("Genesis creation failed - cannot start network", e);
         }
     }

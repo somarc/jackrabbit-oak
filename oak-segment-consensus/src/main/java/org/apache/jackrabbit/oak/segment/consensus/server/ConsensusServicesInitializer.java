@@ -121,18 +121,18 @@ final class ConsensusServicesInitializer {
         List<String> validatorWallets = buildValidatorWallets(wallet.getWalletAddress(), hostnamesList);
         ValidatorEarningsTracker earningsTracker = validatorEarningsTrackerFactory.create(validatorWallets);
         context.setValidatorEarningsTracker(earningsTracker);
-        System.out.println("   ✅ Validator Earnings Tracker initialized (" + validatorWallets.size() + " validators)");
-        System.out.println("   - Self wallet: " + wallet.getWalletAddress());
+        log.info("   ✅ Validator Earnings Tracker initialized ({} validators)", validatorWallets.size());
+        log.info("   - Self wallet: {}", wallet.getWalletAddress());
 
         context.validatorWalletAddress = wallet.getWalletAddress();
         context.clusterWalletAddress = finalClusterWallet;
-        System.out.println("   - Payments routed to cluster wallet: " + finalClusterWallet);
+        log.info("   - Payments routed to cluster wallet: {}", finalClusterWallet);
 
         // Aeron Cluster handles membership via Raft consensus.
         // Keep only local self-registration for compatibility state (health/metrics/peer views).
         String validatorId = wallet.getWalletAddress();
         httpServer.registerSelfValidator(validatorId);
-        System.out.println("   - Self registered (local context only): " + validatorId);
+        log.info("   - Self registered (local context only): {}", validatorId);
     }
 
     static List<String> buildValidatorWallets(String selfWalletAddress, List<String> hostnamesList) {

@@ -19,7 +19,12 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 final class ServerNetworkUtil {
+
+    private static final Logger log = LoggerFactory.getLogger(ServerNetworkUtil.class);
 
     private ServerNetworkUtil() {
     }
@@ -59,11 +64,11 @@ final class ServerNetworkUtil {
                     path != null ? path : "");
             } catch (java.net.UnknownHostException e) {
                 // If resolution fails, return original URL (may be ngrok/Ethos URL)
-                System.out.println("⚠️  Could not resolve hostname " + hostname + " to IP, using original URL");
+                log.warn("⚠️  Could not resolve hostname {} to IP, using original URL", hostname);
                 return url;
             }
         } catch (Exception e) {
-            System.out.println("⚠️  Failed to parse URL " + url + ": " + e.getMessage() + ", using original");
+            log.warn("⚠️  Failed to parse URL {}: {}, using original", url, e.getMessage());
             return url;
         }
     }

@@ -21,6 +21,8 @@ import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient;
@@ -185,11 +187,17 @@ public class AeronClusterRuntimeAttacherTest {
             }
         );
 
-        AeronWriteClient attachedClient =
-            attacher.attach(httpServer, launcher, Arrays.asList("node-a"), "node-a");
+        ListAppender<ILoggingEvent> appender = TestLogAppenderSupport.attach(AeronClusterRuntimeAttacher.class);
+        try {
+            AeronWriteClient attachedClient =
+                attacher.attach(httpServer, launcher, Arrays.asList("node-a"), "node-a");
 
-        assertSame(writeClient, attachedClient);
-        verify(httpServer).setAeronWriteClient(writeClient);
-        assertTrue(context.aeronPrometheusMetrics != null);
+            assertSame(writeClient, attachedClient);
+            verify(httpServer).setAeronWriteClient(writeClient);
+            assertTrue(context.aeronPrometheusMetrics != null);
+            assertTrue(TestLogAppenderSupport.contains(appender, "Failed to connect AeronWriteClient"));
+        } finally {
+            TestLogAppenderSupport.detach(AeronClusterRuntimeAttacher.class, appender);
+        }
     }
 }

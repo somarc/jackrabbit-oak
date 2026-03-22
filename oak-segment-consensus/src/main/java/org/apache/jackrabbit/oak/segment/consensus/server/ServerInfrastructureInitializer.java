@@ -38,9 +38,12 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class ServerInfrastructureInitializer {
 
+    private static final Logger log = LoggerFactory.getLogger(ServerInfrastructureInitializer.class);
     private final BlobStoreStartupCoordinator blobStoreStartupCoordinator = new BlobStoreStartupCoordinator();
 
     InitializationResult initialize(File storeDir,
@@ -57,9 +60,9 @@ final class ServerInfrastructureInitializer {
         FileStore fileStore = storageRuntime.getFileStore();
         NodeStore nodeStore = storageRuntime.getNodeStore();
 
-        System.out.println("✅ Oak FileStore initialized");
-        System.out.println("   - Store version: " + fileStore.getHead().getRecordId());
-        System.out.println("   - Segments: " + storeDir.getAbsolutePath());
+        log.info("✅ Oak FileStore initialized");
+        log.info("   - Store version: {}", fileStore.getHead().getRecordId());
+        log.info("   - Segments: {}", storeDir.getAbsolutePath());
 
         GCCostEstimator gcCostEstimator = initializeGCCostEstimator(fileStore, componentFactory);
         SegmentHttpServer httpServer = initializeHttpServer(storeDir, port, aeronConfig, componentFactory,
@@ -69,13 +72,13 @@ final class ServerInfrastructureInitializer {
         initializeGcConsensusSupport(httpServer, aeronConfig, componentFactory, fileStore, gcCostEstimator,
             fragmentationTracker);
 
-        System.out.println("✅ HTTP server initialized (not yet started)");
+        log.info("✅ HTTP server initialized (not yet started)");
         return new InitializationResult(blobStoreType, blobStore, fileStore, nodeStore, httpServer, gcCostEstimator);
     }
 
     private GCCostEstimator initializeGCCostEstimator(FileStore fileStore,
                                                       GlobalStoreServerComponentFactory componentFactory) {
-        System.out.println("Initializing GC Cost Estimator...");
+        log.info("Initializing GC Cost Estimator...");
         try {
             BigDecimal usdcPerMB = new BigDecimal(RuntimeConfigValueResolver.readString("gc.usdc.per.mb", "0.10"));
             GCCostEstimator gcCostEstimator = componentFactory.createGCCostEstimator(
@@ -84,12 +87,12 @@ final class ServerInfrastructureInitializer {
                 usdcPerMB
             );
 
-            System.out.println("✅ GC Cost Estimator initialized");
-            System.out.println("   - USDC rate: $" + usdcPerMB + " per MB");
+            log.info("✅ GC Cost Estimator initialized");
+            log.info("   - USDC rate: ${} per MB", usdcPerMB);
             return gcCostEstimator;
         } catch (Exception e) {
-            System.err.println("⚠️  Failed to initialize GC Cost Estimator: " + e.getMessage());
-            System.err.println("   GC cost estimation will not be available");
+            log.warn("⚠️  Failed to initialize GC Cost Estimator: {}", e.getMessage());
+            log.warn("   GC cost estimation will not be available");
             return null;
         }
     }
@@ -103,15 +106,15 @@ final class ServerInfrastructureInitializer {
                                                    FileStore fileStore,
                                                    NodeStore nodeStore,
                                                    GCCostEstimator gcCostEstimator) {
-        System.out.println("Initializing HTTP server on port " + port + "...");
+        log.info("Initializing HTTP server on port {}...", port);
         SegmentHttpServer httpServer = componentFactory.createHttpServer(storeDir, port, fileStore, nodeStore);
         ServerContext context = httpServer.getContext();
         String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(port, aeronConfig);
 
         if (GlobalStoreRuntimeConfigUtil.isConfiguredSelfUrl(aeronConfig)) {
-            System.out.println("   Using configured self URL: " + selfUrl);
+            log.info("   Using configured self URL: {}", selfUrl);
         } else {
-            System.out.println("   Resolved self URL to IP: " + selfUrl);
+            log.info("   Resolved self URL to IP: {}", selfUrl);
         }
 
         httpServer.setSelfUrl(selfUrl);
@@ -132,32 +135,32 @@ final class ServerInfrastructureInitializer {
     private void initializeCidMappingService(File storeDir,
                                              GlobalStoreServerComponentFactory componentFactory,
                                              ServerContext context) {
-        System.out.println("Initializing CID Mapping Service...");
+        log.info("Initializing CID Mapping Service...");
         try {
             CidMappingService cidMappingService = componentFactory.createCidMappingService(storeDir.toPath());
             context.cidMappingService = cidMappingService;
-            System.out.println("✅ CID Mapping Service initialized");
-            System.out.println("   - Maps Oak blob IDs ↔ IPFS CIDs");
-            System.out.println("   - Persistence: " + storeDir.getAbsolutePath() + "/cid-mappings.properties");
-            System.out.println("   - API: /api/cid/{oakBlobId} → IPFS CID lookup");
+            log.info("✅ CID Mapping Service initialized");
+            log.info("   - Maps Oak blob IDs ↔ IPFS CIDs");
+            log.info("   - Persistence: {}/cid-mappings.properties", storeDir.getAbsolutePath());
+            log.info("   - API: /api/cid/{oakBlobId} -> IPFS CID lookup");
         } catch (Exception e) {
-            System.err.println("⚠️  Failed to initialize CID Mapping Service: " + e.getMessage());
+            log.warn("⚠️  Failed to initialize CID Mapping Service: {}", e.getMessage());
         }
     }
 
     private FragmentationTracker initializeFragmentationTracker(SegmentHttpServer httpServer,
                                                                 GlobalStoreServerComponentFactory componentFactory) {
-        System.out.println("Initializing Fragmentation Tracker...");
+        log.info("Initializing Fragmentation Tracker...");
         try {
             FragmentationTracker fragmentationTracker = componentFactory.createFragmentationTracker();
             httpServer.getContext().setFragmentationTracker(fragmentationTracker);
-            System.out.println("✅ Fragmentation Tracker initialized");
-            System.out.println("   - Tracks TAR file creation per entity");
-            System.out.println("   - Calculates fragmentation scores and taxes");
+            log.info("✅ Fragmentation Tracker initialized");
+            log.info("   - Tracks TAR file creation per entity");
+            log.info("   - Calculates fragmentation scores and taxes");
             return fragmentationTracker;
         } catch (Exception e) {
-            System.err.println("⚠️  Failed to initialize Fragmentation Tracker: " + e.getMessage());
-            System.err.println("   Fragmentation tracking will not be available");
+            log.warn("⚠️  Failed to initialize Fragmentation Tracker: {}", e.getMessage());
+            log.warn("   Fragmentation tracking will not be available");
             return null;
         }
     }
@@ -165,17 +168,17 @@ final class ServerInfrastructureInitializer {
     private void initializeWalletStorageMetrics(SegmentHttpServer httpServer,
                                                 FileStore fileStore,
                                                 GlobalStoreServerComponentFactory componentFactory) {
-        System.out.println("Initializing Wallet Storage Metrics...");
+        log.info("Initializing Wallet Storage Metrics...");
         try {
             WalletStorageMetrics walletStorageMetrics = componentFactory.createWalletStorageMetrics(fileStore);
             httpServer.getContext().setWalletStorageMetrics(walletStorageMetrics);
-            System.out.println("✅ Wallet Storage Metrics initialized");
-            System.out.println("   - Tracks per-wallet storage ownership %");
-            System.out.println("   - Calculates storage tax and delete tax");
-            System.out.println("   - Monitors capacity (2 TB upper bound)");
+            log.info("✅ Wallet Storage Metrics initialized");
+            log.info("   - Tracks per-wallet storage ownership %");
+            log.info("   - Calculates storage tax and delete tax");
+            log.info("   - Monitors capacity (2 TB upper bound)");
         } catch (Exception e) {
-            System.err.println("⚠️  Failed to initialize Wallet Storage Metrics: " + e.getMessage());
-            System.err.println("   Storage metrics will not be available");
+            log.warn("⚠️  Failed to initialize Wallet Storage Metrics: {}", e.getMessage());
+            log.warn("   Storage metrics will not be available");
         }
     }
 
@@ -185,7 +188,7 @@ final class ServerInfrastructureInitializer {
                                               FileStore fileStore,
                                               GCCostEstimator gcCostEstimator,
                                               FragmentationTracker fragmentationTracker) {
-        System.out.println("Initializing GC Proposal Manager...");
+        log.info("Initializing GC Proposal Manager...");
         try {
             ServerContext context = httpServer.getContext();
             List<String> configuredPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(aeronConfig);
@@ -205,31 +208,31 @@ final class ServerInfrastructureInitializer {
 
             context.setGCProposalManager(gcProposalManager);
 
-            System.out.println("✅ GC Proposal Manager initialized");
-            System.out.println("   - Total validators: " + totalValidators);
-            System.out.println("   - Quorum required: " + ((totalValidators * 2 / 3) + 1) + "/" + totalValidators);
-            System.out.println("   - Tracks GC proposals, voting, and execution");
+            log.info("✅ GC Proposal Manager initialized");
+            log.info("   - Total validators: {}", totalValidators);
+            log.info("   - Quorum required: {}/{}", ((totalValidators * 2 / 3) + 1), totalValidators);
+            log.info("   - Tracks GC proposals, voting, and execution");
 
             GCAccountManager gcAccountManager = componentFactory.createGCAccountManager();
             context.gcAccountManager = gcAccountManager;
 
-            System.out.println("✅ GC Account Manager initialized");
-            System.out.println("   - Tracks GC debt per entity (wallet address)");
-            System.out.println("   - Default debt limit: $100.00");
-            System.out.println("   - Enforces write blocking when debt exceeds limit");
+            log.info("✅ GC Account Manager initialized");
+            log.info("   - Tracks GC debt per entity (wallet address)");
+            log.info("   - Default debt limit: $100.00");
+            log.info("   - Enforces write blocking when debt exceeds limit");
 
             PeriodicGCJob periodicGCJob = componentFactory.createPeriodicGCJob(gcAccountManager);
             periodicGCJob.start();
             context.periodicGCJob = periodicGCJob;
 
-            System.out.println("✅ Periodic GC Job started");
-            System.out.println("   - Interval: " + periodicGCJob.getIntervalSeconds() + "s");
-            System.out.println("   - Initial delay: " + periodicGCJob.getInitialDelaySeconds() + "s");
-            System.out.println("   - Action: Converts pending debt → executed debt");
-            System.out.println("   - Blocks writes when executed debt > limit");
+            log.info("✅ Periodic GC Job started");
+            log.info("   - Interval: {}s", periodicGCJob.getIntervalSeconds());
+            log.info("   - Initial delay: {}s", periodicGCJob.getInitialDelaySeconds());
+            log.info("   - Action: Converts pending debt -> executed debt");
+            log.info("   - Blocks writes when executed debt > limit");
         } catch (Exception e) {
-            System.err.println("⚠️  Failed to initialize GC Proposal Manager: " + e.getMessage());
-            System.err.println("   GC consensus will not be available");
+            log.warn("⚠️  Failed to initialize GC Proposal Manager: {}", e.getMessage());
+            log.warn("   GC consensus will not be available");
         }
     }
 

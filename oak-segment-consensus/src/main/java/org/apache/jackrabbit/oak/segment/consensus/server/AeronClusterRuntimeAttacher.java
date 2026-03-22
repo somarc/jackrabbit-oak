@@ -25,8 +25,12 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class AeronClusterRuntimeAttacher {
+
+    private static final Logger log = LoggerFactory.getLogger(AeronClusterRuntimeAttacher.class);
 
     interface WriteClientFactory {
         AeronWriteClient create(int clientId,
@@ -90,7 +94,7 @@ final class AeronClusterRuntimeAttacher {
         try {
             aeronWriteClient.connect();
         } catch (Exception e) {
-            System.err.println("   ⚠️  WARNING: Failed to connect AeronWriteClient: " + e.getMessage());
+            log.warn("   ⚠️  WARNING: Failed to connect AeronWriteClient: {}", e.getMessage());
         }
 
         httpServer.setAeronWriteClient(aeronWriteClient);
@@ -110,10 +114,10 @@ final class AeronClusterRuntimeAttacher {
                 if (aeron != null && context.aeronPrometheusMetrics == null) {
                     AeronPrometheusMetrics metrics = metricsFactory.create(aeron);
                     context.setAeronPrometheusMetrics(metrics);
-                    System.out.println("✅ Aeron Prometheus metrics initialized (delayed)");
+                    log.info("✅ Aeron Prometheus metrics initialized (delayed)");
                 }
             } catch (Exception e) {
-                System.err.println("⚠️  Failed to initialize Aeron Prometheus metrics: " + e.getMessage());
+                log.warn("⚠️  Failed to initialize Aeron Prometheus metrics: {}", e.getMessage());
             }
         }, 5, TimeUnit.SECONDS);
     }

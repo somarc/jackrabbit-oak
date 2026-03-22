@@ -19,8 +19,12 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class AeronClusterCallbackBinder {
+
+    private static final Logger log = LoggerFactory.getLogger(AeronClusterCallbackBinder.class);
 
     void bind(AeronConsensusEngine aeronEngine, SegmentHttpServer httpServer) {
         aeronEngine.setWriteApplicationCallback(new AeronConsensusEngine.WriteApplicationCallback() {
@@ -41,7 +45,7 @@ final class AeronClusterCallbackBinder {
                 );
             }
         });
-        System.out.println("   ✅ Write application callback configured");
+        log.info("   ✅ Write application callback configured");
 
         aeronEngine.setGCCallback(new AeronConsensusEngine.GCApplicationCallback() {
             @Override
@@ -49,7 +53,7 @@ final class AeronClusterCallbackBinder {
                                         long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
                 GCProposalManager manager = httpServer.getContext().gcProposalManager;
                 if (manager == null) {
-                    System.err.println("⚠️  GC proposal manager not initialized - cannot apply replicated GC proposal");
+                    log.warn("⚠️  GC proposal manager not initialized - cannot apply replicated GC proposal");
                     return;
                 }
                 manager.applyReplicatedProposal(
@@ -65,7 +69,7 @@ final class AeronClusterCallbackBinder {
             public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
                 GCProposalManager manager = httpServer.getContext().gcProposalManager;
                 if (manager == null) {
-                    System.err.println("⚠️  GC proposal manager not initialized - cannot apply replicated GC vote");
+                    log.warn("⚠️  GC proposal manager not initialized - cannot apply replicated GC vote");
                     return;
                 }
                 manager.voteOnProposal(proposalId, validatorId, approve, reason != null ? reason : "");
@@ -75,16 +79,16 @@ final class AeronClusterCallbackBinder {
             public void applyGCExecute(String proposalId, int executorId) {
                 GCProposalManager manager = httpServer.getContext().gcProposalManager;
                 if (manager == null) {
-                    System.err.println("⚠️  GC proposal manager not initialized - cannot apply replicated GC execute");
+                    log.warn("⚠️  GC proposal manager not initialized - cannot apply replicated GC execute");
                     return;
                 }
                 try {
                     manager.executeGC(proposalId, executorId);
                 } catch (Exception e) {
-                    System.err.println("⚠️  Failed to apply replicated GC execute for proposal " + proposalId + ": " + e.getMessage());
+                    log.warn("⚠️  Failed to apply replicated GC execute for proposal {}", proposalId, e);
                 }
             }
         });
-        System.out.println("   ✅ GC application callback configured");
+        log.info("   ✅ GC application callback configured");
     }
 }

@@ -28,9 +28,12 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class ServerActivationCoordinator {
 
+    private static final Logger log = LoggerFactory.getLogger(ServerActivationCoordinator.class);
     private final ConsensusStartupStarter consensusStartupStarter;
 
     ServerActivationCoordinator() {
@@ -68,11 +71,9 @@ final class ServerActivationCoordinator {
         );
 
         if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DISABLED) {
-            System.out.println();
-            System.out.println("ℹ️  Consensus disabled (single-validator mode)");
+            log.info("ℹ️  Consensus disabled (single-validator mode)");
         } else if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DEFERRED) {
-            System.out.println();
-            System.out.println("ℹ️  Consensus initialization deferred (STANDBY mode → callback)");
+            log.info("ℹ️  Consensus initialization deferred (STANDBY mode -> callback)");
         }
 
         startStandbyServer(context.getDetectedMode(), context.getBootstrap());
@@ -87,14 +88,14 @@ final class ServerActivationCoordinator {
                                         SegmentHttpServer httpServer,
                                         int port) throws IOException {
         if (detectedMode == BootstrapMode.STANDBY) {
-            System.out.println("⏸️  HTTP server startup deferred (STANDBY mode - will start after bootstrap completes)");
+            log.info("⏸️  HTTP server startup deferred (STANDBY mode - will start after bootstrap completes)");
             return;
         }
 
-        System.out.println("Starting HTTP server...");
+        log.info("Starting HTTP server...");
         try {
             httpServer.start();
-            System.out.println("✅ HTTP server started on port " + port);
+            log.info("✅ HTTP server started on port {}", port);
         } catch (Exception e) {
             throw new IOException("Failed to start HTTP server", e);
         }
@@ -108,7 +109,7 @@ final class ServerActivationCoordinator {
         try {
             bootstrap.startStandbyServer();
         } catch (Exception e) {
-            System.err.println("⚠️  Failed to start StandbyServerSync: " + e.getMessage());
+            log.warn("⚠️  Failed to start StandbyServerSync: {}", e.getMessage());
         }
     }
 

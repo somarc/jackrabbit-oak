@@ -29,8 +29,12 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class AeronClusterBootstrapper {
+
+    private static final Logger log = LoggerFactory.getLogger(AeronClusterBootstrapper.class);
 
     private final FileStore fileStore;
     private final NodeStore nodeStore;
@@ -73,26 +77,26 @@ public final class AeronClusterBootstrapper {
         boolean hasExistingCluster = bootstrapPlan.hasExistingCluster;
 
         if (logClusterStateDetails) {
-            System.out.println("🔍 DEBUG: Cluster state check:");
-            System.out.println("   - Cluster dir exists: " + bootstrapPlan.clusterDirExists);
-            System.out.println("   - Cluster dir path: " + bootstrapPlan.clusterDir.getAbsolutePath());
+            log.info("🔍 DEBUG: Cluster state check:");
+            log.info("   - Cluster dir exists: {}", bootstrapPlan.clusterDirExists);
+            log.info("   - Cluster dir path: {}", bootstrapPlan.clusterDir.getAbsolutePath());
             if (bootstrapPlan.clusterDirExists) {
-                System.out.println("   - Cluster dir files: " + bootstrapPlan.clusterDirFileCount);
+                log.info("   - Cluster dir files: {}", bootstrapPlan.clusterDirFileCount);
             }
-            System.out.println("   - hasExistingCluster: " + hasExistingCluster);
+            log.info("   - hasExistingCluster: {}", hasExistingCluster);
         }
 
         if (bootstrapPlan.startupMode == AeronClusterBootstrapPlan.StartupMode.EXISTING_CLUSTER) {
-            System.out.println("🌐 Existing cluster detected - will join with " + hostnamesList.size() + " members");
+            log.info("🌐 Existing cluster detected - will join with {} members", hostnamesList.size());
         } else if (bootstrapPlan.startupMode == AeronClusterBootstrapPlan.StartupMode.FRESH_CONFIGURED) {
-            System.out.println("🌐 Fresh cluster start - using configured hostnames (" + hostnamesList.size() + " members)");
+            log.info("🌐 Fresh cluster start - using configured hostnames ({} members)", hostnamesList.size());
             if (logClusterStateDetails) {
-                System.out.println("   → Starting with self only (quorum = 1), peers will join dynamically");
+                log.info("   -> Starting with self only (quorum = 1), peers will join dynamically");
             }
         } else {
-            System.out.println("🌐 Fresh cluster start - starting with self only (quorum = 1)");
+            log.info("🌐 Fresh cluster start - starting with self only (quorum = 1)");
             if (logClusterStateDetails) {
-                System.out.println("   → Peers can join dynamically as they come online");
+                log.info("   -> Peers can join dynamically as they come online");
             }
         }
 
@@ -119,24 +123,20 @@ public final class AeronClusterBootstrapper {
             new AeronClusterLaunchCoordinator().launch(nodeId, hostnamesList, clusterBaseDir, aeronEngine);
 
         if (observeElections && !hasExistingCluster && hostnamesList.size() >= 3) {
-            System.out.println();
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("🔄 STARTUP ELECTION OBSERVATION");
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("Purpose: Observe elections for 15s to verify all " + hostnamesList.size() +
-                " nodes can participate");
-            System.out.println("         before performing critical genesis writes");
-            System.out.println();
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("🔄 STARTUP ELECTION OBSERVATION");
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            log.info("Purpose: Observe elections for 15s to verify all {} nodes can participate",
+                hostnamesList.size());
+            log.info("         before performing critical genesis writes");
 
             try {
                 new AeronClusterElectionObserver().observe(aeronEngine, 15000);
-                System.out.println("✅ Election observation complete - cluster verified healthy");
-                System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                System.out.println();
+                log.info("✅ Election observation complete - cluster verified healthy");
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             } catch (Exception e) {
-                System.err.println("⚠️  Election observation failed: " + e.getMessage());
-                System.err.println("   Proceeding with genesis, but cluster health uncertain");
-                System.err.println();
+                log.warn("⚠️  Election observation failed: {}", e.getMessage());
+                log.warn("   Proceeding with genesis, but cluster health uncertain");
             }
         }
 
@@ -150,9 +150,8 @@ public final class AeronClusterBootstrapper {
         try {
             new ShardRouterInitializer().initialize(httpServer, selfUrl, peerUrls, logClusterStateDetails);
         } catch (Exception e) {
-            System.err.println("⚠️  WARNING: Failed to initialize Shard Router: " + e.getMessage());
-            System.err.println("   → Shard routing disabled, requests will route directly");
-            e.printStackTrace();
+            log.warn("⚠️  WARNING: Failed to initialize Shard Router: {}", e.getMessage(), e);
+            log.warn("   -> Shard routing disabled, requests will route directly");
         }
 
         return new AeronClusterStartupResult(aeronEngine, aeronClusterLauncher, aeronWriteClient, hostnamesList, nodeId);
