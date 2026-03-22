@@ -35,6 +35,7 @@ import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSession;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.sse.ContentEvent;
+import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -47,6 +48,7 @@ import javax.servlet.ServletOutputStream;
 import javax.servlet.WriteListener;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -156,6 +158,22 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testOsgiConfigCoverageRouteReturnsCoveragePayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/config/osgi/coverage");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"config.osgi.coverage.v1\""));
+        });
+    }
+
+    @Test
     public void testDashboardRouteRendersLandingPage() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
@@ -216,6 +234,22 @@ public class RequestRouterTest {
             verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("LLM Chat | Blockchain AEM Validator"));
+        });
+    }
+
+    @Test
+    public void testApiIndexRouteReturnsIndexPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/index");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"index.v1\""));
         });
     }
 
@@ -651,6 +685,36 @@ public class RequestRouterTest {
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"id\":\"seg-002\""));
                 assertTrue(body.toString().contains("\"id\":\"seg-001\""));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testTarFilesRouteReturnsTarMetadata() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-tars");
+            try {
+                Files.write(storeDirectory.resolve("journal.log"), Arrays.asList(
+                    "seg-001 now",
+                    "seg-002 later"
+                ));
+                Files.write(storeDirectory.resolve("data00000a.tar"), new byte[16]);
+                Files.write(storeDirectory.resolve("data00001a.tar"), new byte[32]);
+
+                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/api/segments/tars");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"name\":\"data00000a.tar\""));
+                assertTrue(body.toString().contains("\"name\":\"data00001a.tar\""));
             } finally {
                 deleteRecursively(storeDirectory);
             }
@@ -1107,6 +1171,22 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testManifestRouteRejectsUnsupportedMethod() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/manifest");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
+            assertTrue(body.toString().contains("Method not allowed"));
+        });
+    }
+
+    @Test
     public void testSegmentRouteRejectsInvalidUuid() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
@@ -1345,6 +1425,85 @@ public class RequestRouterTest {
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"latestHead\": \"fallback-file-head\""));
             assertTrue(body.toString().contains("\"committedHead\": \"fallback-file-head\""));
+        });
+    }
+
+    @Test
+    public void testApiMetricsRouteReturnsJsonMetricsPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+            when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
+            when(engine.isLeader()).thenReturn(false);
+            when(engine.getCurrentEpoch()).thenReturn(11);
+            when(engine.getCurrentTerm()).thenReturn(2);
+            when(engine.getReachableValidatorCount()).thenReturn(2);
+            when(engine.getTotalMemberCount()).thenReturn(3);
+            when(engine.getQuorumSize()).thenReturn(2);
+            when(engine.getHeartbeatAgeMs()).thenReturn(15L);
+            when(engine.isClusterHealthy()).thenReturn(true);
+            Map<String, Object> lagStatus = new HashMap<>();
+            lagStatus.put("role", "FOLLOWER");
+            lagStatus.put("myLogPosition", 10L);
+            lagStatus.put("leaderLogPosition", 12L);
+            lagStatus.put("replicationLag", 2L);
+            lagStatus.put("lagThreshold", 5L);
+            lagStatus.put("healthy", true);
+            when(engine.getReplicationLagStatus()).thenReturn(lagStatus);
+            context.aeronConsensusEngine = engine;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/api/metrics");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"status\":\"UP\""));
+            assertTrue(body.toString().contains("\"replicationLag\":2"));
+        });
+    }
+
+    @Test
+    public void testPrometheusMetricsRouteExportsTextMetrics() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/metrics");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("oak_active_connections"));
+        });
+    }
+
+    @Test
+    public void testBlobRouteStreamsBlobPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            BlobStore blobStore = mock(BlobStore.class);
+            byte[] payload = "blob-demo".getBytes(StandardCharsets.UTF_8);
+            when(blobStore.getInputStream("ed06f9cb-demo")).thenReturn(new ByteArrayInputStream(payload));
+            context.blobStore = blobStore;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/api/blob/ed06f9cb-demo");
+            RecordingServletOutputStream output = new RecordingServletOutputStream();
+            HttpServletResponse response = mock(HttpServletResponse.class);
+            when(response.getOutputStream()).thenReturn(output);
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            verify(response).setHeader("X-Blob-Id", "ed06f9cb-demo");
+            assertArrayEquals(payload, output.toByteArray());
         });
     }
 

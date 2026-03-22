@@ -94,7 +94,7 @@ public class ValidatorAuthHandler {
     
     private final boolean enabled;
     private final int sessionTtlHours;
-    private final SecureRandom random = new SecureRandom();
+    private final SecureRandom random;
     
     /**
      * Represents an authenticated session.
@@ -142,18 +142,26 @@ public class ValidatorAuthHandler {
      * Create auth handler from system properties.
      */
     public ValidatorAuthHandler() {
-        this.enabled = RuntimeConfigValueResolver.readBoolean(PROP_AUTH_ENABLED, true);
-        this.sessionTtlHours = RuntimeConfigValueResolver.readInt(PROP_SESSION_TTL, DEFAULT_SESSION_TTL_HOURS);
-
-        String walletsStr = RuntimeConfigValueResolver.readString(PROP_ALLOWED_WALLETS, null);
-        if (walletsStr != null && !walletsStr.isEmpty()) {
-            this.allowedWallets = walletsStr.toLowerCase().split(",");
-        } else {
-            this.allowedWallets = null;
-        }
+        this(
+            RuntimeConfigValueResolver.readBoolean(PROP_AUTH_ENABLED, true),
+            RuntimeConfigValueResolver.readInt(PROP_SESSION_TTL, DEFAULT_SESSION_TTL_HOURS),
+            normalizeAllowedWallets(RuntimeConfigValueResolver.readString(PROP_ALLOWED_WALLETS, null)),
+            new SecureRandom()
+        );
         
         log.info("Validator auth handler initialized: enabled={}, sessionTtl={}h, allowedWallets={}",
             enabled, sessionTtlHours, allowedWallets != null ? allowedWallets.length : "all");
+    }
+
+    ValidatorAuthHandler(boolean enabled, int sessionTtlHours, String[] allowedWallets) {
+        this(enabled, sessionTtlHours, allowedWallets, new SecureRandom());
+    }
+
+    ValidatorAuthHandler(boolean enabled, int sessionTtlHours, String[] allowedWallets, SecureRandom random) {
+        this.enabled = enabled;
+        this.sessionTtlHours = sessionTtlHours;
+        this.allowedWallets = normalizeAllowedWallets(allowedWallets);
+        this.random = random;
     }
     
     /**
@@ -415,6 +423,25 @@ public class ValidatorAuthHandler {
      */
     private void sendForbidden(HttpServletResponse response, String message) throws IOException {
         ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, "forbidden", message);
+    }
+
+    private static String[] normalizeAllowedWallets(String wallets) {
+        if (wallets == null || wallets.isEmpty()) {
+            return null;
+        }
+        return normalizeAllowedWallets(wallets.split(","));
+    }
+
+    private static String[] normalizeAllowedWallets(String[] allowedWallets) {
+        if (allowedWallets == null || allowedWallets.length == 0) {
+            return null;
+        }
+
+        String[] normalized = new String[allowedWallets.length];
+        for (int i = 0; i < allowedWallets.length; i++) {
+            normalized[i] = allowedWallets[i] == null ? "" : allowedWallets[i].trim().toLowerCase();
+        }
+        return normalized;
     }
     
     /**

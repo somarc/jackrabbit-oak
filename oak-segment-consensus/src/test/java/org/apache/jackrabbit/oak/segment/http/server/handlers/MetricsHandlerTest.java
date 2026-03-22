@@ -17,14 +17,22 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
+import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.junit.Test;
+import io.prometheus.client.exporter.common.TextFormat;
 
 import javax.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -98,5 +106,172 @@ public class MetricsHandlerTest {
         String json = body.toString();
         assertTrue(json.contains("\"consensus\":null"));
         assertTrue(json.contains("\"replication\":null"));
+    }
+
+    @Test
+    public void testHandleMetricsIncludesUnhealthyReasonReplicationReasonAndIpfsPolicy() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
+        when(engine.isLeader()).thenReturn(false);
+        when(engine.getCurrentEpoch()).thenReturn(9);
+        when(engine.getCurrentTerm()).thenReturn(3);
+        when(engine.getReachableValidatorCount()).thenReturn(1);
+        when(engine.getTotalMemberCount()).thenReturn(3);
+        when(engine.getQuorumSize()).thenReturn(2);
+        when(engine.getHeartbeatAgeMs()).thenReturn(999L);
+        when(engine.isClusterHealthy()).thenReturn(false);
+        when(engine.getUnhealthyReason()).thenReturn("leader_unreachable");
+
+        Map<String, Object> lagStatus = new HashMap<>();
+        lagStatus.put("role", "FOLLOWER");
+        lagStatus.put("myLogPosition", 11L);
+        lagStatus.put("leaderLogPosition", 15L);
+        lagStatus.put("replicationLag", 4L);
+        lagStatus.put("lagThreshold", 2L);
+        lagStatus.put("healthy", false);
+        lagStatus.put("reason", "lagging");
+        when(engine.getReplicationLagStatus()).thenReturn(lagStatus);
+
+        ServerContext context = new ServerContext(null, null, Paths.get("/tmp/store"), "http://localhost:8090");
+        context.apiIpfsPolicyRejectAmbiguousSource.set(2);
+        context.apiIpfsPolicyRejectNonEnterpriseCid.set(3);
+        context.apiIpfsPolicyRejectUnknownCid.set(5);
+        context.apiIpfsPolicyRejectCidServiceUnavailable.set(7);
+        context.apiIpfsPolicyAcceptedEnterpriseCid.set(11);
+
+        MetricsHandler handler = new MetricsHandler(
+            engine,
+            null,
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            context
+        );
+
+        handler.handleMetrics(response);
+
+        String json = body.toString();
+        assertTrue(json.contains("\"unhealthyReason\":\"leader_unreachable\""));
+        assertTrue(json.contains("\"reason\":\"lagging\""));
+        assertTrue(json.contains("\"storePath\":\"\""));
+        assertTrue(json.contains("\"acceptedEnterpriseCid\":11"));
+        assertTrue(json.contains("\"rejectedUnknownCid\":5"));
+    }
+
+    @Test
+    public void testHandlePrometheusMetricsExportsDynamicGaugeValues() throws Exception {
+        Path storeDir = Files.createTempDirectory("metrics-handler");
+        try {
+            Files.write(storeDir.resolve("00000a.tar"), new byte[] {1, 2, 3});
+            Files.write(storeDir.resolve("00001a.tar"), new byte[] {4});
+            Files.createDirectories(storeDir.resolve("nested"));
+            Files.write(storeDir.resolve("nested").resolve("notes.txt"), new byte[] {5, 6});
+
+            StringWriter body = new StringWriter();
+            HttpServletResponse response = mock(HttpServletResponse.class);
+            when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+            when(engine.isLeader()).thenReturn(true);
+            when(engine.getCurrentEpoch()).thenReturn(17);
+            when(engine.getReachableValidatorCount()).thenReturn(4);
+            when(engine.getLastHeartbeatTime()).thenReturn(System.currentTimeMillis() - 2_000L);
+
+            CrashHandler crashHandler = mock(CrashHandler.class);
+            when(crashHandler.getCrashCount()).thenReturn(3);
+            when(crashHandler.hasCrashed()).thenReturn(true);
+            when(crashHandler.shouldForceBootstrap()).thenReturn(true);
+
+            AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
+            when(launcher.getCrashHandler()).thenReturn(crashHandler);
+
+            AeronPrometheusMetrics prometheusMetrics = mock(AeronPrometheusMetrics.class);
+
+            ServerContext context = new ServerContext(null, null, storeDir, "http://localhost:8090");
+            context.aeronClusterLauncher = launcher;
+            context.aeronPrometheusMetrics = prometheusMetrics;
+
+            MetricsHandler handler = new MetricsHandler(
+                engine,
+                storeDir,
+                Collections.singletonMap("c1", new Object()),
+                Map.of("v1", new Object(), "v2", new Object()),
+                context
+            );
+
+            handler.handlePrometheusMetrics(response);
+
+            verify(response).setContentType(TextFormat.CONTENT_TYPE_004);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            verify(prometheusMetrics).updateGaugeValues();
+
+            String metrics = body.toString();
+            assertTrue(metrics.contains("oak_validators_reachable 4.0"));
+            assertTrue(metrics.contains("oak_segments_stored_total 2.0"));
+            assertTrue(metrics.contains("oak_segments_disk_usage_bytes 6.0"));
+            assertTrue(metrics.contains("oak_active_connections 3.0"));
+            assertTrue(metrics.contains("oak_mediadriver_crash_count 3.0"));
+            assertTrue(metrics.contains("oak_mediadriver_has_crashed 1.0"));
+            assertTrue(metrics.contains("oak_mediadriver_force_bootstrap 1.0"));
+            assertTrue(metrics.contains("oak_consensus_time_since_last_heartbeat_seconds"));
+        } finally {
+            deleteRecursively(storeDir);
+        }
+    }
+
+    @Test
+    public void testHandlePrometheusMetricsResetsCrashMetricsAndIgnoresAeronMetricErrors() throws Exception {
+        Path storeDir = Files.createTempDirectory("metrics-handler-empty");
+        try {
+            StringWriter body = new StringWriter();
+            HttpServletResponse response = mock(HttpServletResponse.class);
+            when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+            ConsensusMetrics.mediaDriverCrashCount.set(9);
+            ConsensusMetrics.mediaDriverHasCrashed.set(1);
+            ConsensusMetrics.mediaDriverForceBootstrap.set(1);
+
+            AeronPrometheusMetrics prometheusMetrics = mock(AeronPrometheusMetrics.class);
+            doThrow(new RuntimeException("boom")).when(prometheusMetrics).updateGaugeValues();
+
+            ServerContext context = new ServerContext(null, null, storeDir.resolve("missing"), "http://localhost:8090");
+            context.aeronPrometheusMetrics = prometheusMetrics;
+
+            MetricsHandler handler = new MetricsHandler(
+                null,
+                context.storeDirectory,
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                context
+            );
+
+            handler.handlePrometheusMetrics(response);
+
+            String metrics = body.toString();
+            assertTrue(metrics.contains("oak_mediadriver_crash_count 0.0"));
+            assertTrue(metrics.contains("oak_mediadriver_has_crashed 0.0"));
+            assertTrue(metrics.contains("oak_mediadriver_force_bootstrap 0.0"));
+            assertTrue(metrics.contains("oak_active_connections 0.0"));
+        } finally {
+            deleteRecursively(storeDir);
+        }
+    }
+
+    private static void deleteRecursively(Path path) throws Exception {
+        if (!Files.exists(path)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> stream = Files.walk(path)) {
+            stream.sorted(Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+        }
     }
 }
