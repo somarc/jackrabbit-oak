@@ -24,11 +24,11 @@ import java.math.BigInteger;
 /**
  * Unified configuration for blockchain mode settings.
  *
- * <p>Supports three distinct blockchain modes:
+ * <p>Supports three blockchain mode names for configuration:
  * <ul>
  *   <li><strong>MOCK</strong> - Pure simulation (instant, no blockchain verification)</li>
- *   <li><strong>SEPOLIA</strong> - Sepolia testnet (real verification, test ETH)</li>
- *   <li><strong>MAINNET</strong> - Ethereum mainnet (real verification, real ETH)</li>
+ *   <li><strong>SEPOLIA</strong> - Chain-backed testnet mode (requires deployed Oak contract + RPC)</li>
+ *   <li><strong>MAINNET</strong> - Reserved namespace; disabled for oak-chain v1 runtime</li>
  * </ul>
  *
  * <p>Configuration Priority:
@@ -71,10 +71,10 @@ public class BlockchainConfig {
         /** Pure mock mode - instant payment simulation, no blockchain */
         MOCK("mock"),
 
-        /** Sepolia testnet - real blockchain verification with test ETH */
+        /** Sepolia testnet - chain-backed verification with testnet infrastructure */
         SEPOLIA("sepolia"),
 
-        /** Ethereum mainnet - real blockchain verification with real ETH */
+        /** Ethereum mainnet - config namespace retained, but runtime is disabled for v1 */
         MAINNET("mainnet");
 
         private final String key;
@@ -208,15 +208,13 @@ public class BlockchainConfig {
                 break;
 
             case MAINNET:
-                log.info("🔴 MAINNET MODE - Production verification (REAL ETH)");
+                log.info("🔴 MAINNET MODE - Disabled for oak-chain v1");
                 if (rpcUrl == null) {
                     log.error("❌ RPC URL REQUIRED for mainnet mode!");
                     log.error("   Set {} to configure RPC endpoint", ENV_RPC_URL);
                 }
-                if (MAINNET_CONTRACT.equals("0x0000000000000000000000000000000000000000")) {
-                    log.error("❌ MAINNET CONTRACT NOT DEPLOYED!");
-                    log.error("   Deploy contract and set {} env var", ENV_CONTRACT_ADDRESS);
-                }
+                log.error("❌ MAINNET RUNTIME IS NOT ENABLED FOR V1 MERGE POSTURE");
+                log.error("   Keep mainnet disabled until contract, verification, and operational review are complete");
                 break;
         }
     }

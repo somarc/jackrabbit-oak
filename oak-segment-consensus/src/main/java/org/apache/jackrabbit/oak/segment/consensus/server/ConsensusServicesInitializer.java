@@ -41,6 +41,8 @@ import org.slf4j.LoggerFactory;
 final class ConsensusServicesInitializer {
 
     private static final Logger log = LoggerFactory.getLogger(ConsensusServicesInitializer.class);
+    private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+    private static final String EXAMPLE_SEPOLIA_CONTRACT = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0";
 
     private final Supplier<BlockchainConfig> blockchainConfigSupplier;
     private final EvmBridgeFactory evmBridgeFactory;
@@ -84,6 +86,7 @@ final class ConsensusServicesInitializer {
                     List<String> hostnamesList) {
         // Initialize Proposal Queue Manager (for Ethereum confirmation tracking)
         BlockchainConfig blockchainConfig = blockchainConfigSupplier.get();
+        validateBlockchainRuntime(blockchainConfig);
         EvmBridge evmBridge = evmBridgeFactory.create(blockchainConfig);
         if (blockchainConfig.isMockMode()) {
             log.info("🎭 Using SimpleEvmBridge (mock simulation)");
@@ -133,6 +136,40 @@ final class ConsensusServicesInitializer {
         String validatorId = wallet.getWalletAddress();
         httpServer.registerSelfValidator(validatorId);
         log.info("   - Self registered (local context only): {}", validatorId);
+    }
+
+    private static void validateBlockchainRuntime(BlockchainConfig blockchainConfig) {
+        if (blockchainConfig == null || blockchainConfig.isMockMode()) {
+            return;
+        }
+
+        String network = blockchainConfig.getNetwork();
+        if ("mainnet".equalsIgnoreCase(network)) {
+            throw new IllegalStateException(
+                "MAINNET mode is disabled for oak-chain v1. Use MOCK for local simulation or SEPOLIA for testnet validation."
+            );
+        }
+
+        String rpcUrl = blockchainConfig.getRpcUrl();
+        if (rpcUrl == null || rpcUrl.trim().isEmpty()) {
+            throw new IllegalStateException(
+                "Chain-backed modes require OAK_BLOCKCHAIN_RPC_URL/oak.blockchain.rpcUrl to be configured."
+            );
+        }
+
+        String contractAddress = blockchainConfig.getContractAddress();
+        if (contractAddress == null || contractAddress.trim().isEmpty()) {
+            throw new IllegalStateException(
+                "Chain-backed modes require an explicit Oak payment contract address."
+            );
+        }
+
+        if (ZERO_ADDRESS.equalsIgnoreCase(contractAddress)
+                || EXAMPLE_SEPOLIA_CONTRACT.equalsIgnoreCase(contractAddress)) {
+            throw new IllegalStateException(
+                "Chain-backed modes require a deployed Oak payment contract address; example and zero-address defaults are not valid for v1."
+            );
+        }
     }
 
     static List<String> buildValidatorWallets(String selfWalletAddress, List<String> hostnamesList) {

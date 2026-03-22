@@ -30,6 +30,8 @@ import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.After;
 import org.junit.Test;
+import org.web3j.crypto.Credentials;
+import org.web3j.crypto.Sign;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.Part;
@@ -38,6 +40,7 @@ import java.io.ByteArrayInputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -61,10 +64,15 @@ public class WriteProposalHandlerTest {
     private static final String VALID_WALLET = "0x1111111111111111111111111111111111111111";
     private static final String VALID_SIGNATURE = "0xabcdef12";
     private static final String VALID_TX_HASH = "0xabcdef1234567890";
+    private static final String TEST_PRIVATE_KEY = "4c0883a6910395bda8e1ab1b5f9f1cc0aa1f4b3f8718abf3483c796f9649b7fd";
+    private static final String VALID_CHAIN_PROPOSAL_ID =
+        "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     @After
     public void tearDown() {
         System.clearProperty("oak.blockchain.mode");
+        System.clearProperty("oak.blockchain.rpcUrl");
+        System.clearProperty("oak.blockchain.contractAddress");
         System.clearProperty("oak.proposal.validator.binary.upload.enabled");
         System.clearProperty("oak.proposal.validator.binary.requires.priority");
         BlockchainConfig.reset();
@@ -254,6 +262,76 @@ public class WriteProposalHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("Invalid proposalId format. Expected 0x-prefixed 32-byte hex or UUID."));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsMissingProposalIdInSepoliaMode() throws Exception {
+        withChainBackedMode();
+        SignedRequest signedRequest = signedRequest("chain-backed message");
+        ServerContext context = readyContext();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        registerClient(context, signedRequest.walletAddress, "client-1");
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(signedRequest.walletAddress);
+        when(request.getParameter("signature")).thenReturn(signedRequest.signature);
+        when(request.getParameter("message")).thenReturn(signedRequest.message);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Chain-backed modes require a client-supplied proposalId"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsUuidProposalIdInSepoliaMode() throws Exception {
+        withChainBackedMode();
+        SignedRequest signedRequest = signedRequest("chain-backed uuid message");
+        ServerContext context = readyContext();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        registerClient(context, signedRequest.walletAddress, "client-1");
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(signedRequest.walletAddress);
+        when(request.getParameter("signature")).thenReturn(signedRequest.signature);
+        when(request.getParameter("message")).thenReturn(signedRequest.message);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("proposalId")).thenReturn("123e4567-e89b-12d3-a456-426614174000");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("UUID proposalIds are mock-only"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsImmediateFallbackInSepoliaMode() throws Exception {
+        withChainBackedMode();
+        SignedRequest signedRequest = signedRequest("chain-backed immediate fallback");
+        ServerContext context = readyContext();
+        registerClient(context, signedRequest.walletAddress, "client-1");
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(signedRequest.walletAddress);
+        when(request.getParameter("signature")).thenReturn(signedRequest.signature);
+        when(request.getParameter("message")).thenReturn(signedRequest.message);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("proposalId")).thenReturn(VALID_CHAIN_PROPOSAL_ID);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("Chain-backed modes require queued verification"));
         assertEquals(1L, context.apiRejectedRequests.get());
     }
 
@@ -687,6 +765,40 @@ public class WriteProposalHandlerTest {
         return engine;
     }
 
+    private static void registerClient(ServerContext context, String wallet, String clientId) {
+        ClientRegistration registration = new ClientRegistration(clientId, "http://author", wallet.toLowerCase());
+        context.registeredClients.put(wallet.toLowerCase(), registration);
+        context.registeredClients.put(clientId, registration);
+    }
+
+    private static void withChainBackedMode() {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        System.setProperty("oak.blockchain.rpcUrl", "https://rpc.example.invalid");
+        System.setProperty("oak.blockchain.contractAddress", "0x1111111111111111111111111111111111111112");
+        BlockchainConfig.reset();
+    }
+
+    private static SignedRequest signedRequest(String message) {
+        Credentials credentials = Credentials.create(TEST_PRIVATE_KEY);
+        Sign.SignatureData signatureData = Sign.signPrefixedMessage(
+            message.getBytes(StandardCharsets.UTF_8),
+            credentials.getEcKeyPair()
+        );
+        return new SignedRequest(credentials.getAddress(), signatureHex(signatureData), message);
+    }
+
+    private static String signatureHex(Sign.SignatureData signatureData) {
+        byte[] bytes = new byte[65];
+        System.arraycopy(signatureData.getR(), 0, bytes, 0, 32);
+        System.arraycopy(signatureData.getS(), 0, bytes, 32, 32);
+        bytes[64] = signatureData.getV()[0];
+        StringBuilder builder = new StringBuilder("0x");
+        for (byte b : bytes) {
+            builder.append(String.format("%02x", b & 0xff));
+        }
+        return builder.toString();
+    }
+
     private static HttpServletRequest request() {
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(request.getContentType()).thenReturn(null);
@@ -726,5 +838,17 @@ public class WriteProposalHandlerTest {
         HttpServletResponse response = mock(HttpServletResponse.class);
         when(response.getWriter()).thenReturn(new PrintWriter(body));
         return response;
+    }
+
+    private static final class SignedRequest {
+        private final String walletAddress;
+        private final String signature;
+        private final String message;
+
+        private SignedRequest(String walletAddress, String signature, String message) {
+            this.walletAddress = walletAddress;
+            this.signature = signature;
+            this.message = message;
+        }
     }
 }

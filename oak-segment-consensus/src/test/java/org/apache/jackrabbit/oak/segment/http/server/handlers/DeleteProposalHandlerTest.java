@@ -28,6 +28,7 @@ import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
+import org.junit.After;
 import org.junit.Test;
 
 import javax.servlet.http.HttpServletRequest;
@@ -50,6 +51,12 @@ public class DeleteProposalHandlerTest {
     private static final String OTHER_WALLET = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
     private static final String VALID_SIGNATURE = "0xabcdef12";
     private static final String PRIORITY_TX_HASH = "0xabcdef123456789f";
+
+    @After
+    public void tearDown() {
+        System.clearProperty("oak.blockchain.mode");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+    }
 
     @Test
     public void testHandleDeleteProposalRejectsUnregisteredWallet() throws Exception {
@@ -123,6 +130,32 @@ public class DeleteProposalHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("Missing ethereumTxHash parameter"));
+    }
+
+    @Test
+    public void testHandleDeleteProposalRejectsChainBackedModeForV1() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedContent(nodeStore, VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_NOT_IMPLEMENTED);
+        assertTrue(body.toString().contains("\"code\":\"delete_chain_mode_unsupported\""));
+        assertTrue(body.toString().contains("Delete proposals are only supported in MOCK mode"));
     }
 
     @Test

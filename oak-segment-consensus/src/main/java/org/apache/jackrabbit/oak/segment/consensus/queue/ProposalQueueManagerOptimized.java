@@ -2306,7 +2306,14 @@ public class ProposalQueueManagerOptimized {
                     // - Payment went to correct contract
                     // - Payment amount is sufficient
                     // ═══════════════════════════════════════════════════════════
-                    
+                    boolean isMockMode = org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance().isMockMode();
+                    if (!isMockMode && !proposal.getProposalId().matches("^0x[0-9a-fA-F]{64}$")) {
+                        verifierRejectedCount.incrementAndGet();
+                        rejectProposal(proposal,
+                            "Chain-backed modes require proposalId to match the on-chain bytes32 identifier (0x-prefixed 32-byte hex)");
+                        continue;
+                    }
+
                     long proofStartNs = System.nanoTime();
                     PaymentProof proof = evmBridge.verifyPayment(proposal.getProposalId());
                     long proofNanos = System.nanoTime() - proofStartNs;
@@ -2346,6 +2353,17 @@ public class ProposalQueueManagerOptimized {
                         rejectProposal(proposal, "Payment to wrong contract (expected: " + 
                             expectedContract + ", got: " + proof.getContractAddress() + ")");
                         continue;
+                    }
+
+                    if (!isMockMode) {
+                        String declaredTxHash = proposal.getEthereumTxHash();
+                        String confirmedTxHash = proof.getTransactionHash();
+                        if (declaredTxHash == null || declaredTxHash.trim().isEmpty()
+                                || confirmedTxHash == null || !confirmedTxHash.equalsIgnoreCase(declaredTxHash)) {
+                            verifierRejectedCount.incrementAndGet();
+                            rejectProposal(proposal, "Confirmed transaction hash does not match declared ethereumTxHash");
+                            continue;
+                        }
                     }
                     
                     // Verify payment amount is present and positive.
@@ -2398,8 +2416,6 @@ public class ProposalQueueManagerOptimized {
                     // Note: Initial verification happens in ConsensusApiHandler at API entry
                     // This is a secondary check for proposals that bypass the API (e.g., internal)
                     // Skip in mock mode - signature verification is done at API entry in real mode
-                    boolean isMockMode = org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance().isMockMode();
-                    
                     if (!isMockMode) {
                         String signedMessage = resolveProposalMessage(proposal);
                         String proposalSignature = proposal.getSignature();

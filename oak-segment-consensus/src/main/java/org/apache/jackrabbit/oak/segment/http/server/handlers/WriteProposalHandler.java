@@ -637,11 +637,30 @@ public class WriteProposalHandler {
                     proposalId = "0x" + proposalId.substring(2);
                 }
             } else {
+                if (!blockchainConfig.isMockMode()) {
+                    context.apiRejectedRequests.incrementAndGet();
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "Chain-backed modes require a client-supplied proposalId from the authorize/payment contract flow (expected 0x-prefixed 32-byte hex).");
+                    return;
+                }
                 proposalId = java.util.UUID.randomUUID().toString();
+            }
+
+            if (!blockchainConfig.isMockMode() && !isChainBackedProposalId(proposalId)) {
+                context.apiRejectedRequests.incrementAndGet();
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "Chain-backed modes require proposalId to be a 0x-prefixed 32-byte hex value. UUID proposalIds are mock-only.");
+                return;
             }
 
             // Check if proposal queue manager is available
             if (context.proposalQueueManager == null) {
+                if (!blockchainConfig.isMockMode()) {
+                    context.apiRejectedRequests.incrementAndGet();
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                        "Proposal queue unavailable. Chain-backed modes require queued verification and cannot fall back to immediate append.");
+                    return;
+                }
                 log.warn("⚠️  ProposalQueueManager not available - falling back to immediate append");
                 // Fallback: immediate append (for backward compatibility)
                 if (context.aeronConsensusEngine == null) {
@@ -834,6 +853,10 @@ public class WriteProposalHandler {
             return true;
         }
         return value.matches("(?i)^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
+    }
+
+    private static boolean isChainBackedProposalId(String proposalId) {
+        return proposalId != null && proposalId.trim().matches("(?i)^0x[a-f0-9]{64}$");
     }
 
     private static boolean isPriorityTier(String paymentTier) {

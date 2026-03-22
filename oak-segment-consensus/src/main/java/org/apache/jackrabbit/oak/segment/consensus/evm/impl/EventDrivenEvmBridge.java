@@ -453,8 +453,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
             
         } catch (Exception e) {
             log.error("❌ Failed to start Web3j event subscription", e);
-            // Fall back to mock mode
-            log.warn("⚠️  Falling back to mock mode due to Web3j connection failure");
+            log.warn("⚠️  Chain-backed verification is unavailable until the Web3j subscription can connect and recover");
         }
     }
     

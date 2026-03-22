@@ -44,6 +44,8 @@ import org.junit.rules.TemporaryFolder;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -121,6 +123,7 @@ public class ConsensusServicesInitializerTest {
         when(blockchainConfig.isMockMode()).thenReturn(false);
         when(blockchainConfig.getNetwork()).thenReturn("sepolia");
         when(blockchainConfig.getContractAddress()).thenReturn("0xdef");
+        when(blockchainConfig.getRpcUrl()).thenReturn("https://rpc.example.invalid");
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         BeaconChainClient beaconClient = mock(BeaconChainClient.class);
@@ -158,6 +161,111 @@ public class ConsensusServicesInitializerTest {
         proposalFactory.raftAppendCallback.appendProposal("0xwallet", "/a", "text/plain", "body", "sig");
         proposalFactory.raftAppendCallback.appendDeleteProposal("0xwallet", "/a", "sig");
         assertEquals(0, proposalFactory.raftAppendCallback.appendProposalBatch(Collections.<QueuedProposal>emptyList()));
+    }
+
+    @Test
+    public void testInitializeRejectsMainnetModeForV1() throws Exception {
+        TestContext testContext = newTestContext();
+        BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
+        when(blockchainConfig.isMockMode()).thenReturn(false);
+        when(blockchainConfig.getNetwork()).thenReturn("mainnet");
+        when(blockchainConfig.getRpcUrl()).thenReturn("https://rpc.example.invalid");
+        when(blockchainConfig.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
+
+        ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
+            () -> blockchainConfig,
+            ignored -> mock(EvmBridge.class),
+            ignored -> mock(BeaconChainClient.class),
+            (evmBridge, raftAppendCallback, backpressureManager, beaconClient, proposalPersistenceDir) ->
+                mock(ProposalQueueManagerOptimized.class),
+            wallets -> mock(ValidatorEarningsTracker.class),
+            (property, env, defaultValue) -> defaultValue
+        );
+
+        try {
+            initializer.initialize(
+                testContext.aeronEngine,
+                testContext.httpServer,
+                testContext.wallet,
+                testContext.storeDir.toString(),
+                "https://beacon.example",
+                "0xcluster",
+                Collections.singletonList("node-1")
+            );
+            fail("Expected mainnet mode to be rejected for v1");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage().contains("MAINNET mode is disabled"));
+        }
+    }
+
+    @Test
+    public void testInitializeRejectsSepoliaWithoutRpcUrl() throws Exception {
+        TestContext testContext = newTestContext();
+        BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
+        when(blockchainConfig.isMockMode()).thenReturn(false);
+        when(blockchainConfig.getNetwork()).thenReturn("sepolia");
+        when(blockchainConfig.getRpcUrl()).thenReturn(null);
+        when(blockchainConfig.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
+
+        ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
+            () -> blockchainConfig,
+            ignored -> mock(EvmBridge.class),
+            ignored -> mock(BeaconChainClient.class),
+            (evmBridge, raftAppendCallback, backpressureManager, beaconClient, proposalPersistenceDir) ->
+                mock(ProposalQueueManagerOptimized.class),
+            wallets -> mock(ValidatorEarningsTracker.class),
+            (property, env, defaultValue) -> defaultValue
+        );
+
+        try {
+            initializer.initialize(
+                testContext.aeronEngine,
+                testContext.httpServer,
+                testContext.wallet,
+                testContext.storeDir.toString(),
+                "https://beacon.example",
+                "0xcluster",
+                Collections.singletonList("node-1")
+            );
+            fail("Expected sepolia mode without RPC URL to be rejected");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage().contains("Chain-backed modes require OAK_BLOCKCHAIN_RPC_URL"));
+        }
+    }
+
+    @Test
+    public void testInitializeRejectsSepoliaPlaceholderContract() throws Exception {
+        TestContext testContext = newTestContext();
+        BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
+        when(blockchainConfig.isMockMode()).thenReturn(false);
+        when(blockchainConfig.getNetwork()).thenReturn("sepolia");
+        when(blockchainConfig.getRpcUrl()).thenReturn("https://rpc.example.invalid");
+        when(blockchainConfig.getContractAddress()).thenReturn("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
+
+        ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
+            () -> blockchainConfig,
+            ignored -> mock(EvmBridge.class),
+            ignored -> mock(BeaconChainClient.class),
+            (evmBridge, raftAppendCallback, backpressureManager, beaconClient, proposalPersistenceDir) ->
+                mock(ProposalQueueManagerOptimized.class),
+            wallets -> mock(ValidatorEarningsTracker.class),
+            (property, env, defaultValue) -> defaultValue
+        );
+
+        try {
+            initializer.initialize(
+                testContext.aeronEngine,
+                testContext.httpServer,
+                testContext.wallet,
+                testContext.storeDir.toString(),
+                "https://beacon.example",
+                "0xcluster",
+                Collections.singletonList("node-1")
+            );
+            fail("Expected placeholder Sepolia contract to be rejected");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage().contains("example and zero-address defaults are not valid"));
+        }
     }
 
     @Test

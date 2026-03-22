@@ -69,6 +69,9 @@ public class DeleteProposalHandler {
         }
 
         try {
+            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig =
+                org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+
             // Read parameters
             // CRITICAL: walletAddress is REQUIRED and must be a valid 0x Ethereum address
             String wallet = request.getParameter("walletAddress");
@@ -175,6 +178,17 @@ public class DeleteProposalHandler {
             }
 
             log.debug("🗑️  DELETE PROPOSAL: client={}, wallet={}, path={}", clientId, wallet, contentPath);
+
+            if (!blockchainConfig.isMockMode()) {
+                context.apiRejectedRequests.incrementAndGet();
+                ApiErrorUtil.sendJsonError(
+                    response,
+                    HttpServletResponse.SC_NOT_IMPLEMENTED,
+                    "delete_chain_mode_unsupported",
+                    "Delete proposals are only supported in MOCK mode for oak-chain v1. SEPOLIA/MAINNET delete payment flow is not merge-ready."
+                );
+                return;
+            }
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // ETHEREUM PAYMENT REQUIRED: Deletes flow through same pipeline as writes
