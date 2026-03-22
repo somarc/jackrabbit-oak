@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oak Segment Consensus Coverage Atlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f6f1ea;
+      --surface: rgba(255,255,255,0.8);
+      --border: rgba(26, 43, 60, 0.12);
+      --text: #1f2c38;
+      --text-dim: #5d6a78;
+      --ink: #1e3a5f;
+      --accent: #b85a2b;
+      --accent-soft: rgba(184, 90, 43, 0.12);
+      --sage: #6f8663;
+      --shadow: 0 22px 56px rgba(26, 33, 41, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 10%, rgba(111, 134, 99, 0.12), transparent 24rem),
+        radial-gradient(circle at 85% 0%, rgba(184, 90, 43, 0.14), transparent 26rem),
+        linear-gradient(180deg, #fbf8f4 0%, var(--bg) 100%);
+    }
+    .shell {
+      width: min(1120px, calc(100vw - 2rem));
+      margin: 0 auto;
+      padding: 2.5rem 0 4rem;
+    }
+    .hero, .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+    .hero {
+      padding: 2.4rem;
+      display: grid;
+      gap: 1.1rem;
+    }
+    .eyebrow {
+      font: 500 0.82rem/1 "IBM Plex Mono", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.17em;
+      color: var(--accent);
+    }
+    h1 {
+      margin: 0;
+      font: 400 clamp(2.3rem, 5vw, 4.4rem)/0.94 "Instrument Serif", serif;
+      color: var(--ink);
+      max-width: 11ch;
+    }
+    .lede {
+      max-width: 62ch;
+      line-height: 1.65;
+      color: var(--text-dim);
+      margin: 0;
+    }
+    .grid {
+      margin-top: 1.4rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .metric, .card {
+      padding: 1.3rem 1.4rem;
+    }
+    .metric {
+      background: rgba(255,255,255,0.7);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+    }
+    .metric .label {
+      font: 500 0.75rem/1 "IBM Plex Mono", monospace;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .metric .value {
+      margin-top: 0.45rem;
+      font-size: 2.1rem;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .card h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 1.15rem;
+    }
+    .card p {
+      color: var(--text-dim);
+      line-height: 1.65;
+    }
+    .pill {
+      display: inline-flex;
+      padding: 0.35rem 0.7rem;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font: 500 0.8rem/1 "IBM Plex Mono", monospace;
+    }
+    .capture {
+      margin-top: 1.5rem;
+    }
+    .capture a {
+      text-decoration: none;
+      color: inherit;
+      display: block;
+    }
+    .cta {
+      display: inline-flex;
+      margin-top: 0.4rem;
+      width: fit-content;
+      padding: 0.85rem 1rem;
+      border-radius: 999px;
+      background: var(--ink);
+      color: #fffaf5;
+      text-decoration: none;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="eyebrow">Coverage Atlas</div>
+      <h1>Oak Segment Consensus</h1>
+      <p class="lede">
+        This scope tracks a specific claim: the coverage refactor was not just test work. It acted as a forcing
+        function that broke a broad monolith intent into specific, named, verifiable surfaces. The first capture
+        records that trajectory and the v1 merge gate it now supports.
+      </p>
+      <div class="grid">
+        <div class="metric">
+          <div class="label">Current line</div>
+          <div class="value">58.03%</div>
+        </div>
+        <div class="metric">
+          <div class="label">Current branch</div>
+          <div class="value">45.56%</div>
+        </div>
+        <div class="metric">
+          <div class="label">Target</div>
+          <div class="value">70 / 55</div>
+        </div>
+      </div>
+    </section>
+    <section class="capture">
+      <article class="card">
+        <div class="pill">2026-03-21 capture</div>
+        <h2>Coverage trajectory from user baseline to structured v1 surfaces</h2>
+        <p>
+          The capture follows the staircase from the user-reported baseline through handler, router, and Aeron seam
+          work, then reframes the outcome as architectural progress: deliverable modules tighten, POC surfaces get
+          pushed out of the gate, and the remaining leverage shifts into GC policy and execution code.
+        </p>
+        <a class="cta" href="./2026-03-21.html">Open Capture</a>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
