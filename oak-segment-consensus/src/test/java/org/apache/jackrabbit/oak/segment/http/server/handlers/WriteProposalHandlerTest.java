@@ -26,22 +26,32 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
+import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.After;
 import org.junit.Test;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.Part;
 import javax.servlet.http.HttpServletResponse;
+import java.io.ByteArrayInputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Optional;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -158,6 +168,42 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
+    public void testHandleProposeWriteRejectsSignatureWithoutHexPayload() throws Exception {
+        ServerContext context = readyContext();
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn("0x");
+        when(request.getParameter("message")).thenReturn("test");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Invalid signature: too short"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsSignatureWithNonHexCharacters() throws Exception {
+        ServerContext context = readyContext();
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn("0xzz11");
+        when(request.getParameter("message")).thenReturn("test");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Invalid signature format: must be valid hexadecimal"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
     public void testHandleProposeWriteRejectsMissingEthereumTxHash() throws Exception {
         ServerContext context = readyContext();
         WriteProposalHandler handler = new WriteProposalHandler(context);
@@ -171,6 +217,24 @@ public class WriteProposalHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("Missing ethereumTxHash parameter."));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsTransactionHashWithNonHexCharacters() throws Exception {
+        ServerContext context = readyContext();
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn("0xabcxyz12");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Invalid ethereumTxHash format: must be valid hexadecimal"));
         assertEquals(1L, context.apiRejectedRequests.get());
     }
 
@@ -197,7 +261,8 @@ public class WriteProposalHandlerTest {
     public void testHandleProposeWriteImmediateIngressFailureReturnsServerError() throws Exception {
         ServerContext context = readyContext();
         when(context.aeronConsensusEngine.sendWriteThroughIngress(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString()
+            anyString(), anyString(), anyString(), anyString(), anyString(),
+            nullable(String.class), nullable(String.class), nullable(String.class), anyString()
         )).thenReturn(false);
         WriteProposalHandler handler = new WriteProposalHandler(context);
         HttpServletRequest request = request();
@@ -314,6 +379,84 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
+    public void testHandleProposeWriteRejectsEnterpriseCidWhenCidServiceUnavailable() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        context.registeredClients.put(
+            "enterprise-1",
+            new ClientRegistration(
+                "enterprise-1",
+                "http://author-1:4502",
+                VALID_WALLET.toLowerCase(),
+                ClientRegistration.CLIENT_TYPE_ENTERPRISE
+            )
+        );
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("ipfsCid")).thenReturn("QmKnownCid");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("CID provenance service unavailable"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteAcceptsKnownEnterpriseCidAndQueuesProposal() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        context.registeredClients.put(
+            "enterprise-1",
+            new ClientRegistration(
+                "enterprise-1",
+                "http://author-1:4502",
+                VALID_WALLET.toLowerCase(),
+                ClientRegistration.CLIENT_TYPE_ENTERPRISE
+            )
+        );
+        context.cidMappingService = mock(CidMappingService.class);
+        when(context.cidMappingService.getOakBlobId("QmKnownCid")).thenReturn(Optional.of("blob-1"));
+        when(queueManager.queueProposal(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+            any(), nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
+        )).thenReturn(new QueuedProposal(
+            "proposal-1",
+            VALID_TX_HASH,
+            null,
+            System.currentTimeMillis(),
+            System.currentTimeMillis() + 300_000L,
+            ProposalState.PENDING
+        ));
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("ipfsCid")).thenReturn("QmKnownCid");
+        when(request.getParameter("message")).thenReturn("hello");
+        when(request.getParameter("contentType")).thenReturn("page");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        assertTrue(body.toString().contains("\"status\":\"accepted\""));
+        assertEquals(1L, context.apiIpfsPolicyAcceptedEnterpriseCid.get());
+        assertEquals(1L, context.apiAcceptedRequests.get());
+    }
+
+    @Test
     public void testHandleProposeWriteReturnsQueueOverloadedWhenAdmissionRejected() throws Exception {
         ServerContext context = readyContext();
         ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
@@ -339,6 +482,38 @@ public class WriteProposalHandlerTest {
         verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
         assertTrue(body.toString().contains("\"code\":\"queue_overloaded\""));
         assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteFallsBackToClientIdHeaderForImmediateIngress() throws Exception {
+        ServerContext context = new ServerContext(
+            null,
+            mock(NodeStore.class),
+            Paths.get("/tmp/store"),
+            "http://localhost:8090"
+        );
+        context.aeronConsensusEngine = baseEngine();
+        context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author", null));
+        when(context.aeronConsensusEngine.sendWriteThroughIngress(
+            anyString(), anyString(), anyString(), anyString(), anyString(),
+            nullable(String.class), nullable(String.class), nullable(String.class), anyString()
+        )).thenReturn(true);
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getHeader("X-Client-Id")).thenReturn("client-1");
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("message")).thenReturn("hello");
+        when(request.getParameter("contentType")).thenReturn("page");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        assertTrue(body.toString().contains("\"mode\":\"immediate\""));
+        assertTrue(body.toString().contains("\"newHead\":\"unknown\""));
     }
 
     @Test
@@ -401,6 +576,47 @@ public class WriteProposalHandlerTest {
 
         handler.handleProposeWrite(request, response);
 
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        assertTrue(body.toString().contains("\"status\":\"accepted\""));
+    }
+
+    @Test
+    public void testHandleProposeWriteAcceptsMultipartBinaryUpload() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        System.setProperty("oak.proposal.validator.binary.upload.enabled", "true");
+        System.setProperty("oak.proposal.validator.binary.requires.priority", "false");
+        BlockchainConfig.reset();
+
+        ServerContext context = readyContext();
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        BlobStore blobStore = mock(BlobStore.class);
+        context.proposalQueueManager = queueManager;
+        context.blobStore = blobStore;
+        context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author", VALID_WALLET.toLowerCase()));
+        when(blobStore.writeBlob(any())).thenReturn("blob-1");
+        when(queueManager.queueProposal(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+            any(), nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
+        )).thenReturn(new QueuedProposal(
+            "proposal-1",
+            VALID_TX_HASH,
+            null,
+            System.currentTimeMillis(),
+            System.currentTimeMillis() + 300_000L,
+            ProposalState.PENDING
+        ));
+
+        HttpServletRequest request = request();
+        when(request.getContentType()).thenReturn("multipart/form-data; boundary=test");
+        Collection<Part> parts = multipartParts();
+        when(request.getParts()).thenReturn(parts);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        handler.handleProposeWrite(request, response);
+
+        verify(blobStore).writeBlob(any());
         verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
         assertTrue(body.toString().contains("\"status\":\"accepted\""));
     }
@@ -475,6 +691,35 @@ public class WriteProposalHandlerTest {
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(request.getContentType()).thenReturn(null);
         return request;
+    }
+
+    private static Collection<Part> multipartParts() throws Exception {
+        return Arrays.asList(
+            fieldPart("walletAddress", VALID_WALLET),
+            fieldPart("signature", VALID_SIGNATURE),
+            fieldPart("ethereumTxHash", VALID_TX_HASH),
+            fieldPart("paymentTier", "priority"),
+            fieldPart("contentType", "page"),
+            fieldPart("message", "hello"),
+            filePart("binary", "asset.bin", "application/octet-stream", new byte[] {1, 2, 3})
+        );
+    }
+
+    private static Part fieldPart(String name, String value) throws Exception {
+        Part part = mock(Part.class);
+        when(part.getName()).thenReturn(name);
+        when(part.getSubmittedFileName()).thenReturn(null);
+        when(part.getInputStream()).thenReturn(new ByteArrayInputStream(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        return part;
+    }
+
+    private static Part filePart(String name, String filename, String contentType, byte[] bytes) throws Exception {
+        Part part = mock(Part.class);
+        when(part.getName()).thenReturn(name);
+        when(part.getSubmittedFileName()).thenReturn(filename);
+        when(part.getContentType()).thenReturn(contentType);
+        when(part.getInputStream()).thenReturn(new ByteArrayInputStream(bytes));
+        return part;
     }
 
     private static HttpServletResponse responseWithBody(StringWriter body) throws Exception {
