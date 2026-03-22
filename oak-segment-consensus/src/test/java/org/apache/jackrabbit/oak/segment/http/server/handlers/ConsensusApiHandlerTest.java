@@ -17,8 +17,11 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.Rule;
@@ -30,12 +33,19 @@ import org.mockito.MockitoAnnotations;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
+import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
+import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -328,6 +338,33 @@ public class ConsensusApiHandlerTest {
         assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
     }
 
+    @Test
+    public void testGetOperationStatusDelegatesToOpsPayload() throws Exception {
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        when(mockRequest.getRequestURI()).thenReturn("/v1/ops/operations/proposal-123");
+        when(queueManager.getProposalStatus("proposal-123")).thenReturn(new ProposalStatus(
+            "proposal-123",
+            ProposalState.PROCESSED,
+            "0xabc",
+            1234L,
+            42L,
+            null,
+            DurabilityState.ACKED,
+            2345L,
+            null,
+            "head-123"
+        ));
+
+        handler.handleGetOperationStatus(mockRequest, mockResponse);
+
+        verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
+        String response = responseWriter.toString();
+        assertTrue(response.contains("\"contractVersion\":\"ops.v1\""));
+        assertTrue(response.contains("\"operationId\":\"proposal-123\""));
+        assertTrue(response.contains("\"state\":\"COMMITTED\""));
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // WALLET STATS ENDPOINT TESTS
     // ═══════════════════════════════════════════════════════════════
@@ -400,6 +437,69 @@ public class ConsensusApiHandlerTest {
         verify(mockResponse).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
     }
 
+    @Test
+    public void testGetQueueStatsReturnsQueueSnapshot() throws Exception {
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("pendingCount", 7);
+        when(queueManager.getQueueStats()).thenReturn(stats);
+
+        handler.handleGetQueueStats(mockResponse);
+
+        verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
+        assertTrue(responseWriter.toString().contains("\"pendingCount\":7"));
+    }
+
+    @Test
+    public void testGetProposalReleaseFlowReturnsAdaptivePayload() throws Exception {
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        Map<String, Object> flow = new LinkedHashMap<>();
+        flow.put("releaseMode", "adaptive-active");
+        when(queueManager.getProposalReleaseFlowStats()).thenReturn(flow);
+
+        handler.handleGetProposalReleaseFlow(mockResponse);
+
+        verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
+        String response = responseWriter.toString();
+        assertTrue(response.contains("\"contractVersion\":\"release-flow.v1\""));
+        assertTrue(response.contains("\"releaseMode\":\"adaptive-active\""));
+    }
+
+    @Test
+    public void testGetProposalEpochsMarksCompatibilityRouteAsDeprecated() throws Exception {
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        Map<String, Object> flow = new LinkedHashMap<>();
+        flow.put("currentEpoch", 42L);
+        when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
+
+        handler.handleGetProposalEpochs(mockResponse);
+
+        verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
+        String response = responseWriter.toString();
+        assertTrue(response.contains("\"deprecated\":true"));
+        assertTrue(response.contains("\"canonicalPath\":\"/v1/proposals/release-flow\""));
+    }
+
+    @Test
+    public void testGetOpsQueueSnapshotReturnsFreshPayload() throws Exception {
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("pendingCount", 11);
+        when(queueManager.getQueueStats()).thenReturn(stats);
+
+        handler.handleGetOpsQueueSnapshot(mockResponse);
+
+        verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
+        String response = responseWriter.toString();
+        assertTrue(response.contains("\"contractVersion\":\"ops.v1\""));
+        assertTrue(response.contains("\"degraded\":false"));
+        assertTrue(response.contains("\"pendingCount\":11"));
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // API METRICS TRACKING TESTS
     // ═══════════════════════════════════════════════════════════════
@@ -448,6 +548,31 @@ public class ConsensusApiHandlerTest {
     }
 
     @Test
+    public void testRefreshCallbacksBindsLateDurabilityFailureCallback() {
+        ServerContext lateContext = new ServerContext(
+            mock(FileStore.class, RETURNS_DEEP_STUBS),
+            mock(NodeStore.class),
+            tempFolder.getRoot().toPath(),
+            "http://localhost:8090"
+        );
+        ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        AeronConsensusEngine aeronEngine = mock(AeronConsensusEngine.class);
+
+        lateContext.setAeronConsensusEngine(aeronEngine);
+        lateHandler.refreshCallbacks();
+
+        ArgumentCaptor<AeronConsensusEngine.DurabilityStatusCallback> captor =
+            ArgumentCaptor.forClass(AeronConsensusEngine.DurabilityStatusCallback.class);
+        verify(aeronEngine).setDurabilityStatusCallback(captor.capture());
+
+        lateContext.setProposalQueueManager(queueManager);
+        captor.getValue().onFailure("proposal-2", "disk-full");
+
+        verify(queueManager).updateDurability("proposal-2", DurabilityState.FAILED, null, "disk-full");
+    }
+
+    @Test
     public void testApplyReplicatedWriteSendsDurabilityAfterLateEngineBinding() {
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         when(fileStore.getHead().getRecordId().toString10()).thenReturn("new-head");
@@ -483,6 +608,145 @@ public class ConsensusApiHandlerTest {
         verify(aeronEngine).sendQueueSegment("proposal-1");
         verify(aeronEngine).sendSegmentPersisted("proposal-1", "new-head", true, null);
         verify(queueManager, never()).updateDurability("proposal-1", DurabilityState.ACKED, "new-head", null);
+    }
+
+    @Test
+    public void testApplyReplicatedDeleteSendsDurabilityAfterLateEngineBinding() throws Exception {
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString10()).thenReturn("delete-head");
+
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedNode(nodeStore,
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1");
+
+        ServerContext lateContext = new ServerContext(
+            fileStore,
+            nodeStore,
+            tempFolder.getRoot().toPath(),
+            "http://localhost:8090"
+        );
+        ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
+        AeronConsensusEngine aeronEngine = mock(AeronConsensusEngine.class);
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+
+        when(aeronEngine.isLeader()).thenReturn(true);
+        lateContext.setAeronConsensusEngine(aeronEngine);
+        lateHandler.refreshCallbacks();
+        lateContext.setProposalQueueManager(queueManager);
+
+        lateHandler.applyReplicatedDelete(
+            "0x1234567890abcdef1234567890abcdef12345678",
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
+            "0xsig",
+            "proposal-delete-1"
+        );
+
+        verify(aeronEngine).sendQueueSegment("proposal-delete-1");
+        verify(aeronEngine).sendSegmentPersisted("proposal-delete-1", "delete-head", true, null);
+        assertFalse(nodeExists(nodeStore,
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1"));
+    }
+
+    @Test
+    public void testApplyReplicatedWriteTracksFragmentationForNewTarFiles() throws Exception {
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString()).thenReturn("previous-head");
+        when(fileStore.getHead().getRecordId().toString10()).thenReturn("tracked-head");
+
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        Path storeDir = tempFolder.newFolder("fragmentation-store").toPath();
+        Files.write(storeDir.resolve("data00000a.tar"), new byte[16]);
+        Files.write(storeDir.resolve("data00001a.tar"), new byte[32]);
+
+        ServerContext fragmentationContext = new ServerContext(
+            fileStore,
+            nodeStore,
+            storeDir,
+            "http://localhost:8090"
+        );
+        fragmentationContext.fragmentationTracker = new FragmentationTracker();
+        ConsensusApiHandler fragmentationHandler = new ConsensusApiHandler(fragmentationContext);
+
+        fragmentationHandler.applyReplicatedWrite(
+            "0x1234567890abcdef1234567890abcdef12345678",
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
+            "page",
+            "{\"title\":\"Hello\"}",
+            "0xsig",
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+
+        FragmentationTracker.EntityFragmentationMetrics metrics =
+            fragmentationContext.fragmentationTracker.getMetrics("0x1234567890abcdef1234567890abcdef12345678");
+        assertNotNull(metrics);
+        assertEquals(2, metrics.tarFilesCreated);
+        assertTrue(fragmentationContext.fragmentationTracker
+            .getTarFilesForEntity("0x1234567890abcdef1234567890abcdef12345678")
+            .contains("data00000a.tar"));
+        assertTrue(nodeExists(nodeStore,
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1"));
+    }
+
+    @Test
+    public void testApplyReplicatedWriteFailureFallsBackToQueueDurabilityWithoutEngine() {
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString()).thenReturn("previous-head");
+
+        ServerContext lateContext = new ServerContext(
+            fileStore,
+            new MemoryNodeStore(),
+            tempFolder.getRoot().toPath(),
+            "http://localhost:8090"
+        );
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        lateContext.setProposalQueueManager(queueManager);
+        ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
+
+        assertThrows(RuntimeException.class, () -> lateHandler.applyReplicatedWrite(
+            "0x1234567890abcdef1234567890abcdef12345678",
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
+            "page",
+            "{\"title\":\"Hello\"}",
+            null,
+            null,
+            null,
+            null,
+            null,
+            "proposal-failure-1"
+        ));
+
+        verify(queueManager).updateDurability(
+            eq("proposal-failure-1"),
+            eq(DurabilityState.FAILED),
+            isNull(),
+            contains("SECURITY VIOLATION")
+        );
+    }
+
+    private static void seedNode(MemoryNodeStore nodeStore, String path) throws Exception {
+        NodeBuilder root = nodeStore.getRoot().builder();
+        NodeBuilder current = root;
+        for (String part : path.split("/")) {
+            if (!part.isEmpty()) {
+                current = current.child(part);
+            }
+        }
+        current.setProperty("title", "seed");
+        nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+    }
+
+    private static boolean nodeExists(MemoryNodeStore nodeStore, String path) {
+        org.apache.jackrabbit.oak.spi.state.NodeState current = nodeStore.getRoot();
+        for (String part : path.split("/")) {
+            if (!part.isEmpty()) {
+                current = current.getChildNode(part);
+            }
+        }
+        return current.exists();
     }
 
     private void assertJsonErrorStatus(int status) {
