@@ -24,6 +24,8 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
+import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.After;
 import org.junit.Test;
@@ -33,6 +35,8 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 
 import static org.junit.Assert.assertEquals;
@@ -227,6 +231,86 @@ public class WriteProposalHandlerTest {
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("Invalid paymentTier: 'gold'. Must be 'standard', 'express', or 'priority'."));
         assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsInvalidOrganizationName() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("organization")).thenReturn("bad org!");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Organization name must be alphanumeric, hyphens, underscores only"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsAmbiguousBinarySources() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("ipfsCid")).thenReturn("bafy-test");
+        when(request.getParameter("binaryData")).thenReturn("AQID");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Ambiguous binary source: provide either ipfsCid or validator-hosted binary payload"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsUnknownEnterpriseCid() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        Path storageDir = Files.createTempDirectory("write-proposal-cids");
+        try {
+            ServerContext context = readyContext();
+            context.registeredClients.put(
+                "enterprise-1",
+                new ClientRegistration(
+                    "enterprise-1",
+                    "http://author-1:4502",
+                    VALID_WALLET.toLowerCase(),
+                    ClientRegistration.CLIENT_TYPE_ENTERPRISE
+                )
+            );
+            context.cidMappingService = new CidMappingService(storageDir);
+            WriteProposalHandler handler = new WriteProposalHandler(context);
+            HttpServletRequest request = request();
+            when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+            when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+            when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+            when(request.getParameter("ipfsCid")).thenReturn("QmUnknownCid");
+            StringWriter body = new StringWriter();
+            HttpServletResponse response = responseWithBody(body);
+
+            handler.handleProposeWrite(request, response);
+
+            verify(response).setStatus(422);
+            assertTrue(body.toString().contains("\"code\":\"unknown_ipfs_cid\""));
+            assertEquals(1L, context.apiRejectedRequests.get());
+        } finally {
+            Files.deleteIfExists(storageDir.resolve("cid-mappings.properties"));
+            Files.deleteIfExists(storageDir);
+        }
     }
 
     @Test

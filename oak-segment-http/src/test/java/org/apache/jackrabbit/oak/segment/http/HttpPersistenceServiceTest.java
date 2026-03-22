@@ -36,6 +36,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.atLeastOnce;
 
 public class HttpPersistenceServiceTest {
 
@@ -86,6 +87,18 @@ public class HttpPersistenceServiceTest {
         service.activate(bundleContext, config(true, 1, 250));
 
         waitFor(() -> service.isValidatorAvailable(), 1000);
+        waitFor(() -> {
+            try {
+                verify(bundleContext, atLeastOnce()).registerService(
+                    eq(SegmentNodeStorePersistence.class),
+                    same((SegmentNodeStorePersistence) service),
+                    any(Dictionary.class)
+                );
+                return true;
+            } catch (AssertionError e) {
+                return false;
+            }
+        }, 1000);
 
         assertTrue(service.isLazyMount());
         assertTrue(service.isValidatorAvailable());

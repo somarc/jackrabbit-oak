@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
@@ -91,6 +92,48 @@ public class FragmentationApiHandlerTest {
     }
 
     @Test
+    public void testGetEntityMetricsReturns404WhenWalletUnknown() throws Exception {
+        context.fragmentationTracker = new FragmentationTracker();
+
+        handler.handleGetEntityMetrics(request, response, "0xmissing");
+
+        verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+        assertTrue(body.toString().contains("\"error\":\"No metrics found for wallet: 0xmissing\""));
+    }
+
+    @Test
+    public void testGetEntityMetricsReturnsTrackedWalletPayload() throws Exception {
+        FragmentationTracker tracker = new FragmentationTracker();
+        tracker.recordWrite("0xabc", "data00001a.tar", 2048L);
+        context.fragmentationTracker = tracker;
+
+        handler.handleGetEntityMetrics(request, response, "0xabc");
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"walletAddress\":\"0xabc\""));
+        assertTrue(json.contains("\"tarFiles\":[\"data00001a.tar\"]"));
+        assertTrue(json.contains("\"totalBytesWritten\":2048"));
+    }
+
+    @Test
+    public void testGetTopFragmentedDefaultsInvalidLimitToTen() throws Exception {
+        FragmentationTracker tracker = new FragmentationTracker();
+        tracker.recordWrite("0xabc", "data00001a.tar", 1024L);
+        tracker.recordWrite("0xdef", "data00001b.tar", 2048L);
+        context.fragmentationTracker = tracker;
+        when(request.getParameter("limit")).thenReturn("not-a-number");
+
+        handler.handleGetTopFragmented(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"limit\":10"));
+        assertTrue(json.contains("\"walletAddress\":\"0xabc\""));
+        assertTrue(json.contains("\"walletAddress\":\"0xdef\""));
+    }
+
+    @Test
     public void testGetGcStatusReturnsSummary() throws Exception {
         GCProposalManager gcManager = mock(GCProposalManager.class);
         GCProposal proposal = new GCProposal();
@@ -111,6 +154,29 @@ public class FragmentationApiHandlerTest {
         assertTrue(json.contains("\"lastGcRun\":12345"));
         assertTrue(json.contains("\"lastGcReclaimedMB\":42"));
         assertTrue(json.contains("\"lastGcCostUSDC\":\"4.25\""));
+    }
+
+    @Test
+    public void testGetCompactionProposalsSerializesProposalVotes() throws Exception {
+        GCProposalManager gcManager = mock(GCProposalManager.class);
+        GCProposal proposal = new GCProposal();
+        proposal.proposalId = "gc-1";
+        proposal.proposerWallet = "0xabc";
+        proposal.targetRevision = "rev-1";
+        proposal.estimatedReclaimableSizeMB = 64L;
+        proposal.estimatedCostUSDC = new BigDecimal("6.40");
+        proposal.addVote(1, true, "looks good");
+        context.gcProposalManager = gcManager;
+        when(gcManager.getPendingProposals()).thenReturn(Collections.singletonList(proposal));
+
+        handler.handleGetCompactionProposals(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"proposalId\":\"gc-1\""));
+        assertTrue(json.contains("\"state\":\"VOTING\""));
+        assertTrue(json.contains("\"approveVotes\":1"));
+        assertTrue(json.contains("\"votes\":{\"1\":"));
     }
 
     @Test
@@ -153,6 +219,33 @@ public class FragmentationApiHandlerTest {
     }
 
     @Test
+    public void testProposeGcFallsBackToQueryParametersAndReplicatesThroughAeron() throws Exception {
+        GCProposalManager gcManager = mock(GCProposalManager.class);
+        GCProposal proposal = new GCProposal();
+        proposal.proposalId = "gc-proposal-2";
+        proposal.proposerWallet = "0xabc";
+        proposal.targetRevision = "rev-q";
+        proposal.estimatedReclaimableSizeMB = 64L;
+        proposal.estimatedCostUSDC = new BigDecimal("6.40");
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        context.gcProposalManager = gcManager;
+        context.aeronConsensusEngine = engine;
+        when(request.getContentType()).thenReturn("application/x-www-form-urlencoded");
+        when(request.getParameter("walletAddress")).thenReturn("0xabc");
+        when(request.getParameter("wallet")).thenReturn(null);
+        when(request.getParameter("targetRevision")).thenReturn("rev-q");
+        when(gcManager.proposeGC("0xabc", "rev-q")).thenReturn(proposal);
+        when(engine.sendGCProposalThroughIngress("gc-proposal-2", "0xabc", "rev-q", 64L, "6.40")).thenReturn(true);
+
+        handler.handleProposeGC(request, response);
+
+        verify(gcManager).proposeGC("0xabc", "rev-q");
+        verify(engine).sendGCProposalThroughIngress("gc-proposal-2", "0xabc", "rev-q", 64L, "6.40");
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        assertTrue(body.toString().contains("\"proposalId\":\"gc-proposal-2\""));
+    }
+
+    @Test
     public void testExecuteGcRejectsMissingProposalId() throws Exception {
         context.gcProposalManager = mock(GCProposalManager.class);
         when(request.getContentType()).thenReturn("application/x-www-form-urlencoded");
@@ -165,6 +258,20 @@ public class FragmentationApiHandlerTest {
     }
 
     @Test
+    public void testExecuteGcReturns404WhenProposalMissing() throws Exception {
+        GCProposalManager gcManager = mock(GCProposalManager.class);
+        context.gcProposalManager = gcManager;
+        when(request.getContentType()).thenReturn("application/x-www-form-urlencoded");
+        when(request.getParameter("proposalId")).thenReturn("missing");
+        when(gcManager.executeGC("missing", 0)).thenThrow(new IllegalArgumentException("Proposal not found"));
+
+        handler.handleExecuteGC(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+        assertTrue(body.toString().contains("\"error\":\"Proposal not found\""));
+    }
+
+    @Test
     public void testVoteGcRejectsMissingProposalId() throws Exception {
         context.gcProposalManager = mock(GCProposalManager.class);
         when(request.getContentType()).thenReturn("application/x-www-form-urlencoded");
@@ -174,6 +281,30 @@ public class FragmentationApiHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("proposalId parameter required"));
+    }
+
+    @Test
+    public void testVoteGcFallsBackToQueryParametersAndReturnsProposalSummary() throws Exception {
+        GCProposalManager gcManager = mock(GCProposalManager.class);
+        GCProposal proposal = new GCProposal();
+        proposal.proposalId = "gc-1";
+        context.gcProposalManager = gcManager;
+        when(request.getContentType()).thenReturn("application/x-www-form-urlencoded");
+        when(request.getParameter("proposalId")).thenReturn("gc-1");
+        when(request.getParameter("validatorId")).thenReturn("3");
+        when(request.getParameter("approve")).thenReturn("false");
+        when(request.getParameter("reason")).thenReturn("too expensive");
+        when(gcManager.getProposal("gc-1")).thenReturn(proposal);
+
+        handler.handleVoteGC(request, response);
+
+        verify(gcManager).voteOnProposal("gc-1", 3, false, "too expensive");
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"validatorId\":3"));
+        assertTrue(json.contains("\"approve\":false"));
+        assertTrue(json.contains("\"replicationAttempted\":false"));
+        assertTrue(json.contains("\"proposal\":{\"proposalId\":\"gc-1\""));
     }
 
     @Test
@@ -201,6 +332,33 @@ public class FragmentationApiHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("\"error\":\"amount parameter required\""));
+    }
+
+    @Test
+    public void testSetDebtLimitUpdatesAccountState() throws Exception {
+        context.gcAccountManager = new GCAccountManager();
+        when(request.getParameter("limit")).thenReturn("12.5");
+
+        handler.handleSetDebtLimit(request, response, "0xwallet");
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"success\":true"));
+        assertTrue(json.contains("\"debtLimit\":\"12.5\""));
+    }
+
+    @Test
+    public void testExecutePendingDebtMovesPendingBalanceToExecuted() throws Exception {
+        GCAccountManager accountManager = new GCAccountManager();
+        accountManager.addDebt("0xwallet", "/oak-chain/test", 5L);
+        context.gcAccountManager = accountManager;
+
+        handler.handleExecutePendingDebt(request, response, "0xwallet");
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"converted\":\"0.50\""));
+        assertTrue(json.contains("\"executedDebt\":\"0.50\""));
     }
 
     @Test

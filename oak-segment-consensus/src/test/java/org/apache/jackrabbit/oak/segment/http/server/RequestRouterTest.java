@@ -287,6 +287,64 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testGcAccountSetLimitRouteUpdatesDebtLimit() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.gcAccountManager = new GCAccountManager();
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/v1/gc/account/0xwallet/set-limit");
+            when(request.getParameter("limit")).thenReturn("12.5");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"debtLimit\":\"12.5\""));
+        });
+    }
+
+    @Test
+    public void testGcAccountExecutePendingRouteConvertsPendingDebt() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            GCAccountManager accountManager = new GCAccountManager();
+            accountManager.addDebt("0xwallet", "/oak-chain/demo", 5L);
+            context.gcAccountManager = accountManager;
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/v1/gc/account/0xwallet/execute-pending");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"converted\":\"0.50\""));
+            assertTrue(body.toString().contains("\"executedDebt\":\"0.50\""));
+        });
+    }
+
+    @Test
+    public void testFragmentationEntityRouteReturns404WhenWalletUnknown() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.fragmentationTracker = new FragmentationTracker();
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/fragmentation/metrics/0xmissing");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+            assertTrue(body.toString().contains("No metrics found for wallet: 0xmissing"));
+        });
+    }
+
+    @Test
     public void testGcTriggerRouteExecutesCycle() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
