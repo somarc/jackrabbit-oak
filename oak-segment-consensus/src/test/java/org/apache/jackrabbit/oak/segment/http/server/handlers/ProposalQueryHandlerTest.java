@@ -51,16 +51,8 @@ public class ProposalQueryHandlerTest {
 
     @Before
     public void setUp() throws Exception {
-        ServerContext context = new ServerContext(
-            mock(FileStore.class),
-            mock(NodeStore.class),
-            Paths.get("/tmp/store"),
-            "http://localhost:8090"
-        );
         queueManager = mock(ProposalQueueManagerOptimized.class);
-        context.proposalQueueManager = queueManager;
-
-        handler = new ProposalQueryHandler(context);
+        handler = newHandler(queueManager);
         request = mock(HttpServletRequest.class);
         response = mock(HttpServletResponse.class);
         body = new StringWriter();
@@ -75,6 +67,54 @@ public class ProposalQueryHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("\"error\":\"Invalid proposal ID\""));
+    }
+
+    @Test
+    public void testGetProposalStatusReturnsProposalPayload() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/proposals/proposal-123/status");
+        when(queueManager.getProposalStatus("proposal-123")).thenReturn(new ProposalStatus(
+            "proposal-123",
+            ProposalState.CONFIRMED,
+            "0xabc",
+            1234L,
+            null,
+            null,
+            null,
+            0L,
+            null,
+            null
+        ));
+
+        handler.handleGetProposalStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"proposalId\":\"proposal-123\""));
+        assertTrue(json.contains("\"state\":\"CONFIRMED\""));
+        assertTrue(json.contains("\"confirmedBlock\":-1"));
+        assertTrue(json.contains("\"durabilityState\":\"UNKNOWN\""));
+    }
+
+    @Test
+    public void testGetProposalStatusReturnsNotFoundWhenProposalMissing() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/proposals/proposal-404/status");
+        when(queueManager.getProposalStatus("proposal-404")).thenReturn(null);
+
+        handler.handleGetProposalStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+        assertTrue(body.toString().contains("\"error\":\"Proposal not found\""));
+    }
+
+    @Test
+    public void testGetProposalStatusRejectsWhenQueueUnavailable() throws Exception {
+        ProposalQueryHandler noQueueHandler = newHandler(null);
+        when(request.getRequestURI()).thenReturn("/v1/proposals/proposal-123/status");
+
+        noQueueHandler.handleGetProposalStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"Proposal queue not available\""));
     }
 
     @Test
@@ -105,6 +145,67 @@ public class ProposalQueryHandlerTest {
     }
 
     @Test
+    public void testGetOperationStatusRejectsInvalidOperationId() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/ops/operations/");
+
+        handler.handleGetOperationStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("\"error\":\"Invalid operation ID\""));
+    }
+
+    @Test
+    public void testGetOperationStatusReturnsQueuedForPendingProposal() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/ops/operations/proposal-pending");
+        when(queueManager.getProposalStatus("proposal-pending")).thenReturn(new ProposalStatus(
+            "proposal-pending",
+            ProposalState.PENDING,
+            "0xdef",
+            9999L,
+            null,
+            null,
+            null,
+            0L,
+            null,
+            null
+        ));
+
+        handler.handleGetOperationStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"state\":\"QUEUED\""));
+        assertTrue(json.contains("\"completedAtMs\":null"));
+        assertTrue(json.contains("\"error\":null"));
+    }
+
+    @Test
+    public void testGetOperationStatusReturnsFailedWithDurabilityError() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/ops/operations/proposal-failed");
+        when(queueManager.getProposalStatus("proposal-failed")).thenReturn(new ProposalStatus(
+            "proposal-failed",
+            ProposalState.PROCESSED,
+            "0xabc",
+            4321L,
+            99L,
+            "quorum lost",
+            DurabilityState.FAILED,
+            9876L,
+            "durability write failed",
+            "head-err"
+        ));
+
+        handler.handleGetOperationStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"state\":\"FAILED\""));
+        assertTrue(json.contains("\"error\":{\"code\":\"OPERATION_FAILED\""));
+        assertTrue(json.contains("\"message\":\"durability write failed\""));
+        assertTrue(json.contains("\"retryable\":false"));
+    }
+
+    @Test
     public void testGetOperationStatusReturnsTimedOutRetryableError() throws Exception {
         when(request.getRequestURI()).thenReturn("/v1/ops/operations/proposal-timeout");
         when(queueManager.getProposalStatus("proposal-timeout")).thenReturn(new ProposalStatus(
@@ -128,6 +229,62 @@ public class ProposalQueryHandlerTest {
         assertTrue(json.contains("\"error\":{\"code\":\"OPERATION_TIMED_OUT\""));
         assertTrue(json.contains("\"message\":\"Timeout waiting for transaction confirmation\""));
         assertTrue(json.contains("\"retryable\":true"));
+    }
+
+    @Test
+    public void testGetOperationStatusReturnsNotFoundWhenOperationMissing() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/ops/operations/proposal-missing");
+        when(queueManager.getProposalStatus("proposal-missing")).thenReturn(null);
+
+        handler.handleGetOperationStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+        assertTrue(body.toString().contains("\"error\":\"Operation not found\""));
+    }
+
+    @Test
+    public void testGetPendingCountReturnsCurrentCount() throws Exception {
+        when(queueManager.getPendingCount()).thenReturn(7);
+
+        handler.handleGetPendingCount(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        assertTrue(body.toString().contains("\"pendingCount\":7"));
+    }
+
+    @Test
+    public void testGetPendingCountReturnsServerErrorWhenQueueFails() throws Exception {
+        when(queueManager.getPendingCount()).thenThrow(new IllegalStateException("broken counter"));
+
+        handler.handleGetPendingCount(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        assertTrue(body.toString().contains("\"error\":\"Error: broken counter\""));
+    }
+
+    @Test
+    public void testGetQueueStatsReturnsQueuePayload() throws Exception {
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("pendingCount", 3);
+        stats.put("oldestAgeMs", 55L);
+        when(queueManager.getQueueStats()).thenReturn(stats);
+
+        handler.handleGetQueueStats(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"pendingCount\":3"));
+        assertTrue(json.contains("\"oldestAgeMs\":55"));
+    }
+
+    @Test
+    public void testGetQueueStatsReturnsServerErrorWhenQueueFails() throws Exception {
+        when(queueManager.getQueueStats()).thenThrow(new IllegalStateException("queue stats down"));
+
+        handler.handleGetQueueStats(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        assertTrue(body.toString().contains("\"error\":\"Error: queue stats down\""));
     }
 
     @Test
@@ -171,6 +328,16 @@ public class ProposalQueryHandlerTest {
     }
 
     @Test
+    public void testGetOpsQueueSnapshotReturnsServerErrorWithoutCachedFallback() throws Exception {
+        when(queueManager.getQueueStats()).thenThrow(new IllegalStateException("snapshot unavailable"));
+
+        handler.handleGetOpsQueueSnapshot(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        assertTrue(body.toString().contains("\"error\":\"Error: snapshot unavailable\""));
+    }
+
+    @Test
     public void testGetProposalReleaseFlowReturnsAdaptivePayload() throws Exception {
         Map<String, Object> flow = new LinkedHashMap<>();
         flow.put("releaseMode", "adaptive-active");
@@ -184,6 +351,16 @@ public class ProposalQueryHandlerTest {
         assertTrue(json.contains("\"contractVersion\":\"release-flow.v1\""));
         assertTrue(json.contains("\"releaseMode\":\"adaptive-active\""));
         assertTrue(json.contains("\"releaseStages\":{}"));
+    }
+
+    @Test
+    public void testGetProposalReleaseFlowReturnsServerErrorWhenQueueFails() throws Exception {
+        when(queueManager.getProposalReleaseFlowStats()).thenThrow(new IllegalStateException("release flow unavailable"));
+
+        handler.handleGetProposalReleaseFlow(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        assertTrue(body.toString().contains("\"error\":\"Error: release flow unavailable\""));
     }
 
     @Test
@@ -201,6 +378,27 @@ public class ProposalQueryHandlerTest {
         assertTrue(json.contains("\"deprecated\":true"));
         assertTrue(json.contains("\"canonicalPath\":\"/v1/proposals/release-flow\""));
         assertTrue(json.contains("\"currentEpoch\":42"));
+    }
+
+    @Test
+    public void testGetProposalEpochsReturnsServerErrorWhenQueueFails() throws Exception {
+        when(queueManager.getProposalEpochFlowStats()).thenThrow(new IllegalStateException("epoch flow unavailable"));
+
+        handler.handleGetProposalEpochs(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        assertTrue(body.toString().contains("\"error\":\"Error: epoch flow unavailable\""));
+    }
+
+    private static ProposalQueryHandler newHandler(ProposalQueueManagerOptimized queueManager) {
+        ServerContext context = new ServerContext(
+            mock(FileStore.class),
+            mock(NodeStore.class),
+            Paths.get("/tmp/store"),
+            "http://localhost:8090"
+        );
+        context.proposalQueueManager = queueManager;
+        return new ProposalQueryHandler(context);
     }
 
     private static void ageQueueSnapshotCache(ProposalQueryHandler handler) throws Exception {
