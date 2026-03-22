@@ -25,6 +25,7 @@ import org.junit.Test;
 
 import java.util.Map;
 
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -129,6 +130,10 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
             assertTrue(waitForCondition(() -> rejectedCount(queueManager) == 1L, 5_000L));
             assertEquals(1L, rejectedCount(queueManager));
+            ProposalStatus status = queueManager.getProposalStatus(proposalId);
+            assertNotNull(status);
+            assertEquals(ProposalState.REJECTED, status.getState());
+            assertTrue(status.getRejectionReason().contains("does not match declared ethereumTxHash"));
         } finally {
             queueManager.stop();
         }

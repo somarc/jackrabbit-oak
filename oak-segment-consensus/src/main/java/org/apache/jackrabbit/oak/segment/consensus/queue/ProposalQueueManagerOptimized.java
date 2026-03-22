@@ -2011,7 +2011,6 @@ public class ProposalQueueManagerOptimized {
         proposal.setState(ProposalState.REJECTED);
         proposal.setRejectionReason(reason);
         cleanupPayload(proposal);
-        allProposals.remove(proposal.getProposalId());
         totalRejectedCount.incrementAndGet();
         recordTerminalState(proposal, ProposalState.REJECTED);
     }
@@ -2192,7 +2191,7 @@ public class ProposalQueueManagerOptimized {
                 }
             }
             
-            cleanupProcessedProposals();
+            cleanupTerminalProposals();
             return workCount;
         }
         
@@ -2205,7 +2204,7 @@ public class ProposalQueueManagerOptimized {
     /**
      * Clean up processed proposals after retention window to avoid unbounded growth.
      */
-    private void cleanupProcessedProposals() {
+    private void cleanupTerminalProposals() {
         long now = System.currentTimeMillis();
         if (now - lastProcessedCleanup < 60_000L) {
             return;
@@ -2214,12 +2213,17 @@ public class ProposalQueueManagerOptimized {
         final int[] removed = {0};
         allProposals.entrySet().removeIf(entry -> {
             QueuedProposal proposal = entry.getValue();
-            if (proposal.getState() != ProposalState.PROCESSED) {
+            ProposalState state = proposal.getState();
+            if (state != ProposalState.PROCESSED && state != ProposalState.REJECTED) {
                 return false;
             }
             long age = now - proposal.getTimestamp();
-        if (age < processedRetentionMs) {
+            if (age < processedRetentionMs) {
                 return false;
+            }
+            if (state == ProposalState.REJECTED) {
+                removed[0]++;
+                return true;
             }
             DurabilityState durability = proposal.getDurabilityState();
             boolean shouldRemove = durability == DurabilityState.ACKED || durability == DurabilityState.FAILED;
