@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import io.aeron.cluster.service.Cluster;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -110,6 +111,48 @@ public class AeronApiHandlerTest {
     }
 
     @Test
+    public void testGetClusterStateDataUsesFallbacksWhenNativeStateIsSparse() {
+        ServerContext context = newContext();
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        Map<String, Object> nativeState = new HashMap<>();
+        nativeState.put("memberId", "not-a-number");
+        nativeState.put("memberCount", 3);
+        nativeState.put("reachableCount", 7);
+        when(engine.getNativeClusterState()).thenReturn(nativeState);
+        when(engine.getWalletAddress()).thenReturn(null);
+        when(engine.getPublicKeyHex()).thenReturn(null);
+        when(engine.getReachableValidatorCount()).thenReturn(1);
+        when(engine.getLastHeartbeatTime()).thenReturn(1234L);
+        context.aeronConsensusEngine = engine;
+
+        AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
+        when(launcher.getCrashHandler()).thenReturn(null);
+        context.aeronClusterLauncher = launcher;
+        context.aeronPrometheusMetrics = mock(AeronPrometheusMetrics.class);
+
+        AeronApiHandler handler = new AeronApiHandler(context);
+        Map<String, Object> state = handler.getClusterStateData();
+
+        assertNotNull(state);
+        assertEquals(2, state.get("nodeId"));
+        assertFalse(state.containsKey("validatorIdentity"));
+        assertEquals(7, state.get("reachableCount"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> mediaDriver = (Map<String, Object>) state.get("mediaDriver");
+        assertEquals("UNKNOWN", mediaDriver.get("status"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> aeronMetrics = (Map<String, Object>) state.get("aeronMetrics");
+        assertEquals(true, aeronMetrics.get("available"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> health = (Map<String, Object>) state.get("health");
+        assertEquals("DEGRADED", health.get("status"));
+        assertEquals(false, health.get("mediaDriverHealthy"));
+    }
+
+    @Test
     public void testHandleValidatorIdentitiesReturnsSelfIdentity() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
@@ -179,6 +222,31 @@ public class AeronApiHandlerTest {
     }
 
     @Test
+    public void testHandleNodeStatusUsesNodeIdToSelectFollower() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getParameter("nodeId")).thenReturn("3");
+
+        ServerContext context = newContext();
+        AeronConsensusEngine engine = baseEngine();
+        when(engine.getCurrentLeader()).thenReturn("http://validator-1:8090");
+        when(engine.getAllFollowers()).thenReturn(Arrays.asList("http://validator-2:8090", "http://validator-3:8090"));
+        when(engine.getLastHeartbeatTime()).thenReturn(9876L);
+        context.aeronConsensusEngine = engine;
+
+        AeronApiHandler handler = new AeronApiHandler(context);
+        handler.handleNodeStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"nodeId\":3"));
+        assertTrue(json.contains("\"url\":\"http://validator-3:8090\""));
+        assertTrue(json.contains("\"role\":\"FOLLOWER\""));
+        assertTrue(json.contains("\"isSelf\":false"));
+    }
+
+    @Test
     public void testHandleLeadershipHistoryCapsLimitAndMarksLeaderRotation() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
@@ -212,6 +280,39 @@ public class AeronApiHandlerTest {
     }
 
     @Test
+    public void testHandleLeadershipHistoryDefaultsInvalidLimitAndUnknownPreviousRole() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getParameter("limit")).thenReturn("0");
+
+        ServerContext context = newContext();
+        AeronConsensusEngine engine = baseEngine();
+        when(engine.getLeadershipHistory(10)).thenReturn(Arrays.asList(
+            new LeadershipChange(
+                2234L,
+                Cluster.Role.FOLLOWER,
+                null,
+                9,
+                3,
+                "http://validator-3:8090"
+            )
+        ));
+        context.aeronConsensusEngine = engine;
+
+        AeronApiHandler handler = new AeronApiHandler(context);
+        handler.handleLeadershipHistory(request, response);
+
+        verify(engine).getLeadershipHistory(10);
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"limit\":10"));
+        assertTrue(json.contains("\"previousRole\":\"UNKNOWN\""));
+        assertTrue(json.contains("\"newRole\":\"FOLLOWER\""));
+        assertTrue(json.contains("\"isLeaderRotation\":false"));
+    }
+
+    @Test
     public void testHandleReplicationLagReturnsNotFoundWhenUnavailable() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
@@ -227,6 +328,43 @@ public class AeronApiHandlerTest {
         String json = body.toString();
         assertTrue(json.contains("\"code\":\"not_found\""));
         assertTrue(json.contains("\"error\":\"Replication lag not applicable (cluster not initialized)\""));
+    }
+
+    @Test
+    public void testHandleReplicationLagReturnsPayloadWhenAvailable() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext();
+        AeronConsensusEngine engine = baseEngine();
+        Map<String, Object> lagStatus = new HashMap<>();
+        lagStatus.put("role", "FOLLOWER");
+        lagStatus.put("replicationLag", 12);
+        lagStatus.put("healthy", false);
+        when(engine.getReplicationLagStatus()).thenReturn(lagStatus);
+        context.aeronConsensusEngine = engine;
+
+        AeronApiHandler handler = new AeronApiHandler(context);
+        handler.handleReplicationLag(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"role\":\"FOLLOWER\""));
+        assertTrue(json.contains("\"replicationLag\":12"));
+        assertTrue(json.contains("\"healthy\":false"));
+    }
+
+    @Test
+    public void testHandleGetOpsClusterSnapshotReturnsServiceUnavailableWithoutCache() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        AeronApiHandler handler = new AeronApiHandler(newContext());
+        handler.handleGetOpsClusterSnapshot(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        String json = body.toString();
+        assertTrue(json.contains("\"code\":\"service_unavailable\""));
+        assertTrue(json.contains("\"error\":\"Aeron Cluster consensus not configured\""));
     }
 
     @Test

@@ -24,6 +24,7 @@ import org.apache.jackrabbit.oak.segment.SegmentIdProvider;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
@@ -36,6 +37,7 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
@@ -1820,6 +1822,114 @@ public class RequestRouterTest {
         });
     }
 
+    @Test
+    public void testMockEpochStatusRouteReturnsBeaconHealthPayloadInMockMode() throws Exception {
+        withBlockchainMode("mock", () -> withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+            when(queueManager.getBeaconClient()).thenReturn(beaconClient);
+            when(beaconClient.getHealthStatus()).thenReturn(new HashMap<>());
+            when(beaconClient.getCachedCurrentEpoch()).thenReturn(1042L);
+            when(beaconClient.getCachedFinalizedEpoch()).thenReturn(1040L);
+            when(beaconClient.isEpochDataFresh()).thenReturn(true);
+            when(beaconClient.getMillisSinceLastUpdate()).thenReturn(15L);
+            when(beaconClient.getMockEpochOffset()).thenReturn(42L);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/api/mock/epoch-status");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            assertTrue(body.toString().contains("\"mode\":\"MOCK\""));
+            assertTrue(body.toString().contains("\"currentEpoch\":1042"));
+            assertTrue(body.toString().contains("\"mockEpochOffset\":42"));
+            assertTrue(body.toString().contains("\"advanceEpoch\":\"POST /api/mock/advance-epoch?epochs=N\""));
+        }));
+    }
+
+    @Test
+    public void testMockAdvanceEpochRouteAdvancesEpochInMockMode() throws Exception {
+        withBlockchainMode("mock", () -> withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+            when(queueManager.getBeaconClient()).thenReturn(beaconClient);
+            when(beaconClient.advanceMockEpoch(3)).thenReturn(true);
+            when(beaconClient.getCachedCurrentEpoch()).thenReturn(1045L);
+            when(beaconClient.getCachedFinalizedEpoch()).thenReturn(1043L);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/api/mock/advance-epoch");
+            when(request.getParameter("epochs")).thenReturn("3");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(beaconClient).advanceMockEpoch(3);
+            assertTrue(body.toString().contains("\"success\":true"));
+            assertTrue(body.toString().contains("\"advanced\":3"));
+            assertTrue(body.toString().contains("\"currentEpoch\":1045"));
+        }));
+    }
+
+    @Test
+    public void testMockSetEpochOffsetRouteSetsOffsetInMockMode() throws Exception {
+        withBlockchainMode("mock", () -> withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+            when(queueManager.getBeaconClient()).thenReturn(beaconClient);
+            when(beaconClient.setMockEpochOffset(42L)).thenReturn(true);
+            when(beaconClient.getCachedCurrentEpoch()).thenReturn(1042L);
+            when(beaconClient.getCachedFinalizedEpoch()).thenReturn(1040L);
+            context.proposalQueueManager = queueManager;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/api/mock/set-epoch-offset");
+            when(request.getParameter("offset")).thenReturn("42");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(beaconClient).setMockEpochOffset(42L);
+            assertTrue(body.toString().contains("\"success\":true"));
+            assertTrue(body.toString().contains("\"offset\":42"));
+            assertTrue(body.toString().contains("\"finalizedEpoch\":1040"));
+        }));
+    }
+
+    @Test
+    public void testProposeWriteRouteUsesWalletFallbackForShardRouting() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            ShardRouter shardRouter = mock(ShardRouter.class);
+            when(shardRouter.routeRequest("0xwallet")).thenReturn("http://validator-7:8090");
+            context.shardRouter = shardRouter;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("POST", "/v1/propose-write");
+            when(request.getParameter("walletAddress")).thenReturn(null);
+            when(request.getParameter("wallet")).thenReturn("0xwallet");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(shardRouter).routeRequest("0xwallet");
+        });
+    }
+
     private StringWriter body;
 
     private ServerContext newContext() {
@@ -1961,6 +2071,18 @@ public class RequestRouterTest {
             } else {
                 System.setProperty("rate.limit.enabled", previousRateLimit);
             }
+        }
+    }
+
+    private void withBlockchainMode(String mode, ThrowingRunnable runnable) throws Exception {
+        String previousMode = System.getProperty("oak.blockchain.mode");
+        try {
+            restoreProperty("oak.blockchain.mode", mode);
+            BlockchainConfig.reset();
+            runnable.run();
+        } finally {
+            restoreProperty("oak.blockchain.mode", previousMode);
+            BlockchainConfig.reset();
         }
     }
 
