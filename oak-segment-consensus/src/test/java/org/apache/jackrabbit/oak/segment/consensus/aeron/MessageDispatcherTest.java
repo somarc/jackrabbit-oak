@@ -97,6 +97,36 @@ public class MessageDispatcherTest {
     }
 
     @Test
+    public void testWriteProposalMissingTermAcceptedForCompatibility() {
+        AtomicReference<String> called = new AtomicReference<>(null);
+        MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
+            @Override
+            public void applyWrite(String wallet, String path, String contentType, String message, String signature,
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+                called.set(wallet + "|" + path);
+            }
+
+            @Override
+            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            }
+        });
+        dispatcher.setTermProvider(() -> 10L);
+
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL,
+            "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\"}"));
+        assertEquals("0xabc|/oak-chain/test", called.get());
+    }
+
+    @Test
+    public void testWriteProposalWithoutCallbackRejected() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+        dispatcher.setTermProvider(() -> 1L);
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL,
+            "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\",\"term\":1}"));
+    }
+
+    @Test
     public void testWriteBatchDispatchProcessesAll() {
         List<String> calls = new ArrayList<>();
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
@@ -120,6 +150,98 @@ public class MessageDispatcherTest {
         assertTrue(result);
         assertEquals(2, calls.size());
         assertEquals(2, dispatcher.getLastBatchSize());
+    }
+
+    @Test
+    public void testWriteBatchSkipsInvalidAndStaleEntries() {
+        List<String> calls = new ArrayList<>();
+        MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
+            @Override
+            public void applyWrite(String wallet, String path, String contentType, String message, String signature,
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+                calls.add(wallet + "|" + path);
+            }
+
+            @Override
+            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            }
+        });
+        dispatcher.setTermProvider(() -> 9L);
+
+        String payload = "{\"batch\":[" +
+            "{\"walletAddress\":\"0x1\",\"path\":\"/ok\",\"term\":9}," +
+            "{\"walletAddress\":\"0x2\",\"path\":\"/stale\",\"term\":8}," +
+            "{\"walletAddress\":\"0x3\",\"term\":9}" +
+            "]}";
+
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, payload));
+        assertEquals(1, calls.size());
+        assertEquals("0x1|/ok", calls.get(0));
+        assertEquals(1, dispatcher.getLastBatchSize());
+    }
+
+    @Test
+    public void testWriteBatchRejectsInvalidFormatAndMissingCallback() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH,
+            "{\"batch\":[{\"walletAddress\":\"0x1\",\"path\":\"/ok\"}]}"));
+        dispatcher.setCallbacks(new MessageDispatcher.WriteCallback() {
+            @Override
+            public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+            }
+
+            @Override
+            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            }
+        });
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, "{\"oops\":true}"));
+    }
+
+    @Test
+    public void testDeleteProposalDispatchCallsCallback() {
+        AtomicReference<String> deleted = new AtomicReference<>(null);
+        MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
+            @Override
+            public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+            }
+
+            @Override
+            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+                deleted.set(walletAddress + "|" + path + "|" + proposalId);
+            }
+        });
+        dispatcher.setTermProvider(() -> 5L);
+
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
+            "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\",\"proposalId\":\"p1\",\"term\":5}"));
+        assertEquals("0xabc|/oak-chain/test|p1", deleted.get());
+    }
+
+    @Test
+    public void testDeleteProposalRejectsMissingFieldsAndMissingCallback() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+        dispatcher.setTermProvider(() -> 5L);
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
+            "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\",\"term\":5}"));
+
+        dispatcher.setCallbacks(new MessageDispatcher.WriteCallback() {
+            @Override
+            public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+            }
+
+            @Override
+            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            }
+        });
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
+            "{\"walletAddress\":\"0xabc\",\"term\":5}"));
     }
 
     @Test
@@ -153,6 +275,65 @@ public class MessageDispatcherTest {
     }
 
     @Test
+    public void testGcVoteAndExecuteDispatch() {
+        AtomicReference<String> vote = new AtomicReference<>(null);
+        AtomicReference<String> execute = new AtomicReference<>(null);
+        MessageDispatcher dispatcher = new MessageDispatcher();
+        dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
+            @Override
+            public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
+                                        long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
+            }
+
+            @Override
+            public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
+                vote.set(proposalId + "|" + validatorId + "|" + approve + "|" + reason);
+            }
+
+            @Override
+            public void applyGCExecute(String proposalId, int executorId) {
+                execute.set(proposalId + "|" + executorId);
+            }
+        });
+
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE,
+            "{\"proposalId\":\"gc-2\",\"validatorId\":4,\"approve\":true,\"reason\":\"ok\"}"));
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE,
+            "{\"proposalId\":\"gc-2\",\"executorId\":7}"));
+
+        assertEquals("gc-2|4|true|ok", vote.get());
+        assertEquals("gc-2|7", execute.get());
+    }
+
+    @Test
+    public void testGcHandlersRejectMissingCallbackAndRequiredFields() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE,
+            "{\"proposalId\":\"gc-3\",\"validatorId\":1,\"approve\":true}"));
+
+        dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
+            @Override
+            public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
+                                        long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
+            }
+
+            @Override
+            public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
+            }
+
+            @Override
+            public void applyGCExecute(String proposalId, int executorId) {
+            }
+        });
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE,
+            "{\"proposalId\":\"gc-3\",\"validatorId\":1}"));
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE,
+            "{\"proposalId\":\"gc-3\"}"));
+    }
+
+    @Test
     public void testDurabilityQueueSegmentDispatch() {
         AtomicReference<String> queued = new AtomicReference<>(null);
         MessageDispatcher dispatcher = new MessageDispatcher();
@@ -180,6 +361,65 @@ public class MessageDispatcherTest {
 
         assertTrue(result);
         assertEquals("p-1:3:2", queued.get());
+    }
+
+    @Test
+    public void testDurabilitySegmentPersistedAndAckDispatch() {
+        AtomicReference<String> persisted = new AtomicReference<>(null);
+        AtomicReference<String> acked = new AtomicReference<>(null);
+        MessageDispatcher dispatcher = new MessageDispatcher();
+        dispatcher.setDurabilityCallback(new MessageDispatcher.DurabilityCallback() {
+            @Override
+            public void onQueueSegment(String proposalId, int totalMembers, int requiredAcks) {
+            }
+
+            @Override
+            public void onSegmentPersisted(String proposalId, int memberId, String durableHead, boolean success, String error) {
+                persisted.set(proposalId + "|" + memberId + "|" + durableHead + "|" + success + "|" + error);
+            }
+
+            @Override
+            public void onAckSegmentPersisted(String proposalId, boolean success, String durableHead, String error,
+                                              int totalMembers, int requiredAcks) {
+                acked.set(proposalId + "|" + success + "|" + durableHead + "|" + error + "|" + totalMembers + "|" + requiredAcks);
+            }
+        });
+
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED,
+            "{\"proposalId\":\"p-2\",\"memberId\":4,\"durableHead\":\"dh1\",\"success\":false,\"error\":\"disk\"}"));
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_ACK_SEGMENT_PERSISTED,
+            "{\"proposalId\":\"p-2\",\"success\":true,\"durableHead\":\"dh2\",\"totalMembers\":5,\"requiredAcks\":3}"));
+
+        assertEquals("p-2|4|dh1|false|disk", persisted.get());
+        assertEquals("p-2|true|dh2|null|5|3", acked.get());
+    }
+
+    @Test
+    public void testDurabilityHandlersRejectMissingCallbackAndRequiredFields() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_QUEUE_SEGMENT,
+            "{\"proposalId\":\"p-1\",\"totalMembers\":3,\"requiredAcks\":2}"));
+
+        dispatcher.setDurabilityCallback(new MessageDispatcher.DurabilityCallback() {
+            @Override
+            public void onQueueSegment(String proposalId, int totalMembers, int requiredAcks) {
+            }
+
+            @Override
+            public void onSegmentPersisted(String proposalId, int memberId, String durableHead, boolean success, String error) {
+            }
+
+            @Override
+            public void onAckSegmentPersisted(String proposalId, boolean success, String durableHead, String error,
+                                              int totalMembers, int requiredAcks) {
+            }
+        });
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED,
+            "{\"proposalId\":\"p-1\",\"memberId\":1}"));
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_ACK_SEGMENT_PERSISTED,
+            "{\"proposalId\":\"p-1\",\"success\":true,\"totalMembers\":3}"));
     }
 
     @Test
@@ -213,6 +453,30 @@ public class MessageDispatcherTest {
     }
 
     @Test
+    public void testStartTransactionUsesDefaultTimeoutWhenMissing() {
+        AtomicReference<String> started = new AtomicReference<>(null);
+        MessageDispatcher dispatcher = new MessageDispatcher();
+        dispatcher.setTransactionCallback(new MessageDispatcher.TransactionCallback() {
+            @Override
+            public void onStartTransaction(String transactionId, String correlationId, long timeoutMs, String initiatorWallet) {
+                started.set(transactionId + "|" + correlationId + "|" + timeoutMs + "|" + initiatorWallet);
+            }
+
+            @Override
+            public void onCommitTransaction(String transactionId, String correlationId) {
+            }
+
+            @Override
+            public void onAbortTransaction(String transactionId, String correlationId, String reason) {
+            }
+        });
+
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_START_TRANSACTION,
+            "{\"transactionId\":\"tx-4\",\"correlationId\":\"corr-4\",\"initiatorWallet\":\"0xdef\"}"));
+        assertEquals("tx-4|corr-4|30000|0xdef", started.get());
+    }
+
+    @Test
     public void testCommitTransactionDispatch() {
         AtomicReference<String> committed = new AtomicReference<>(null);
         MessageDispatcher dispatcher = new MessageDispatcher();
@@ -239,6 +503,35 @@ public class MessageDispatcherTest {
 
         assertTrue(result);
         assertEquals("tx-2|corr-2", committed.get());
+    }
+
+    @Test
+    public void testTransactionHandlersRejectMissingCallbackOrTransactionId() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_COMMIT_TRANSACTION,
+            "{\"transactionId\":\"tx-5\",\"correlationId\":\"corr-5\"}"));
+
+        dispatcher.setTransactionCallback(new MessageDispatcher.TransactionCallback() {
+            @Override
+            public void onStartTransaction(String transactionId, String correlationId, long timeoutMs, String initiatorWallet) {
+            }
+
+            @Override
+            public void onCommitTransaction(String transactionId, String correlationId) {
+            }
+
+            @Override
+            public void onAbortTransaction(String transactionId, String correlationId, String reason) {
+            }
+        });
+
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_START_TRANSACTION,
+            "{\"correlationId\":\"corr-6\"}"));
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_COMMIT_TRANSACTION,
+            "{\"correlationId\":\"corr-6\"}"));
+        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_ABORT_TRANSACTION,
+            "{\"reason\":\"timeout\"}"));
     }
 
     @Test
@@ -269,6 +562,91 @@ public class MessageDispatcherTest {
 
         assertFalse(result);
         assertNull(aborted.get());
+    }
+
+    @Test
+    public void testDispatchRejectsPayloadShorterThanHeaderBlockLength() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+        byte[] bytes = buildMessageBytes(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, "{}");
+        DirectBuffer buffer = bufferFor(bytes);
+
+        boolean result = dispatcher.dispatch(System.currentTimeMillis(), buffer, 0, SimpleMessageHeader.ENCODED_LENGTH + 1);
+
+        assertFalse(result);
+    }
+
+    @Test
+    public void testDispatchRejectsUnknownTemplateAndAcceptsGenesisAndSnapshot() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+
+        assertFalse(dispatch(dispatcher, 999, "{}"));
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, "{}"));
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT, "{}"));
+    }
+
+    @Test
+    public void testLifecycleAndSetterMethodsAreCallable() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+        dispatcher.activate();
+        dispatcher.setCallbacks(new MessageDispatcher.WriteCallback() {
+            @Override
+            public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+            }
+
+            @Override
+            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            }
+        });
+        dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
+            @Override
+            public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
+                                        long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
+            }
+
+            @Override
+            public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
+            }
+
+            @Override
+            public void applyGCExecute(String proposalId, int executorId) {
+            }
+        });
+        dispatcher.setDurabilityCallback(new MessageDispatcher.DurabilityCallback() {
+            @Override
+            public void onQueueSegment(String proposalId, int totalMembers, int requiredAcks) {
+            }
+
+            @Override
+            public void onSegmentPersisted(String proposalId, int memberId, String durableHead, boolean success, String error) {
+            }
+
+            @Override
+            public void onAckSegmentPersisted(String proposalId, boolean success, String durableHead, String error,
+                                              int totalMembers, int requiredAcks) {
+            }
+        });
+        dispatcher.setTransactionCallback(new MessageDispatcher.TransactionCallback() {
+            @Override
+            public void onStartTransaction(String transactionId, String correlationId, long timeoutMs, String initiatorWallet) {
+            }
+
+            @Override
+            public void onCommitTransaction(String transactionId, String correlationId) {
+            }
+
+            @Override
+            public void onAbortTransaction(String transactionId, String correlationId, String reason) {
+            }
+        });
+        dispatcher.setTermProvider(() -> 3L);
+        dispatcher.deactivate();
+    }
+
+    private boolean dispatch(MessageDispatcher dispatcher, int templateId, String payload) {
+        DirectBuffer buffer = bufferFor(buildMessageBytes(templateId, payload));
+        return dispatcher.dispatch(System.currentTimeMillis(), buffer, 0,
+            SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length);
     }
 
     private byte[] buildMessageBytes(int templateId, String payload) {
