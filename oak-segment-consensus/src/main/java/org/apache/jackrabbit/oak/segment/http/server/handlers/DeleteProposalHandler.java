@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
@@ -98,6 +99,15 @@ public class DeleteProposalHandler {
                 return;
             }
             String normalizedWallet = walletValidation.getNormalizedValue();
+
+            if (!ShardWriteAuthorityEnforcer.allowLocalWrite(
+                context,
+                normalizedWallet,
+                "/v1/propose-delete",
+                response
+            )) {
+                return;
+            }
 
             // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
             // This is the primary identifier - clientId is secondary

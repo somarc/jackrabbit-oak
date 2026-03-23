@@ -23,6 +23,7 @@ import org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -47,7 +48,8 @@ public class ServerContext {
     private static final Logger log = LoggerFactory.getLogger(ServerContext.class);
     
     public final FileStore fileStore;
-    public final NodeStore nodeStore;
+    public final NodeStore nodeStore; // Composite/read-view store
+    public volatile NodeStore authoritativeNodeStore; // Local writable store
     public final Path storeDirectory;
     public volatile AeronConsensusEngine aeronConsensusEngine;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronWriteClient aeronWriteClient;
@@ -72,6 +74,7 @@ public class ServerContext {
     public volatile String validatorWalletAddress = "0x0000000000000000000000000000000000000000"; // This node's Ethereum address
     public volatile String clusterWalletAddress = "0x0000000000000000000000000000000000000000"; // Cluster payment wallet (ADR 046)
     public volatile EventBroadcaster eventBroadcaster; // SSE event broadcasting (ADR 036)
+    public volatile ShardingRuntimeConfig shardingRuntimeConfig = ShardingRuntimeConfig.disabled();
     
     // API-level metrics (rejections before reaching queue)
     public final java.util.concurrent.atomic.AtomicLong apiRejectedRequests = new java.util.concurrent.atomic.AtomicLong(0);
@@ -105,6 +108,7 @@ public class ServerContext {
             String selfUrl) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
+        this.authoritativeNodeStore = nodeStore;
         this.storeDirectory = storeDirectory;
         this.selfUrl = selfUrl;
         
@@ -167,6 +171,11 @@ public class ServerContext {
         this.proposalQueueManager = proposalQueueManager;
         log.info("✅ Proposal Queue Manager initialized");
     }
+
+    public void setAuthoritativeNodeStore(NodeStore authoritativeNodeStore) {
+        this.authoritativeNodeStore = authoritativeNodeStore;
+        log.info("✅ Authoritative NodeStore initialized");
+    }
     
     public void setFragmentationTracker(FragmentationTracker fragmentationTracker) {
         this.fragmentationTracker = fragmentationTracker;
@@ -201,5 +210,16 @@ public class ServerContext {
     public void setEventBroadcaster(EventBroadcaster eventBroadcaster) {
         this.eventBroadcaster = eventBroadcaster;
         log.info("📡 Event Broadcaster initialized (ADR 036 SSE streaming)");
+    }
+
+    public void setShardingRuntimeConfig(ShardingRuntimeConfig shardingRuntimeConfig) {
+        this.shardingRuntimeConfig = shardingRuntimeConfig != null ? shardingRuntimeConfig : ShardingRuntimeConfig.disabled();
+        if (this.shardingRuntimeConfig.isEnabled()) {
+            log.info("✅ Sharding runtime config initialized");
+            log.info("   - Local prefixes: {}", this.shardingRuntimeConfig.describeLocalRanges());
+            log.info("   - Remote routes: {}", this.shardingRuntimeConfig.describeRemoteRoutes());
+        } else {
+            log.info("ℹ️  Sharding runtime disabled");
+        }
     }
 }

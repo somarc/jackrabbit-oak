@@ -22,6 +22,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
@@ -120,6 +121,31 @@ public class WriteProposalHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("Missing wallet address. Please provide a valid Ethereum address"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRedirectsForeignShardBeforeLocalProcessing() throws Exception {
+        ServerContext context = readyContext();
+        context.setShardingRuntimeConfig(ShardingRuntimeConfig.fromSpecs(
+            true,
+            "80-ff",
+            "10-1f=http://cluster-a:8090"
+        ));
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_TEMPORARY_REDIRECT);
+        verify(response).setHeader("Location", "http://cluster-a:8090/v1/propose-write");
+        assertTrue(body.toString().contains("\"code\":\"wrong_shard\""));
+        assertTrue(body.toString().contains("\"l1Prefix\":\"11\""));
         assertEquals(1L, context.apiRejectedRequests.get());
     }
 

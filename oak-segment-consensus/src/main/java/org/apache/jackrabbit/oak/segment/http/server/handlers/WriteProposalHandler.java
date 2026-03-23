@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
@@ -174,6 +175,15 @@ public class WriteProposalHandler {
                 return;
             }
             String normalizedWallet = walletValidation.getNormalizedValue();
+
+            if (!ShardWriteAuthorityEnforcer.allowLocalWrite(
+                context,
+                normalizedWallet,
+                "/v1/propose-write",
+                response
+            )) {
+                return;
+            }
 
             // ============================================================
             // ORGANIZATION VALIDATION (ADR 037)

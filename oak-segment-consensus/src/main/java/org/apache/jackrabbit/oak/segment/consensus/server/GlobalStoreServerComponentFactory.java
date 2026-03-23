@@ -60,7 +60,7 @@ public interface GlobalStoreServerComponentFactory {
             .withBlobStore(blobStore)
             .build();
         NodeStore nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
-        return new ServerStorageRuntime(fileStore, nodeStore);
+        return new ServerStorageRuntime(fileStore, nodeStore, nodeStore);
     }
 
     default TarFiles extractTarFiles(FileStore fileStore) throws Exception {

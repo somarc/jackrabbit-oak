@@ -22,10 +22,16 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 final class ServerStorageRuntime {
     private final FileStore fileStore;
     private final NodeStore nodeStore;
+    private final NodeStore readViewNodeStore;
 
     ServerStorageRuntime(FileStore fileStore, NodeStore nodeStore) {
+        this(fileStore, nodeStore, nodeStore);
+    }
+
+    ServerStorageRuntime(FileStore fileStore, NodeStore nodeStore, NodeStore readViewNodeStore) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
+        this.readViewNodeStore = readViewNodeStore;
     }
 
     FileStore getFileStore() {
@@ -34,5 +40,13 @@ final class ServerStorageRuntime {
 
     NodeStore getNodeStore() {
         return nodeStore;
+    }
+
+    NodeStore getAuthoritativeNodeStore() {
+        return nodeStore;
+    }
+
+    NodeStore getReadViewNodeStore() {
+        return readViewNodeStore;
     }
 }

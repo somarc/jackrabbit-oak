@@ -31,6 +31,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -58,7 +59,8 @@ final class ServerInfrastructureInitializer {
 
         ServerStorageRuntime storageRuntime = componentFactory.createStorageRuntime(storeDir, blobStore);
         FileStore fileStore = storageRuntime.getFileStore();
-        NodeStore nodeStore = storageRuntime.getNodeStore();
+        NodeStore authoritativeNodeStore = storageRuntime.getAuthoritativeNodeStore();
+        NodeStore readViewNodeStore = storageRuntime.getReadViewNodeStore();
 
         log.info("✅ Oak FileStore initialized");
         log.info("   - Store version: {}", fileStore.getHead().getRecordId());
@@ -66,14 +68,14 @@ final class ServerInfrastructureInitializer {
 
         GCCostEstimator gcCostEstimator = initializeGCCostEstimator(fileStore, componentFactory);
         SegmentHttpServer httpServer = initializeHttpServer(storeDir, port, aeronConfig, componentFactory,
-            blobStore, blobStoreType, fileStore, nodeStore, gcCostEstimator);
+            blobStore, blobStoreType, fileStore, readViewNodeStore, authoritativeNodeStore, gcCostEstimator);
         FragmentationTracker fragmentationTracker = initializeFragmentationTracker(httpServer, componentFactory);
         initializeWalletStorageMetrics(httpServer, fileStore, componentFactory);
         initializeGcConsensusSupport(httpServer, aeronConfig, componentFactory, fileStore, gcCostEstimator,
             fragmentationTracker);
 
         log.info("✅ HTTP server initialized (not yet started)");
-        return new InitializationResult(blobStoreType, blobStore, fileStore, nodeStore, httpServer, gcCostEstimator);
+        return new InitializationResult(blobStoreType, blobStore, fileStore, authoritativeNodeStore, readViewNodeStore, httpServer, gcCostEstimator);
     }
 
     private GCCostEstimator initializeGCCostEstimator(FileStore fileStore,
@@ -104,10 +106,11 @@ final class ServerInfrastructureInitializer {
                                                    BlobStore blobStore,
                                                    String blobStoreType,
                                                    FileStore fileStore,
-                                                   NodeStore nodeStore,
+                                                   NodeStore readViewNodeStore,
+                                                   NodeStore authoritativeNodeStore,
                                                    GCCostEstimator gcCostEstimator) {
         log.info("Initializing HTTP server on port {}...", port);
-        SegmentHttpServer httpServer = componentFactory.createHttpServer(storeDir, port, fileStore, nodeStore);
+        SegmentHttpServer httpServer = componentFactory.createHttpServer(storeDir, port, fileStore, readViewNodeStore);
         ServerContext context = httpServer.getContext();
         String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(port, aeronConfig);
 
@@ -118,6 +121,8 @@ final class ServerInfrastructureInitializer {
         }
 
         httpServer.setSelfUrl(selfUrl);
+        context.setAuthoritativeNodeStore(authoritativeNodeStore);
+        context.setShardingRuntimeConfig(ShardingRuntimeConfig.load());
         if (gcCostEstimator != null) {
             context.setGCCostEstimator(gcCostEstimator);
         }
@@ -265,6 +270,7 @@ final class ServerInfrastructureInitializer {
         private final BlobStore blobStore;
         private final FileStore fileStore;
         private final NodeStore nodeStore;
+        private final NodeStore readViewNodeStore;
         private final SegmentHttpServer httpServer;
         private final GCCostEstimator gcCostEstimator;
 
@@ -272,12 +278,14 @@ final class ServerInfrastructureInitializer {
                              BlobStore blobStore,
                              FileStore fileStore,
                              NodeStore nodeStore,
+                             NodeStore readViewNodeStore,
                              SegmentHttpServer httpServer,
                              GCCostEstimator gcCostEstimator) {
             this.blobStoreType = blobStoreType;
             this.blobStore = blobStore;
             this.fileStore = fileStore;
             this.nodeStore = nodeStore;
+            this.readViewNodeStore = readViewNodeStore;
             this.httpServer = httpServer;
             this.gcCostEstimator = gcCostEstimator;
         }
@@ -296,6 +304,10 @@ final class ServerInfrastructureInitializer {
 
         NodeStore getNodeStore() {
             return nodeStore;
+        }
+
+        NodeStore getReadViewNodeStore() {
+            return readViewNodeStore;
         }
 
         SegmentHttpServer getHttpServer() {

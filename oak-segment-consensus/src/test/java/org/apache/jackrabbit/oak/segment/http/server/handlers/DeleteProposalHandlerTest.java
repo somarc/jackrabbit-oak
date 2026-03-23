@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -73,6 +74,32 @@ public class DeleteProposalHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_FORBIDDEN);
         assertTrue(body.toString().contains("not registered"));
+    }
+
+    @Test
+    public void testHandleDeleteProposalRedirectsForeignShardBeforeLocalProcessing() throws Exception {
+        ServerContext context = readyContext(new MemoryNodeStore());
+        context.setShardingRuntimeConfig(ShardingRuntimeConfig.fromSpecs(
+            true,
+            "80-ff",
+            "10-1f=http://cluster-a:8090"
+        ));
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(WalletPathUtil.getShardRoot(VALID_WALLET) + "/content/doc-1");
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_TEMPORARY_REDIRECT);
+        verify(response).setHeader("Location", "http://cluster-a:8090/v1/propose-delete");
+        assertTrue(body.toString().contains("\"code\":\"wrong_shard\""));
+        assertTrue(body.toString().contains("\"l1Prefix\":\"12\""));
+        assertEquals(1L, context.apiRejectedRequests.get());
     }
 
     @Test
