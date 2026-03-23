@@ -53,15 +53,17 @@ public class ConsensusApiHandler {
         
         // Initialize application services
         this.flushService = new FileStoreFlushService(context.fileStore);
+        org.apache.jackrabbit.oak.spi.state.NodeStore authoritativeStore =
+            context.authoritativeNodeStore != null ? context.authoritativeNodeStore : context.nodeStore;
         this.writeApplicationService = new WriteApplicationService(
             context.fileStore,
-            context.nodeStore,
+            authoritativeStore,
             context.blobStore,
             flushService
         );
         this.deleteApplicationService = new DeleteApplicationService(
             context.fileStore,
-            context.nodeStore,
+            authoritativeStore,
             flushService
         );
         

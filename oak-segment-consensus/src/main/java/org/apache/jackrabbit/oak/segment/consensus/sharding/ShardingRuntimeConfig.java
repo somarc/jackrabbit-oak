@@ -126,6 +126,27 @@ public final class ShardingRuntimeConfig {
     }
 
     @NotNull
+    public List<ReadOnlyMount> expandRemoteReadOnlyMounts() {
+        if (!enabled || remoteRoutes.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<ReadOnlyMount> mounts = new ArrayList<>();
+        for (RemoteRoute route : remoteRoutes) {
+            for (int value = route.range.start; value <= route.range.end; value++) {
+                String prefix = String.format("%02x", value);
+                mounts.add(new ReadOnlyMount(
+                    prefix,
+                    "oak-chain-remote-" + prefix,
+                    "/oak-chain/" + prefix,
+                    route.endpoint
+                ));
+            }
+        }
+        return Collections.unmodifiableList(mounts);
+    }
+
+    @NotNull
     private static List<PrefixRange> parseLocalRanges(@Nullable String spec) {
         List<PrefixRange> ranges = new ArrayList<>();
         if (!RuntimeConfigValueResolver.hasText(spec)) {
@@ -265,6 +286,43 @@ public final class ShardingRuntimeConfig {
             String base = redirectBaseUrl.endsWith("/") ? redirectBaseUrl.substring(0, redirectBaseUrl.length() - 1) : redirectBaseUrl;
             String path = apiPath.startsWith("/") ? apiPath : "/" + apiPath;
             return base + path;
+        }
+    }
+
+    public static final class ReadOnlyMount {
+        private final String l1Prefix;
+        private final String mountName;
+        private final String mountPath;
+        private final String endpoint;
+
+        private ReadOnlyMount(@NotNull String l1Prefix,
+                              @NotNull String mountName,
+                              @NotNull String mountPath,
+                              @NotNull String endpoint) {
+            this.l1Prefix = l1Prefix;
+            this.mountName = mountName;
+            this.mountPath = mountPath;
+            this.endpoint = endpoint;
+        }
+
+        @NotNull
+        public String getL1Prefix() {
+            return l1Prefix;
+        }
+
+        @NotNull
+        public String getMountName() {
+            return mountName;
+        }
+
+        @NotNull
+        public String getMountPath() {
+            return mountPath;
+        }
+
+        @NotNull
+        public String getEndpoint() {
+            return endpoint;
         }
     }
 

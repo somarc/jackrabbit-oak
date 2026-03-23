@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import java.io.File;
+import java.io.Closeable;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.List;
@@ -61,6 +62,7 @@ final class ServerInfrastructureInitializer {
         FileStore fileStore = storageRuntime.getFileStore();
         NodeStore authoritativeNodeStore = storageRuntime.getAuthoritativeNodeStore();
         NodeStore readViewNodeStore = storageRuntime.getReadViewNodeStore();
+        Closeable readViewResources = storageRuntime.getReadViewResources();
 
         log.info("✅ Oak FileStore initialized");
         log.info("   - Store version: {}", fileStore.getHead().getRecordId());
@@ -75,7 +77,8 @@ final class ServerInfrastructureInitializer {
             fragmentationTracker);
 
         log.info("✅ HTTP server initialized (not yet started)");
-        return new InitializationResult(blobStoreType, blobStore, fileStore, authoritativeNodeStore, readViewNodeStore, httpServer, gcCostEstimator);
+        return new InitializationResult(blobStoreType, blobStore, fileStore, authoritativeNodeStore, readViewNodeStore,
+            readViewResources, httpServer, gcCostEstimator);
     }
 
     private GCCostEstimator initializeGCCostEstimator(FileStore fileStore,
@@ -271,6 +274,7 @@ final class ServerInfrastructureInitializer {
         private final FileStore fileStore;
         private final NodeStore nodeStore;
         private final NodeStore readViewNodeStore;
+        private final Closeable readViewResources;
         private final SegmentHttpServer httpServer;
         private final GCCostEstimator gcCostEstimator;
 
@@ -279,6 +283,7 @@ final class ServerInfrastructureInitializer {
                              FileStore fileStore,
                              NodeStore nodeStore,
                              NodeStore readViewNodeStore,
+                             Closeable readViewResources,
                              SegmentHttpServer httpServer,
                              GCCostEstimator gcCostEstimator) {
             this.blobStoreType = blobStoreType;
@@ -286,6 +291,7 @@ final class ServerInfrastructureInitializer {
             this.fileStore = fileStore;
             this.nodeStore = nodeStore;
             this.readViewNodeStore = readViewNodeStore;
+            this.readViewResources = readViewResources;
             this.httpServer = httpServer;
             this.gcCostEstimator = gcCostEstimator;
         }
@@ -308,6 +314,10 @@ final class ServerInfrastructureInitializer {
 
         NodeStore getReadViewNodeStore() {
             return readViewNodeStore;
+        }
+
+        Closeable getReadViewResources() {
+            return readViewResources;
         }
 
         SegmentHttpServer getHttpServer() {

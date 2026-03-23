@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
@@ -169,6 +170,12 @@ public class HealthHandlerTest {
         context.blobStoreType = "ipfs";
         context.blobStore = mock(org.apache.jackrabbit.oak.spi.blob.BlobStore.class);
         context.cidMappingService = mock(org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService.class);
+        context.setAuthoritativeNodeStore(mock(NodeStore.class));
+        context.setShardingRuntimeConfig(ShardingRuntimeConfig.fromSpecs(
+            true,
+            "80-ff",
+            "10-11=http://cluster-a:8090"
+        ));
 
         AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
         when(engine.isClusterHealthy()).thenReturn(true);
@@ -198,6 +205,11 @@ public class HealthHandlerTest {
         assertTrue(json.contains("\"registeredValidators\":1"));
         assertTrue(json.contains("\"type\":\"ipfs\""));
         assertTrue(json.contains("\"cidMappingAvailable\":true"));
+        assertTrue(json.contains("\"sharding\":"));
+        assertTrue(json.contains("\"enabled\":true"));
+        assertTrue(json.contains("\"localPrefixes\":\"80-ff\""));
+        assertTrue(json.contains("\"remoteMountCount\":2"));
+        assertTrue(json.contains("\"authoritativeStoreSeparated\":true"));
         assertTrue(json.matches("(?s).*\"overall\":\\{[^}]*\"status\":\"UP\"[^}]*}.*"));
     }
 

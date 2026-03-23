@@ -22,6 +22,8 @@ import java.nio.file.Path;
 import java.util.function.Supplier;
 
 import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
+import org.apache.jackrabbit.oak.segment.consensus.mount.ValidatorReadViewBuilder;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics;
@@ -60,7 +62,9 @@ public interface GlobalStoreServerComponentFactory {
             .withBlobStore(blobStore)
             .build();
         NodeStore nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
-        return new ServerStorageRuntime(fileStore, nodeStore, nodeStore);
+        ValidatorReadViewBuilder.BuildResult readView = new ValidatorReadViewBuilder()
+            .build(nodeStore, ShardingRuntimeConfig.load());
+        return new ServerStorageRuntime(fileStore, nodeStore, readView.getReadViewNodeStore(), readView);
     }
 
     default TarFiles extractTarFiles(FileStore fileStore) throws Exception {

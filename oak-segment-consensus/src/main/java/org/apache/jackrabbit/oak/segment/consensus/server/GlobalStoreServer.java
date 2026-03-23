@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import java.io.File;
+import java.io.Closeable;
 import java.io.IOException;
 
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
@@ -90,6 +91,7 @@ public class GlobalStoreServer {
     private volatile boolean running = false;
     private FileStore fileStore;
     private NodeStore nodeStore;
+    private Closeable readViewResources;
     private org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     private SegmentHttpServer httpServer;
     private EpochListener epochListener;
@@ -200,6 +202,7 @@ public class GlobalStoreServer {
             this.blobStore = blobStore; // Store reference for genesis image upload
             this.fileStore = infrastructure.getFileStore();
             this.nodeStore = infrastructure.getNodeStore();
+            this.readViewResources = infrastructure.getReadViewResources();
             this.httpServer = infrastructure.getHttpServer();
             this.gcCostEstimator = infrastructure.getGcCostEstimator();
             String selfUrl = this.httpServer.getContext().selfUrl;
@@ -416,6 +419,15 @@ public class GlobalStoreServer {
                 log.info("✅ HTTP server stopped");
             } catch (Exception e) {
                 log.warn("Error stopping HTTP server: {}", e.getMessage());
+            }
+        }
+
+        if (readViewResources != null) {
+            try {
+                readViewResources.close();
+                log.info("✅ Remote read-view resources closed");
+            } catch (Exception e) {
+                log.warn("Error closing remote read-view resources: {}", e.getMessage());
             }
         }
         

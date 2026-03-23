@@ -132,6 +132,8 @@ public class HealthHandler {
             }
         }
 
+        payload.put("sharding", buildShardingPayload());
+
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
     
@@ -334,6 +336,7 @@ public class HealthHandler {
             blobStore.put("note", "FileDataStore (embedded)");
         }
         payload.put("blobStore", blobStore);
+        payload.put("sharding", buildShardingPayload());
 
         Map<String, Object> overall = new HashMap<>();
         overall.put("status", allHealthy ? "UP" : "DEGRADED");
@@ -484,7 +487,28 @@ public class HealthHandler {
         payload.put("leaderUrl", leaderUrl);
         payload.put("registeredClients", registeredClients != null ? registeredClients.size() : 0);
         payload.put("registeredValidators", registeredValidators != null ? registeredValidators.size() : 0);
+        payload.put("sharding", buildShardingPayload());
         return payload;
+    }
+
+    private Map<String, Object> buildShardingPayload() {
+        Map<String, Object> sharding = new HashMap<>();
+        if (context == null || context.shardingRuntimeConfig == null) {
+            sharding.put("enabled", false);
+            sharding.put("localPrefixes", "none");
+            sharding.put("remoteMountCount", 0);
+            sharding.put("authoritativeStoreSeparated", false);
+            return sharding;
+        }
+
+        sharding.put("enabled", context.shardingRuntimeConfig.isEnabled());
+        sharding.put("localPrefixes", context.shardingRuntimeConfig.describeLocalRanges());
+        sharding.put("remoteMountCount", context.shardingRuntimeConfig.expandRemoteReadOnlyMounts().size());
+        sharding.put(
+            "authoritativeStoreSeparated",
+            context.authoritativeNodeStore != null && context.authoritativeNodeStore != context.nodeStore
+        );
+        return sharding;
     }
 
     private String buildOpsEnvelope(Object data,
