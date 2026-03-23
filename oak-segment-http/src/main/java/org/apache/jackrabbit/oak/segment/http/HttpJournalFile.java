@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -64,6 +65,7 @@ public class HttpJournalFile implements JournalFile {
         try {
             String content = http2ClientPool.getString(url);
             List<String> lines = new ArrayList<>(Arrays.asList(content.split("\n")));
+            Collections.reverse(lines);
             log.debug("Loaded {} journal entries via HTTP/2", lines.size());
             return new HttpJournalFileReader(lines);
         } catch (Exception e) {
@@ -143,4 +145,3 @@ public class HttpJournalFile implements JournalFile {
         }
     }
 }
-

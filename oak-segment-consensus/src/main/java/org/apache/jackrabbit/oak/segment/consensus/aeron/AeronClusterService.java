@@ -127,6 +127,7 @@ public class AeronClusterService {
         log.info("AeronClusterService {}", event);
         log.info("  enabled: {}", config.enabled());
         log.info("  nodeId: {}", config.nodeId());
+        log.info("  basePort: {}", config.basePort());
         log.info("  selfUrl: {}", config.selfUrl());
         log.info("  peerUrls: {}", Arrays.toString(config.peerUrls()));
         log.info("  observeElections: {}", config.observeElections());
@@ -192,6 +193,7 @@ public class AeronClusterService {
     }
 
     private void applyOptionalConfigProperties() {
+        setIfPositive(AeronClusterTopology.PORT_BASE_PROPERTY, config.basePort());
         setIfNotBlank("oak.cluster.environment", config.clusterEnvironment());
         setIfPositive("oak.cluster.session.timeout.minutes", config.sessionTimeoutMinutes());
         setIfPositive("oak.cluster.media.driver.timeout.ms", config.mediaDriverTimeoutMs());

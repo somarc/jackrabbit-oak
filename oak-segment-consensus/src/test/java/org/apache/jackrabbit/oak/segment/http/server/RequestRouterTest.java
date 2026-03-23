@@ -1391,6 +1391,56 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testManifestAndJournalBypassRateLimiter() throws Exception {
+        String previousRateLimit = System.getProperty("rate.limit.enabled");
+        String previousClientRps = System.getProperty(RateLimiter.PROP_REQUESTS_PER_SECOND);
+        String previousBurst = System.getProperty(RateLimiter.PROP_BURST_SIZE);
+        String previousGlobalRps = System.getProperty(RateLimiter.PROP_GLOBAL_RPS);
+        String previousToken = System.getProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME);
+        try {
+            System.setProperty("rate.limit.enabled", "true");
+            System.setProperty(RateLimiter.PROP_REQUESTS_PER_SECOND, "1");
+            System.setProperty(RateLimiter.PROP_BURST_SIZE, "1");
+            System.setProperty(RateLimiter.PROP_GLOBAL_RPS, "100");
+            System.clearProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME);
+
+            Path storeDirectory = Files.createTempDirectory("router-rate-bypass");
+            try {
+                Files.write(storeDirectory.resolve("manifest"), "manifest-data".getBytes(StandardCharsets.UTF_8));
+                Files.write(storeDirectory.resolve("journal.log"), "journal-entry".getBytes(StandardCharsets.UTF_8));
+
+                RequestRouter router = new RequestRouter(newContext(mock(NodeStore.class), storeDirectory));
+
+                Request firstBaseRequest = mock(Request.class);
+                HttpServletResponse firstResponse = responseWithBody();
+                router.route(firstBaseRequest, request("GET", "/v1/config/osgi"), firstResponse);
+                verify(firstBaseRequest).setHandled(true);
+                verify(firstResponse).setStatus(HttpServletResponse.SC_OK);
+
+                Request manifestBaseRequest = mock(Request.class);
+                HttpServletResponse manifestResponse = responseWithBody();
+                router.route(manifestBaseRequest, request("HEAD", "/manifest"), manifestResponse);
+                verify(manifestBaseRequest).setHandled(true);
+                verify(manifestResponse).setStatus(HttpServletResponse.SC_OK);
+
+                Request journalBaseRequest = mock(Request.class);
+                HttpServletResponse journalResponse = responseWithBody();
+                router.route(journalBaseRequest, request("GET", "/journal.log"), journalResponse);
+                verify(journalBaseRequest).setHandled(true);
+                verify(journalResponse).setStatus(HttpServletResponse.SC_OK);
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        } finally {
+            restoreProperty("rate.limit.enabled", previousRateLimit);
+            restoreProperty(RateLimiter.PROP_REQUESTS_PER_SECOND, previousClientRps);
+            restoreProperty(RateLimiter.PROP_BURST_SIZE, previousBurst);
+            restoreProperty(RateLimiter.PROP_GLOBAL_RPS, previousGlobalRps);
+            restoreProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME, previousToken);
+        }
+    }
+
+    @Test
     public void testHeadRouteUsesAeronHeadValuesWhenAvailable() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContextWithHead("file-head");

@@ -23,7 +23,8 @@ import java.util.List;
 
 final class AeronClusterTopology {
 
-    private static final int PORT_BASE = 9000;
+    static final String PORT_BASE_PROPERTY = "aeron.cluster.basePort";
+    private static final int DEFAULT_PORT_BASE = 9000;
     private static final int PORTS_PER_NODE = 100;
     private static final int ARCHIVE_CONTROL_PORT_OFFSET = 1;
     static final int CLIENT_FACING_PORT_OFFSET = 2;
@@ -36,19 +37,31 @@ final class AeronClusterTopology {
     }
 
     static int getPortBase() {
-        return PORT_BASE;
+        return Integer.getInteger(PORT_BASE_PROPERTY, DEFAULT_PORT_BASE);
     }
 
     static int calculatePort(int nodeId, int offset) {
-        return PORT_BASE + (nodeId * PORTS_PER_NODE) + offset;
+        return calculatePort(getPortBase(), nodeId, offset);
+    }
+
+    static int calculatePort(int portBase, int nodeId, int offset) {
+        return portBase + (nodeId * PORTS_PER_NODE) + offset;
     }
 
     static String archiveControlChannel(int nodeId, String ipAddress, int clusterTermLengthBytes) {
-        return udpChannel(nodeId, ipAddress, ARCHIVE_CONTROL_PORT_OFFSET, clusterTermLengthBytes);
+        return archiveControlChannel(getPortBase(), nodeId, ipAddress, clusterTermLengthBytes);
+    }
+
+    static String archiveControlChannel(int portBase, int nodeId, String ipAddress, int clusterTermLengthBytes) {
+        return udpChannel(portBase, nodeId, ipAddress, ARCHIVE_CONTROL_PORT_OFFSET, clusterTermLengthBytes);
     }
 
     static String consensusLogChannel(int nodeId, String ipAddress, int clusterTermLengthBytes) {
-        int port = calculatePort(nodeId, LOG_CONTROL_PORT_OFFSET);
+        return consensusLogChannel(getPortBase(), nodeId, ipAddress, clusterTermLengthBytes);
+    }
+
+    static String consensusLogChannel(int portBase, int nodeId, String ipAddress, int clusterTermLengthBytes) {
+        int port = calculatePort(portBase, nodeId, LOG_CONTROL_PORT_OFFSET);
         return new ChannelUriStringBuilder()
             .media("udp")
             .termLength(clusterTermLengthBytes)
@@ -65,22 +78,26 @@ final class AeronClusterTopology {
     }
 
     static String clusterMembers(List<String> addresses) {
+        return clusterMembers(getPortBase(), addresses);
+    }
+
+    static String clusterMembers(int portBase, List<String> addresses) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < addresses.size(); i++) {
             String address = addresses.get(i);
             sb.append(i);
-            sb.append(',').append(address).append(':').append(calculatePort(i, CLIENT_FACING_PORT_OFFSET));
-            sb.append(',').append(address).append(':').append(calculatePort(i, MEMBER_FACING_PORT_OFFSET));
-            sb.append(',').append(address).append(':').append(calculatePort(i, LOG_PORT_OFFSET));
-            sb.append(',').append(address).append(':').append(calculatePort(i, TRANSFER_PORT_OFFSET));
-            sb.append(',').append(address).append(':').append(calculatePort(i, ARCHIVE_CONTROL_PORT_OFFSET));
+            sb.append(',').append(address).append(':').append(calculatePort(portBase, i, CLIENT_FACING_PORT_OFFSET));
+            sb.append(',').append(address).append(':').append(calculatePort(portBase, i, MEMBER_FACING_PORT_OFFSET));
+            sb.append(',').append(address).append(':').append(calculatePort(portBase, i, LOG_PORT_OFFSET));
+            sb.append(',').append(address).append(':').append(calculatePort(portBase, i, TRANSFER_PORT_OFFSET));
+            sb.append(',').append(address).append(':').append(calculatePort(portBase, i, ARCHIVE_CONTROL_PORT_OFFSET));
             sb.append('|');
         }
         return sb.toString();
     }
 
-    private static String udpChannel(int nodeId, String ipAddress, int portOffset, int clusterTermLengthBytes) {
-        int port = calculatePort(nodeId, portOffset);
+    private static String udpChannel(int portBase, int nodeId, String ipAddress, int portOffset, int clusterTermLengthBytes) {
+        int port = calculatePort(portBase, nodeId, portOffset);
         return new ChannelUriStringBuilder()
             .media("udp")
             .termLength(clusterTermLengthBytes)

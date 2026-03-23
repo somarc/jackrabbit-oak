@@ -29,13 +29,19 @@ final class AeronIngressEndpointPlanner {
 
     private final List<String> clusterHostnames;
     private final String clientHostname;
+    private final int clusterBasePort;
     private final AeronClusterAddressResolver.HostnameResolver hostnameResolver;
     private final AeronClusterAddressResolver.LocalAddressProvider localAddressProvider;
 
     static AeronIngressEndpointPlanner system(List<String> clusterHostnames, String clientHostname) {
+        return system(clusterHostnames, clientHostname, AeronClusterLauncher.getPortBase());
+    }
+
+    static AeronIngressEndpointPlanner system(List<String> clusterHostnames, String clientHostname, int clusterBasePort) {
         return new AeronIngressEndpointPlanner(
             clusterHostnames,
             clientHostname,
+            clusterBasePort,
             hostname -> InetAddress.getByName(hostname).getHostAddress(),
             AeronClusterAddressResolver.systemLocalAddressProvider()
         );
@@ -45,8 +51,23 @@ final class AeronIngressEndpointPlanner {
                                 String clientHostname,
                                 AeronClusterAddressResolver.HostnameResolver hostnameResolver,
                                 AeronClusterAddressResolver.LocalAddressProvider localAddressProvider) {
+        this(
+            clusterHostnames,
+            clientHostname,
+            AeronClusterLauncher.getPortBase(),
+            hostnameResolver,
+            localAddressProvider
+        );
+    }
+
+    AeronIngressEndpointPlanner(List<String> clusterHostnames,
+                                String clientHostname,
+                                int clusterBasePort,
+                                AeronClusterAddressResolver.HostnameResolver hostnameResolver,
+                                AeronClusterAddressResolver.LocalAddressProvider localAddressProvider) {
         this.clusterHostnames = clusterHostnames;
         this.clientHostname = clientHostname;
+        this.clusterBasePort = clusterBasePort;
         this.hostnameResolver = hostnameResolver;
         this.localAddressProvider = localAddressProvider;
     }
@@ -61,7 +82,11 @@ final class AeronIngressEndpointPlanner {
             }
             String hostname = clusterHostnames.get(i);
             String ip = resolveIngressAddress(hostname, validatorSubnet);
-            int clientPort = AeronClusterLauncher.calculatePort(i, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET);
+            int clientPort = AeronClusterLauncher.calculatePort(
+                clusterBasePort,
+                i,
+                AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET
+            );
             ingressEndpoints.append(i).append("=").append(ip).append(":").append(clientPort);
             log.info("   Node {} ingress endpoint: {}:{}", i, ip, clientPort);
         }

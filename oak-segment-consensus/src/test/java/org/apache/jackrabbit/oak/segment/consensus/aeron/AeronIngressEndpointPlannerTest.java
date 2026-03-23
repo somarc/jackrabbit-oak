@@ -107,4 +107,20 @@ public class AeronIngressEndpointPlannerTest {
         );
         assertEquals("10.0.0.9", plan.clientIp);
     }
+
+    @Test
+    public void planUsesProvidedClusterBasePort() {
+        AeronIngressEndpointPlanner planner = new AeronIngressEndpointPlanner(
+            Arrays.asList("node-a", "node-b"),
+            "client-host",
+            9400,
+            hostname -> "10.0.0." + ("node-a".equals(hostname) ? "1" : "2"),
+            Collections::emptyList
+        );
+
+        AeronIngressEndpointPlanner.Plan plan = planner.plan();
+
+        assertEquals("0=10.0.0.1:9402,1=10.0.0.2:9502", plan.ingressEndpoints);
+        assertEquals("10.0.0.2", plan.clientIp);
+    }
 }

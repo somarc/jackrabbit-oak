@@ -60,6 +60,7 @@ public class AeronClusterRuntimeAttacherTest {
 
         AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
         when(launcher.getAeronDirectoryName()).thenReturn("aeron-dir");
+        when(launcher.getClusterBasePort()).thenReturn(AeronClusterLauncher.getPortBase());
 
         AeronWriteClient writeClient = mock(AeronWriteClient.class);
         AeronClusterRuntimeAttacher attacher = new AeronClusterRuntimeAttacher(
@@ -101,6 +102,7 @@ public class AeronClusterRuntimeAttacherTest {
         AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
         io.aeron.Aeron aeron = mock(io.aeron.Aeron.class);
         when(launcher.getAeronDirectoryName()).thenReturn("aeron-dir");
+        when(launcher.getClusterBasePort()).thenReturn(AeronClusterLauncher.getPortBase());
         when(launcher.getAeron()).thenReturn(aeron);
 
         AeronWriteClient writeClient = mock(AeronWriteClient.class);
@@ -140,6 +142,7 @@ public class AeronClusterRuntimeAttacherTest {
 
         AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
         when(launcher.getAeronDirectoryName()).thenReturn("aeron-dir");
+        when(launcher.getClusterBasePort()).thenReturn(AeronClusterLauncher.getPortBase());
         when(launcher.getAeron()).thenReturn(null);
 
         AeronWriteClient writeClient = mock(AeronWriteClient.class);
@@ -175,6 +178,7 @@ public class AeronClusterRuntimeAttacherTest {
 
         AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
         when(launcher.getAeronDirectoryName()).thenReturn("aeron-dir");
+        when(launcher.getClusterBasePort()).thenReturn(AeronClusterLauncher.getPortBase());
 
         AeronWriteClient writeClient = mock(AeronWriteClient.class);
         doThrow(new RuntimeException("connect failed")).when(writeClient).connect();

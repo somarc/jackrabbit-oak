@@ -26,6 +26,19 @@ import static org.junit.Assert.assertTrue;
 public class AeronClusterTopologyTest {
 
     @Test
+    public void calculatePortUsesConfiguredBasePortSystemProperty() {
+        String previous = System.getProperty(AeronClusterTopology.PORT_BASE_PROPERTY);
+        System.setProperty(AeronClusterTopology.PORT_BASE_PROPERTY, "9400");
+        try {
+            assertEquals(9402, AeronClusterTopology.calculatePort(0, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET));
+            assertEquals(9502, AeronClusterTopology.calculatePort(1, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET));
+            assertEquals(9607, AeronClusterTopology.calculatePort(2, 7));
+        } finally {
+            restorePortBase(previous);
+        }
+    }
+
+    @Test
     public void calculatePortUsesNodeStrideFromBasePort() {
         assertEquals(9002, AeronClusterTopology.calculatePort(0, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET));
         assertEquals(9102, AeronClusterTopology.calculatePort(1, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET));
@@ -65,5 +78,13 @@ public class AeronClusterTopologyTest {
                 + "1,validator-1:9102,validator-1:9103,validator-1:9104,validator-1:9105,validator-1:9101|",
             members
         );
+    }
+
+    private static void restorePortBase(String previous) {
+        if (previous == null) {
+            System.clearProperty(AeronClusterTopology.PORT_BASE_PROPERTY);
+        } else {
+            System.setProperty(AeronClusterTopology.PORT_BASE_PROPERTY, previous);
+        }
     }
 }

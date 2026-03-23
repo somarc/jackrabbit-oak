@@ -50,6 +50,7 @@ final class AeronClusterContextFactory {
                                  ErrorHandler mediaDriverErrorHandler,
                                  ErrorHandler consensusModuleErrorHandler,
                                  ErrorHandler clusteredServiceErrorHandler) {
+        int clusterBasePort = AeronClusterTopology.getPortBase();
         MediaDriver.Context mediaDriverContext = new MediaDriver.Context()
                 .aeronDirectoryName(aeronDirName)
                 .threadingMode(ThreadingMode.SHARED)
@@ -69,7 +70,7 @@ final class AeronClusterContextFactory {
         Archive.Context archiveContext = new Archive.Context()
                 .aeronDirectoryName(aeronDirName)
                 .archiveDir(new File(baseDir, "archive"))
-                .controlChannel(AeronClusterTopology.archiveControlChannel(nodeId, myIPAddress, clusterTermLengthBytes))
+                .controlChannel(AeronClusterTopology.archiveControlChannel(clusterBasePort, nodeId, myIPAddress, clusterTermLengthBytes))
                 .replicationChannel(AeronClusterTopology.replicationChannel(myIPAddress))
                 .archiveClientContext(replicationArchiveContext)
                 .localControlChannel("aeron:ipc?term-length=64k")
@@ -85,10 +86,10 @@ final class AeronClusterContextFactory {
         ConsensusModule.Context consensusModuleContext = new ConsensusModule.Context()
                 .errorHandler(consensusModuleErrorHandler)
                 .clusterMemberId(nodeId)
-                .clusterMembers(AeronClusterTopology.clusterMembers(ipAddresses))
+                .clusterMembers(AeronClusterTopology.clusterMembers(clusterBasePort, ipAddresses))
                 .clusterDir(new File(baseDir, "cluster"))
                 .ingressChannel("aeron:udp?term-length=" + clusterTermLengthBytes)
-                .logChannel(AeronClusterTopology.consensusLogChannel(nodeId, myIPAddress, clusterTermLengthBytes))
+                .logChannel(AeronClusterTopology.consensusLogChannel(clusterBasePort, nodeId, myIPAddress, clusterTermLengthBytes))
                 .replicationChannel(AeronClusterTopology.replicationChannel(myIPAddress))
                 .sessionTimeoutNs(sessionTimeoutConfig.timeoutNs)
                 .archiveContext(aeronArchiveContext.clone());

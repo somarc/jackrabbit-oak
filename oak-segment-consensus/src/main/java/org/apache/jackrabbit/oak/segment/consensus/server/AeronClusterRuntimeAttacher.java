@@ -83,7 +83,7 @@ final class AeronClusterRuntimeAttacher {
                             List<String> hostnamesList,
                             String clientHostname) {
         String aeronDirectoryName = aeronClusterLauncher.getAeronDirectoryName();
-        int clusterBasePort = AeronClusterLauncher.getPortBase();
+        int clusterBasePort = aeronClusterLauncher.getClusterBasePort();
 
         AeronWriteClient aeronWriteClient =
             writeClientFactory.create(0, aeronDirectoryName, hostnamesList, clusterBasePort, clientHostname);

@@ -135,6 +135,65 @@ public class LazyHttpNodeStoreTest {
     }
 
     @Test
+    public void testBurstInitializationFailuresAreThrottledBeforeOpeningCircuit() {
+        AtomicInteger attempts = new AtomicInteger();
+        CircuitBreaker circuitBreaker = new CircuitBreaker("shard-0x250", 5, 60_000L, 1);
+        LazyHttpNodeStore store = new LazyHttpNodeStore(
+            "http://cluster-b:8090",
+            "shard-0x250",
+            5000L,
+            30000L,
+            circuitBreaker,
+            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> {
+                attempts.incrementAndGet();
+                throw new IOException("remote unavailable");
+            },
+            60_000L
+        );
+
+        for (int i = 0; i < 5; i++) {
+            NodeState root = store.getRoot();
+            assertTrue(root.exists());
+            assertFalse(root.hasChildNode("oak-chain"));
+        }
+
+        assertEquals(1, attempts.get());
+        assertEquals(CircuitBreaker.State.CLOSED, store.getCircuitState());
+        assertFalse(store.isCircuitOpen());
+    }
+
+    @Test
+    public void testInitializationRetriesAfterCircuitResetTimeout() {
+        AtomicInteger attempts = new AtomicInteger();
+        CloseableMemoryNodeStore recoveredStore = new CloseableMemoryNodeStore();
+        CircuitBreaker circuitBreaker = new CircuitBreaker("shard-0x350", 1, 0L, 1);
+        LazyHttpNodeStore store = new LazyHttpNodeStore(
+            "http://cluster-c:8090",
+            "shard-0x350",
+            5000L,
+            30000L,
+            circuitBreaker,
+            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> {
+                if (attempts.incrementAndGet() == 1) {
+                    throw new IOException("first attempt fails");
+                }
+                return recoveredStore;
+            }
+        );
+
+        NodeState failedRoot = store.getRoot();
+        assertTrue(failedRoot.exists());
+        assertEquals(1, attempts.get());
+        assertTrue(store.isCircuitOpen());
+
+        NodeState recoveredRoot = store.getRoot();
+
+        assertTrue(recoveredRoot.exists());
+        assertEquals(2, attempts.get());
+        assertTrue(store.isConnected());
+    }
+
+    @Test
     public void testCloseClosesDelegateAndAllowsFreshInitializationLater() throws Exception {
         CloseableMemoryNodeStore firstStore = new CloseableMemoryNodeStore();
         CloseableMemoryNodeStore secondStore = new CloseableMemoryNodeStore();
@@ -162,6 +221,44 @@ public class LazyHttpNodeStoreTest {
         assertEquals(2, factory.invocationCount.get());
         assertTrue(store.isConnected());
         assertFalse(secondStore.closed);
+    }
+
+    @Test
+    public void testGetRootRefreshesRefreshingDelegates() {
+        RefreshTrackingNodeStore remoteStore = new RefreshTrackingNodeStore();
+        LazyHttpNodeStore store = new LazyHttpNodeStore(
+            "http://cluster-e:8090",
+            "shard-0x500",
+            5000L,
+            30000L,
+            new CircuitBreaker("shard-0x500"),
+            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore
+        );
+
+        store.getRoot();
+        store.getRoot();
+
+        assertEquals(2, remoteStore.refreshCount.get());
+    }
+
+    @Test
+    public void testRefreshFailureFallsBackToLastKnownRemoteState() {
+        FlakyRefreshTrackingNodeStore remoteStore = new FlakyRefreshTrackingNodeStore();
+        LazyHttpNodeStore store = new LazyHttpNodeStore(
+            "http://cluster-f:8090",
+            "shard-0x600",
+            5000L,
+            30000L,
+            new CircuitBreaker("shard-0x600"),
+            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore
+        );
+
+        NodeState firstRoot = store.getRoot();
+        NodeState secondRoot = store.getRoot();
+
+        assertTrue(firstRoot.exists());
+        assertTrue(secondRoot.exists());
+        assertEquals(2, remoteStore.refreshCount.get());
     }
 
     private static final class RecordingFactory implements LazyHttpNodeStore.RemoteNodeStoreFactory {
@@ -199,6 +296,30 @@ public class LazyHttpNodeStoreTest {
         @Override
         public void close() throws IOException {
             closed = true;
+        }
+    }
+
+    private static final class RefreshTrackingNodeStore extends MemoryNodeStore
+        implements LazyHttpNodeStore.RefreshingNodeStore {
+
+        private final AtomicInteger refreshCount = new AtomicInteger();
+
+        @Override
+        public void refresh() {
+            refreshCount.incrementAndGet();
+        }
+    }
+
+    private static final class FlakyRefreshTrackingNodeStore extends MemoryNodeStore
+        implements LazyHttpNodeStore.RefreshingNodeStore {
+
+        private final AtomicInteger refreshCount = new AtomicInteger();
+
+        @Override
+        public void refresh() throws IOException {
+            if (refreshCount.incrementAndGet() > 1) {
+                throw new IOException("transient refresh failure");
+            }
         }
     }
 }

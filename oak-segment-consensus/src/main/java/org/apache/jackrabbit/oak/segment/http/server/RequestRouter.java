@@ -231,8 +231,9 @@ public class RequestRouter {
                 return;
             }
             
-            // Rate limiting check (skip for health endpoints above)
-            if (!rateLimiter.allowRequest(request, response)) {
+            // Internal segment-transfer endpoints are part of cluster-to-cluster read fabric,
+            // not public API traffic, so they must bypass public rate limiting.
+            if (!isRateLimitExempt(path, method) && !rateLimiter.allowRequest(request, response)) {
                 rateLimiter.sendRateLimitResponse(response);
                 baseRequest.setHandled(true);
                 return;
@@ -930,6 +931,29 @@ public class RequestRouter {
         return "/explorer".equals(path)
             || "/api-browser".equals(path)
             || "/chat".equals(path);
+    }
+
+    private boolean isRateLimitExempt(String path, String method) {
+        if (path == null || method == null) {
+            return false;
+        }
+        if (path.startsWith("/health")) {
+            return true;
+        }
+        if ("/v1/ops/snapshots/health".equals(path) && "GET".equals(method)) {
+            return true;
+        }
+        if ("/journal.log".equals(path) && "GET".equals(method)) {
+            return true;
+        }
+        if ("/manifest".equals(path) && ("GET".equals(method) || "HEAD".equals(method))) {
+            return true;
+        }
+        if ("/gc.log".equals(path) && "GET".equals(method)) {
+            return true;
+        }
+        return path.startsWith("/segments/")
+            && ("GET".equals(method) || "HEAD".equals(method));
     }
     
     /**

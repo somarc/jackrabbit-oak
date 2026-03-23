@@ -322,6 +322,10 @@ public class AeronClusterLauncher {
     public static int getPortBase() {
         return AeronClusterTopology.getPortBase();
     }
+
+    public int getClusterBasePort() {
+        return getPortBase();
+    }
     
     private String getHostname() {
         return hostnames.get(nodeId);
@@ -329,6 +333,10 @@ public class AeronClusterLauncher {
     
     public static int calculatePort(int nodeId, int offset) {
         return AeronClusterTopology.calculatePort(nodeId, offset);
+    }
+
+    public static int calculatePort(int clusterBasePort, int nodeId, int offset) {
+        return AeronClusterTopology.calculatePort(clusterBasePort, nodeId, offset);
     }
     
     /**

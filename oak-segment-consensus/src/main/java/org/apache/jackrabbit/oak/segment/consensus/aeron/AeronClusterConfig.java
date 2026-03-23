@@ -41,6 +41,12 @@ public @interface AeronClusterConfig {
     int nodeId() default 0;
 
     @AttributeDefinition(
+        name = "Base Port",
+        description = "Aeron cluster base port. 0 = use built-in default."
+    )
+    int basePort() default 0;
+
+    @AttributeDefinition(
         name = "Self URL",
         description = "Validator self URL (e.g., http://localhost:8090)"
     )

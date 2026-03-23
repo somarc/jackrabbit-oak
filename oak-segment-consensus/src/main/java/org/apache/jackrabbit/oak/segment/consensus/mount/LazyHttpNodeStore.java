@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.mount;
 import org.apache.jackrabbit.oak.api.Blob;
 import org.apache.jackrabbit.oak.api.CommitFailedException;
 import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
+import org.apache.jackrabbit.oak.segment.file.JournalReader;
 import org.apache.jackrabbit.oak.segment.file.ReadOnlyFileStore;
 import org.apache.jackrabbit.oak.segment.http.HttpPersistence;
 
@@ -38,6 +39,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -61,10 +63,15 @@ import java.util.concurrent.atomic.AtomicReference;
 public class LazyHttpNodeStore implements NodeStore, Closeable {
     
     private static final Logger LOG = LoggerFactory.getLogger(LazyHttpNodeStore.class);
+    private static final long DEFAULT_INITIALIZATION_RETRY_INTERVAL_MS = 1_000L;
 
     @FunctionalInterface
     interface RemoteNodeStoreFactory {
         NodeStore create(String endpoint, String mountName, long connectTimeoutMs, long readTimeoutMs) throws Exception;
+    }
+
+    interface RefreshingNodeStore extends NodeStore {
+        void refresh() throws IOException;
     }
     
     private final String endpoint;
@@ -73,10 +80,11 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     private final long connectTimeoutMs;
     private final long readTimeoutMs;
     private final RemoteNodeStoreFactory remoteNodeStoreFactory;
+    private final long initializationRetryIntervalMs;
     
     private final AtomicReference<NodeStore> delegate = new AtomicReference<>();
     private final AtomicBoolean initialized = new AtomicBoolean(false);
-    private final AtomicBoolean initializationFailed = new AtomicBoolean(false);
+    private final AtomicLong lastInitializationAttemptAt = new AtomicLong(0);
     
     // Empty state returned when remote is unavailable
     private static final NodeState EMPTY_STATE = new EmptyNodeState();
@@ -109,12 +117,24 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
                       long readTimeoutMs,
                       CircuitBreaker circuitBreaker,
                       RemoteNodeStoreFactory remoteNodeStoreFactory) {
+        this(endpoint, mountName, connectTimeoutMs, readTimeoutMs, circuitBreaker, remoteNodeStoreFactory,
+            DEFAULT_INITIALIZATION_RETRY_INTERVAL_MS);
+    }
+
+    LazyHttpNodeStore(String endpoint,
+                      String mountName,
+                      long connectTimeoutMs,
+                      long readTimeoutMs,
+                      CircuitBreaker circuitBreaker,
+                      RemoteNodeStoreFactory remoteNodeStoreFactory,
+                      long initializationRetryIntervalMs) {
         this.endpoint = endpoint;
         this.mountName = mountName;
         this.connectTimeoutMs = connectTimeoutMs;
         this.readTimeoutMs = readTimeoutMs;
         this.circuitBreaker = circuitBreaker;
         this.remoteNodeStoreFactory = remoteNodeStoreFactory;
+        this.initializationRetryIntervalMs = initializationRetryIntervalMs;
         
         LOG.info("LazyHttpNodeStore[{}] created for {} (lazy init)", mountName, endpoint);
     }
@@ -134,6 +154,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
             LOG.debug("LazyHttpNodeStore[{}] circuit open, returning empty state", mountName);
             return null;
         }
+        boolean throttleInitializationAttempt = circuitBreaker.getState() == CircuitBreaker.State.CLOSED;
         
         // Lazy initialization
         synchronized (this) {
@@ -141,11 +162,17 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
             if (store != null) {
                 return store;
             }
-            
-            if (initializationFailed.get()) {
-                // Don't retry immediately if init already failed
-                return null;
+
+            long now = System.currentTimeMillis();
+            if (throttleInitializationAttempt && initializationRetryIntervalMs > 0L) {
+                long lastAttempt = lastInitializationAttemptAt.get();
+                if (lastAttempt > 0L && now - lastAttempt < initializationRetryIntervalMs) {
+                    LOG.debug("LazyHttpNodeStore[{}] skipping reconnect attempt after {}ms backoff window",
+                        mountName, initializationRetryIntervalMs);
+                    return null;
+                }
             }
+            lastInitializationAttemptAt.set(now);
             
             try {
                 LOG.info("LazyHttpNodeStore[{}] initializing connection to {}...", mountName, endpoint);
@@ -154,6 +181,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
                 
                 delegate.set(store);
                 initialized.set(true);
+                lastInitializationAttemptAt.set(0L);
                 circuitBreaker.recordSuccess();
                 
                 LOG.info("✅ LazyHttpNodeStore[{}] connected to {}", mountName, endpoint);
@@ -162,19 +190,35 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
             } catch (Exception e) {
                 LOG.warn("❌ LazyHttpNodeStore[{}] failed to connect: {}", mountName, e.getMessage());
                 circuitBreaker.recordFailure(e);
-                initializationFailed.set(true);
-                
-                // Schedule retry after circuit breaker timeout
-                // For now, just return null
                 return null;
             }
         }
+    }
+
+    @Nullable
+    private NodeStore getReadableDelegate() {
+        NodeStore store = getDelegate();
+        if (store == null) {
+            return null;
+        }
+
+        if (store instanceof RefreshingNodeStore) {
+            try {
+                ((RefreshingNodeStore) store).refresh();
+            } catch (IOException e) {
+                LOG.warn("LazyHttpNodeStore[{}] refresh failed: {}", mountName, e.getMessage());
+                circuitBreaker.recordFailure(e);
+                return store;
+            }
+        }
+
+        return store;
     }
     
     @Override
     @NotNull
     public NodeState getRoot() {
-        NodeStore store = getDelegate();
+        NodeStore store = getReadableDelegate();
         if (store == null) {
             LOG.debug("LazyHttpNodeStore[{}] returning empty root (remote unavailable)", mountName);
             return EMPTY_STATE;
@@ -207,7 +251,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     @Override
     @NotNull
     public NodeState rebase(@NotNull NodeBuilder builder) {
-        NodeStore store = getDelegate();
+        NodeStore store = getReadableDelegate();
         if (store == null) {
             return EMPTY_STATE;
         }
@@ -216,7 +260,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     
     @Override
     public NodeState reset(@NotNull NodeBuilder builder) {
-        NodeStore store = getDelegate();
+        NodeStore store = getReadableDelegate();
         if (store == null) {
             return EMPTY_STATE;
         }
@@ -232,7 +276,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     @Override
     @Nullable
     public Blob getBlob(@NotNull String reference) {
-        NodeStore store = getDelegate();
+        NodeStore store = getReadableDelegate();
         if (store == null) {
             return null;
         }
@@ -254,7 +298,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     @Override
     @NotNull
     public Map<String, String> checkpointInfo(@NotNull String checkpoint) {
-        NodeStore store = getDelegate();
+        NodeStore store = getReadableDelegate();
         if (store == null) {
             return Map.of();
         }
@@ -264,7 +308,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     @Override
     @NotNull
     public Iterable<String> checkpoints() {
-        NodeStore store = getDelegate();
+        NodeStore store = getReadableDelegate();
         if (store == null) {
             return java.util.Collections.emptyList();
         }
@@ -274,7 +318,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     @Override
     @Nullable
     public NodeState retrieve(@NotNull String checkpoint) {
-        NodeStore store = getDelegate();
+        NodeStore store = getReadableDelegate();
         if (store == null) {
             return null;
         }
@@ -293,6 +337,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
             ((Closeable) store).close();
         }
         initialized.set(false);
+        lastInitializationAttemptAt.set(0L);
         LOG.info("LazyHttpNodeStore[{}] closed", mountName);
     }
     
@@ -347,7 +392,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     public void reconnect() {
         delegate.set(null);
         initialized.set(false);
-        initializationFailed.set(false);
+        lastInitializationAttemptAt.set(0L);
         circuitBreaker.reset();
         LOG.info("LazyHttpNodeStore[{}] reset for reconnection", mountName);
     }
@@ -471,15 +516,136 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
             long connectTimeoutMs,
             long readTimeoutMs) throws Exception {
         // Timeouts are reserved for future HTTP client wiring and retained as part of the constructor contract.
-        HttpPersistence persistence = new HttpPersistence(endpoint);
+        return new RefreshingRemoteNodeStore(endpoint, mountName);
+    }
 
-        java.io.File tempDir = java.nio.file.Files.createTempDirectory("oak-http-" + mountName).toFile();
-        tempDir.deleteOnExit();
+    private static final class RefreshingRemoteNodeStore implements RefreshingNodeStore, Closeable {
+        private static final long MIN_REFRESH_INTERVAL_MS = 1_000L;
 
-        ReadOnlyFileStore fileStore = fileStoreBuilder(tempDir)
-            .withCustomPersistence(persistence)
-            .buildReadOnly();
+        private final HttpPersistence persistence;
+        private final ReadOnlyFileStore fileStore;
+        private final NodeStore nodeStore;
+        private final AtomicLong lastRefreshAttemptMs = new AtomicLong(0);
+        private volatile String currentRevision;
 
-        return SegmentNodeStoreBuilders.builder(fileStore).build();
+        private RefreshingRemoteNodeStore(String endpoint, String mountName) throws Exception {
+            this.persistence = new HttpPersistence(endpoint);
+
+            java.io.File tempDir = java.nio.file.Files.createTempDirectory("oak-http-" + mountName).toFile();
+            tempDir.deleteOnExit();
+
+            this.fileStore = fileStoreBuilder(tempDir)
+                .withCustomPersistence(persistence)
+                .buildReadOnly();
+            this.nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
+            this.currentRevision = readLatestRevision(persistence);
+        }
+
+        @Override
+        public void refresh() throws IOException {
+            long now = System.currentTimeMillis();
+            long previousAttempt = lastRefreshAttemptMs.get();
+            if (now - previousAttempt < MIN_REFRESH_INTERVAL_MS) {
+                return;
+            }
+            if (!lastRefreshAttemptMs.compareAndSet(previousAttempt, now)) {
+                return;
+            }
+
+            String latestRevision = readLatestRevision(persistence);
+            if (latestRevision == null || latestRevision.equals(currentRevision)) {
+                return;
+            }
+
+            fileStore.setRevision(latestRevision);
+            currentRevision = latestRevision;
+        }
+
+        @Override
+        @NotNull
+        public NodeState getRoot() {
+            return nodeStore.getRoot();
+        }
+
+        @Override
+        @NotNull
+        public NodeState merge(@NotNull NodeBuilder builder,
+                               @NotNull CommitHook commitHook,
+                               @NotNull CommitInfo info) throws CommitFailedException {
+            return nodeStore.merge(builder, commitHook, info);
+        }
+
+        @Override
+        @NotNull
+        public NodeState rebase(@NotNull NodeBuilder builder) {
+            return nodeStore.rebase(builder);
+        }
+
+        @Override
+        public NodeState reset(@NotNull NodeBuilder builder) {
+            return nodeStore.reset(builder);
+        }
+
+        @Override
+        @NotNull
+        public Blob createBlob(InputStream inputStream) throws IOException {
+            return nodeStore.createBlob(inputStream);
+        }
+
+        @Override
+        @Nullable
+        public Blob getBlob(@NotNull String reference) {
+            return nodeStore.getBlob(reference);
+        }
+
+        @Override
+        @NotNull
+        public String checkpoint(long lifetime, @NotNull Map<String, String> properties) {
+            return nodeStore.checkpoint(lifetime, properties);
+        }
+
+        @Override
+        @NotNull
+        public String checkpoint(long lifetime) {
+            return nodeStore.checkpoint(lifetime);
+        }
+
+        @Override
+        @NotNull
+        public Map<String, String> checkpointInfo(@NotNull String checkpoint) {
+            return nodeStore.checkpointInfo(checkpoint);
+        }
+
+        @Override
+        @NotNull
+        public Iterable<String> checkpoints() {
+            return nodeStore.checkpoints();
+        }
+
+        @Override
+        @Nullable
+        public NodeState retrieve(@NotNull String checkpoint) {
+            return nodeStore.retrieve(checkpoint);
+        }
+
+        @Override
+        public boolean release(@NotNull String checkpoint) {
+            return nodeStore.release(checkpoint);
+        }
+
+        @Override
+        public void close() throws IOException {
+            fileStore.close();
+        }
+    }
+
+    @Nullable
+    private static String readLatestRevision(HttpPersistence persistence) throws IOException {
+        try (JournalReader journalReader = new JournalReader(persistence.getJournalFile())) {
+            if (!journalReader.hasNext()) {
+                return null;
+            }
+            return journalReader.next().getRevision();
+        }
     }
 }

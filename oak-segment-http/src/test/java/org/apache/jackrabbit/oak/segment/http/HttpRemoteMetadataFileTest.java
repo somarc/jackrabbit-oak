@@ -44,8 +44,8 @@ public class HttpRemoteMetadataFileTest {
         JournalFileReader reader = journalFile.openJournalReader();
 
         assertEquals("http://validator.example/journal.log", pool.lastGetStringUrl);
-        assertEquals("head", reader.readLine());
         assertEquals("root", reader.readLine());
+        assertEquals("head", reader.readLine());
         assertNull(reader.readLine());
         reader.close();
         assertTrue(journalFile.exists());

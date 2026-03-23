@@ -31,6 +31,48 @@ import static org.mockito.Mockito.mock;
 public class AeronClusterContextFactoryTest {
 
     @Test
+    public void createUsesConfiguredClusterBasePort() {
+        String previous = System.getProperty(AeronClusterTopology.PORT_BASE_PROPERTY);
+        System.setProperty(AeronClusterTopology.PORT_BASE_PROPERTY, "9400");
+        try {
+            ClusteredService clusteredService = mock(ClusteredService.class);
+            AeronClusterContextFactory.LaunchContexts contexts = AeronClusterContextFactory.create(
+                1,
+                new File("target/aeron-context-factory"),
+                clusteredService,
+                "aeron-test-dir",
+                "172.20.1.8",
+                Arrays.asList("172.20.1.5", "peer-1", "172.20.1.8"),
+                new ShutdownSignalBarrier(),
+                16384,
+                16384,
+                65536,
+                60000,
+                524288,
+                new AeronClusterLauncher.SessionTimeoutConfig(5, TimeUnit.MINUTES.toNanos(5), "test", "staging"),
+                throwable -> { },
+                throwable -> { },
+                throwable -> { }
+            );
+
+            assertEquals(
+                "1,peer-1:9502,peer-1:9503,peer-1:9504,peer-1:9505,peer-1:9501",
+                contexts.consensusModuleContext.clusterMembers().split("\\|")[1]
+            );
+            assertEquals(
+                AeronClusterTopology.consensusLogChannel(9400, 1, "172.20.1.8", 524288),
+                contexts.consensusModuleContext.logChannel()
+            );
+            assertEquals(
+                AeronClusterTopology.archiveControlChannel(9400, 1, "172.20.1.8", 524288),
+                contexts.archiveContext.controlChannel()
+            );
+        } finally {
+            restorePortBase(previous);
+        }
+    }
+
+    @Test
     public void createBuildsDriverAndArchiveContextsFromInputs() {
         ClusteredService clusteredService = mock(ClusteredService.class);
         AeronClusterContextFactory.LaunchContexts contexts = AeronClusterContextFactory.create(
@@ -119,5 +161,13 @@ public class AeronClusterContextFactoryTest {
         assertSame(clusteredService, contexts.clusteredServiceContext.clusteredService());
         assertEquals("aeron:ipc?term-length=64k", contexts.clusteredServiceContext.archiveContext().controlRequestChannel());
         assertEquals("aeron:ipc?term-length=64k", contexts.clusteredServiceContext.archiveContext().controlResponseChannel());
+    }
+
+    private static void restorePortBase(String previous) {
+        if (previous == null) {
+            System.clearProperty(AeronClusterTopology.PORT_BASE_PROPERTY);
+        } else {
+            System.setProperty(AeronClusterTopology.PORT_BASE_PROPERTY, previous);
+        }
     }
 }

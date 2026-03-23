@@ -72,7 +72,7 @@ public class AeronWriteClient {
             clusterHostnames,
             clusterBasePort,
             clientHostname,
-            () -> AeronIngressEndpointPlanner.system(clusterHostnames, clientHostname).plan(),
+            () -> AeronIngressEndpointPlanner.system(clusterHostnames, clientHostname, clusterBasePort).plan(),
             defaultClusterClientFactory(aeronDirectoryName),
             new BackoffIdleStrategy(100, 10, 1000, 1_000_000),
             Thread::sleep,

@@ -36,6 +36,7 @@ public final class AeronClusterTuningIntrospection {
         values.put("peer_urls_count", snapshot.peerUrls.size());
         values.put("observe_elections", snapshot.observeElections);
         values.put("log_cluster_state_details", snapshot.logClusterStateDetails);
+        values.put("cluster_base_port", readInt(AeronClusterTopology.PORT_BASE_PROPERTY, AeronClusterTopology.getPortBase()));
         values.put("cluster_environment", readString("oak.cluster.environment", ""));
         values.put("session_timeout_minutes", readInt("oak.cluster.session.timeout.minutes", 0));
         values.put("media_driver_timeout_ms", readInt("oak.cluster.media.driver.timeout.ms", 0));
