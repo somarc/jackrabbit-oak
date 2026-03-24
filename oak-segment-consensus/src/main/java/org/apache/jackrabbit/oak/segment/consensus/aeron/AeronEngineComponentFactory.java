@@ -89,4 +89,16 @@ final class AeronEngineComponentFactory {
     static AeronLeaderTracker createLeaderTracker(LeaderDiscoveryService leaderDiscoveryService) {
         return new AeronLeaderTracker(leaderDiscoveryService);
     }
+
+    static AeronIngressWritePayloadBuilder createIngressWritePayloadBuilder() {
+        return new AeronIngressWritePayloadBuilder();
+    }
+
+    static AeronIngressControlPayloadBuilder createIngressControlPayloadBuilder() {
+        return new AeronIngressControlPayloadBuilder();
+    }
+
+    static AeronInternalClusterClientConnector createInternalClusterClientConnector() {
+        return new AeronInternalClusterClientConnector();
+    }
 }

@@ -33,7 +33,7 @@ public class AeronIngressWritePayloadBuilderTest {
 
     @Test
     public void writeProposalEscapesOptionalFieldsAndEncodesSbeHeader() {
-        AeronIngressWritePayloadBuilder.EncodedMessage encoded = builder.buildWriteProposal(
+        AeronEncodedMessage encoded = builder.buildWriteProposal(
             "0xabc\\\"def",
             "/content/demo",
             null,
@@ -56,7 +56,7 @@ public class AeronIngressWritePayloadBuilderTest {
 
     @Test
     public void writeProposalWithBinaryDefaultsMimeTypeAndIncludesBlobMetadata() {
-        AeronIngressWritePayloadBuilder.EncodedMessage encoded = builder.buildWriteProposalWithBinary(
+        AeronEncodedMessage encoded = builder.buildWriteProposalWithBinary(
             "0xabc",
             "/content/binary",
             "asset",
@@ -77,7 +77,7 @@ public class AeronIngressWritePayloadBuilderTest {
 
     @Test
     public void deleteProposalOmitsAbsentOptionalFields() {
-        AeronIngressWritePayloadBuilder.EncodedMessage encoded = builder.buildDeleteProposal(
+        AeronEncodedMessage encoded = builder.buildDeleteProposal(
             "0xdef",
             "/content/delete",
             null,
@@ -112,7 +112,7 @@ public class AeronIngressWritePayloadBuilderTest {
         second.setMimeType("image/png");
         second.setIpfsCid("bafy456");
 
-        AeronIngressWritePayloadBuilder.EncodedMessage encoded =
+        AeronEncodedMessage encoded =
             builder.buildWriteBatch(List.of(first, second), Integer.valueOf(11));
 
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, encoded.templateId);
@@ -137,7 +137,7 @@ public class AeronIngressWritePayloadBuilderTest {
         return new QueuedProposal(proposalId, "0xtx", null, 1L, 2L, ProposalState.PENDING);
     }
 
-    private static void assertPayloadMatches(AeronIngressWritePayloadBuilder.EncodedMessage encoded) {
+    private static void assertPayloadMatches(AeronEncodedMessage encoded) {
         SimpleMessageHeader.HeaderInfo header = SimpleMessageHeader.decode(encoded.buffer, 0);
         byte[] payload = new byte[encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH];
         encoded.buffer.getBytes(SimpleMessageHeader.ENCODED_LENGTH, payload);

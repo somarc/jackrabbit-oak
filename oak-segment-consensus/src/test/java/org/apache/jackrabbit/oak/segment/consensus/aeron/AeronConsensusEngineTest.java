@@ -16,11 +16,16 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import org.agrona.MutableDirectBuffer;
 import io.aeron.Image;
 import io.aeron.cluster.service.Cluster;
+import io.aeron.cluster.service.ClientSession;
+import io.aeron.logbuffer.Header;
+import org.agrona.DirectBuffer;
+import org.agrona.MutableDirectBuffer;
 import org.agrona.concurrent.IdleStrategy;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
@@ -31,6 +36,8 @@ import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import java.io.File;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,6 +45,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.sun.net.httpserver.HttpServer;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -330,6 +338,95 @@ public class AeronConsensusEngineTest {
     }
 
     @Test
+    public void onSessionMessageDelegatesToIngressHandler() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        AeronIngressHandler ingressHandler = mock(AeronIngressHandler.class);
+        ClientSession session = mock(ClientSession.class);
+        Header header = mock(Header.class);
+        DirectBuffer buffer = mock(DirectBuffer.class);
+        Cluster cluster = mock(Cluster.class);
+        setField(engine, "ingressHandler", ingressHandler);
+        setField(engine, "cluster", cluster);
+
+        engine.onSessionMessage(session, 123L, buffer, 4, 5, header);
+
+        verify(ingressHandler).handleMessage(session, 123L, buffer, 4, 5, header, cluster);
+    }
+
+    @Test
+    public void onTakeSnapshotDelegatesToSnapshotService() throws Exception {
+        SnapshotService snapshotService = mock(SnapshotService.class);
+        AeronConsensusEngine engine = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), snapshotService);
+        io.aeron.ExclusivePublication publication = mock(io.aeron.ExclusivePublication.class);
+        IdleStrategy idleStrategy = mock(IdleStrategy.class);
+        setField(engine, "idleStrategy", idleStrategy);
+        setField(engine, "currentEthereumEpoch", 17);
+
+        engine.onTakeSnapshot(publication);
+
+        verify(snapshotService).createSnapshot(publication, idleStrategy, 17);
+    }
+
+    @Test
+    public void getCurrentLeaderHintUsesKnownLeaderHintForFollower() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.role()).thenReturn(Cluster.Role.FOLLOWER);
+        setField(engine, "cluster", cluster);
+        LeaderDiscoveryService leaderDiscoveryService =
+            (LeaderDiscoveryService) getField(engine, "leaderDiscoveryService");
+        leaderDiscoveryService.setKnownLeader("http://leader:8080", 2);
+
+        assertEquals("http://leader:8080", engine.getCurrentLeaderHint());
+    }
+
+    @Test
+    public void refreshLeaderTermIfNeededSyncsTermFromLeaderEndpoint() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.role()).thenReturn(Cluster.Role.FOLLOWER);
+        setField(engine, "cluster", cluster);
+        setField(engine, "currentTerm", 2);
+
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/v1/aeron/cluster-state", exchange -> {
+            byte[] payload = "{\"term\":7}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, payload.length);
+            exchange.getResponseBody().write(payload);
+            exchange.close();
+        });
+        server.start();
+        try {
+            LeaderDiscoveryService leaderDiscoveryService =
+                (LeaderDiscoveryService) getField(engine, "leaderDiscoveryService");
+            leaderDiscoveryService.setKnownLeader("http://127.0.0.1:" + server.getAddress().getPort(), 3);
+
+            Method method = AeronConsensusEngine.class.getDeclaredMethod("refreshLeaderTermIfNeeded", boolean.class);
+            method.setAccessible(true);
+            method.invoke(engine, true);
+
+            assertEquals(7, engine.getCurrentTerm());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    public void createGenesisViaConsensusOffersGenesisProposal() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+
+        Method method = AeronConsensusEngine.class.getDeclaredMethod("createGenesisViaConsensus");
+        method.setAccessible(true);
+        method.invoke(engine);
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, offer.templateId);
+        assertTrue(offer.json.contains("\"genesisValidator\":\"http://self:8080\""));
+        assertTrue(offer.json.contains("\"timestamp\":"));
+    }
+
+    @Test
     public void onRoleChangeToLeaderSkipsGenesisBootstrapWhenGenesisExists() throws Exception {
         RecordingTaskScheduler scheduler = new RecordingTaskScheduler();
         AeronBackgroundCoordinator backgroundCoordinator =
@@ -507,6 +604,101 @@ public class AeronConsensusEngineTest {
     }
 
     @Test
+    public void sendWriteThroughIngressWithBinaryOffersBlobMetadata() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+        setField(engine, "currentTerm", 11);
+
+        assertTrue(engine.sendWriteThroughIngress(
+            "0xabc",
+            "/content/binary",
+            "asset",
+            "{\"title\":\"Oak\"}",
+            "sig-3",
+            "blob-99",
+            "image/png",
+            "cid-2",
+            "proposal-4"
+        ));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, offer.templateId);
+        assertTrue(offer.json.contains("\"blobId\":\"blob-99\""));
+        assertTrue(offer.json.contains("\"mimeType\":\"image/png\""));
+        assertTrue(offer.json.contains("\"ipfsCid\":\"cid-2\""));
+        assertTrue(offer.json.contains("\"proposalId\":\"proposal-4\""));
+        assertTrue(offer.json.contains("\"term\":11"));
+    }
+
+    @Test
+    public void sendWriteBatchThroughIngressOffersWriteBatchMessage() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+        setField(engine, "currentTerm", 13);
+
+        QueuedProposal first = proposal("proposal-5");
+        first.setWalletAddress("0xaaa");
+        first.setPath("/content/a");
+        first.setContentType("page");
+        first.setMessage("hello");
+        first.setSignature("sig-a");
+        first.setIntentToken("intent-5");
+
+        QueuedProposal second = proposal("proposal-6");
+        second.setWalletAddress("0xbbb");
+        second.setPath("/content/b");
+        second.setContentType("asset");
+        second.setMessage("world");
+        second.setSignature("sig-b");
+        second.setBlobId("blob-6");
+        second.setMimeType("image/jpeg");
+        second.setIpfsCid("cid-6");
+
+        assertEquals(2, engine.sendWriteBatchThroughIngress(List.of(first, second)));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, offer.templateId);
+        assertTrue(offer.json.contains("\"proposalId\":\"proposal-5\""));
+        assertTrue(offer.json.contains("\"intentToken\":\"intent-5\""));
+        assertTrue(offer.json.contains("\"proposalId\":\"proposal-6\""));
+        assertTrue(offer.json.contains("\"blobId\":\"blob-6\""));
+        assertTrue(offer.json.contains("\"mimeType\":\"image/jpeg\""));
+        assertTrue(offer.json.contains("\"ipfsCid\":\"cid-6\""));
+        assertTrue(offer.json.contains("\"term\":13"));
+    }
+
+    @Test
+    public void sendGCProposalThroughIngressOffersGcProposalMessage() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+
+        assertTrue(engine.sendGCProposalThroughIngress("gc-2", "0xwallet", null, 512L, null));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, offer.templateId);
+        assertTrue(offer.json.contains("\"proposalId\":\"gc-2\""));
+        assertTrue(offer.json.contains("\"proposerWallet\":\"0xwallet\""));
+        assertTrue(offer.json.contains("\"targetRevision\":\"HEAD\""));
+        assertTrue(offer.json.contains("\"estimatedReclaimableSizeMB\":512"));
+        assertTrue(offer.json.contains("\"estimatedCostUSDC\":\"0\""));
+    }
+
+    @Test
+    public void sendGCVoteThroughIngressOffersGcVoteMessage() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+
+        assertTrue(engine.sendGCVoteThroughIngress("gc-3", 4, false, "too expensive"));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GC_VOTE, offer.templateId);
+        assertTrue(offer.json.contains("\"proposalId\":\"gc-3\""));
+        assertTrue(offer.json.contains("\"validatorId\":4"));
+        assertTrue(offer.json.contains("\"approve\":false"));
+        assertTrue(offer.json.contains("\"reason\":\"too expensive\""));
+    }
+
+    @Test
     public void sendGCExecuteThroughIngressOffersGcExecuteMessageForLeader() throws Exception {
         AeronConsensusEngine engine = createEngine();
         io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
@@ -564,6 +756,10 @@ public class AeronConsensusEngineTest {
             .child("content")
             .child("genesis");
         nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+    }
+
+    private static QueuedProposal proposal(String proposalId) {
+        return new QueuedProposal(proposalId, "0xtx", null, 1L, 2L, ProposalState.PENDING);
     }
 
     private static final class RecordingTaskScheduler implements AeronBackgroundCoordinator.TaskScheduler {

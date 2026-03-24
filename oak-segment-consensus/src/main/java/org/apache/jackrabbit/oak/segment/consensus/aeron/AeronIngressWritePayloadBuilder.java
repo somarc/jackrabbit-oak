@@ -16,23 +16,20 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import org.agrona.MutableDirectBuffer;
-import org.agrona.concurrent.UnsafeBuffer;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 final class AeronIngressWritePayloadBuilder {
 
-    EncodedMessage buildWriteProposal(String walletAddress,
-                                      String path,
-                                      String contentType,
-                                      String message,
-                                      String signature,
-                                      Integer term,
-                                      String ipfsCid,
-                                      String proposalId) {
+    AeronEncodedMessage buildWriteProposal(String walletAddress,
+                                           String path,
+                                           String contentType,
+                                           String message,
+                                           String signature,
+                                           Integer term,
+                                           String ipfsCid,
+                                           String proposalId) {
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
@@ -50,19 +47,19 @@ final class AeronIngressWritePayloadBuilder {
             json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
         }
         json.append("}");
-        return encode(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, json.toString());
+        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, json.toString());
     }
 
-    EncodedMessage buildWriteProposalWithBinary(String walletAddress,
-                                                String path,
-                                                String contentType,
-                                                String message,
-                                                String signature,
-                                                Integer term,
-                                                String blobId,
-                                                String mimeType,
-                                                String ipfsCid,
-                                                String proposalId) {
+    AeronEncodedMessage buildWriteProposalWithBinary(String walletAddress,
+                                                     String path,
+                                                     String contentType,
+                                                     String message,
+                                                     String signature,
+                                                     Integer term,
+                                                     String blobId,
+                                                     String mimeType,
+                                                     String ipfsCid,
+                                                     String proposalId) {
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
@@ -85,14 +82,14 @@ final class AeronIngressWritePayloadBuilder {
             json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
         }
         json.append("}");
-        return encode(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, json.toString());
+        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, json.toString());
     }
 
-    EncodedMessage buildDeleteProposal(String walletAddress,
-                                       String path,
-                                       String signature,
-                                       Integer term,
-                                       String proposalId) {
+    AeronEncodedMessage buildDeleteProposal(String walletAddress,
+                                            String path,
+                                            String signature,
+                                            Integer term,
+                                            String proposalId) {
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
@@ -105,10 +102,10 @@ final class AeronIngressWritePayloadBuilder {
             json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
         }
         json.append("}");
-        return encode(SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL, json.toString());
+        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL, json.toString());
     }
 
-    EncodedMessage buildWriteBatch(List<QueuedProposal> proposals, Integer term) {
+    AeronEncodedMessage buildWriteBatch(List<QueuedProposal> proposals, Integer term) {
         StringBuilder json = new StringBuilder();
         json.append("{\"batch\":[");
 
@@ -151,40 +148,10 @@ final class AeronIngressWritePayloadBuilder {
         }
 
         json.append("]}");
-        return encode(SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, json.toString());
-    }
-
-    private EncodedMessage encode(int templateId, String json) {
-        byte[] jsonBytes = json.getBytes(StandardCharsets.UTF_8);
-        int totalLength = SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-        MutableDirectBuffer messageBuffer = new UnsafeBuffer(new byte[totalLength]);
-        SimpleMessageHeader.encode(messageBuffer, 0, jsonBytes.length, templateId);
-        messageBuffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
-        return new EncodedMessage(templateId, json, messageBuffer, totalLength);
+        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, json.toString());
     }
 
     String escapeJson(String str) {
-        if (str == null) {
-            return "";
-        }
-        return str.replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t");
-    }
-
-    static final class EncodedMessage {
-        final int templateId;
-        final String json;
-        final MutableDirectBuffer buffer;
-        final int totalLength;
-
-        private EncodedMessage(int templateId, String json, MutableDirectBuffer buffer, int totalLength) {
-            this.templateId = templateId;
-            this.json = json;
-            this.buffer = buffer;
-            this.totalLength = totalLength;
-        }
+        return AeronIngressPayloadSupport.escapeJson(str);
     }
 }

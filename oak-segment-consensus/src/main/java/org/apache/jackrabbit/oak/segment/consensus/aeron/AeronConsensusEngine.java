@@ -139,8 +139,10 @@ public class AeronConsensusEngine implements ClusteredService {
     private final AeronBackgroundCoordinator backgroundCoordinator;
     private final LeaderDiscoveryService leaderDiscoveryService;
     private final AeronIngressWritePayloadBuilder ingressWritePayloadBuilder;
+    private final AeronIngressControlPayloadBuilder ingressControlPayloadBuilder;
     private final AeronClusterStateView clusterStateView;
     private final AeronIngressEndpointPlanner internalIngressEndpointPlanner;
+    private final AeronInternalClusterClientConnector internalClusterClientConnector;
     private final HeadStateService headStateService;
     
     // Aeron Cluster components
@@ -317,9 +319,11 @@ public class AeronConsensusEngine implements ClusteredService {
         this.backgroundCoordinator = backgroundCoordinator != null
             ? backgroundCoordinator
             : new AeronBackgroundCoordinator();
-        this.ingressWritePayloadBuilder = new AeronIngressWritePayloadBuilder();
+        this.ingressWritePayloadBuilder = AeronEngineComponentFactory.createIngressWritePayloadBuilder();
+        this.ingressControlPayloadBuilder = AeronEngineComponentFactory.createIngressControlPayloadBuilder();
         this.clusterStateView = new AeronClusterStateView(selfUrl, peerUrls, nodeIdToUrl, this::isSameUrlByPort);
         this.internalIngressEndpointPlanner = AeronIngressEndpointPlanner.systemFromUrls(selfUrl, peerUrls);
+        this.internalClusterClientConnector = AeronEngineComponentFactory.createInternalClusterClientConnector();
         this.leaderDiscoveryService = AeronEngineComponentFactory.createLeaderDiscoveryService(nodeIdToUrl, peerUrls, selfUrl);
         this.messageDispatcher = AeronEngineComponentFactory.createMessageDispatcher(
             new MessageDispatcher.WriteCallback() {
@@ -852,28 +856,12 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     private synchronized void ensureInternalClusterClient() {
         log.debug("🔧 ensureInternalClusterClient() called - checking if client exists...");
-        
-        // Check if client exists AND is healthy (not closed)
-        if (internalClusterClient != null) {
-            if (internalClusterClient.isClosed()) {
-                log.warn("⚠️  Internal cluster client is CLOSED - will reconnect");
-                log.warn("   Session closed but messages queued - this causes silent drops!");
-                
-                // Close cleanly to release resources
-                try {
-                    internalClusterClient.close();
-                } catch (Exception e) {
-                    log.debug("Error closing stale client: {}", e.getMessage());
-                }
-                
-                // Set to null to trigger reconnection below
-                internalClusterClient = null;
-            } else {
-                log.debug("✅ Internal cluster client already exists and is healthy (not closed)");
-                return; // Already created and healthy
-            }
+
+        if (internalClusterClient != null && !internalClusterClient.isClosed()) {
+            log.debug("✅ Internal cluster client already exists and is healthy (not closed)");
+            return;
         }
-        
+
         log.info("🔧 Internal cluster client is null - checking aeron directory...");
         log.info("   aeronDirectoryName: {}", aeronDirectoryName);
         log.info("   peerUrls: {}", peerUrls);
@@ -892,56 +880,13 @@ public class AeronConsensusEngine implements ClusteredService {
         log.info("   Aeron directory: {}", aeronDirectoryName);
         log.info("   Using UDP endpoints for distributed network communication");
         log.info("   Ingress endpoints: {} (resolved from configured node URLs)", ingressEndpointsStr);
-        
-        try {
-            // Retry connection with backoff (like production)
-            int maxRetries = 10;
-            for (int attempt = 0; attempt < maxRetries; attempt++) {
-                try {
-                    String egressHostname = ingressPlan.clientIp;
 
-                    // Create egress listener for receiving responses
-                    io.aeron.cluster.client.EgressListener egressListener = (clusterSessionId, timestamp, message, header, offset, length) -> {
-                        // Basic egress listener - just log that we received a message
-                        log.debug("Received egress message from cluster (session: {}, length: {})", clusterSessionId, length);
-                    };
-                    
-                    // ✈️ DISTRIBUTED UDP MODE: Use UDP with network endpoints for distributed communication
-                    // The cluster's ingress is configured as UDP, so we must use UDP too
-                    // Endpoints are extracted from peer URLs - supports distributed deployment across networks
-                    // Egress binds to validator's network interface (or all interfaces) for distributed access
-                    internalClusterClient = io.aeron.cluster.client.AeronCluster.connect(
-                        new io.aeron.cluster.client.AeronCluster.Context()
-                            .aeronDirectoryName(aeronDirectoryName)
-                            .ingressChannel("aeron:udp?term-length=128m")  // CRITICAL: Must match cluster's log term-length (128MB)
-                            .ingressEndpoints(ingressEndpointsStr)  // Required for UDP (distributed network endpoints)
-                            .egressChannel("aeron:udp?endpoint=" + egressHostname + ":0")  // UDP egress (distributed network binding)
-                            .egressListener(egressListener)
-                            .idleStrategy(idleStrategy)
-                            .errorHandler(e -> log.error("Internal cluster client error", e))
-                    );
-                    
-                    log.info("✅ Internal AeronCluster client created successfully (UDP distributed network, attempt {})", attempt + 1);
-                    log.info("   Egress binding: {} (distributed network access)", egressHostname);
-                    return; // Success
-                } catch (Exception e) {
-                    if (attempt < maxRetries - 1) {
-                        log.debug("⚠️  Failed to create internal cluster client (attempt {}): {} - retrying...", 
-                            attempt + 1, e.getMessage());
-                        try {
-                            Thread.sleep(1000 * (attempt + 1)); // Exponential backoff
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            return;
-                        }
-                    } else {
-                        log.error("❌ Failed to create internal AeronCluster client after {} attempts", maxRetries, e);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.error("❌ Exception creating internal AeronCluster client", e);
-        }
+        internalClusterClient = internalClusterClientConnector.ensureConnected(
+            internalClusterClient,
+            aeronDirectoryName,
+            ingressPlan,
+            idleStrategy
+        );
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -959,19 +904,16 @@ public class AeronConsensusEngine implements ClusteredService {
             log.warn("⚠️  Not sending START transaction {}: {}", transactionId, gate.getReason());
             return false;
         }
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"transactionId\":\"").append(escapeJson(transactionId)).append("\"");
-        if (correlationId != null && !correlationId.isEmpty()) {
-            json.append(",\"correlationId\":\"").append(escapeJson(correlationId)).append("\"");
-        }
-        if (initiatorWallet != null && !initiatorWallet.isEmpty()) {
-            json.append(",\"initiatorWallet\":\"").append(escapeJson(initiatorWallet)).append("\"");
-        }
-        json.append(",\"timeoutMs\":").append(timeoutMs > 0 ? timeoutMs : 30000L);
-        json.append(",\"term\":").append(getCurrentTerm());
-        json.append("}");
-        return sendTransactionMessage(SimpleMessageHeader.TEMPLATE_ID_START_TRANSACTION, json.toString(), "start-transaction");
+        return sendTransactionMessage(
+            ingressControlPayloadBuilder.buildStartTransaction(
+                transactionId,
+                correlationId,
+                timeoutMs,
+                initiatorWallet,
+                getCurrentTerm()
+            ),
+            "start-transaction"
+        );
     }
 
     public boolean sendCommitTransactionThroughIngress(String transactionId, String correlationId) {
@@ -983,15 +925,10 @@ public class AeronConsensusEngine implements ClusteredService {
             log.warn("⚠️  Not sending COMMIT transaction {}: {}", transactionId, gate.getReason());
             return false;
         }
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"transactionId\":\"").append(escapeJson(transactionId)).append("\"");
-        if (correlationId != null && !correlationId.isEmpty()) {
-            json.append(",\"correlationId\":\"").append(escapeJson(correlationId)).append("\"");
-        }
-        json.append(",\"term\":").append(getCurrentTerm());
-        json.append("}");
-        return sendTransactionMessage(SimpleMessageHeader.TEMPLATE_ID_COMMIT_TRANSACTION, json.toString(), "commit-transaction");
+        return sendTransactionMessage(
+            ingressControlPayloadBuilder.buildCommitTransaction(transactionId, correlationId, getCurrentTerm()),
+            "commit-transaction"
+        );
     }
 
     public boolean sendAbortTransactionThroughIngress(String transactionId, String correlationId, String reason) {
@@ -1004,18 +941,10 @@ public class AeronConsensusEngine implements ClusteredService {
             log.warn("⚠️  Not sending ABORT transaction {}: {}", transactionId, gate.getReason());
             return false;
         }
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"transactionId\":\"").append(escapeJson(transactionId)).append("\"");
-        if (correlationId != null && !correlationId.isEmpty()) {
-            json.append(",\"correlationId\":\"").append(escapeJson(correlationId)).append("\"");
-        }
-        if (reason != null && !reason.isEmpty()) {
-            json.append(",\"reason\":\"").append(escapeJson(reason)).append("\"");
-        }
-        json.append(",\"term\":").append(getCurrentTerm());
-        json.append("}");
-        return sendTransactionMessage(SimpleMessageHeader.TEMPLATE_ID_ABORT_TRANSACTION, json.toString(), "abort-transaction");
+        return sendTransactionMessage(
+            ingressControlPayloadBuilder.buildAbortTransaction(transactionId, correlationId, reason, getCurrentTerm()),
+            "abort-transaction"
+        );
     }
 
     public boolean sendQueueSegment(String proposalId) {
@@ -1029,10 +958,10 @@ public class AeronConsensusEngine implements ClusteredService {
         if (proposalId == null || proposalId.isEmpty()) {
             return false;
         }
-        String json = "{\"proposalId\":\"" + escapeJson(proposalId) + "\"," +
-            "\"totalMembers\":" + totalMembers + "," +
-            "\"requiredAcks\":" + requiredAcks + "}";
-        return sendDurabilityMessage(SimpleMessageHeader.TEMPLATE_ID_QUEUE_SEGMENT, json, "queue-segment");
+        return sendDurabilityMessage(
+            ingressControlPayloadBuilder.buildQueueSegment(proposalId, totalMembers, requiredAcks),
+            "queue-segment"
+        );
     }
 
     public boolean sendSegmentPersisted(String proposalId, String durableHead, boolean success, String error) {
@@ -1040,19 +969,10 @@ public class AeronConsensusEngine implements ClusteredService {
             return false;
         }
         int memberId = cluster != null ? cluster.memberId() : -1;
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
-        json.append("\"memberId\":").append(memberId).append(",");
-        json.append("\"success\":").append(success);
-        if (durableHead != null && !durableHead.isEmpty()) {
-            json.append(",\"durableHead\":\"").append(escapeJson(durableHead)).append("\"");
-        }
-        if (error != null && !error.isEmpty()) {
-            json.append(",\"error\":\"").append(escapeJson(error)).append("\"");
-        }
-        json.append("}");
-        return sendDurabilityMessage(SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED, json.toString(), "segment-persisted");
+        return sendDurabilityMessage(
+            ingressControlPayloadBuilder.buildSegmentPersisted(proposalId, memberId, success, durableHead, error),
+            "segment-persisted"
+        );
     }
 
     public boolean sendAckSegmentPersisted(String proposalId, boolean success, String durableHead, String error,
@@ -1060,104 +980,42 @@ public class AeronConsensusEngine implements ClusteredService {
         if (proposalId == null || proposalId.isEmpty()) {
             return false;
         }
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
-        json.append("\"success\":").append(success).append(",");
-        json.append("\"totalMembers\":").append(totalMembers).append(",");
-        json.append("\"requiredAcks\":").append(requiredAcks);
-        if (durableHead != null && !durableHead.isEmpty()) {
-            json.append(",\"durableHead\":\"").append(escapeJson(durableHead)).append("\"");
-        }
-        if (error != null && !error.isEmpty()) {
-            json.append(",\"error\":\"").append(escapeJson(error)).append("\"");
-        }
-        json.append("}");
-        return sendDurabilityMessage(SimpleMessageHeader.TEMPLATE_ID_ACK_SEGMENT_PERSISTED, json.toString(), "ack-segment-persisted");
+        return sendDurabilityMessage(
+            ingressControlPayloadBuilder.buildAckSegmentPersisted(
+                proposalId,
+                success,
+                durableHead,
+                error,
+                totalMembers,
+                requiredAcks
+            ),
+            "ack-segment-persisted"
+        );
     }
 
-    private boolean sendDurabilityMessage(int templateId, String json, String label) {
-        if (cluster == null) {
-            log.error("❌ Cluster not initialized - cannot send durability message ({})", label);
+    private boolean sendDurabilityMessage(AeronEncodedMessage encoded, String label) {
+        if (!ensureIngressClient("durability message (" + label + ")")) {
             return false;
         }
-
-        ensureInternalClusterClient();
-
-        if (internalClusterClient == null) {
-            log.error("❌ Internal AeronCluster client not available - cannot send durability message ({})", label);
-            return false;
+        boolean sent = sendEncodedMessage(encoded, "durability " + label, null);
+        if (sent) {
+            log.debug("✅ Durability message sent ({})", label);
         }
-
-        try {
-            byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            int blockLength = jsonBytes.length;
-            int totalLength = SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
-            );
-
-            SimpleMessageHeader.encode(messageBuffer, 0, blockLength, templateId);
-            messageBuffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
-
-            if (internalClusterClient.isClosed()) {
-                log.error("❌ Cannot send durability message - internal cluster client session is CLOSED ({})", label);
-                synchronized (this) {
-                    internalClusterClient = null;
-                    ensureInternalClusterClient();
-                }
-                if (internalClusterClient == null || internalClusterClient.isClosed()) {
-                    log.error("❌ Reconnection failed - cannot send durability message ({})", label);
-                    return false;
-                }
-            }
-
-            boolean sent = egressHandler.offerWithRetry(
-                internalClusterClient,
-                idleStrategy,
-                messageBuffer,
-                totalLength,
-                "durability " + label,
-                100,
-                null,
-                false
-            );
-            if (sent) {
-                log.debug("✅ Durability message sent ({})", label);
-            }
-            return sent;
-        } catch (Exception e) {
-            log.error("❌ Exception sending durability message ({})", label, e);
-            return false;
-        }
+        return sent;
     }
 
-    private boolean sendTransactionMessage(int templateId, String json, String label) {
-        if (cluster == null) {
-            log.error("❌ Cluster not initialized - cannot send transaction message ({})", label);
+    private boolean sendTransactionMessage(AeronEncodedMessage encoded, String label) {
+        if (!ensureIngressClient("transaction message (" + label + ")")) {
             return false;
         }
-
-        ensureInternalClusterClient();
-        if (internalClusterClient == null) {
-            log.error("❌ Internal AeronCluster client not available - cannot send transaction message ({})", label);
-            return false;
-        }
-
-        try {
-            byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            int totalLength = SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
-            );
-            SimpleMessageHeader.encode(messageBuffer, 0, jsonBytes.length, templateId);
-            messageBuffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
-            return sendMessageWithRetry(messageBuffer, totalLength, "TX " + label);
-        } catch (Exception e) {
-            log.error("❌ Exception sending transaction message ({})", label, e);
-            return false;
-        }
+        return sendEncodedMessage(
+            encoded,
+            "TX " + label,
+            () -> {
+                ingressTimestamps.offer(System.nanoTime());
+                performanceMetrics.recordMessageIngressed();
+            }
+        );
     }
     
     public boolean sendWriteThroughIngress(String walletAddress, String path, 
@@ -1188,7 +1046,7 @@ public class AeronConsensusEngine implements ClusteredService {
             internalClusterClient.isClosed());
         
         try {
-            AeronIngressWritePayloadBuilder.EncodedMessage encoded =
+            AeronEncodedMessage encoded =
                 ingressWritePayloadBuilder.buildWriteProposal(
                     walletAddress,
                     path,
@@ -1205,45 +1063,14 @@ public class AeronConsensusEngine implements ClusteredService {
             // Aeron then replicates the message to ALL nodes via Raft, and onSessionMessage() is called on each node
             
             try {
-                // 🔍 HEALTH CHECK: Verify session is open before offering
-                if (internalClusterClient.isClosed()) {
-                    log.error("❌ Cannot send write - internal cluster client session is CLOSED");
-                    log.error("   This indicates session timeout or connection loss");
-                    log.error("   Attempting reconnection...");
-                    
-                    // Try to reconnect
-                    synchronized (this) {
-                        internalClusterClient = null;
-                        ensureInternalClusterClient();
-                    }
-                    
-                    // If still null or closed after reconnect, fail
-                    if (internalClusterClient == null || internalClusterClient.isClosed()) {
-                        log.error("❌ Reconnection failed - cannot send write");
-                        return false;
-                    }
-                    
-                    log.info("✅ Reconnection successful - retrying write send");
-                }
-                
-                boolean sent = egressHandler.offerWithRetry(
-                    internalClusterClient,
-                    idleStrategy,
-                    encoded.buffer,
-                    encoded.totalLength,
+                boolean sent = sendEncodedMessage(
+                    encoded,
                     "write ingress",
-                    100,
                     () -> {
-                        // 📊 Track ingress timestamp for Raft latency calculation
-                        // Store in FIFO queue - will be matched with replication in onSessionMessage()
                         ingressTimestamps.offer(System.nanoTime());
                         performanceMetrics.recordMessageIngressed();
-                        // 🚦 BACKPRESSURE: Increment sent counter for backpressure tracking
-                        // This MUST be called after successful offer to Aeron
-                        // Will be matched with incrementAcknowledged() in onSessionMessage()
                         backpressureManager.incrementSent();
-                    },
-                    false
+                    }
                 );
                 if (sent) {
                     log.debug("✅ Write sent through AeronCluster.offer() - will replicate to all nodes via Raft");
@@ -1294,7 +1121,7 @@ public class AeronConsensusEngine implements ClusteredService {
             blobId);
         
         try {
-            AeronIngressWritePayloadBuilder.EncodedMessage encoded =
+            AeronEncodedMessage encoded =
                 ingressWritePayloadBuilder.buildWriteProposalWithBinary(
                     walletAddress,
                     path,
@@ -1313,32 +1140,14 @@ public class AeronConsensusEngine implements ClusteredService {
             }
             
             try {
-                if (internalClusterClient.isClosed()) {
-                    log.error("❌ Cannot send write - internal cluster client session is CLOSED");
-                    synchronized (this) {
-                        internalClusterClient = null;
-                        ensureInternalClusterClient();
-                    }
-                    if (internalClusterClient == null || internalClusterClient.isClosed()) {
-                        log.error("❌ Reconnection failed - cannot send write");
-                        return false;
-                    }
-                    log.info("✅ Reconnection successful - retrying write send");
-                }
-                
-                boolean sent = egressHandler.offerWithRetry(
-                    internalClusterClient,
-                    idleStrategy,
-                    encoded.buffer,
-                    encoded.totalLength,
+                boolean sent = sendEncodedMessage(
+                    encoded,
                     "write (binary) ingress",
-                    100,
                     () -> {
                         ingressTimestamps.offer(System.nanoTime());
                         performanceMetrics.recordMessageIngressed();
                         backpressureManager.incrementSent();
-                    },
-                    false
+                    }
                 );
                 if (sent) {
                     log.debug("✅ Write with binary sent through AeronCluster.offer() - blobId={}", blobId);
@@ -1385,7 +1194,7 @@ public class AeronConsensusEngine implements ClusteredService {
         log.info("🗑️  SENDING DELETE through ingress: wallet={}, path={}", walletAddress, path);
         
         try {
-            AeronIngressWritePayloadBuilder.EncodedMessage encoded =
+            AeronEncodedMessage encoded =
                 ingressWritePayloadBuilder.buildDeleteProposal(
                     walletAddress,
                     path,
@@ -1394,33 +1203,14 @@ public class AeronConsensusEngine implements ClusteredService {
                     proposalId
                 );
             
-            // Check session health
-            if (internalClusterClient.isClosed()) {
-                log.error("❌ Cannot send delete - internal cluster client session is CLOSED");
-                synchronized (this) {
-                    internalClusterClient = null;
-                    ensureInternalClusterClient();
-                }
-                if (internalClusterClient == null || internalClusterClient.isClosed()) {
-                    log.error("❌ Reconnection failed - cannot send delete");
-                    return false;
-                }
-                log.info("✅ Reconnection successful - retrying delete send");
-            }
-            
-            boolean sent = egressHandler.offerWithRetry(
-                internalClusterClient,
-                idleStrategy,
-                encoded.buffer,
-                encoded.totalLength,
+            boolean sent = sendEncodedMessage(
+                encoded,
                 "delete ingress",
-                100,
                 () -> {
                     ingressTimestamps.offer(System.nanoTime());
                     performanceMetrics.recordMessageIngressed();
                     backpressureManager.incrementSent();
-                },
-                false
+                }
             );
             if (sent) {
                 log.info("✅ DELETE sent through AeronCluster.offer() - will replicate to all nodes via Raft");
@@ -1485,7 +1275,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 }
             }
 
-            AeronIngressWritePayloadBuilder.EncodedMessage encoded =
+            AeronEncodedMessage encoded =
                 ingressWritePayloadBuilder.buildWriteBatch(
                     proposals,
                     shouldIncludeTerm() ? Integer.valueOf(getIngressTerm()) : null
@@ -1502,44 +1292,16 @@ public class AeronConsensusEngine implements ClusteredService {
             log.debug("🔍DEBUG_BATCH [7]: About to call internalClusterClient.offer() - totalLength: {} bytes", encoded.totalLength);
             
             try {
-                // 🔍 HEALTH CHECK: Verify session is open before offering batch
-                if (internalClusterClient.isClosed()) {
-                    log.error("❌ Cannot send batch - internal cluster client session is CLOSED (batch size: {})", proposals.size());
-                    log.error("   This indicates session timeout or connection loss during release queueing");
-                    log.error("   Attempting reconnection...");
-                    
-                    // Try to reconnect
-                    synchronized (this) {
-                        internalClusterClient = null;
-                        ensureInternalClusterClient();
-                    }
-                    
-                    // If still null or closed after reconnect, fail
-                    if (internalClusterClient == null || internalClusterClient.isClosed()) {
-                        log.error("❌ Reconnection failed - cannot send batch (batch size: {})", proposals.size());
-                        return 0;
-                    }
-                    
-                    log.info("✅ Reconnection successful - retrying batch send (batch size: {})", proposals.size());
-                }
-                
-                boolean sent = egressHandler.offerWithRetry(
-                    internalClusterClient,
-                    idleStrategy,
-                    encoded.buffer,
-                    encoded.totalLength,
+                boolean sent = sendEncodedMessage(
+                    encoded,
                     "batch ingress",
-                    100,
                     () -> {
                         log.debug("🔍DEBUG_BATCH [8]: offer() SUCCESS");
-                        // 📊 Track ingress timestamp for Raft latency calculation
                         ingressTimestamps.offer(System.nanoTime());
                         performanceMetrics.recordMessageIngressed();
                         log.debug("🔍DEBUG_BATCH [11]: Tracked ingress timestamp and metrics");
-                        // 🚦 BACKPRESSURE: Count each proposal in the batch once on successful ingress.
                         backpressureManager.incrementSent(proposals.size());
-                    },
-                    false
+                    }
                 );
                 if (!sent) {
                     return 0;
@@ -1644,30 +1406,16 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         
         try {
-            // Build JSON GC proposal
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
-            json.append("\"proposerWallet\":\"").append(escapeJson(proposerWallet)).append("\",");
-            json.append("\"targetRevision\":\"").append(escapeJson(targetRevision != null ? targetRevision : "HEAD")).append("\",");
-            json.append("\"estimatedReclaimableSizeMB\":").append(estimatedReclaimableSizeMB).append(",");
-            json.append("\"estimatedCostUSDC\":\"").append(escapeJson(estimatedCostUSDC != null ? estimatedCostUSDC : "0")).append("\"");
-            json.append("}");
-            
-            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            
-            // Encode with SBE header (template ID 103 = GC_PROPOSAL)
-            int totalLength = SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
+            return sendMessageWithRetry(
+                ingressControlPayloadBuilder.buildGcProposal(
+                    proposalId,
+                    proposerWallet,
+                    targetRevision,
+                    estimatedReclaimableSizeMB,
+                    estimatedCostUSDC
+                ),
+                "GC_PROPOSAL"
             );
-            
-            SimpleMessageHeader.encode(messageBuffer, 0, jsonBytes.length, 
-                SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL);
-            messageBuffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
-            
-            // Send through Aeron with back-pressure handling
-            return sendMessageWithRetry(messageBuffer, totalLength, "GC_PROPOSAL");
             
         } catch (Exception e) {
             log.error("❌ Exception sending GC proposal through ingress", e);
@@ -1699,29 +1447,10 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         
         try {
-            // Build JSON GC vote
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
-            json.append("\"validatorId\":").append(validatorId).append(",");
-            json.append("\"approve\":").append(approve).append(",");
-            json.append("\"reason\":\"").append(escapeJson(reason != null ? reason : "")).append("\"");
-            json.append("}");
-            
-            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            
-            // Encode with SBE header (template ID 104 = GC_VOTE)
-            int totalLength = SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
+            return sendMessageWithRetry(
+                ingressControlPayloadBuilder.buildGcVote(proposalId, validatorId, approve, reason),
+                "GC_VOTE"
             );
-            
-            SimpleMessageHeader.encode(messageBuffer, 0, jsonBytes.length, 
-                SimpleMessageHeader.TEMPLATE_ID_GC_VOTE);
-            messageBuffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
-            
-            // Send through Aeron with back-pressure handling
-            return sendMessageWithRetry(messageBuffer, totalLength, "GC_VOTE");
             
         } catch (Exception e) {
             log.error("❌ Exception sending GC vote through ingress", e);
@@ -1758,27 +1487,10 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         
         try {
-            // Build JSON GC execute command
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
-            json.append("\"executorId\":").append(executorId);
-            json.append("}");
-            
-            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            
-            // Encode with SBE header (template ID 105 = GC_EXECUTE)
-            int totalLength = SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
+            return sendMessageWithRetry(
+                ingressControlPayloadBuilder.buildGcExecute(proposalId, executorId),
+                "GC_EXECUTE"
             );
-            
-            SimpleMessageHeader.encode(messageBuffer, 0, jsonBytes.length, 
-                SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE);
-            messageBuffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
-            
-            // Send through Aeron with back-pressure handling
-            return sendMessageWithRetry(messageBuffer, totalLength, "GC_EXECUTE");
             
         } catch (Exception e) {
             log.error("❌ Exception sending GC execute through ingress", e);
@@ -1789,10 +1501,46 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * Helper method to send a message through Aeron with retry logic.
      */
-    private boolean sendMessageWithRetry(org.agrona.MutableDirectBuffer messageBuffer, 
-                                         int totalLength, String messageType) {
+    private boolean sendMessageWithRetry(AeronEncodedMessage encoded, String messageType) {
         try {
-            // Health check
+            boolean sent = sendEncodedMessage(
+                encoded,
+                messageType + " ingress",
+                () -> {
+                    ingressTimestamps.offer(System.nanoTime());
+                    performanceMetrics.recordMessageIngressed();
+                    // Transaction control messages are not proposal writes; do not affect write backpressure.
+                }
+            );
+            if (sent) {
+                log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", messageType);
+            }
+            return sent;
+            
+        } catch (Exception e) {
+            log.error("❌ Exception sending {} through AeronCluster client", messageType, e);
+            return false;
+        }
+    }
+
+    private boolean ensureIngressClient(String operationDescription) {
+        if (cluster == null) {
+            log.error("❌ Cluster not initialized - cannot send {}", operationDescription);
+            return false;
+        }
+
+        ensureInternalClusterClient();
+        if (internalClusterClient == null) {
+            log.error("❌ Internal AeronCluster client not available - cannot send {}", operationDescription);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean sendEncodedMessage(AeronEncodedMessage encoded,
+                                       String messageType,
+                                       Runnable onSuccess) {
+        try {
             if (internalClusterClient.isClosed()) {
                 log.error("❌ Cannot send {} - internal cluster client session is CLOSED", messageType);
                 synchronized (this) {
@@ -1804,26 +1552,18 @@ public class AeronConsensusEngine implements ClusteredService {
                     return false;
                 }
             }
-            
-            boolean sent = egressHandler.offerWithRetry(
+
+            Runnable successCallback = onSuccess != null ? onSuccess : () -> { };
+            return egressHandler.offerWithRetry(
                 internalClusterClient,
                 idleStrategy,
-                messageBuffer,
-                totalLength,
-                messageType + " ingress",
+                encoded.buffer,
+                encoded.totalLength,
+                messageType,
                 100,
-                () -> {
-                    ingressTimestamps.offer(System.nanoTime());
-                    performanceMetrics.recordMessageIngressed();
-                    // Transaction control messages are not proposal writes; do not affect write backpressure.
-                },
+                successCallback,
                 false
             );
-            if (sent) {
-                log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", messageType);
-            }
-            return sent;
-            
         } catch (Exception e) {
             log.error("❌ Exception sending {} through AeronCluster client", messageType, e);
             return false;
