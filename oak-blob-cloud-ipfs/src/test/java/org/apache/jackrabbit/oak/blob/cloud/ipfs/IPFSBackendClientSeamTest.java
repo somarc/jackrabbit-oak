@@ -85,6 +85,7 @@ public class IPFSBackendClientSeamTest {
         backend.write(id, tempFile);
 
         assertEquals(CID_ONE, backend.getCID(id));
+        assertEquals(Map.of("blob-1", CID_ONE), backend.getAllCIDMappings());
         assertEquals(List.of(CID_ONE), client.pinAddCalls);
         assertTrue(backend.exists(id));
 
@@ -94,7 +95,10 @@ public class IPFSBackendClientSeamTest {
 
         DataRecord record = backend.getRecord(id);
         assertEquals(content.length, record.getLength());
-        assertTrue(record.getLastModified() > 0);
+        assertEquals(content.length, record.getLength());
+        long lastModified = record.getLastModified();
+        assertTrue(lastModified > 0);
+        assertEquals(lastModified, record.getLastModified());
         try (InputStream stream = record.getStream()) {
             assertArrayEquals(content, stream.readAllBytes());
         }
@@ -114,6 +118,29 @@ public class IPFSBackendClientSeamTest {
         assertEquals(List.of(CID_ONE), client.pinRemoveCalls);
         assertFalse(backend.exists(id));
         assertNull(backend.getCID(id));
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testExistsReturnsFalseWhenBlockStatIsIncompleteOrThrows() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(new MerkleNode(CID_ONE));
+        client.blockStats.put(CID_ONE, Map.of("Links", 1));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        File tempFile = File.createTempFile("oak-ipfs-stat", ".bin");
+        Files.writeString(tempFile.toPath(), "stat");
+        DataIdentifier id = new DataIdentifier("blob-stat");
+
+        backend.write(id, tempFile);
+
+        assertFalse(backend.exists(id));
+
+        client.blockStatFailure = new RuntimeException("stat failed");
+        assertFalse(backend.exists(id));
+
         tempFile.delete();
         backend.close();
     }
@@ -151,6 +178,60 @@ public class IPFSBackendClientSeamTest {
     }
 
     @Test
+    public void testMetadataAddWithoutReturnedCidAndMissingFilePath() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        backend.addMetadataRecord(new ByteArrayInputStream("meta".getBytes(StandardCharsets.UTF_8)), "empty-result");
+        assertFalse(backend.metadataRecordExists("empty-result"));
+
+        try {
+            backend.addMetadataRecord(new File("does-not-exist-" + System.nanoTime()), "missing-file");
+            fail("Expected missing file to fail");
+        } catch (DataStoreException e) {
+            assertTrue(e.getMessage().contains("Failed to add metadata from file: missing-file"));
+        }
+
+        backend.close();
+    }
+
+    @Test
+    public void testDeleteMetadataRecordReturnsFalseWhenUnpinFails() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(new MerkleNode(CID_ONE));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        backend.addMetadataRecord(new ByteArrayInputStream("meta".getBytes(StandardCharsets.UTF_8)), "failing-delete");
+        client.pinRemoveFailure = new RuntimeException("rm failed");
+
+        assertFalse(backend.deleteMetadataRecord("failing-delete"));
+        assertTrue(backend.metadataRecordExists("failing-delete"));
+
+        backend.close();
+    }
+
+    @Test
+    public void testDeleteAllMetadataRecordsSwallowsDeleteFailures() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(new MerkleNode(CID_TWO));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        backend.addMetadataRecord(new ByteArrayInputStream("one".getBytes(StandardCharsets.UTF_8)), "pref-one");
+        backend.addMetadataRecord(new ByteArrayInputStream("two".getBytes(StandardCharsets.UTF_8)), "pref-two");
+        client.pinRemoveFailure = new RuntimeException("rm failed");
+
+        backend.deleteAllMetadataRecords("pref");
+
+        assertTrue(backend.metadataRecordExists("pref-one"));
+        assertTrue(backend.metadataRecordExists("pref-two"));
+        backend.close();
+    }
+
+    @Test
     public void testWriteAndMetadataFailuresAreTranslated() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
@@ -172,6 +253,33 @@ public class IPFSBackendClientSeamTest {
             fail("Expected metadata add to fail");
         } catch (DataStoreException e) {
             assertTrue(e.getMessage().contains("Failed to add metadata: failing-meta"));
+        }
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testRecordLengthFailureIsTranslated() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(new MerkleNode(CID_ONE));
+        client.blockStats.put(CID_ONE, Map.of("Size", 5));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        File tempFile = File.createTempFile("oak-ipfs-length", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        DataIdentifier id = new DataIdentifier("blob-length");
+        backend.write(id, tempFile);
+
+        DataRecord record = backend.getRecord(id);
+        client.blockStatFailure = new RuntimeException("stat failed");
+
+        try {
+            record.getLength();
+            fail("Expected record length lookup to fail");
+        } catch (DataStoreException e) {
+            assertTrue(e.getMessage().contains("Failed to get length for"));
         }
 
         tempFile.delete();
@@ -232,6 +340,7 @@ public class IPFSBackendClientSeamTest {
         private RuntimeException pinAddFailure;
         private RuntimeException pinRemoveFailure;
         private RuntimeException catFailure;
+        private RuntimeException blockStatFailure;
 
         @Override
         public Object version() {
@@ -275,6 +384,9 @@ public class IPFSBackendClientSeamTest {
 
         @Override
         public Map<String, Object> blockStat(String cid) {
+            if (blockStatFailure != null) {
+                throw blockStatFailure;
+            }
             return blockStats.get(cid);
         }
     }
