@@ -25,9 +25,8 @@ import java.util.UUID;
 /**
  * Value object representing a content write proposal from the HTTP API.
  * 
- * <p>This is distinct from {@link org.apache.jackrabbit.oak.segment.consensus.WriteProposal}
- * which represents segment-level replication proposals. This class represents
- * the HTTP API layer proposal before it's queued for consensus.
+ * <p>This is distinct from the earlier segment-replication proposal model.
+ * This class represents the HTTP API layer proposal before it's queued for consensus.
  * 
  * <p><strong>Immutable:</strong> All fields are final and set via builder.
  * 

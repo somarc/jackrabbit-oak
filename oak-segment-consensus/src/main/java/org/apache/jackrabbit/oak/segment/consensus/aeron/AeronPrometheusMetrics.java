@@ -282,10 +282,10 @@ public class AeronPrometheusMetrics implements AutoCloseable {
     }
     
     /**
-     * Sanitize metric name for Prometheus (lowercase, replace _ with .).
+     * Sanitize metric names for Prometheus using lowercase snake_case.
      */
     private static String sanitize(String s) {
-        return s.toLowerCase(Locale.ENGLISH).replace('_', '.');
+        return s.toLowerCase(Locale.ENGLISH).replaceAll("[^a-z0-9_]", "_");
     }
     
     /**

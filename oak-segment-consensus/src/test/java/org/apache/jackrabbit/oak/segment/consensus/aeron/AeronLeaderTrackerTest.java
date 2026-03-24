@@ -23,6 +23,8 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 public class AeronLeaderTrackerTest {
 
@@ -55,5 +57,19 @@ public class AeronLeaderTrackerTest {
         assertEquals(119L, all.get(0).timestamp);
         assertEquals(20L, all.get(all.size() - 1).timestamp);
         assertTrue(all.get(0).term > all.get(all.size() - 1).term);
+    }
+
+    @Test
+    public void delegatesInvalidateAndLeadershipNotifications() {
+        LeaderDiscoveryService service = mock(LeaderDiscoveryService.class);
+        AeronLeaderTracker tracker = new AeronLeaderTracker(service);
+
+        tracker.invalidateCache();
+        tracker.notifyBecameLeader(7);
+        tracker.notifyLostLeadership();
+
+        verify(service).invalidateCache();
+        verify(service).notifyBecameLeader(7);
+        verify(service).notifyLostLeadership();
     }
 }

@@ -138,6 +138,7 @@ public class MediaDriverHealthMonitor implements AutoCloseable {
             
             // Check health thresholds
             boolean wasHealthy = healthy;
+            healthy = true;
             StringBuilder statusBuilder = new StringBuilder();
             
             if (errorRate > ERROR_RATE_THRESHOLD) {
@@ -279,4 +280,3 @@ public class MediaDriverHealthMonitor implements AutoCloseable {
         }
     }
 }
-

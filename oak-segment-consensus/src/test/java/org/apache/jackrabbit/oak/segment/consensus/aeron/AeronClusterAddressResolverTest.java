@@ -26,6 +26,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class AeronClusterAddressResolverTest {
 
@@ -117,5 +120,112 @@ public class AeronClusterAddressResolverTest {
             Arrays.asList("172.20.1.7", "172.20.1.11", "peer-2"),
             resolver.resolveClusterMemberAddresses("172.20.1.7")
         );
+    }
+
+    @Test
+    public void resolveRequiredHostnameFailsAfterMaxRetries() {
+        List<Long> sleeps = new ArrayList<>();
+        AeronClusterAddressResolver resolver = new AeronClusterAddressResolver(
+            0,
+            Collections.singletonList("self"),
+            hostname -> {
+                throw new UnknownHostException(hostname);
+            },
+            Collections::emptyList,
+            sleeps::add
+        );
+
+        try {
+            resolver.resolveRequiredHostname("peer-1");
+            fail("expected resolution to fail");
+        } catch (RuntimeException e) {
+            assertTrue(e.getMessage().contains("Failed to resolve hostname: peer-1"));
+        }
+
+        assertEquals(19, sleeps.size());
+        assertEquals(Long.valueOf(1000L), sleeps.get(0));
+        assertEquals(Long.valueOf(10000L), sleeps.get(sleeps.size() - 1));
+    }
+
+    @Test
+    public void resolveRequiredHostnamePropagatesInterruptedSleep() {
+        AeronClusterAddressResolver resolver = new AeronClusterAddressResolver(
+            0,
+            Collections.singletonList("self"),
+            hostname -> {
+                throw new UnknownHostException(hostname);
+            },
+            Collections::emptyList,
+            millis -> {
+                throw new InterruptedException("stop");
+            }
+        );
+
+        try {
+            resolver.resolveRequiredHostname("peer-1");
+            fail("expected interrupt");
+        } catch (RuntimeException e) {
+            assertEquals("IP resolution interrupted", e.getMessage());
+        }
+
+        assertTrue(Thread.interrupted());
+    }
+
+    @Test
+    public void resolveLocalNodeAddressFallsBackWhenEnumerationFails() {
+        AeronClusterAddressResolver resolver = new AeronClusterAddressResolver(
+            0,
+            Arrays.asList("self", "peer-1"),
+            hostname -> "192.168.10.9",
+            () -> {
+                throw new RuntimeException("boom");
+            },
+            millis -> { }
+        );
+
+        assertEquals("192.168.10.9", resolver.resolveLocalNodeAddress("self"));
+    }
+
+    @Test
+    public void resolveLocalNodeAddressFailsWhenFallbackResolutionFails() {
+        AeronClusterAddressResolver resolver = new AeronClusterAddressResolver(
+            0,
+            Arrays.asList("self", "peer-1"),
+            hostname -> {
+                throw new UnknownHostException(hostname);
+            },
+            () -> {
+                throw new RuntimeException("boom");
+            },
+            millis -> { }
+        );
+
+        try {
+            resolver.resolveLocalNodeAddress("self");
+            fail("expected address resolution to fail");
+        } catch (RuntimeException e) {
+            assertEquals("Cannot determine IP address for Aeron Cluster", e.getMessage());
+        }
+    }
+
+    @Test
+    public void systemHelpersReturnUsableResolvers() throws Exception {
+        assertNotNull(AeronClusterAddressResolver.system(0, Collections.singletonList("localhost")));
+        assertNotNull(AeronClusterAddressResolver.systemLocalAddressProvider().listCandidateAddresses());
+    }
+
+    @Test
+    public void resolveLocalNodeAddressHandlesSingleNodeTopologyWithoutPeerSubnet() {
+        AeronClusterAddressResolver resolver = new AeronClusterAddressResolver(
+            0,
+            Collections.singletonList("self"),
+            hostname -> "192.168.10.9",
+            () -> Collections.singletonList(
+                new AeronClusterAddressResolver.CandidateAddress("en0", "172.30.0.4")
+            ),
+            millis -> { }
+        );
+
+        assertEquals("172.30.0.4", resolver.resolveLocalNodeAddress("self"));
     }
 }

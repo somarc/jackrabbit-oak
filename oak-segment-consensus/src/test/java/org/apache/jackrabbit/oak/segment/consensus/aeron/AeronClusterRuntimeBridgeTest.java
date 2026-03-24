@@ -95,4 +95,20 @@ public class AeronClusterRuntimeBridgeTest {
         assertTrue(result.startupResetScheduled);
         verify(failureCoordinator).scheduleSuccessfulStartupReset();
     }
+
+    @Test
+    public void activateSupportsMissingFailureCoordinator() {
+        ClusteredServiceContainer container = mock(ClusteredServiceContainer.class);
+        ClusteredServiceContainer.Context context = mock(ClusteredServiceContainer.Context.class);
+        when(container.context()).thenReturn(context);
+        when(context.aeron()).thenReturn(null);
+
+        AeronClusterRuntimeBridge.RuntimeBridgeResult result =
+            new AeronClusterRuntimeBridge(mock(ClusteredService.class), ignored -> mock(MediaDriverHealthMonitor.class))
+                .activate(container, "ignored", null);
+
+        assertFalse(result.healthMonitorStarted);
+        assertFalse(result.ingressConfigured);
+        assertFalse(result.startupResetScheduled);
+    }
 }
