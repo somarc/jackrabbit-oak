@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -46,12 +47,27 @@ public class ExplorerApiHandler {
     
     private final NodeStore nodeStore;
     private final Path storeDirectory;
-    private final org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
+    private final Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier;
     
     public ExplorerApiHandler(NodeStore nodeStore, Path storeDirectory, org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
+        this(nodeStore, storeDirectory, () -> blobStore, true);
+    }
+
+    private ExplorerApiHandler(
+            NodeStore nodeStore,
+            Path storeDirectory,
+            Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier,
+            boolean ignored) {
         this.nodeStore = nodeStore;
         this.storeDirectory = storeDirectory;
-        this.blobStore = blobStore;
+        this.blobStoreSupplier = blobStoreSupplier;
+    }
+
+    public static ExplorerApiHandler withBlobStoreSupplier(
+            NodeStore nodeStore,
+            Path storeDirectory,
+            Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier) {
+        return new ExplorerApiHandler(nodeStore, storeDirectory, blobStoreSupplier, true);
     }
     
     /**
@@ -258,6 +274,7 @@ public class ExplorerApiHandler {
     public void handleBlobStream(javax.servlet.http.HttpServletRequest request, 
                                   HttpServletResponse response, 
                                   String blobId) throws IOException {
+        org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = blobStoreSupplier.get();
         if (blobStore == null) {
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "BlobStore not configured");

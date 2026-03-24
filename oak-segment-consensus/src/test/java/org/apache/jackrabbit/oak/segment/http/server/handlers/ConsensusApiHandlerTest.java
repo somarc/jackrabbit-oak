@@ -16,12 +16,14 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
+import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.Rule;
@@ -692,6 +694,52 @@ public class ConsensusApiHandlerTest {
     }
 
     @Test
+    public void testApplyReplicatedWriteUsesLateBoundAuthoritativeNodeStoreAndBlobStore() {
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString()).thenReturn("previous-head");
+        when(fileStore.getHead().getRecordId().toString10()).thenReturn("binary-head");
+
+        MemoryNodeStore readViewStore = new MemoryNodeStore();
+        MemoryNodeStore authoritativeStore = new MemoryNodeStore();
+        ServerContext lateContext = new ServerContext(
+            fileStore,
+            readViewStore,
+            tempFolder.getRoot().toPath(),
+            "http://localhost:8090"
+        );
+        ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
+        lateContext.setAuthoritativeNodeStore(authoritativeStore);
+        lateContext.blobStore = mock(BlobStore.class);
+
+        lateHandler.applyReplicatedWrite(
+            "0x1234567890abcdef1234567890abcdef12345678",
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
+            "file",
+            "{\"title\":\"Hello\"}",
+            "0xsig",
+            null,
+            "blob-123#42",
+            "image/jpeg",
+            "QmBinaryCid",
+            null
+        );
+
+        assertFalse(nodeExists(readViewStore,
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1"));
+        assertTrue(nodeExists(authoritativeStore,
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1"));
+
+        org.apache.jackrabbit.oak.spi.state.NodeState contentNode = nodeAt(
+            authoritativeStore,
+            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1"
+        );
+        assertEquals(Type.BINARY, contentNode.getProperty("jcr:data").getType());
+        assertEquals("blob-123#42", contentNode.getProperty("jcr:blobId").getValue(Type.STRING));
+        assertEquals("QmBinaryCid", contentNode.getProperty("ipfsCid").getValue(Type.STRING));
+        assertEquals("validator", contentNode.getProperty("oak:binaryStorageMode").getValue(Type.STRING));
+    }
+
+    @Test
     public void testApplyReplicatedWriteFailureFallsBackToQueueDurabilityWithoutEngine() {
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         when(fileStore.getHead().getRecordId().toString()).thenReturn("previous-head");
@@ -747,6 +795,16 @@ public class ConsensusApiHandlerTest {
             }
         }
         return current.exists();
+    }
+
+    private static org.apache.jackrabbit.oak.spi.state.NodeState nodeAt(MemoryNodeStore nodeStore, String path) {
+        org.apache.jackrabbit.oak.spi.state.NodeState current = nodeStore.getRoot();
+        for (String part : path.split("/")) {
+            if (!part.isEmpty()) {
+                current = current.getChildNode(part);
+            }
+        }
+        return current;
     }
 
     private void assertJsonErrorStatus(int status) {

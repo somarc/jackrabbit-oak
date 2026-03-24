@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.junit.Test;
 
@@ -140,6 +141,51 @@ public class WriteApplicationServiceTest {
         assertEquals("https://ipfs.io/ipfs/bafybeigdyrzt5", stringProperty(contentNode, "ipfsGateway"));
         assertEquals("intent-1", stringProperty(contentNode, "jcr:intentToken"));
         assertTrue(booleanProperty(contentNode, "jcr:pendingBinary"));
+    }
+
+    @Test
+    public void testApplyWriteUsesLateBoundNodeStoreWhenResolvingBinaryEventCid() {
+        FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        AtomicReference<MemoryNodeStore> nodeStoreRef = new AtomicReference<>();
+        WriteApplicationService service = new WriteApplicationService(
+            fileStore,
+            nodeStoreRef::get,
+            () -> (BlobStore) null,
+            flushService);
+
+        AtomicReference<String> binaryEvent = new AtomicReference<>();
+        service.setSseEventCallback(new WriteApplicationService.SSEEventCallback() {
+            @Override
+            public void emitContentWrite(String path, String wallet, String org, String message, String signature, String contentType) {
+                binaryEvent.set("unexpected-content-event");
+            }
+
+            @Override
+            public void emitBinaryUpload(String path, String wallet, String org, String message, String ipfsCid, String mimeType) {
+                binaryEvent.set(path + "|" + wallet + "|" + org + "|" + ipfsCid + "|" + mimeType);
+            }
+        });
+
+        MemoryNodeStore authoritativeStore = new MemoryNodeStore();
+        nodeStoreRef.set(authoritativeStore);
+
+        String newHead = service.applyWrite(
+            WALLET,
+            PATH,
+            "file",
+            "binary-message",
+            "0xsig",
+            null,
+            "deadbeef#123",
+            "image/jpeg",
+            null,
+            "proposal-binary");
+
+        assertEquals("new-head", newHead);
+        assertEquals(PATH + "|" + WALLET + "|Acme|null|image/jpeg", binaryEvent.get());
+        assertEquals("deadbeef#123", stringProperty(contentNode(authoritativeStore, PATH), "jcr:data"));
+        verify(flushService).onChangeApplied();
     }
 
     @Test

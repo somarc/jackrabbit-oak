@@ -53,17 +53,15 @@ public class ConsensusApiHandler implements AutoCloseable {
         
         // Initialize application services
         this.flushService = new FileStoreFlushService(context.fileStore);
-        org.apache.jackrabbit.oak.spi.state.NodeStore authoritativeStore =
-            context.authoritativeNodeStore != null ? context.authoritativeNodeStore : context.nodeStore;
         this.writeApplicationService = new WriteApplicationService(
             context.fileStore,
-            authoritativeStore,
-            context.blobStore,
+            () -> context.authoritativeNodeStore != null ? context.authoritativeNodeStore : context.nodeStore,
+            () -> context.blobStore,
             flushService
         );
         this.deleteApplicationService = new DeleteApplicationService(
             context.fileStore,
-            authoritativeStore,
+            () -> context.authoritativeNodeStore != null ? context.authoritativeNodeStore : context.nodeStore,
             flushService
         );
         

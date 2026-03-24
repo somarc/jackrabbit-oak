@@ -189,6 +189,31 @@ public class ExplorerApiHandlerTest {
         assertArrayEquals(payload, output.toByteArray());
     }
 
+    @Test
+    public void testHandleBlobStreamUsesLateBoundBlobStoreSupplier() throws Exception {
+        final BlobStore[] blobStoreRef = new BlobStore[1];
+        BlobStore blobStore = mock(BlobStore.class);
+        byte[] payload = "late-bound".getBytes(StandardCharsets.UTF_8);
+        when(blobStore.getInputStream("blob-late")).thenReturn(new ByteArrayInputStream(payload));
+
+        RecordingServletOutputStream output = new RecordingServletOutputStream();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getOutputStream()).thenReturn(output);
+
+        ExplorerApiHandler handler = ExplorerApiHandler.withBlobStoreSupplier(
+            new MemoryNodeStore(),
+            Paths.get("/tmp/store"),
+            () -> blobStoreRef[0]
+        );
+        blobStoreRef[0] = blobStore;
+
+        handler.handleBlobStream(mock(HttpServletRequest.class), response, "blob-late");
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setHeader("X-Blob-Id", "blob-late");
+        assertArrayEquals(payload, output.toByteArray());
+    }
+
     private static HttpServletResponse responseWithBody(StringWriter body) throws Exception {
         HttpServletResponse response = mock(HttpServletResponse.class);
         when(response.getWriter()).thenReturn(new PrintWriter(body));

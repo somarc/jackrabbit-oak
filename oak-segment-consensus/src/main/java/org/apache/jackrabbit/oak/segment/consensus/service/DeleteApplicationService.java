@@ -28,6 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
+import java.util.function.Supplier;
 
 /**
  * Service responsible for applying replicated deletes to the Oak FileStore.
@@ -51,7 +52,7 @@ public class DeleteApplicationService {
     private static final Logger log = LoggerFactory.getLogger(DeleteApplicationService.class);
     
     private final FileStore fileStore;
-    private final NodeStore nodeStore;
+    private final Supplier<NodeStore> nodeStoreSupplier;
     private final FileStoreFlushService flushService;
     
     // Optional callbacks for integration
@@ -69,8 +70,15 @@ public class DeleteApplicationService {
             @NotNull FileStore fileStore,
             @NotNull NodeStore nodeStore,
             @NotNull FileStoreFlushService flushService) {
+        this(fileStore, () -> nodeStore, flushService);
+    }
+
+    public DeleteApplicationService(
+            @NotNull FileStore fileStore,
+            @NotNull Supplier<NodeStore> nodeStoreSupplier,
+            @NotNull FileStoreFlushService flushService) {
         this.fileStore = fileStore;
-        this.nodeStore = nodeStore;
+        this.nodeStoreSupplier = nodeStoreSupplier;
         this.flushService = flushService;
     }
     
@@ -121,6 +129,7 @@ public class DeleteApplicationService {
         
         try {
             log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
+            NodeStore nodeStore = requireNodeStore();
             
             // Get current HEAD for logging
             String previousHead = fileStore.getHead().getRecordId().toString();
@@ -218,6 +227,15 @@ public class DeleteApplicationService {
             log.error("❌ Failed to apply replicated delete", e);
             throw new RuntimeException("Failed to apply replicated delete", e);
         }
+    }
+
+    @NotNull
+    private NodeStore requireNodeStore() {
+        NodeStore nodeStore = nodeStoreSupplier.get();
+        if (nodeStore == null) {
+            throw new IllegalStateException("NodeStore supplier returned null");
+        }
+        return nodeStore;
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

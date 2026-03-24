@@ -95,10 +95,10 @@ public class RequestRouter implements AutoCloseable {
             context.storeDirectory,
             context.connectedPeers
         );
-        this.explorerApiHandler = new ExplorerApiHandler(
+        this.explorerApiHandler = ExplorerApiHandler.withBlobStoreSupplier(
             context.nodeStore,
             context.storeDirectory,
-            context.blobStore
+            () -> context.blobStore
         );
         this.dashboardHandler = new DashboardHandler(context);
         this.explorerApiV1Handler = new ExplorerApiV1Handler(context);

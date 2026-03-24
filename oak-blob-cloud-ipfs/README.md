@@ -65,13 +65,16 @@ Oak SegmentNodeStore
 ### 1. Start IPFS Node
 
 ```bash
-# Install IPFS (if not already installed)
+# Install Kubo (IPFS CLI; the binary remains `ipfs`)
 # macOS:
-brew install ipfs
+brew install kubo
 
 # Linux:
-wget https://dist.ipfs.tech/kubo/v0.24.0/kubo_v0.24.0_linux-amd64.tar.gz
-tar -xvzf kubo_v0.24.0_linux-amd64.tar.gz
+# Download the current release for your OS/arch from:
+# https://github.com/ipfs/kubo/releases
+# Replace <version> with the current release tag, for example v0.40.1.
+curl -LO https://dist.ipfs.tech/kubo/<version>/kubo_<version>_linux-amd64.tar.gz
+tar -xvzf kubo_<version>_linux-amd64.tar.gz
 cd kubo && sudo bash install.sh
 
 # Initialize IPFS repository
@@ -218,7 +221,7 @@ volumes:
 
 ```bash
 # IPFS version
-ipfs version
+ipfs version --all
 
 # Connected peers
 ipfs swarm peers

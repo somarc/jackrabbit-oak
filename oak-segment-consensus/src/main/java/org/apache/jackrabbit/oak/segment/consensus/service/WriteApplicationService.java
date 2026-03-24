@@ -35,6 +35,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
+import java.util.function.Supplier;
 
 /**
  * Service responsible for applying replicated writes to the Oak FileStore.
@@ -64,8 +65,8 @@ public class WriteApplicationService {
     private static final Logger log = LoggerFactory.getLogger(WriteApplicationService.class);
     
     private final FileStore fileStore;
-    private final NodeStore nodeStore;
-    private final BlobStore blobStore;
+    private final Supplier<NodeStore> nodeStoreSupplier;
+    private final Supplier<BlobStore> blobStoreSupplier;
     private final FileStoreFlushService flushService;
     
     // Optional callbacks for integration
@@ -87,9 +88,17 @@ public class WriteApplicationService {
             @NotNull NodeStore nodeStore,
             @Nullable BlobStore blobStore,
             @NotNull FileStoreFlushService flushService) {
+        this(fileStore, () -> nodeStore, () -> blobStore, flushService);
+    }
+
+    public WriteApplicationService(
+            @NotNull FileStore fileStore,
+            @NotNull Supplier<NodeStore> nodeStoreSupplier,
+            @NotNull Supplier<BlobStore> blobStoreSupplier,
+            @NotNull FileStoreFlushService flushService) {
         this.fileStore = fileStore;
-        this.nodeStore = nodeStore;
-        this.blobStore = blobStore;
+        this.nodeStoreSupplier = nodeStoreSupplier;
+        this.blobStoreSupplier = blobStoreSupplier;
         this.flushService = flushService;
     }
     
@@ -160,6 +169,8 @@ public class WriteApplicationService {
         try {
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
                      walletAddress, path, intentToken, blobId, ipfsCid);
+            NodeStore nodeStore = requireNodeStore();
+            BlobStore blobStore = blobStoreSupplier.get();
             
             // Get current HEAD for logging
             String previousHead = fileStore.getHead().getRecordId().toString();
@@ -222,7 +233,7 @@ public class WriteApplicationService {
 
             // Handle binary content
             if (blobId != null && !blobId.isEmpty()) {
-                handleBinaryContent(contentNode, blobId, mimeType, ipfsCid);
+                handleBinaryContent(contentNode, blobStore, blobId, mimeType, ipfsCid);
             } else if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 // Pure IPFS reference without local blob
                 contentNode.setProperty("ipfsCid", ipfsCid);
@@ -452,6 +463,7 @@ public class WriteApplicationService {
      */
     private void handleBinaryContent(
             NodeBuilder contentNode,
+            BlobStore blobStore,
             String blobId,
             String mimeType,
             String ipfsCid) {
@@ -486,7 +498,7 @@ public class WriteApplicationService {
                 log.info("✅ Binary stored with client-provided IPFS CID: jcr:blobId={}, ipfsCid={}", blobId, ipfsCid);
             } else {
                 // Try to derive CID from validator's IPFSDataStore (legacy path)
-                String derivedCid = tryDeriveCidFromBlobStore(blobId);
+                String derivedCid = tryDeriveCidFromBlobStore(blobStore, blobId);
                 if (derivedCid != null) {
                     contentNode.setProperty("ipfsCid", derivedCid);
                     contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + derivedCid);
@@ -510,7 +522,7 @@ public class WriteApplicationService {
      * Try to derive IPFS CID from validator's BlobStore (legacy path).
      */
     @Nullable
-    private String tryDeriveCidFromBlobStore(String blobId) {
+    private String tryDeriveCidFromBlobStore(BlobStore blobStore, String blobId) {
         if (!(blobStore instanceof DataStoreBlobStore)) {
             return null;
         }
@@ -542,6 +554,15 @@ public class WriteApplicationService {
         }
         
         return null;
+    }
+
+    @NotNull
+    private NodeStore requireNodeStore() {
+        NodeStore nodeStore = nodeStoreSupplier.get();
+        if (nodeStore == null) {
+            throw new IllegalStateException("NodeStore supplier returned null");
+        }
+        return nodeStore;
     }
     
     /**
@@ -634,7 +655,7 @@ public class WriteApplicationService {
         
         // Try reading from node
         try {
-            NodeState current = nodeStore.getRoot();
+            NodeState current = requireNodeStore().getRoot();
             for (String part : path.substring(1).split("/")) {
                 if (!part.isEmpty() && current.hasChildNode(part)) {
                     current = current.getChildNode(part);
