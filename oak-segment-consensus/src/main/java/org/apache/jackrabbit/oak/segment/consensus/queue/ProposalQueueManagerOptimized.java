@@ -68,6 +68,8 @@ import java.util.concurrent.*;
  * </ul>
  */
 public class ProposalQueueManagerOptimized {
+    private static final int CAPABILITY_VALIDATOR_HOSTED_BINARY = 1 << 0;
+
     
     private static final Logger log = LoggerFactory.getLogger(ProposalQueueManagerOptimized.class);
     private static final long HIGH_FREQ_LOG_INTERVAL_MS = 5000;
@@ -2384,11 +2386,18 @@ public class ProposalQueueManagerOptimized {
                         }
                     }
                     
+                    if (!isMockMode
+                        && requiresValidatorHostedBinaryCapability(proposal)
+                        && !proof.hasCapabilityFlag(CAPABILITY_VALIDATOR_HOSTED_BINARY)) {
+                        verifierRejectedCount.incrementAndGet();
+                        rejectProposal(
+                            proposal,
+                            "Validator-hosted binary proposal requires CAPABILITY_VALIDATOR_HOSTED_BINARY in the settlement proof"
+                        );
+                        continue;
+                    }
+
                     // Verify payment amount is present and positive.
-                    // TODO(contract-review): Oak no longer centers release on payment tiers, but
-                    // proof-tier enforcement still requires a contract/bridge review because
-                    // current bridges expose mixed payment units and proofs do not carry an
-                    // authoritative entitlement/capability marker.
                     try {
                         java.math.BigInteger amountWei = new java.math.BigInteger(proof.getAmountWei());
                         if (amountWei.signum() <= 0) {
@@ -2649,13 +2658,25 @@ public class ProposalQueueManagerOptimized {
                     ? org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.DELETE
                     : org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.WRITE,
                 org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.PaymentToken.ETH,
-                0,
+                requiresValidatorHostedBinaryCapability(proposal) ? CAPABILITY_VALIDATOR_HOSTED_BINARY : 0,
                 requiredConfirmations
             );
         } catch (Exception e) {
             log.error("Failed to create mock payment proof for proposal {}", proposal.getProposalId(), e);
             return null;
         }
+    }
+
+    private static boolean requiresValidatorHostedBinaryCapability(QueuedProposal proposal) {
+        if (proposal == null || proposal.getType() != QueuedProposal.ProposalType.WRITE) {
+            return false;
+        }
+        String intentToken = proposal.getIntentToken();
+        if (intentToken != null && !intentToken.isEmpty()) {
+            return true;
+        }
+        String blobId = proposal.getBlobId();
+        return blobId != null && !blobId.isEmpty();
     }
     
     // ============================================================================

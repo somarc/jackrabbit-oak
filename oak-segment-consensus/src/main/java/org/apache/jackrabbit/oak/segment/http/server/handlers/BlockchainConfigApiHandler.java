@@ -82,6 +82,7 @@ public class BlockchainConfigApiHandler {
         releasePolicy.put("priorityDirectReleaseEnabled", queueTuning.get("priority_direct_release_enabled"));
         releasePolicy.put("validatorHostedBinaryUploadEnabled", queueTuning.get("validator_hosted_binary_upload_enabled"));
         releasePolicy.put("validatorHostedBinaryRequiresPriorityTier", queueTuning.get("validator_hosted_binary_requires_priority_tier"));
+        releasePolicy.put("validatorHostedBinaryEntitlementSource", "settlement-capability");
         releasePolicy.put("normalPath", "Verified proposals enter an adaptive packing buffer and release immediately when Aeron is healthy.");
         releasePolicy.put("underPressure", "Packing widens and verified work can spill into backpressure overflow before release.");
         releasePolicy.put("fixedTierDelayDeprecated", true);

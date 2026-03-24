@@ -197,6 +197,69 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
         }
     }
 
+    @Test
+    public void testVerifierRejectsValidatorHostedBinaryWriteWithoutCapabilityInChainBackedMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        String proposalId = "0x3333333333333333333333333333333333333333333333333333333333333333";
+        String declaredTxHash = "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        String walletAddress = "0x1234567890abcdef1234567890abcdef12345678";
+
+        EvmBridge evmBridge = mock(EvmBridge.class);
+        when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
+        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
+        when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
+            declaredTxHash,
+            123L,
+            walletAddress,
+            "0x1111111111111111111111111111111111111111",
+            proposalId,
+            "1",
+            ValidatorEarningsTracker.PaymentTier.STANDARD,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.ETH,
+            0,
+            12
+        ));
+
+        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+        when(beaconClient.getCachedCurrentEpoch()).thenReturn(10L);
+        when(beaconClient.getCachedFinalizedEpoch()).thenReturn(8L);
+
+        ProposalQueueManagerOptimized queueManager = new ProposalQueueManagerOptimized(
+            evmBridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient
+        );
+        queueManager.start();
+        try {
+            queueManager.queueProposal(
+                proposalId,
+                declaredTxHash,
+                walletAddress,
+                "/oak-chain/12/34/56/0x1234567890abcdef1234567890abcdef12345678/content/page-binary",
+                "page",
+                "message",
+                "",
+                ValidatorEarningsTracker.PaymentTier.STANDARD,
+                null,
+                "blob-1",
+                "application/octet-stream",
+                null
+            );
+
+            assertTrue(waitForCondition(() -> rejectedCount(queueManager) == 1L, 5_000L));
+            ProposalStatus status = queueManager.getProposalStatus(proposalId);
+            assertNotNull(status);
+            assertEquals(ProposalState.REJECTED, status.getState());
+            assertTrue(status.getRejectionReason().contains("CAPABILITY_VALIDATOR_HOSTED_BINARY"));
+        } finally {
+            queueManager.stop();
+        }
+    }
+
     private static long rejectedCount(ProposalQueueManagerOptimized queueManager) {
         Map<String, Object> stats = queueManager.getQueueStats();
         Object value = stats.get("totalRejectedCount");

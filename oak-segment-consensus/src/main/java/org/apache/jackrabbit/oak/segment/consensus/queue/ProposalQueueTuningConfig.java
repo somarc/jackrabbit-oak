@@ -141,7 +141,7 @@ public @interface ProposalQueueTuningConfig {
 
     @AttributeDefinition(
         name = "Validator Binary Requires Priority Tier",
-        description = "Legacy entitlement policy. When enabled, validator-hosted binary upload requires paymentTier=priority."
+        description = "Legacy compatibility toggle. Go-live entitlement for validator-hosted binary uploads is verified from settlement capability flags; this flag only preserves older priority-tier assumptions where operators still need them."
     )
     boolean validator_hosted_binary_requires_priority_tier() default ProposalQueueTuning.DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER;
 

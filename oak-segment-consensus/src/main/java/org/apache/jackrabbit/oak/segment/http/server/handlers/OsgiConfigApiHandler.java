@@ -538,7 +538,7 @@ public class OsgiConfigApiHandler {
             true,
             "runtime-readable",
             "guarded",
-            "Legacy entitlement policy: require paymentTier=priority for validator-hosted binary uploads",
+            "Legacy compatibility toggle. Validator-hosted binary entitlement is now verified from settlement capability flags; this flag only preserves older priority-tier assumptions where operators still need them.",
             "oak.proposal.validator.binary.requires.priority"));
 
         schema.add(schemaEntry(

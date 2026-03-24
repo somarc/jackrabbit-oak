@@ -107,6 +107,57 @@ public class EventDrivenEvmBridgeProposalSettledTest {
         assertEquals(blockNumber, proof.getBlockNumber());
     }
 
+    @Test
+    public void testProposalSettledWriteLogPreservesCapabilityFlags() throws Exception {
+        String contractAddress = "0x1234567890abcdef1234567890abcdef12345678";
+        String proposalId = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        String payer = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        String preferredValidator = "0xcccccccccccccccccccccccccccccccccccccccc";
+        BigInteger amount = new BigInteger("1000000000000000");
+        long blockNumber = 123790L;
+        String txHash = "0xabababababababababababababababababababababababababababababababab";
+
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress, false);
+
+        Log ethLog = new Log();
+        ethLog.setAddress(contractAddress);
+        ethLog.setBlockNumber(hex(blockNumber));
+        ethLog.setTransactionHash(txHash);
+        ethLog.setTopics(Arrays.asList(
+            EventEncoder.encode(PROPOSAL_SETTLED_EVENT),
+            proposalId,
+            paddedAddressTopic(payer),
+            paddedUint(BigInteger.ZERO)
+        ));
+        ethLog.setData("0x"
+            + paddedUint(BigInteger.ZERO)
+            + paddedUint(BigInteger.valueOf(2L))
+            + paddedUint(amount)
+            + paddedUint(BigInteger.ONE)
+            + paddedAddressWord(preferredValidator)
+            + paddedUint(BigInteger.valueOf(1_710_000_124L)));
+
+        Method parsePaymentLog = EventDrivenEvmBridge.class.getDeclaredMethod("parsePaymentLog", Log.class);
+        parsePaymentLog.setAccessible(true);
+        EventDrivenEvmBridge.WriteAuthorizedEvent event =
+            (EventDrivenEvmBridge.WriteAuthorizedEvent) parsePaymentLog.invoke(bridge, ethLog);
+        assertNotNull(event);
+
+        Method processWriteAuthorizedEvent = EventDrivenEvmBridge.class.getDeclaredMethod(
+            "processWriteAuthorizedEvent",
+            EventDrivenEvmBridge.WriteAuthorizedEvent.class
+        );
+        processWriteAuthorizedEvent.setAccessible(true);
+        processWriteAuthorizedEvent.invoke(bridge, event);
+
+        PaymentProof proof = bridge.verifyPayment(proposalId);
+        assertNotNull(proof);
+        assertEquals(PaymentProof.ProposalKind.WRITE, proof.getProposalKind());
+        assertEquals(PaymentProof.PaymentToken.ETH, proof.getPaymentToken());
+        assertEquals(ValidatorEarningsTracker.PaymentTier.PRIORITY, proof.getPaymentTier());
+        assertEquals(1, proof.getCapabilityFlags());
+    }
+
     private static String hex(long value) {
         return "0x" + Long.toHexString(value);
     }

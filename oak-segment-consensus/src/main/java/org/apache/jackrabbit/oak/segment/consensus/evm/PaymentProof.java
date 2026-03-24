@@ -133,6 +133,16 @@ public interface PaymentProof {
     default int getCapabilityFlags() {
         return 0;
     }
+
+    /**
+     * Check whether a capability flag is present.
+     *
+     * @param capabilityFlag capability bit to test
+     * @return {@code true} when the proof carries the capability flag
+     */
+    default boolean hasCapabilityFlag(int capabilityFlag) {
+        return capabilityFlag != 0 && (getCapabilityFlags() & capabilityFlag) == capabilityFlag;
+    }
     
     /**
      * Get the number of confirmations this transaction has.

@@ -42,6 +42,7 @@ import java.util.Optional;
 public class WriteProposalHandler {
 
     private static final Logger log = LoggerFactory.getLogger(WriteProposalHandler.class);
+    private static final int CAPABILITY_VALIDATOR_HOSTED_BINARY = 1 << 0;
 
     private final ServerContext context;
 
@@ -329,6 +330,7 @@ public class WriteProposalHandler {
             boolean hasClientIpfsCid = ipfsCid != null;
             boolean hasBinaryPayload = binaryBytes != null && binaryBytes.length > 0;
             boolean hasIntentToken = intentToken != null;
+            boolean usesValidatorHostedBinary = hasBinaryPayload || hasIntentToken;
 
             if (hasClientIpfsCid && hasBinaryPayload) {
                 context.apiRejectedRequests.incrementAndGet();
@@ -560,14 +562,12 @@ public class WriteProposalHandler {
                         "For default client-side IPFS, upload to IPFS and pass ipfsCid instead.");
                     return;
                 }
-                if (ProposalQueuePolicy.isValidatorHostedBinaryRequiresPriorityTier() && !isPriorityTier(paymentTier)) {
-                    context.apiRejectedRequests.incrementAndGet();
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_PAYMENT_REQUIRED,
-                        "validator_binary_requires_priority",
-                        "Validator-hosted binary upload requires paymentTier=priority. " +
-                        "For default client-side IPFS, upload to IPFS and pass ipfsCid instead.");
-                    return;
-                }
+            }
+            if (usesValidatorHostedBinary
+                && ProposalQueuePolicy.isValidatorHostedBinaryRequiresPriorityTier()
+                && !isPriorityTier(paymentTier)) {
+                log.info("Validator-hosted binary proposal will rely on settlement capability proof instead of API-side priority gating: wallet={}, requestedTier={}",
+                    normalizedWallet, paymentTier != null ? paymentTier : "standard");
             }
 
             // ============================================================
@@ -765,6 +765,9 @@ public class WriteProposalHandler {
                         proposalId,
                         paymentAmount.toString(), // Wei amount based on tier
                         tier,
+                        org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.WRITE,
+                        org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.PaymentToken.ETH,
+                        usesValidatorHostedBinary ? CAPABILITY_VALIDATOR_HOSTED_BINARY : 0,
                         ProposalQueuePolicy.requiredConfirmations()
                     );
                 simpleEvmBridge.simulatePayment(mockPayment);

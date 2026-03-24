@@ -621,11 +621,25 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
-    public void testHandleProposeWriteRejectsValidatorHostedBinaryWithoutPriorityByDefault() throws Exception {
+    public void testHandleProposeWriteAcceptsValidatorHostedBinaryWithoutPriorityByDefault() throws Exception {
         System.setProperty("oak.blockchain.mode", "mock");
         BlockchainConfig.reset();
         ServerContext context = readyContext();
-        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        when(queueManager.queueProposal(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.nullable(String.class),
+            org.mockito.ArgumentMatchers.nullable(String.class), anyString(),
+            org.mockito.ArgumentMatchers.nullable(String.class)
+        )).thenReturn(new QueuedProposal(
+            "proposal-1",
+            VALID_TX_HASH,
+            null,
+            System.currentTimeMillis(),
+            System.currentTimeMillis() + 300_000L,
+            ProposalState.PENDING
+        ));
         WriteProposalHandler handler = new WriteProposalHandler(context);
         HttpServletRequest request = request();
         when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
@@ -639,9 +653,8 @@ public class WriteProposalHandlerTest {
 
         handler.handleProposeWrite(request, response);
 
-        verify(response).setStatus(HttpServletResponse.SC_PAYMENT_REQUIRED);
-        assertTrue(body.toString().contains("\"code\":\"validator_binary_requires_priority\""));
-        assertEquals(1L, context.apiRejectedRequests.get());
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        assertTrue(body.toString().contains("\"status\":\"accepted\""));
     }
 
     @Test
