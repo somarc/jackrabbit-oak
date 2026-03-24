@@ -5,6 +5,12 @@
 **Status**: Active Development / POC  
 **Related**: [STATE-MACHINE-DIAGRAMS.md](STATE-MACHINE-DIAGRAMS.md)
 
+**Refactor Note (March 24, 2026)**: the standalone `oak-segment-http` module
+was removed and its remaining read-only transport code now lives inside
+`oak-segment-consensus` under
+`org.apache.jackrabbit.oak.segment.consensus.mount.http`. Historical references
+below have not all been renamed yet.
+
 ---
 
 ## TODO Triage Summary (January 17, 2026)
@@ -54,7 +60,7 @@ rg -c "TEST_STUB" oak-segment-consensus/
 | Module | Implementation | Unit Tests | Integration Tests | Production Ready |
 |--------|---------------|------------|-------------------|------------------|
 | **oak-segment-consensus** | 🟢 POC-Complete (Mock Mode) | 🟡 ~50% | 🔴 ~10% | ❌ No |
-| **oak-segment-http** | 🟢 95% | 🟡 ~40% | 🟡 ~20% | ❌ No |
+| **oak-segment-consensus (internal HTTP mount client)** | 🟢 95% | 🟡 ~40% | 🟡 ~20% | ❌ No |
 | **oak-blob-cloud-ipfs** | 🟢 85% | 🟡 ~30% | 🔴 0% | ❌ No |
 | **oak-auth-web3** | 🟢 95% | 🟢 ~60% | 🔴 0% | ❌ No |
 
@@ -782,7 +788,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Unit Tests
-        run: mvn test -pl oak-segment-consensus,oak-segment-http,oak-blob-cloud-ipfs,oak-auth-web3
+        run: mvn test -pl oak-segment-consensus,oak-blob-cloud-ipfs,oak-auth-web3
         
   integration-tests:
     runs-on: ubuntu-latest

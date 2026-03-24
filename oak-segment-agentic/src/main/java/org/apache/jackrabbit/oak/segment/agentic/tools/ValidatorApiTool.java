@@ -69,6 +69,11 @@ public class ValidatorApiTool implements AgenticTool {
         if (url != null && !url.isEmpty()) {
             return url;
         }
+
+        url = System.getProperty("consensus.self.url");
+        if (url != null && !url.isEmpty()) {
+            return url;
+        }
         
         // Try to read from OSGi Configuration Admin
         try {
@@ -77,10 +82,10 @@ public class ValidatorApiTool implements AgenticTool {
                 // Try to get Configuration Admin service
                 Object configAdmin = getConfigurationAdmin(bundleContext);
                 if (configAdmin != null) {
-                    // Look for HttpPersistenceService configuration
+                    // Look for the validator runtime configuration
                     String configUrl = getConfigFromAdmin(configAdmin, 
-                        "org.apache.jackrabbit.oak.segment.http.HttpPersistenceService", 
-                        "globalStoreUrl");
+                        "org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService",
+                        "selfUrl");
                     if (configUrl != null && !configUrl.isEmpty()) {
                         return configUrl;
                     }
@@ -400,4 +405,3 @@ public class ValidatorApiTool implements AgenticTool {
         }
     }
 }
-

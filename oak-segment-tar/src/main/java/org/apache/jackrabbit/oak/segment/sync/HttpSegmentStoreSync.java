@@ -45,7 +45,8 @@ import java.util.Map;
  * 
  * <p><strong>Architecture: Cold Standby Pattern - Lives in oak-segment-tar</strong></p>
  * 
- * <p>This service is intentionally placed in {@code oak-segment-tar} (not {@code oak-segment-http})
+ * <p>This service is intentionally placed in {@code oak-segment-tar} (not the
+ * consensus-internal HTTP mount client)
  * for the same reason Cold Standby is here: it needs direct access to {@link ReadOnlyFileStore}
  * which is an internal class not exported by the bundle.
  * 
@@ -160,7 +161,7 @@ public class HttpSegmentStoreSync implements Runnable {
         // Register with validator after successful activation only when an
         // explicit wallet address is configured on this sync component.
         // Read-only HTTP mount behavior does not depend on a separate wallet
-        // service inside oak-segment-http.
+        // service inside oak-segment-consensus.
         if (walletAddress != null && !walletAddress.isEmpty()) {
             log.debug("Calling registerWithValidator()");
             registerWithValidator();

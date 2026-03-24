@@ -210,7 +210,7 @@ The RAG system indexes the following Blockchain-AEM modules and documentation:
 | `oak-segment-consensus` | Aeron Raft consensus | `AeronConsensusEngine`, `GlobalStoreServer`, `ConsensusApiHandler` |
 | `oak-segment-agentic` | This LLM chat module | `ChatHandler`, `RAGService`, `HybridRAGService` |
 | `oak-segment-tar` | TAR-based segment storage | `FileStore`, `SegmentNodeStore` |
-| `oak-segment-http` | HTTP segment transfer | `SegmentHttpClient`, `SegmentHttpServer` |
+| `oak-segment-consensus` (internal mount client) | HTTP segment transfer | `LazyHttpNodeStore`, `HttpPersistence`, `SegmentHttpServer` |
 | `oak-store-composite` | Composite mounts | `CompositeNodeStore` |
 | `oak-blob-cloud-ipfs` | IPFS binary storage | `IPFSBackend`, `IPFSDataStore` |
 | `oak-auth-web3` | Web3 biometric auth | `Web3BiometricAuthentication`, `ChallengeService` |

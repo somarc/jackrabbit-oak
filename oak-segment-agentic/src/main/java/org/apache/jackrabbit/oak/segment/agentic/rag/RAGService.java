@@ -304,7 +304,6 @@ public class RAGService {
             "oak-segment-agentic",
             // Storage layer
             "oak-segment-tar",
-            "oak-segment-http",
             "oak-store-composite",
             // Blockchain-native modules
             "oak-blob-cloud-ipfs",   // IPFS binary storage (ADR 015)
@@ -815,4 +814,3 @@ public class RAGService {
         ));
     }
 }
-

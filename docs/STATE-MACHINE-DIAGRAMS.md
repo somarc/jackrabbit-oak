@@ -2,7 +2,12 @@
 
 **Purpose**: Comprehensive state machine documentation for all Blockchain AEM components  
 **Date**: January 10, 2026  
-**Modules Covered**: oak-segment-consensus, oak-segment-http, oak-blob-cloud-ipfs, oak-auth-web3
+**Modules Covered**: oak-segment-consensus (including the former oak-segment-http client), oak-blob-cloud-ipfs, oak-auth-web3
+
+**Refactor Note (March 24, 2026)**: `oak-segment-http` was folded into
+`oak-segment-consensus` as an internal read-mount client under
+`org.apache.jackrabbit.oak.segment.consensus.mount.http`. Remaining
+`oak-segment-http` references in this document are historical.
 
 ---
 

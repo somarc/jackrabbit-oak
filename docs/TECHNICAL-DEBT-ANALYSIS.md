@@ -5,6 +5,11 @@
 **Status**: Active Review  
 **Related**: [GAPS-AND-TESTING-REQUIREMENTS.md](GAPS-AND-TESTING-REQUIREMENTS.md)
 
+**Refactor Note (March 24, 2026)**: the former `oak-segment-http` artifact was
+folded into `oak-segment-consensus` as an internal read-mount client package
+tree. References to `oak-segment-http` in this analysis are historical unless
+otherwise updated.
+
 ---
 
 ## Table of Contents
@@ -26,7 +31,7 @@
 | Module | Total LOC | Files | Avg LOC/File | Largest File |
 |--------|-----------|-------|--------------|--------------|
 | **oak-segment-consensus** | ~25,000+ | 70+ | ~360 | AeronConsensusEngine (4,586) |
-| **oak-segment-http** | ~1,700+ | 10 | ~175 | HttpPersistenceService (336) |
+| **oak-segment-consensus internal HTTP mount client** | ~1,700+ | 10 | ~175 | HttpPersistenceService (historical) |
 | **oak-blob-cloud-ipfs** | ~590 | 2 | ~295 | IPFSBackend (422) |
 | **oak-auth-web3** | ~3,000 | 10 | ~300 | Web3BiometricLoginModule (536) |
 

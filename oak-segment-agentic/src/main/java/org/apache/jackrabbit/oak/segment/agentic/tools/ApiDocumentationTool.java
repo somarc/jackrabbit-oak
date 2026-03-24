@@ -187,12 +187,12 @@ public class ApiDocumentationTool implements AgenticTool {
         docs.append("    Description: Journal file (text/plain)\n");
         docs.append("    Response: Journal entries, one per line\n");
         docs.append("    Format: <record-id> <timestamp> <segment-id>\n");
-        docs.append("    Used by: oak-segment-http clients for polling updates\n\n");
+        docs.append("    Used by: consensus read-mount clients for polling updates\n\n");
         
         docs.append("  GET /manifest\n");
         docs.append("    Description: Manifest file (text/plain)\n");
         docs.append("    Response: Manifest entries\n");
-        docs.append("    Used by: oak-segment-http clients for initialization\n\n");
+        docs.append("    Used by: consensus read-mount clients for initialization\n\n");
         
         docs.append("  GET /gc.log\n");
         docs.append("    Description: Garbage collection log (text/plain)\n");
@@ -202,7 +202,7 @@ public class ApiDocumentationTool implements AgenticTool {
         docs.append("    Description: Fetch segment by ID (binary)\n");
         docs.append("    Parameters: id (path param) - segment UUID\n");
         docs.append("    Response: Binary segment data\n");
-        docs.append("    Used by: oak-segment-http clients for on-demand segment fetching\n");
+        docs.append("    Used by: consensus read-mount clients for on-demand segment fetching\n");
         docs.append("    Example: GET /segments/abc123-def456-...\n\n");
         
         docs.append("  HEAD /segments/{id}\n");
@@ -212,10 +212,10 @@ public class ApiDocumentationTool implements AgenticTool {
         
         // Oak Segment HTTP APIs (client-side, but validator serves the endpoints)
         docs.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-        docs.append("📡 OAK SEGMENT HTTP APIs (oak-segment-http)\n");
+        docs.append("📡 OAK SEGMENT HTTP APIs (consensus mount client)\n");
         docs.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
         
-        docs.append("NOTE: oak-segment-http is a CLIENT library that consumes the validator APIs above.\n");
+        docs.append("NOTE: the consensus read-mount client consumes the validator APIs above.\n");
         docs.append("It does not expose its own HTTP endpoints, but uses:\n");
         docs.append("  - GET /journal.log - for polling journal updates\n");
         docs.append("  - GET /manifest - for reading manifest\n");
@@ -252,4 +252,3 @@ public class ApiDocumentationTool implements AgenticTool {
         return ToolResult.success(docs.toString(), "api-documentation");
     }
 }
-

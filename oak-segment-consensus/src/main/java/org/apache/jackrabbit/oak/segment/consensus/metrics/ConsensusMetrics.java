@@ -217,7 +217,7 @@ public class ConsensusMetrics {
             .help("Number of transactions waiting to be included in a block")
             .register();
     
-    // ========== HTTP Client Metrics (for oak-segment-http) ==========
+    // ========== HTTP Client Metrics (for consensus read-mount transport) ==========
     
     /**
      * Total number of HTTP requests to validators.

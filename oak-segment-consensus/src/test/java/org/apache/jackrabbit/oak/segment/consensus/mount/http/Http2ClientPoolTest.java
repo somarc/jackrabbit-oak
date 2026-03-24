@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.jackrabbit.oak.segment.http;
+package org.apache.jackrabbit.oak.segment.consensus.mount.http;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -62,7 +62,7 @@ public class Http2ClientPoolTest {
     public void setUp() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/bytes", exchange -> respond(exchange, 200, new byte[] {1, 2, 3, 4}));
-        server.createContext("/text", exchange -> respond(exchange, 200, "oak-segment-http".getBytes(StandardCharsets.UTF_8)));
+        server.createContext("/text", exchange -> respond(exchange, 200, "consensus-mount-http".getBytes(StandardCharsets.UTF_8)));
         server.createContext("/exists", exchange -> respond(exchange, 200, new byte[0]));
         server.createContext("/missing", exchange -> respond(exchange, 404, "missing".getBytes(StandardCharsets.UTF_8)));
         server.createContext("/error", exchange -> respond(exchange, 500, "boom".getBytes(StandardCharsets.UTF_8)));
@@ -96,7 +96,7 @@ public class Http2ClientPoolTest {
 
         String body = pool.getString(baseUrl + "/text");
 
-        assertEquals("oak-segment-http", body);
+        assertEquals("consensus-mount-http", body);
         assertTrue(pool.getPoolStats().contains("Requests=1"));
     }
 

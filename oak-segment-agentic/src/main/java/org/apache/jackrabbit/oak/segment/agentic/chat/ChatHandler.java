@@ -229,14 +229,14 @@ public class ChatHandler {
                         if (configAdmin != null) {
                             Object config = configAdmin.getClass()
                                 .getMethod("getConfiguration", String.class)
-                                .invoke(configAdmin, "org.apache.jackrabbit.oak.segment.http.HttpPersistenceService");
+                                .invoke(configAdmin, "org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService");
                             if (config != null) {
                                 Object properties = config.getClass()
                                     .getMethod("getProperties").invoke(config);
                                 if (properties != null) {
                                     Object value = properties.getClass()
                                         .getMethod("get", Object.class)
-                                        .invoke(properties, "globalStoreUrl");
+                                        .invoke(properties, "selfUrl");
                                     if (value != null) {
                                         return value.toString();
                                     }

@@ -272,11 +272,11 @@ http://localhost:8091/
 
 ## Integration
 
-### With `oak-segment-http`
-- `oak-segment-http` provides HTTP persistence layer for **cross-cluster reads**
+### Internal Read-Mount Client
+- `oak-segment-consensus` owns the HTTP persistence layer for **cross-cluster reads**
 - Used by validators via `LazyHttpNodeStore` to mount other clusters as read-only stores
-- Enables **shard routing** - validators read segments from other shards/clusters via HTTP
-- **Note**: AEM customers should use `oak-chain-connector` (AEM-compatible version with renamed packages)
+- The internal client lives under `org.apache.jackrabbit.oak.segment.consensus.mount.http`
+- **Note**: AEM customers should use `oak-chain-connector` for client-side mounting
 
 ### With `oak-segment-agentic`
 - Optional LLM chat module
@@ -301,6 +301,7 @@ oak-segment-consensus/
 │   ├── security/           # Wallet signature verification
 │   ├── store/              # Composite store builders
 │   └── mount/              # Remote mount helpers for composite read paths
+│       └── http/           # Internal HTTP transport for read-only cross-cluster mounts
 ├── pom.xml                 # Maven build configuration
 └── README.md               # This file
 ```
@@ -352,7 +353,6 @@ Apache License 2.0 - See [LICENSE](../../LICENSE) for details
 
 ## Related Modules
 
-- **`oak-segment-http`**: HTTP persistence layer for clients
 - **`oak-segment-agentic`**: Optional LLM chat interface
 - **`oak-segment-tar`**: Core segment store implementation
 
