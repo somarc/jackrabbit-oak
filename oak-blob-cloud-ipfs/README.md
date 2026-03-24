@@ -36,11 +36,11 @@ Oak SegmentNodeStore
 
 **Data flow:**
 1. Sling uploads 10MB image via JCR API
-2. Oak writes metadata to segment (path, properties, CID reference)
+2. Oak writes content metadata to segments and delegates the binary payload to the BlobStore
 3. IPFSDataStore uploads binary to IPFS → gets CID
-4. IPFS node pins CID (persistence) and replicates to network
-5. Oak stores CID reference in jcr:data property
-6. On retrieval: Oak fetches binary from IPFS by CID
+4. IPFS node pins CID (persistence) and stores the Oak blob ID → CID mapping in IPFS Files (MFS)
+5. Oak stores its blob identifier in repository content
+6. On retrieval: the backend resolves the Oak blob identifier to a CID and fetches the binary from IPFS
 
 ## Requirements
 
@@ -115,13 +115,24 @@ SegmentNodeStore nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build()
 # IPFS API endpoint (multiaddr format)
 ipfsApiEndpoint=/ip4/127.0.0.1/tcp/5001
 
+# Root path in IPFS Files (MFS) used for Oak metadata and CID mappings
+# Use a unique root per Oak repository if multiple repositories share one IPFS repo
+ipfsFilesRoot=/oak/ipfs
+
 # Minimum size for external storage (bytes)
 # Binaries smaller than this are stored inline in segments
 minRecordLength=16384
 
-# Cache settings (inherited from AbstractSharedCachingDataStore)
+# DataStoreBlobStore in-memory cache size (MB)
+cacheSizeInMB=16
+
+# Shared caching datastore local cache settings
+path=/var/oak/ipfs-cache
 cacheSize=68719476736
-# Other cache settings...
+stagingSplitPercentage=10
+uploadThreads=10
+stagingPurgeInterval=300
+stagingRetryInterval=600
 ```
 
 ### 3. Test Binary Upload/Retrieval
@@ -189,8 +200,15 @@ volumes:
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `ipfsApiEndpoint` | String | `/ip4/127.0.0.1/tcp/5001` | IPFS HTTP API multiaddr |
+| `ipfsFilesRoot` | String | `/oak/ipfs` | Root path in IPFS Files (MFS) for CID mappings and metadata |
 | `minRecordLength` | int | 16384 (16KB) | Minimum binary size for IPFS storage |
+| `cacheSizeInMB` | int | 16 | DataStoreBlobStore in-memory cache size in MB |
+| `path` | String | none | Local path for the shared caching datastore staging/download cache |
 | `cacheSize` | long | 64GB | Local cache size (bytes) |
+| `stagingSplitPercentage` | int | 10 | Percentage of local cache reserved for staging |
+| `uploadThreads` | int | 10 | Number of background upload threads |
+| `stagingPurgeInterval` | int | 300 | Seconds between staging-area purge runs |
+| `stagingRetryInterval` | int | 600 | Seconds between retrying failed staged uploads |
 | `cachePurgeTrigFactor` | double | 0.95 | Cache purge trigger factor |
 | `cachePurgeResizeFactor` | double | 0.85 | Cache purge resize factor |
 
@@ -287,19 +305,19 @@ ipfs repo stat
 
 ### Current Limitations
 
-1. **CID Mapping:** In-memory cache only (not persisted)
-   - **Impact:** After restart, need to rebuild identifier → CID mapping
-   - **Mitigation:** Store mapping in Oak metadata nodes
-   - **Roadmap:** Phase 2 (production hardening)
+1. **Independent IPFS Repositories Are Not Coordinated**
+   - **Impact:** Durable CID mappings and metadata survive restarts against the same IPFS repository, but validators pointed at different independent IPFS repositories do not automatically share that state.
+   - **Mitigation:** Use a shared IPFS repository/endpoint per Oak repository today.
+   - **Follow-up Note:** Evaluate IPFS Cluster, a replicated metadata channel, or a consensus-backed mapping store for multi-node coordination.
 
 2. **No S3 Fallback:** Pure IPFS (no hybrid mode)
    - **Impact:** If IPFS unavailable, reads fail
    - **Mitigation:** Ensure IPFS node highly available
    - **Roadmap:** Phase 2 (hybrid S3+IPFS)
 
-3. **Single IPFS Node:** No clustering
-   - **Impact:** Single point of failure
-   - **Mitigation:** IPFS Cluster in Phase 3
+3. **No Coordinated Pinning/Placement Policy**
+   - **Impact:** Pinning is local to the configured IPFS endpoint; there is no module-level policy for replica count or cluster-wide placement.
+   - **Mitigation:** Manage pinning/replication externally at the IPFS layer for now.
    - **Roadmap:** Phase 3 (production scale)
 
 4. **Limited Testing:** POC-level test coverage
@@ -310,13 +328,13 @@ ipfs repo stat
 ### Production Roadmap
 
 **Phase 2 (Q1 2026) - Production Hardening:**
-- Persistent CID mapping (stored in Oak)
 - Hybrid S3+IPFS fallback
 - Comprehensive test suite
 - Performance benchmarking
 
 **Phase 3 (Q2 2026) - Scale:**
 - IPFS Cluster (coordinated pinning)
+- Multi-validator metadata coordination across independent IPFS repositories
 - Multi-validator replication guarantees
 - Monitoring & alerting
 
@@ -408,4 +426,3 @@ Apache License 2.0 (same as Apache Jackrabbit Oak)
 This is POC code for Blockchain AEM Garage Week (Dec 15, 2025). For production use, see roadmap above.
 
 **Questions?** See `Blockchain-AEM/adr/015-ipfs-datastore-binary-storage.md` for complete rationale.
-

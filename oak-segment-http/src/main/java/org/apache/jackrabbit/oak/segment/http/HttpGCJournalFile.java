@@ -26,7 +26,12 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * HTTP/2-enabled GC journal file for read-only access.
+ * Read-only {@link GCJournalFile} backed by the remote {@code /gc.log}
+ * endpoint.
+ *
+ * <p>Writes and truncation are intentionally ignored because the HTTP
+ * persistence layer exposes a read-only mount. A missing remote GC journal is
+ * treated as an empty history.</p>
  */
 public class HttpGCJournalFile implements GCJournalFile {
     
@@ -35,6 +40,12 @@ public class HttpGCJournalFile implements GCJournalFile {
     private final String baseUrl;
     private final Http2ClientPool http2ClientPool;
     
+    /**
+     * Creates a remote GC journal adapter rooted at the given persistence URL.
+     *
+     * @param baseUrl the base URL of the remote HTTP persistence endpoint
+     * @param http2ClientPool shared client used for remote reads
+     */
     public HttpGCJournalFile(String baseUrl, Http2ClientPool http2ClientPool) {
         this.baseUrl = baseUrl;
         this.http2ClientPool = http2ClientPool;
@@ -42,8 +53,7 @@ public class HttpGCJournalFile implements GCJournalFile {
     
     @Override
     public void writeLine(String line) throws IOException {
-        // No-op for read-only HTTP mount
-        // Silently ignore GC journal writes - this is expected for read-only stores
+        // Intentionally ignored because the remote HTTP store is read-only.
     }
     
     @Override
@@ -54,7 +64,7 @@ public class HttpGCJournalFile implements GCJournalFile {
             return new ArrayList<>(Arrays.asList(content.split("\n")));
         } catch (Exception e) {
             if (e.getMessage() != null && e.getMessage().contains("404")) {
-                // GC journal doesn't exist yet - return empty
+                // A missing GC journal means the remote store has no GC history yet.
                 return new ArrayList<>();
             }
             throw new IOException("Failed to fetch gc.log via HTTP/2: " + e.getMessage(), e);
@@ -63,7 +73,6 @@ public class HttpGCJournalFile implements GCJournalFile {
     
     @Override
     public void truncate() throws IOException {
-        // No-op for read-only HTTP mount
-        // Silently ignore truncation - this is expected for read-only stores
+        // Intentionally ignored because the remote HTTP store is read-only.
     }
 }

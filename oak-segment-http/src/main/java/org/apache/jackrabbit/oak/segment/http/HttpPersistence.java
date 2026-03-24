@@ -32,26 +32,17 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 
 /**
- * HTTP/2-enabled persistence for remote segment stores.
- * 
- * <p>This implementation enables read-only access to a remote segment store
- * via HTTP/2, suitable for mounting global blockchain stores in Blockchain AEM.</p>
- * 
- * <p><strong>HTTP/2 Benefits:</strong></p>
- * <ul>
- *   <li>Multiplexing: Multiple segment requests on single connection</li>
- *   <li>Header compression: Reduced overhead for repeated requests</li>
- *   <li>20-30% latency improvement over HTTP/1.1</li>
- *   <li>Falls back to HTTP/1.1 if server doesn't support HTTP/2</li>
- * </ul>
- * 
- * <p><strong>Design:</strong></p>
- * <ul>
- *   <li>Segments fetched on-demand via HTTP/2</li>
- *   <li>Read-only access (no writes supported)</li>
- *   <li>Journal/manifest handled via HTTP endpoints</li>
- *   <li>No repository locking (read-only mount)</li>
- * </ul>
+ * {@link SegmentNodeStorePersistence} that exposes a remote segment store over
+ * HTTP.
+ *
+ * <p>This persistence is read-only: it wires HTTP implementations for archive,
+ * journal, GC journal, and manifest access, and returns no-op locks or writers
+ * where the Oak SPI still expects mutating entry points. Resources are resolved
+ * relative to a single base URL shared by the helpers in this package.</p>
+ *
+ * <p>The transport prefers HTTP/2 through {@link Http2ClientPool}, but remains
+ * compatible with HTTP/1.1 endpoints through the JDK client's normal fallback
+ * behaviour.</p>
  */
 public class HttpPersistence implements SegmentNodeStorePersistence {
     
@@ -62,9 +53,9 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
     private final Http2ClientPool http2ClientPool;
     
     /**
-     * Create a new HTTP/2 persistence layer.
-     * 
-     * @param baseUrl Base URL of the GlobalStoreServer (e.g., "http://oak-global-store:8090")
+     * Creates a read-only HTTP persistence layer rooted at the given base URL.
+     *
+     * @param baseUrl base URL of the remote segment-store endpoint
      */
     public HttpPersistence(String baseUrl) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
@@ -89,8 +80,8 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
     @Override
     public boolean segmentFilesExist() {
         log.debug("Checking if segment files exist at: {}", baseUrl);
-        // Assume segments exist if server is reachable
-        // In production, would check via HTTP HEAD to /archives endpoint
+        // Archive discovery is currently deferred to the archive manager because
+        // the remote endpoint does not expose a dedicated listing endpoint yet.
         return true;
     }
     
@@ -120,12 +111,12 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
     }
     
     /**
-     * No-op repository lock for read-only mounts.
+     * Repository lock placeholder returned for a read-only remote mount.
      */
     private static class NoOpRepositoryLock implements RepositoryLock {
         @Override
         public void unlock() throws IOException {
-            // No-op
+            // Nothing to release because no lock is actually acquired.
         }
     }
 }

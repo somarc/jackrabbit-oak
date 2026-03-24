@@ -30,7 +30,12 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * HTTP/2-enabled journal file implementation for read-only segment store access.
+ * Read-only {@link JournalFile} implementation that serves
+ * {@code journal.log} from the remote HTTP persistence endpoint.
+ *
+ * <p>The journal is fetched eagerly into memory when a reader is opened. The
+ * lines are then reversed so callers see the newest revision first, matching
+ * Oak's normal journal-reader behaviour.</p>
  */
 public class HttpJournalFile implements JournalFile {
     
@@ -40,6 +45,13 @@ public class HttpJournalFile implements JournalFile {
     private final WriteAccessController writeAccessController;
     private final Http2ClientPool http2ClientPool;
     
+    /**
+     * Creates a journal adapter rooted at the given persistence URL.
+     *
+     * @param baseUrl the base URL of the remote HTTP persistence endpoint
+     * @param writeAccessController retained to match the local SPI contract
+     * @param http2ClientPool shared client used for remote reads
+     */
     public HttpJournalFile(String baseUrl, WriteAccessController writeAccessController, Http2ClientPool http2ClientPool) {
         this.baseUrl = baseUrl;
         this.writeAccessController = writeAccessController;
@@ -55,6 +67,7 @@ public class HttpJournalFile implements JournalFile {
         try {
             String content = http2ClientPool.getString(url);
             List<String> lines = new ArrayList<>(Arrays.asList(content.split("\n")));
+            // Oak consumers expect the latest journal revision to be read first.
             Collections.reverse(lines);
             log.debug("Loaded {} journal entries via HTTP/2", lines.size());
             return new HttpJournalFileReader(lines);
@@ -65,31 +78,29 @@ public class HttpJournalFile implements JournalFile {
     
     @Override
     public JournalFileWriter openJournalWriter() throws IOException {
-        // Read-only mount - return a no-op writer
-        // DO NOT call checkWritingAllowed() - it blocks forever!
-        // Oak's TarRevisions requires a writer even for read-only stores
+        // Oak still requests a writer during startup, so return a sink that
+        // satisfies the SPI without trying to acquire write access.
         log.debug("Returning no-op journal writer for read-only HTTP mount");
         return new NoOpJournalFileWriter();
     }
     
     /**
-     * No-op journal writer for read-only HTTP mounts.
-     * All write operations are silently ignored since this is a read-only view.
+     * Journal writer placeholder required by Oak startup for a read-only mount.
      */
     private static class NoOpJournalFileWriter implements JournalFileWriter {
         @Override
         public void truncate() throws IOException {
-            // No-op for read-only mount
+            // Intentionally ignored because the mount is read-only.
         }
 
         @Override
         public void writeLine(String line) throws IOException {
-            // No-op for read-only mount - writes are silently ignored
+            // Intentionally ignored because the mount is read-only.
         }
 
         @Override
         public void batchWriteLines(java.util.List<String> lines) throws IOException {
-            // No-op for read-only mount - writes are silently ignored
+            // Intentionally ignored because the mount is read-only.
         }
 
         @Override
@@ -110,7 +121,7 @@ public class HttpJournalFile implements JournalFile {
     }
     
     /**
-     * In-memory journal reader for HTTP-fetched content.
+     * In-memory reader over the reversed journal contents fetched from HTTP.
      */
     private static class HttpJournalFileReader implements JournalFileReader {
         private final List<String> lines;

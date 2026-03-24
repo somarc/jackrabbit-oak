@@ -16,7 +16,17 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
+/**
+ * Factory for creating {@link IpfsClient} instances for a configured endpoint.
+ */
 interface IpfsClientFactory {
 
+    /**
+     * Creates a client for the given IPFS API endpoint.
+     *
+     * @param endpoint IPFS API endpoint or multiaddr
+     * @return a client bound to that endpoint
+     * @throws Exception if the client cannot be created
+     */
     IpfsClient create(String endpoint) throws Exception;
 }

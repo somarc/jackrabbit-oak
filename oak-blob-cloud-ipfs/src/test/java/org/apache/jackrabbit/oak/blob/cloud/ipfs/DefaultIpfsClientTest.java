@@ -25,10 +25,15 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -55,6 +60,15 @@ public class DefaultIpfsClientTest {
             assertArrayEquals(CONTENT, client.cat(CID));
             assertEquals(Map.of("Size", CONTENT.length), client.blockStat(CID));
             client.pinRemove(CID);
+            client.ensureDirectory("/oak/ipfs/metadata");
+            client.writeFile("/oak/ipfs/metadata/payload.bin", CONTENT);
+            assertTrue(client.fileExists("/oak/ipfs/metadata"));
+            assertTrue(client.fileExists("/oak/ipfs/metadata/payload.bin"));
+            assertEquals(CONTENT.length, client.fileSize("/oak/ipfs/metadata/payload.bin"));
+            assertEquals(List.of("payload.bin"), client.listFiles("/oak/ipfs/metadata"));
+            assertArrayEquals(CONTENT, client.readFile("/oak/ipfs/metadata/payload.bin"));
+            client.deleteFile("/oak/ipfs/metadata/payload.bin");
+            assertTrue(client.listFiles("/oak/ipfs/metadata").isEmpty());
 
             RequestSnapshot versionRequest = node.firstRequest("/api/v0/version");
             assertEquals("POST", versionRequest.method);
@@ -88,6 +102,29 @@ public class DefaultIpfsClientTest {
             assertEquals("application/json", pinRemoveRequest.contentType);
             assertTrue(pinRemoveRequest.query.contains("arg=" + CID));
             assertTrue(pinRemoveRequest.query.contains("r=true"));
+
+            RequestSnapshot mkdirRequest = node.firstRequest("/api/v0/files/mkdir");
+            assertEquals("POST", mkdirRequest.method);
+            assertTrue(mkdirRequest.query.contains("arg=%2Foak%2Fipfs%2Fmetadata"));
+
+            RequestSnapshot writeRequest = node.firstRequest("/api/v0/files/write");
+            assertEquals("POST", writeRequest.method);
+            assertTrue(writeRequest.query.contains("arg=%2Foak%2Fipfs%2Fmetadata%2Fpayload.bin"));
+            assertTrue(writeRequest.query.contains("create=true"));
+            assertTrue(writeRequest.query.contains("parents=true"));
+            assertTrue(writeRequest.query.contains("truncate=true"));
+
+            RequestSnapshot lsRequest = node.firstRequest("/api/v0/files/ls");
+            assertEquals("POST", lsRequest.method);
+            assertTrue(lsRequest.query.contains("arg=%2Foak%2Fipfs%2Fmetadata"));
+
+            RequestSnapshot readRequest = node.firstRequest("/api/v0/files/read");
+            assertEquals("POST", readRequest.method);
+            assertTrue(readRequest.query.contains("arg=%2Foak%2Fipfs%2Fmetadata%2Fpayload.bin"));
+
+            RequestSnapshot rmRequest = node.firstRequest("/api/v0/files/rm");
+            assertEquals("POST", rmRequest.method);
+            assertTrue(rmRequest.query.contains("arg=%2Foak%2Fipfs%2Fmetadata%2Fpayload.bin"));
         }
     }
 
@@ -95,11 +132,14 @@ public class DefaultIpfsClientTest {
 
         private final HttpServer server;
         private final List<RequestSnapshot> requests = new ArrayList<>();
+        private final Map<String, byte[]> files = new LinkedHashMap<>();
+        private final Set<String> directories = new HashSet<>();
 
         private FakeIpfsNode() throws IOException {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/api/v0/", this::handle);
             server.start();
+            directories.add("/");
         }
 
         private String endpoint() {
@@ -147,9 +187,130 @@ public class DefaultIpfsClientTest {
                 respondJson(exchange, "{\"Size\":" + CONTENT.length + "}");
                 return;
             }
+            if ("/api/v0/files/mkdir".equals(path)) {
+                createDirectory(queryArg(exchange));
+                respondJson(exchange, "{\"Message\":\"ok\"}");
+                return;
+            }
+            if ("/api/v0/files/write".equals(path)) {
+                String filePath = queryArg(exchange);
+                createDirectory(parent(filePath));
+                files.put(filePath, extractMultipartPayload(headers.getFirst("Content-Type"), requestBody));
+                respondJson(exchange, "{\"Message\":\"ok\"}");
+                return;
+            }
+            if ("/api/v0/files/stat".equals(path)) {
+                String target = queryArg(exchange);
+                if (files.containsKey(target)) {
+                    respondJson(exchange, "{\"Size\":" + files.get(target).length + "}");
+                    return;
+                }
+                if (directories.contains(target)) {
+                    respondJson(exchange, "{\"Size\":0}");
+                    return;
+                }
+                exchange.sendResponseHeaders(404, -1);
+                exchange.close();
+                return;
+            }
+            if ("/api/v0/files/ls".equals(path)) {
+                String target = queryArg(exchange);
+                List<String> children = directChildren(target);
+                StringBuilder body = new StringBuilder("{\"Entries\":[");
+                for (int i = 0; i < children.size(); i++) {
+                    if (i > 0) {
+                        body.append(',');
+                    }
+                    body.append("{\"Name\":\"").append(children.get(i)).append("\"}");
+                }
+                body.append("]}");
+                respondJson(exchange, body.toString());
+                return;
+            }
+            if ("/api/v0/files/read".equals(path)) {
+                String target = queryArg(exchange);
+                byte[] data = files.get(target);
+                if (data == null) {
+                    exchange.sendResponseHeaders(404, -1);
+                    exchange.close();
+                    return;
+                }
+                respondBytes(exchange, data, "application/octet-stream");
+                return;
+            }
+            if ("/api/v0/files/rm".equals(path)) {
+                files.remove(queryArg(exchange));
+                respondJson(exchange, "{\"Message\":\"ok\"}");
+                return;
+            }
 
             exchange.sendResponseHeaders(404, -1);
             exchange.close();
+        }
+
+        private String queryArg(HttpExchange exchange) throws IOException {
+            String rawQuery = exchange.getRequestURI().getRawQuery();
+            if (rawQuery == null || rawQuery.isEmpty()) {
+                return "";
+            }
+            for (String param : rawQuery.split("&")) {
+                if (param.startsWith("arg=")) {
+                    return URLDecoder.decode(param.substring(4), StandardCharsets.UTF_8.name());
+                }
+            }
+            return "";
+        }
+
+        private void createDirectory(String path) {
+            if (path == null || path.isEmpty() || "/".equals(path)) {
+                directories.add("/");
+                return;
+            }
+            String current = "";
+            for (String part : path.substring(1).split("/")) {
+                current = current + "/" + part;
+                directories.add(current);
+            }
+        }
+
+        private static String parent(String path) {
+            int separator = path.lastIndexOf('/');
+            if (separator <= 0) {
+                return "/";
+            }
+            return path.substring(0, separator);
+        }
+
+        private List<String> directChildren(String path) {
+            String prefix = path.endsWith("/") ? path : path + "/";
+            List<String> children = new ArrayList<>();
+            for (String filePath : files.keySet()) {
+                if (!filePath.startsWith(prefix)) {
+                    continue;
+                }
+                String remainder = filePath.substring(prefix.length());
+                if (!remainder.isEmpty() && !remainder.contains("/")) {
+                    children.add(remainder);
+                }
+            }
+            Collections.sort(children);
+            return children;
+        }
+
+        private static byte[] extractMultipartPayload(String contentType, byte[] body) {
+            String boundary = contentType.substring(contentType.indexOf("boundary=") + "boundary=".length());
+            String payload = new String(body, StandardCharsets.ISO_8859_1);
+            String delimiter = "--" + boundary;
+            int dataStart = payload.indexOf("\r\n\r\n");
+            if (dataStart < 0) {
+                return new byte[0];
+            }
+            dataStart += 4;
+            int dataEnd = payload.indexOf("\r\n" + delimiter, dataStart);
+            if (dataEnd < 0) {
+                dataEnd = payload.length();
+            }
+            return payload.substring(dataStart, dataEnd).getBytes(StandardCharsets.ISO_8859_1);
         }
 
         private static void respondJson(HttpExchange exchange, String body) throws IOException {

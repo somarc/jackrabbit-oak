@@ -26,10 +26,21 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 
+/**
+ * Default {@link ValidatorHealthProbe} that checks validator reachability by
+ * issuing a short-lived HTTP request to {@code /journal.log}.
+ *
+ * <p>A validator is considered available only when that endpoint returns
+ * HTTP 200. Any transport error or non-success status is treated as
+ * unavailable.</p>
+ */
 class HttpValidatorHealthProbe implements ValidatorHealthProbe {
 
     private static final Logger log = LoggerFactory.getLogger(HttpValidatorHealthProbe.class);
 
+    /**
+     * Factory used to create the short-lived client for a single probe cycle.
+     */
     @FunctionalInterface
     interface HttpClientFactory {
         CloseableHttpClient create(RequestConfig requestConfig);
@@ -37,12 +48,19 @@ class HttpValidatorHealthProbe implements ValidatorHealthProbe {
 
     private final HttpClientFactory clientFactory;
 
+    /**
+     * Creates the probe with the default Apache {@link CloseableHttpClient}
+     * factory.
+     */
     HttpValidatorHealthProbe() {
         this(requestConfig -> HttpClients.custom()
             .setDefaultRequestConfig(requestConfig)
             .build());
     }
 
+    /**
+     * Testing seam that injects a custom client factory.
+     */
     HttpValidatorHealthProbe(HttpClientFactory clientFactory) {
         this.clientFactory = clientFactory;
     }
@@ -57,6 +75,7 @@ class HttpValidatorHealthProbe implements ValidatorHealthProbe {
 
         try (CloseableHttpClient client = clientFactory.create(requestConfig)) {
 
+            // Probe the same endpoint the mount needs for normal operation.
             String url = baseUrl + "/journal.log";
             HttpGet request = new HttpGet(url);
 

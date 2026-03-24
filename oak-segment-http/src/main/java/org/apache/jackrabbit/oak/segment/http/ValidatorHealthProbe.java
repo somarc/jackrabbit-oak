@@ -16,7 +16,19 @@
  */
 package org.apache.jackrabbit.oak.segment.http;
 
+/**
+ * Strategy for determining whether the remote validator is ready to serve the
+ * HTTP segment mount.
+ */
 interface ValidatorHealthProbe {
 
+    /**
+     * Probes the configured validator endpoint within the given timeout budget.
+     *
+     * @param baseUrl base URL of the remote validator
+     * @param timeoutMs per-request timeout in milliseconds
+     * @return {@code true} when the validator is reachable and serving the
+     *         expected endpoint
+     */
     boolean isAvailable(String baseUrl, int timeoutMs);
 }

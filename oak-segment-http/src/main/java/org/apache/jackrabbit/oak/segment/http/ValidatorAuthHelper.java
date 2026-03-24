@@ -23,16 +23,13 @@ import org.slf4j.LoggerFactory;
 import java.net.HttpURLConnection;
 
 /**
- * Helper utility for adding authentication headers to HTTP requests to validators.
- * 
- * <p>Token can be configured via:
- * <ul>
- *   <li>System property: {@code oak.validator.auth.token}</li>
- *   <li>Environment variable: {@code OAK_VALIDATOR_AUTH_TOKEN}</li>
- * </ul>
- * 
- * <p>If no token is configured, no Authorization header is added (POC mode).
- * This matches the validator's behavior - if no token is configured, auth is disabled.
+ * Adds validator authentication headers when a token has been configured.
+ *
+ * <p>The token is resolved once per JVM, preferring the
+ * {@code oak.validator.auth.token} system property over the
+ * {@code OAK_VALIDATOR_AUTH_TOKEN} environment variable. Blank values are
+ * treated as absent, in which case requests are sent without an
+ * {@code Authorization} header.</p>
  */
 public class ValidatorAuthHelper {
     
@@ -57,9 +54,12 @@ public class ValidatorAuthHelper {
     private static boolean tokenInitialized = false;
     
     /**
-     * Get the configured auth token (if any).
-     * 
-     * @return The auth token, or null if not configured (POC mode)
+     * Returns the configured authentication token, if one has been supplied.
+     *
+     * <p>The lookup result is cached after the first call.</p>
+     *
+     * @return the configured token, or {@code null} when authentication is not
+     *         enabled
      */
     public static String getAuthToken() {
         synchronized (ValidatorAuthHelper.class) {
@@ -84,6 +84,9 @@ public class ValidatorAuthHelper {
         }
     }
 
+    /**
+     * Trims surrounding whitespace and collapses blank values to {@code null}.
+     */
     private static String normalizeToken(String token) {
         if (token == null) {
             return null;
@@ -93,9 +96,10 @@ public class ValidatorAuthHelper {
     }
     
     /**
-     * Add Authorization header to HttpURLConnection if token is configured.
-     * 
-     * @param conn The HTTP connection
+     * Adds the configured {@code Authorization} header to a
+     * {@link HttpURLConnection}.
+     *
+     * @param conn the request to mutate
      */
     public static void addAuthHeader(HttpURLConnection conn) {
         String token = getAuthToken();
@@ -105,9 +109,10 @@ public class ValidatorAuthHelper {
     }
     
     /**
-     * Add Authorization header to Apache HttpClient request if token is configured.
-     * 
-     * @param request The HTTP request
+     * Adds the configured {@code Authorization} header to an Apache
+     * {@link HttpRequest}.
+     *
+     * @param request the request to mutate
      */
     public static void addAuthHeader(HttpRequest request) {
         String token = getAuthToken();
@@ -117,9 +122,9 @@ public class ValidatorAuthHelper {
     }
     
     /**
-     * Check if authentication is enabled (token is configured).
-     * 
-     * @return true if token is configured, false otherwise (POC mode)
+     * Indicates whether validator authentication is enabled.
+     *
+     * @return {@code true} when a non-blank token has been configured
      */
     public static boolean isAuthEnabled() {
         return getAuthToken() != null;

@@ -32,18 +32,13 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * HTTP/2-enabled implementation of SegmentArchiveManager.
- * Provides read-only access to a remote segment store via HTTP/2.
- * 
- * <p><strong>HTTP/2 Benefits:</strong></p>
- * <ul>
- *   <li>Multiplexing: Multiple archive operations on single connection</li>
- *   <li>20-30% latency improvement over HTTP/1.1</li>
- *   <li>Falls back to HTTP/1.1 if server doesn't support HTTP/2</li>
- * </ul>
- * 
- * <p>This is designed for the Blockchain AEM POC to enable remote mounting
- * of the global segment store.</p>
+ * Read-only {@link SegmentArchiveManager} for the HTTP persistence mount.
+ *
+ * <p>The current remote contract does not expose archive discovery or mutation
+ * endpoints. As a result this implementation advertises a single conventional
+ * archive name, opens readers against the remote segment endpoints, and
+ * supplies no-op writers where Oak still requires a writer instance during
+ * startup.</p>
  */
 public class HttpSegmentArchiveManager implements SegmentArchiveManager {
 
@@ -54,11 +49,11 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
     private final Http2ClientPool http2ClientPool;
 
     /**
-     * Create a new HTTP/2-based archive manager.
-     * 
-     * @param baseUrl Base URL of the GlobalStoreServer (e.g., "http://oak-global-store:8090")
-     * @param ioMonitor IO monitor for tracking read operations
-     * @param http2ClientPool Shared HTTP/2 client pool for connection reuse
+     * Creates a read-only archive manager rooted at the given base URL.
+     *
+     * @param baseUrl base URL of the remote segment-store endpoint
+     * @param ioMonitor I/O monitor used by archive readers
+     * @param http2ClientPool shared client used for remote reads
      */
     public HttpSegmentArchiveManager(String baseUrl, IOMonitor ioMonitor, Http2ClientPool http2ClientPool) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
@@ -69,7 +64,7 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
     
     @Override
     public List<String> listArchives() throws IOException {
-        // No archive listing endpoint - assume a single archive (standard Oak naming)
+        // The current HTTP endpoint exposes segments directly, not an archive index.
         List<String> archives = new ArrayList<>();
         archives.add("data00000a.tar");
         log.debug("Listing archives: {} (hardcoded for HTTP store)", archives);
@@ -93,13 +88,15 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
     @Override
     public SegmentArchiveReader forceOpen(String archiveName) throws IOException {
         log.debug("Force opening archive via HTTP/2: {}", archiveName);
-        // For HTTP-based store, forceOpen is the same as open
+        // There is no additional recovery path for the HTTP mount, so forceOpen
+        // simply skips the existence probe and constructs a reader directly.
         return new HttpSegmentArchiveReader(baseUrl, archiveName, ioMonitor, http2ClientPool);
     }
 
     @Override
     public boolean exists(String archiveName) {
-        // POC SIMPLIFICATION: Assume archive exists if it matches our hardcoded name
+        // Until the server exposes archive discovery, only the conventional
+        // single-archive name is treated as present.
         boolean exists = "data00000a.tar".equals(archiveName);
         log.debug("POC mode: Archive {} exists: {}", archiveName, exists);
         return exists;
@@ -107,8 +104,8 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
 
     @Override
     public SegmentArchiveWriter create(String archiveName) throws IOException {
-        // Return a no-op writer for read-only HTTP mount
-        // Oak initialization requires this even for read-only stores
+        // Oak startup still asks for a writer even when the persistence is
+        // read-only, so return a sink implementation.
         log.debug("Creating no-op writer for read-only HTTP mount: {}", archiveName);
         return new NoOpSegmentArchiveWriter(archiveName);
     }
@@ -153,8 +150,7 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
     }
     
     /**
-     * No-op segment archive writer for read-only HTTP mounts.
-     * All write operations are silently ignored.
+     * Writer placeholder used to satisfy Oak's SPI for a read-only mount.
      */
     private static class NoOpSegmentArchiveWriter implements SegmentArchiveWriter {
         private final String name;
@@ -170,23 +166,23 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
         
         @Override
         public void writeSegment(long msb, long lsb, byte[] data, int offset, int size, int generation, int fullGeneration, boolean isCompacted) throws IOException {
-            // No-op - silently ignore writes for read-only mount
+            // Intentionally ignored because the mount is read-only.
         }
         
         @Override
         public Buffer readSegment(long msb, long lsb) throws IOException {
-            // No-op writer can't read - return null
+            // This writer never persists anything, so there is nothing to read.
             return null;
         }
         
         @Override
         public void writeGraph(byte[] data) throws IOException {
-            // No-op - silently ignore writes for read-only mount
+            // Intentionally ignored because the mount is read-only.
         }
         
         @Override
         public void writeBinaryReferences(byte[] data) throws IOException {
-            // No-op - silently ignore writes for read-only mount
+            // Intentionally ignored because the mount is read-only.
         }
         
         @Override
@@ -221,12 +217,12 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
         
         @Override
         public boolean isRemote() {
-            return true; // HTTP mount is always remote
+            return true; // The writer is only used by the remote HTTP mount.
         }
         
         @Override
         public boolean containsSegment(long msb, long lsb) {
-            return false; // No-op writer doesn't actually contain any segments
+            return false; // The writer never stores any local segment content.
         }
     }
 }

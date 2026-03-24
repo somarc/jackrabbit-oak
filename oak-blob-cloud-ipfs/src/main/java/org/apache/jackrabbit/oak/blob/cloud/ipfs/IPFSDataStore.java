@@ -23,40 +23,25 @@ import org.apache.jackrabbit.oak.spi.blob.SharedBackend;
 import java.util.Properties;
 
 /**
- * IPFS DataStore for Oak - stores large binaries in IPFS.
- * 
- * This provides:
- * - Content-addressed storage (CID = cryptographic hash, immutable)
- * - Decentralized replication (P2P between validators)
- * - Built-in deduplication (same binary uploaded multiple times = stored once)
- * - Blockchain-native storage layer (complements Oak segments)
- * 
- * Strategic positioning (ADR 015):
- * - Oak segments → AEM compatibility (moat)
- * - IPFS binaries → Blockchain-native (differentiation)
- * 
- * Usage:
- * <pre>
- * IPFSDataStore ds = new IPFSDataStore();
- * ds.setIpfsApiEndpoint("/ip4/127.0.0.1/tcp/5001");
- * ds.init();
- * 
- * // Upload binary
- * DataRecord record = ds.addRecord(inputStream);
- * 
- * // Retrieve binary
- * InputStream data = record.getStream();
- * </pre>
- * 
- * Configuration properties:
- * - ipfsApiEndpoint: IPFS HTTP API endpoint (default: /ip4/127.0.0.1/tcp/5001)
- * - minRecordLength: Minimum size for external storage (default: 16KB)
- * - cache*: Local cache settings (inherited from AbstractSharedCachingDataStore)
- * 
+ * Oak {@link AbstractSharedCachingDataStore} implementation backed by
+ * {@link IPFSBackend}.
+ *
+ * <p>This class is responsible for wiring datastore configuration into the
+ * backend and exposing IPFS-specific convenience accessors such as the
+ * configured endpoint, IPFS Files root, and current CID mappings. Blobs smaller than
+ * {@link #getMinRecordLength()} stay inline in Oak segments, while larger
+ * binaries are delegated to IPFS.</p>
+ *
+ * <p>The backend persists CID mappings and metadata in the IPFS Files namespace
+ * so records remain discoverable across backend restarts that reconnect to the
+ * same IPFS repository.</p>
+ *
  * @see IPFSBackend
  * @see org.apache.jackrabbit.oak.plugins.blob.AbstractSharedCachingDataStore
  */
 public class IPFSDataStore extends AbstractSharedCachingDataStore {
+
+    private static final String DEFAULT_IPFS_FILES_ROOT = "/oak/ipfs";
 
     protected Properties properties;
 
@@ -78,20 +63,32 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
             if (endpoint != null) {
                 ipfsBackend.setIpfsApiEndpoint(endpoint);
             }
+            String filesRoot = properties.getProperty("ipfsFilesRoot");
+            if (filesRoot != null) {
+                ipfsBackend.setIpfsFilesRoot(filesRoot);
+            }
         }
         return ipfsBackend;
     }
 
     /**
-     * Properties required to configure the IPFS Backend.
-     * 
-     * Supported properties:
-     * - ipfsApiEndpoint: IPFS HTTP API multiaddr (e.g., /ip4/127.0.0.1/tcp/5001)
+     * Supplies backend properties that will be applied when the backend is
+     * created.
+     *
+     * <p>The backend currently consumes {@code ipfsApiEndpoint} and
+     * {@code ipfsFilesRoot} directly.</p>
+     *
+     * @param properties datastore and backend configuration properties
      */
     public void setProperties(Properties properties) {
         this.properties = properties;
     }
 
+    /**
+     * Returns the instantiated shared backend.
+     *
+     * @return the backend currently associated with this datastore
+     */
     public SharedBackend getBackend() {
         return backend;
     }
@@ -101,14 +98,23 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
         return minRecordLength;
     }
 
+    /**
+     * Sets the minimum blob size that should be delegated to the shared backend.
+     *
+     * @param minRecordLength size threshold in bytes
+     */
     public void setMinRecordLength(int minRecordLength) {
         this.minRecordLength = minRecordLength;
     }
     
     /**
-     * Set IPFS API endpoint directly (convenience method).
-     * 
-     * @param endpoint IPFS HTTP API multiaddr (e.g., /ip4/127.0.0.1/tcp/5001)
+     * Sets the IPFS API endpoint directly.
+     *
+     * <p>The property is retained for later backend creation and also pushed to
+     * the live backend when one already exists.</p>
+     *
+     * @param endpoint IPFS HTTP API multiaddr (for example
+     *                 {@code /ip4/127.0.0.1/tcp/5001})
      */
     public void setIpfsApiEndpoint(String endpoint) {
         if (properties == null) {
@@ -122,7 +128,10 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
     }
     
     /**
-     * Get IPFS API endpoint.
+     * Returns the configured IPFS API endpoint.
+     *
+     * @return the live backend endpoint when initialized, otherwise the stored
+     *         configuration value
      */
     public String getIpfsApiEndpoint() {
         if (ipfsBackend != null) {
@@ -130,14 +139,48 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
         }
         return properties != null ? properties.getProperty("ipfsApiEndpoint") : null;
     }
+
+    /**
+     * Sets the IPFS Files namespace root used for durable Oak metadata.
+     *
+     * <p>Use a distinct root when multiple Oak repositories share one IPFS
+     * repository to avoid collisions between CID mappings and metadata.</p>
+     *
+     * @param root MFS root path, for example {@code /oak/ipfs}
+     */
+    public void setIpfsFilesRoot(String root) {
+        if (properties == null) {
+            properties = new Properties();
+        }
+        String normalizedRoot = normalizeIpfsFilesRoot(root);
+        properties.setProperty("ipfsFilesRoot", normalizedRoot);
+
+        if (ipfsBackend != null) {
+            ipfsBackend.setIpfsFilesRoot(normalizedRoot);
+        }
+    }
+
+    /**
+     * Returns the configured IPFS Files namespace root.
+     *
+     * @return the live backend root when initialized, otherwise the stored
+     *         configuration value
+     */
+    public String getIpfsFilesRoot() {
+        if (ipfsBackend != null) {
+            return ipfsBackend.getIpfsFilesRoot();
+        }
+        return properties != null ? normalizeIpfsFilesRoot(properties.getProperty("ipfsFilesRoot")) : null;
+    }
     
     /**
-     * Get IPFS CID for an Oak blob ID.
-     * 
-     * This allows coordination between Oak blob IDs (SHA-256 hex) and IPFS CIDs (multihash).
-     * 
-     * @param oakBlobId Oak blob ID (e.g., "ed06f9cb...#22216")
-     * @return IPFS CID (e.g., "Qmf4F3...") or null if not found
+     * Returns the IPFS CID for an Oak blob identifier.
+     *
+     * <p>If the blob identifier contains the Oak size suffix (for example
+     * {@code hash#length}), the suffix is stripped before the lookup.</p>
+     *
+     * @param oakBlobId Oak blob identifier
+     * @return the resolved IPFS CID, or {@code null} when no mapping is known
      */
     public String getCID(String oakBlobId) {
         if (ipfsBackend == null) {
@@ -154,9 +197,9 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
     }
     
     /**
-     * Get all CID mappings.
-     * 
-     * @return Map of Oak blob IDs to IPFS CIDs
+     * Returns a snapshot of the backend's current identifier-to-CID mappings.
+     *
+     * @return mapping of Oak blob IDs to IPFS CIDs
      */
     public java.util.Map<String, String> getAllCIDMappings() {
         if (ipfsBackend == null) {
@@ -164,5 +207,18 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
         }
         return ipfsBackend.getAllCIDMappings();
     }
-}
 
+    private static String normalizeIpfsFilesRoot(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return DEFAULT_IPFS_FILES_ROOT;
+        }
+        String normalized = value.trim();
+        if (!normalized.startsWith("/")) {
+            normalized = "/" + normalized;
+        }
+        while (normalized.length() > 1 && normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+}

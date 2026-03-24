@@ -34,23 +34,14 @@ import java.util.Hashtable;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * OSGi service that provides HTTP-based segment persistence for SegmentNodeStoreFactory.
+ * OSGi component that publishes {@link HttpPersistence} as a
+ * {@link SegmentNodeStorePersistence} service.
  *
- * <p>This service registers an {@link HttpPersistence} implementation that can be injected
- * into SegmentNodeStoreFactory when {@code customSegmentStore=true} is configured.</p>
- *
- * <p><strong>Lazy Mount Mode:</strong></p>
- * <p>When {@code lazyMount=true}, the SegmentNodeStorePersistence service is NOT registered
- * immediately. Instead, a background thread checks if the validator is reachable. Once the
- * validator becomes available, the service is registered, triggering the composite mount.
- * This allows Sling to start without blocking even if the validator is down.</p>
- *
- * <p>Configuration properties:</p>
- * <ul>
- *   <li>globalStoreUrl: URL of the GlobalStoreServer (e.g., http://oak-global-store:8090)</li>
- *   <li>lazyMount: If true, defer service registration until validator is reachable (default: false)</li>
- *   <li>healthCheckIntervalSeconds: How often to check validator health in lazy mode (default: 10)</li>
- * </ul>
+ * <p>In the default mode the persistence service is registered during
+ * activation. When {@code lazyMount=true}, registration is delayed until a
+ * health probe can reach the remote validator. That lets Sling and the rest of
+ * the bundle graph start without blocking on a temporarily unavailable remote
+ * store.</p>
  */
 @Component(
     // NOTE: When lazyMount=true, we register SegmentNodeStorePersistence dynamically
@@ -101,17 +92,23 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
     private int healthCheckIntervalSeconds;
     private int connectionTimeoutMs;
     
-    // For lazy mount mode
+    // State used only when lazy registration is enabled.
     private BundleContext bundleContext;
     private ServiceRegistration<SegmentNodeStorePersistence> persistenceRegistration;
     private Thread healthCheckThread;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicBoolean validatorAvailable = new AtomicBoolean(false);
 
+    /**
+     * Creates the component with the default HTTP-based health probe.
+     */
     public HttpPersistenceService() {
         this(new HttpValidatorHealthProbe());
     }
 
+    /**
+     * Testing seam that injects a custom validator health probe.
+     */
     HttpPersistenceService(ValidatorHealthProbe healthProbe) {
         this.healthProbe = healthProbe;
     }
@@ -150,7 +147,8 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
     }
 
     /**
-     * Start background thread to check validator health and register service when ready.
+     * Starts a daemon thread that polls validator health until registration
+     * succeeds or the component is deactivated.
      */
     private void startHealthCheckThread() {
         healthCheckThread = new Thread(() -> {
@@ -183,15 +181,19 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
     }
 
     /**
-     * Check if the validator is reachable by making a lightweight HTTP request.
+     * Probes the configured validator endpoint using the configured timeout.
+     *
+     * @return {@code true} when the validator responds successfully
      */
     private boolean checkValidatorHealth() {
         return healthProbe.isAvailable(globalStoreUrl, connectionTimeoutMs);
     }
 
     /**
-     * Register this service as SegmentNodeStorePersistence in OSGi.
-     * This triggers SegmentNodeStoreFactory to create the oak-chain NodeStore.
+     * Publishes this component as a {@link SegmentNodeStorePersistence} service.
+     *
+     * <p>Registration happens once per activation and is the signal that allows
+     * dependent services to build the remote mount.</p>
      */
     private void registerPersistenceService() {
         if (persistenceRegistration != null) {
@@ -212,7 +214,7 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
     }
 
     /**
-     * Unregister the SegmentNodeStorePersistence service from OSGi.
+     * Withdraws the dynamic {@link SegmentNodeStorePersistence} registration.
      */
     private void unregisterPersistenceService() {
         if (persistenceRegistration != null) {
@@ -228,24 +230,27 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
     }
     
     /**
-     * Check if the validator is currently available (useful for monitoring).
-     * @return true if validator is reachable
+     * Indicates whether the validator has been observed as reachable.
+     *
+     * @return {@code true} when the latest successful probe has completed
      */
     public boolean isValidatorAvailable() {
         return validatorAvailable.get();
     }
     
     /**
-     * Check if lazy mount mode is enabled.
-     * @return true if lazyMount=true in configuration
+     * Indicates whether lazy registration mode is enabled.
+     *
+     * @return {@code true} when registration is deferred behind health checks
      */
     public boolean isLazyMount() {
         return lazyMount;
     }
     
     /**
-     * Get the global store URL configured for this service.
-     * @return The global store URL (e.g., http://oak-global-store:8090)
+     * Returns the configured remote persistence URL.
+     *
+     * @return the base URL used by the delegate persistence
      */
     public String getGlobalStoreUrl() {
         return globalStoreUrl;
@@ -273,7 +278,7 @@ public class HttpPersistenceService implements SegmentNodeStorePersistence {
         log.info("HTTP Segment Persistence deactivated");
     }
 
-    // Delegate all methods to HttpPersistence
+    // SegmentNodeStorePersistence methods are fulfilled by the activated delegate.
 
     @Override
     public org.apache.jackrabbit.oak.segment.spi.persistence.SegmentArchiveManager createArchiveManager(

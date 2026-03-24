@@ -25,16 +25,21 @@ import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -190,10 +195,6 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testMetadataLifecycleAndPrefixDeletion() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.addResults.add(new MerkleNode(CID_TWO));
-        client.blockStats.put(CID_ONE, Map.of("Size", 4));
-        client.blockStats.put(CID_TWO, Map.of("Size", 6));
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -206,7 +207,7 @@ public class IPFSBackendClientSeamTest {
         assertTrue(backend.metadataRecordExists("pref-two"));
         assertNotNull(backend.getMetadataRecord("pref-one"));
         assertEquals(2, backend.getAllMetadataRecords("pref").size());
-        assertEquals(List.of(CID_ONE, CID_TWO), client.pinAddCalls);
+        assertTrue(client.pinAddCalls.isEmpty());
 
         assertTrue(backend.deleteMetadataRecord("pref-one"));
         assertFalse(backend.metadataRecordExists("pref-one"));
@@ -214,7 +215,7 @@ public class IPFSBackendClientSeamTest {
         backend.deleteAllMetadataRecords("pref");
 
         assertFalse(backend.metadataRecordExists("pref-two"));
-        assertEquals(List.of(CID_ONE, CID_TWO), client.pinRemoveCalls);
+        assertTrue(client.pinRemoveCalls.isEmpty());
         tempFile.delete();
         backend.close();
     }
@@ -232,24 +233,25 @@ public class IPFSBackendClientSeamTest {
 
         List<DataRecord> prefRecords = backend.getAllMetadataRecords("pref");
         assertEquals(1, prefRecords.size());
-        assertEquals(new DataIdentifier("META_pref-one"), prefRecords.get(0).getIdentifier());
+        assertEquals(new DataIdentifier("pref-one"), prefRecords.get(0).getIdentifier());
 
         backend.deleteAllMetadataRecords("pref");
 
         assertFalse(backend.metadataRecordExists("pref-one"));
         assertTrue(backend.metadataRecordExists("other-one"));
-        assertEquals(List.of(CID_ONE), client.pinRemoveCalls);
+        assertTrue(client.pinRemoveCalls.isEmpty());
         backend.close();
     }
 
     @Test
-    public void testMetadataAddWithoutReturnedCidAndMissingFilePath() throws Exception {
+    public void testMetadataAddAndMissingFilePath() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
         backend.addMetadataRecord(new ByteArrayInputStream("meta".getBytes(StandardCharsets.UTF_8)), "empty-result");
-        assertFalse(backend.metadataRecordExists("empty-result"));
+        assertTrue(backend.metadataRecordExists("empty-result"));
+        assertEquals(new DataIdentifier("empty-result"), backend.getMetadataRecord("empty-result").getIdentifier());
 
         try {
             backend.addMetadataRecord(new File("does-not-exist-" + System.nanoTime()), "missing-file");
@@ -262,14 +264,13 @@ public class IPFSBackendClientSeamTest {
     }
 
     @Test
-    public void testDeleteMetadataRecordReturnsFalseWhenUnpinFails() throws Exception {
+    public void testDeleteMetadataRecordReturnsFalseWhenFileDeleteFails() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
         backend.addMetadataRecord(new ByteArrayInputStream("meta".getBytes(StandardCharsets.UTF_8)), "failing-delete");
-        client.pinRemoveFailure = new RuntimeException("rm failed");
+        client.fileDeleteFailure = new RuntimeException("rm failed");
 
         assertFalse(backend.deleteMetadataRecord("failing-delete"));
         assertTrue(backend.metadataRecordExists("failing-delete"));
@@ -280,14 +281,12 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testDeleteAllMetadataRecordsSwallowsDeleteFailures() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.addResults.add(new MerkleNode(CID_TWO));
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
         backend.addMetadataRecord(new ByteArrayInputStream("one".getBytes(StandardCharsets.UTF_8)), "pref-one");
         backend.addMetadataRecord(new ByteArrayInputStream("two".getBytes(StandardCharsets.UTF_8)), "pref-two");
-        client.pinRemoveFailure = new RuntimeException("rm failed");
+        client.fileDeleteFailure = new RuntimeException("rm failed");
 
         backend.deleteAllMetadataRecords("pref");
 
@@ -311,8 +310,7 @@ public class IPFSBackendClientSeamTest {
             assertTrue(e.getMessage().contains("IPFS add returned empty result"));
         }
 
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.pinAddFailure = new RuntimeException("pin-failed");
+        client.fileWriteFailure = new RuntimeException("write-failed");
         try {
             backend.addMetadataRecord(new ByteArrayInputStream("meta".getBytes(StandardCharsets.UTF_8)), "failing-meta");
             fail("Expected metadata add to fail");
@@ -322,6 +320,49 @@ public class IPFSBackendClientSeamTest {
 
         tempFile.delete();
         backend.close();
+    }
+
+    @Test
+    public void testCidMappingsMetadataAndReferenceKeySurviveRestart() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(new MerkleNode(CID_ONE));
+        client.blockStats.put(CID_ONE, Map.of("Size", 5));
+        client.catResults.put(CID_ONE, "hello".getBytes(StandardCharsets.UTF_8));
+
+        IPFSBackend firstBackend = new IPFSBackend(endpoint -> client);
+        firstBackend.init();
+
+        File tempFile = File.createTempFile("oak-ipfs-persist", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        DataIdentifier identifier = new DataIdentifier("blob-persist");
+
+        firstBackend.write(identifier, tempFile);
+        firstBackend.addMetadataRecord(new ByteArrayInputStream("meta".getBytes(StandardCharsets.UTF_8)), "meta-persist");
+        byte[] firstReferenceKey = firstBackend.getOrCreateReferenceKey();
+        firstBackend.close();
+
+        IPFSBackend secondBackend = new IPFSBackend(endpoint -> client);
+        secondBackend.init();
+
+        assertEquals(CID_ONE, secondBackend.getCID(identifier));
+        assertTrue(secondBackend.exists(identifier));
+        assertEquals(Map.of("blob-persist", CID_ONE), secondBackend.getAllCIDMappings());
+
+        Iterator<DataIdentifier> identifiers = secondBackend.getAllIdentifiers();
+        assertTrue(identifiers.hasNext());
+        assertEquals(identifier, identifiers.next());
+        assertFalse(identifiers.hasNext());
+
+        DataRecord metadataRecord = secondBackend.getMetadataRecord("meta-persist");
+        assertNotNull(metadataRecord);
+        assertEquals(new DataIdentifier("meta-persist"), metadataRecord.getIdentifier());
+        try (InputStream metadataStream = metadataRecord.getStream()) {
+            assertArrayEquals("meta".getBytes(StandardCharsets.UTF_8), metadataStream.readAllBytes());
+        }
+
+        assertArrayEquals(firstReferenceKey, secondBackend.getOrCreateReferenceKey());
+        tempFile.delete();
+        secondBackend.close();
     }
 
     @Test
@@ -422,12 +463,24 @@ public class IPFSBackendClientSeamTest {
         private final Map<String, Map<String, Object>> blockStats = new HashMap<>();
         private final List<String> pinAddCalls = new ArrayList<>();
         private final List<String> pinRemoveCalls = new ArrayList<>();
+        private final Map<String, byte[]> files = new LinkedHashMap<>();
+        private final Set<String> directories = new HashSet<>();
 
         private RuntimeException versionFailure;
         private RuntimeException pinAddFailure;
         private RuntimeException pinRemoveFailure;
         private RuntimeException catFailure;
         private RuntimeException blockStatFailure;
+        private RuntimeException fileWriteFailure;
+        private RuntimeException fileDeleteFailure;
+        private RuntimeException fileReadFailure;
+        private RuntimeException fileSizeFailure;
+        private RuntimeException fileListFailure;
+        private RuntimeException directoryFailure;
+
+        private RecordingIpfsClient() {
+            directories.add("/");
+        }
 
         @Override
         public Object version() {
@@ -475,6 +528,119 @@ public class IPFSBackendClientSeamTest {
                 throw blockStatFailure;
             }
             return blockStats.get(cid);
+        }
+
+        @Override
+        public void ensureDirectory(String path) {
+            if (directoryFailure != null) {
+                throw directoryFailure;
+            }
+            String normalized = normalize(path);
+            createDirectory(normalized);
+        }
+
+        @Override
+        public void writeFile(String path, byte[] data) throws Exception {
+            if (fileWriteFailure != null) {
+                throw fileWriteFailure;
+            }
+            String normalized = normalize(path);
+            createDirectory(parent(normalized));
+            files.put(normalized, data.clone());
+        }
+
+        @Override
+        public byte[] readFile(String path) throws Exception {
+            if (fileReadFailure != null) {
+                throw fileReadFailure;
+            }
+            byte[] data = files.get(normalize(path));
+            if (data == null) {
+                throw new IOException("missing file");
+            }
+            return data.clone();
+        }
+
+        @Override
+        public boolean fileExists(String path) {
+            String normalized = normalize(path);
+            return files.containsKey(normalized) || directories.contains(normalized);
+        }
+
+        @Override
+        public List<String> listFiles(String path) throws Exception {
+            if (fileListFailure != null) {
+                throw fileListFailure;
+            }
+            String normalized = normalize(path);
+            String prefix = normalized.endsWith("/") ? normalized : normalized + "/";
+            List<String> names = new ArrayList<>();
+            for (String filePath : files.keySet()) {
+                if (!filePath.startsWith(prefix)) {
+                    continue;
+                }
+                String remainder = filePath.substring(prefix.length());
+                if (!remainder.isEmpty() && !remainder.contains("/")) {
+                    names.add(remainder);
+                }
+            }
+            Collections.sort(names);
+            return names;
+        }
+
+        @Override
+        public void deleteFile(String path) throws Exception {
+            if (fileDeleteFailure != null) {
+                throw fileDeleteFailure;
+            }
+            files.remove(normalize(path));
+        }
+
+        @Override
+        public long fileSize(String path) throws Exception {
+            if (fileSizeFailure != null) {
+                throw fileSizeFailure;
+            }
+            byte[] data = files.get(normalize(path));
+            if (data == null) {
+                throw new IOException("missing file");
+            }
+            return data.length;
+        }
+
+        private void createDirectory(String path) {
+            String normalized = normalize(path);
+            if ("/".equals(normalized)) {
+                directories.add(normalized);
+                return;
+            }
+            String current = "";
+            for (String part : normalized.substring(1).split("/")) {
+                current = current + "/" + part;
+                directories.add(current);
+            }
+        }
+
+        private static String parent(String path) {
+            int separator = path.lastIndexOf('/');
+            if (separator <= 0) {
+                return "/";
+            }
+            return path.substring(0, separator);
+        }
+
+        private static String normalize(String path) {
+            if (path == null || path.isEmpty()) {
+                return "/";
+            }
+            if ("/".equals(path)) {
+                return path;
+            }
+            String normalized = path.startsWith("/") ? path : "/" + path;
+            while (normalized.endsWith("/") && normalized.length() > 1) {
+                normalized = normalized.substring(0, normalized.length() - 1);
+            }
+            return normalized;
         }
     }
 }

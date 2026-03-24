@@ -196,10 +196,8 @@ public class IPFSBackendTest {
      */
     @Test
     public void testDeleteMetadataRecordUnknown() {
-        // Should return false (not found) but not throw
         boolean deleted = backend.deleteMetadataRecord("unknown-metadata");
-        // Note: Implementation may return true or false depending on behavior
-        // The important thing is it doesn't throw
+        assertFalse(deleted);
     }
     
     /**
@@ -251,17 +249,11 @@ public class IPFSBackendTest {
     }
     
     /**
-     * Test KEY_PREFIX constant is used correctly.
-     * Note: This tests internal implementation detail.
+     * Test metadata names are exposed without synthetic identifier prefixes.
      */
     @Test
-    public void testKeyPrefixUsage() {
-        // The KEY_PREFIX "ipfs_" should be used internally
-        // We can't directly test private constants, but we can verify
-        // that metadata records use the META_ prefix
+    public void testMetadataRecordNamingContract() {
         assertFalse(backend.metadataRecordExists("test"));
-        
-        // After adding metadata (if IPFS was available), it would be stored
-        // with META_ prefix in the cidCache
+        assertNull(backend.getMetadataRecord("test"));
     }
 }

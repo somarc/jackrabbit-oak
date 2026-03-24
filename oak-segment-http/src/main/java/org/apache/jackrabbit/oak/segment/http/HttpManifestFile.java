@@ -25,7 +25,13 @@ import java.io.StringReader;
 import java.util.Properties;
 
 /**
- * HTTP/2-enabled manifest file for read-only access.
+ * Read-only {@link ManifestFile} adapter over the remote {@code /manifest}
+ * endpoint.
+ *
+ * <p>{@link #load()} returns empty properties when the remote manifest is
+ * absent. {@link #save(Properties)} is a no-op because the HTTP persistence
+ * layer never mutates the remote store, but Oak startup still expects the call
+ * to succeed.</p>
  */
 public class HttpManifestFile implements ManifestFile {
     
@@ -34,6 +40,12 @@ public class HttpManifestFile implements ManifestFile {
     private final String baseUrl;
     private final Http2ClientPool http2ClientPool;
     
+    /**
+     * Creates a manifest adapter rooted at the given persistence URL.
+     *
+     * @param baseUrl the base URL of the remote HTTP persistence endpoint
+     * @param http2ClientPool shared client used for remote reads
+     */
     public HttpManifestFile(String baseUrl, Http2ClientPool http2ClientPool) {
         this.baseUrl = baseUrl;
         this.http2ClientPool = http2ClientPool;
@@ -56,7 +68,7 @@ public class HttpManifestFile implements ManifestFile {
             return props;
         } catch (Exception e) {
             if (e.getMessage() != null && e.getMessage().contains("404")) {
-                // Manifest doesn't exist - return empty properties
+                // A missing manifest is treated the same as an empty one.
                 return new Properties();
             }
             throw new IOException("Failed to fetch manifest via HTTP/2: " + e.getMessage(), e);
@@ -65,8 +77,7 @@ public class HttpManifestFile implements ManifestFile {
     
     @Override
     public void save(Properties properties) throws IOException {
-        // No-op for read-only HTTP mount
-        // Silently ignore manifest writes - this is expected for read-only stores
-        // DO NOT throw exception - Oak initialization requires this to succeed
+        // Intentionally ignored because the mount is read-only and callers still
+        // expect the save path to complete without failing startup.
     }
 }

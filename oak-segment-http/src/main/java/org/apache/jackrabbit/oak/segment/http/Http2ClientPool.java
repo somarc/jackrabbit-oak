@@ -29,24 +29,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * HTTP/2-enabled client pool using Java 11+ HttpClient.
- * 
- * <p><strong>HTTP/2 Benefits:</strong></p>
- * <ul>
- *   <li>Multiplexing: Multiple requests on single connection (no head-of-line blocking)</li>
- *   <li>Header compression: HPACK reduces overhead for repeated headers</li>
- *   <li>Binary protocol: More efficient than HTTP/1.1 text parsing</li>
- *   <li>Server push: (future) Validators could push hot segments</li>
- * </ul>
- * 
- * <p><strong>Performance vs HTTP/1.1:</strong></p>
- * <ul>
- *   <li>20-30% latency reduction for sequential requests</li>
- *   <li>50%+ improvement for parallel requests (multiplexing)</li>
- *   <li>Reduced connection overhead (single connection per host)</li>
- * </ul>
- * 
- * <p>Falls back to HTTP/1.1 if server doesn't support HTTP/2.</p>
+ * Shared transport wrapper for the HTTP segment-store client.
+ *
+ * <p>The pool owns a single JDK {@link HttpClient} configured to prefer
+ * HTTP/2 while remaining compatible with servers that only negotiate
+ * HTTP/1.1. The same client is reused for segment, journal, GC journal, and
+ * manifest reads so connection setup and protocol negotiation are amortized
+ * across the mount.</p>
+ *
+ * <p>The class also keeps lightweight counters that are useful when debugging
+ * which protocol version was negotiated and how much payload has been
+ * transferred.</p>
  */
 public class Http2ClientPool {
     
@@ -56,7 +49,7 @@ public class Http2ClientPool {
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
     
-    // Thread pool for async operations
+    // Executor shared with the JDK client implementation.
     private static final int THREAD_POOL_SIZE = 10;
     
     private final HttpClient httpClient;
@@ -69,7 +62,7 @@ public class Http2ClientPool {
     private final AtomicLong totalBytesReceived = new AtomicLong(0);
     
     /**
-     * Create a new HTTP/2 client pool with default configuration.
+     * Creates a pool with the default timeouts and a daemon-thread executor.
      */
     public Http2ClientPool() {
         log.info("Initializing HTTP/2 Client Pool (connectTimeout={}s, requestTimeout={}s)", 
@@ -91,26 +84,29 @@ public class Http2ClientPool {
         log.info("HTTP/2 Client Pool initialized (version preference: HTTP/2 with HTTP/1.1 fallback)");
     }
 
+    /**
+     * Testing seam that injects a prebuilt client and skips executor creation.
+     */
     Http2ClientPool(HttpClient httpClient) {
         this.httpClient = httpClient;
         this.executor = null;
     }
     
     /**
-     * Get the HTTP/2 client.
-     * 
-     * @return The shared HttpClient instance
+     * Returns the shared client instance used by this pool.
+     *
+     * @return the configured {@link HttpClient}
      */
     public HttpClient getHttpClient() {
         return httpClient;
     }
     
     /**
-     * Perform a GET request and return the response body as bytes.
-     * 
-     * @param url The URL to fetch
-     * @return Response body as byte array
-     * @throws Exception if request fails
+     * Fetches a binary resource and records protocol and byte counters.
+     *
+     * @param url the resource URL
+     * @return the response body
+     * @throws Exception if the request fails or returns a non-200 status
      */
     public byte[] get(String url) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
@@ -121,7 +117,7 @@ public class Http2ClientPool {
         
         HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
         
-        // Track metrics
+        // Record which protocol version the server negotiated for this request.
         requestCount.incrementAndGet();
         if (response.version() == HttpClient.Version.HTTP_2) {
             http2RequestCount.incrementAndGet();
@@ -140,11 +136,11 @@ public class Http2ClientPool {
     }
     
     /**
-     * Perform a GET request and return the response body as string.
-     * 
-     * @param url The URL to fetch
-     * @return Response body as string
-     * @throws Exception if request fails
+     * Fetches a text resource and records which protocol version was used.
+     *
+     * @param url the resource URL
+     * @return the response body as a string
+     * @throws Exception if the request fails or returns a non-200 status
      */
     public String getString(String url) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
@@ -155,7 +151,7 @@ public class Http2ClientPool {
         
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         
-        // Track metrics
+        // Record which protocol version the server negotiated for this request.
         requestCount.incrementAndGet();
         if (response.version() == HttpClient.Version.HTTP_2) {
             http2RequestCount.incrementAndGet();
@@ -171,10 +167,12 @@ public class Http2ClientPool {
     }
     
     /**
-     * Perform a HEAD request to check if resource exists.
-     * 
-     * @param url The URL to check
-     * @return true if resource exists (HTTP 200), false otherwise
+     * Uses {@code HEAD} to test whether a resource is present without fetching
+     * its body.
+     *
+     * @param url the resource URL
+     * @return {@code true} when the endpoint returns HTTP 200, otherwise
+     *         {@code false}
      */
     public boolean exists(String url) {
         try {
@@ -201,9 +199,9 @@ public class Http2ClientPool {
     }
     
     /**
-     * Get pool statistics.
-     * 
-     * @return Stats as formatted string
+     * Returns the current counters in a log-friendly format.
+     *
+     * @return a formatted snapshot of protocol and transfer statistics
      */
     public String getPoolStats() {
         long total = requestCount.get();
@@ -224,7 +222,10 @@ public class Http2ClientPool {
     }
     
     /**
-     * Shutdown the client pool.
+     * Logs the final counters for the pool.
+     *
+     * <p>The JDK {@link HttpClient} API does not expose an explicit close
+     * operation, so this method is intentionally observational.</p>
      */
     public void shutdown() {
         log.info("Shutting down HTTP/2 Client Pool. Final stats: {}", getPoolStats());

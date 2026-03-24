@@ -28,18 +28,14 @@ import java.util.Collections;
 import java.util.UUID;
 
 /**
- * HTTP/2-enabled implementation of SegmentArchiveReader.
- * Fetches segments over HTTP/2 from a GlobalStoreServer.
- * 
- * <p><strong>HTTP/2 Benefits:</strong></p>
- * <ul>
- *   <li>Multiplexing: Multiple segment requests on single connection</li>
- *   <li>Header compression: Reduced overhead for repeated requests</li>
- *   <li>Binary protocol: More efficient than HTTP/1.1 text parsing</li>
- *   <li>20-30% latency improvement over HTTP/1.1</li>
- * </ul>
- * 
- * <p>Falls back to HTTP/1.1 if server doesn't support HTTP/2.</p>
+ * Remote {@link org.apache.jackrabbit.oak.segment.spi.persistence.SegmentArchiveReader}
+ * that resolves segment UUIDs through the HTTP persistence endpoints.
+ *
+ * <p>The reader fetches individual segments from {@code /segments/&lt;uuid&gt;}
+ * and does not currently receive a remote archive index or sidecar files such
+ * as graph or binary-reference data. Those gaps are surfaced to the base class
+ * through empty metadata so the reader stays honest about the current endpoint
+ * contract.</p>
  */
 public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader {
 
@@ -49,8 +45,17 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
     private final String baseUrl;
     private final String archiveName;
 
+    /**
+     * Creates a reader for a single remote archive view.
+     *
+     * @param baseUrl base URL of the remote segment-store endpoint
+     * @param archiveName logical archive name presented to Oak
+     * @param ioMonitor I/O monitor used by the base reader
+     * @param http2ClientPool shared client used for remote reads
+     * @throws IOException if the reader cannot be initialized
+     */
     public HttpSegmentArchiveReader(String baseUrl, String archiveName, IOMonitor ioMonitor, Http2ClientPool http2ClientPool) throws IOException {
-        super(ioMonitor, archiveName, Collections.emptyList()); // No index available yet
+        super(ioMonitor, archiveName, Collections.emptyList()); // No remote index is exposed yet.
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.archiveName = archiveName;
         this.http2ClientPool = http2ClientPool;
@@ -64,7 +69,6 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
 
     @Override
     public Buffer readSegment(long msb, long lsb) throws IOException {
-        // HTTP/2 segment fetch - multiplexed on single connection
         UUID uuid = new UUID(msb, lsb);
         String segmentUrl = baseUrl + "/segments/" + uuid.toString();
         log.debug("Fetching segment via HTTP/2: {}", segmentUrl);
@@ -84,7 +88,7 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
 
     @Override
     public boolean containsSegment(long msb, long lsb) {
-        // HTTP/2 HEAD request to check segment existence
+        // Use HEAD so existence checks do not download the segment body.
         UUID uuid = new UUID(msb, lsb);
         String segmentUrl = baseUrl + "/segments/" + uuid.toString();
         return http2ClientPool.exists(segmentUrl);
@@ -92,7 +96,8 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
 
     @Override
     protected void doReadSegmentToBuffer(String segmentFileName, Buffer buffer) throws IOException {
-        // Parse UUID from filename pattern: "position.msb-lsb" -> "msb-lsb"
+        // AbstractRemoteSegmentArchiveReader passes names like
+        // "position.uuid"; only the UUID portion is part of the HTTP contract.
         String uuidPart = segmentFileName;
         if (segmentFileName.contains(".")) {
             uuidPart = segmentFileName.substring(segmentFileName.indexOf('.') + 1);
@@ -113,9 +118,8 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
 
     @Override
     protected Buffer doReadDataFile(String extension) throws IOException {
-        // POC SIMPLIFICATION: No archive metadata endpoints yet
-        // Graph (.gph) and binary references (.brf) will be computed on-demand
-        // by the base class if not available
+        // The remote endpoint does not currently expose archive sidecar files.
+        // Returning null lets the base class fall back to its on-demand logic.
         log.debug("POC mode: No archive metadata file for extension {}", extension);
         return null;
     }
