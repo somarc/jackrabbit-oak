@@ -18,6 +18,8 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.net.URL;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -35,6 +37,27 @@ final class AeronIngressEndpointPlanner {
 
     static AeronIngressEndpointPlanner system(List<String> clusterHostnames, String clientHostname) {
         return system(clusterHostnames, clientHostname, AeronClusterLauncher.getPortBase());
+    }
+
+    static AeronIngressEndpointPlanner systemFromUrls(String selfUrl, List<String> peerUrls) {
+        return new AeronIngressEndpointPlanner(
+            clusterHostnamesFromUrls(selfUrl, peerUrls),
+            hostnameFromUrl(selfUrl),
+            hostname -> InetAddress.getByName(hostname).getHostAddress(),
+            AeronClusterAddressResolver.systemLocalAddressProvider()
+        );
+    }
+
+    static AeronIngressEndpointPlanner fromUrls(String selfUrl,
+                                                List<String> peerUrls,
+                                                AeronClusterAddressResolver.HostnameResolver hostnameResolver,
+                                                AeronClusterAddressResolver.LocalAddressProvider localAddressProvider) {
+        return new AeronIngressEndpointPlanner(
+            clusterHostnamesFromUrls(selfUrl, peerUrls),
+            hostnameFromUrl(selfUrl),
+            hostnameResolver,
+            localAddressProvider
+        );
     }
 
     static AeronIngressEndpointPlanner system(List<String> clusterHostnames, String clientHostname, int clusterBasePort) {
@@ -162,6 +185,34 @@ final class AeronIngressEndpointPlanner {
             log.debug("Interface enumeration failed: {}", e.getMessage());
         }
         return null;
+    }
+
+    private static List<String> clusterHostnamesFromUrls(String selfUrl, List<String> peerUrls) {
+        List<String> hostnames = new ArrayList<>();
+        String selfHostname = hostnameFromUrl(selfUrl);
+        if (selfHostname != null && !selfHostname.isEmpty()) {
+            hostnames.add(selfHostname);
+        }
+        if (peerUrls != null) {
+            for (String peerUrl : peerUrls) {
+                String peerHostname = hostnameFromUrl(peerUrl);
+                if (peerHostname != null && !peerHostname.isEmpty()) {
+                    hostnames.add(peerHostname);
+                }
+            }
+        }
+        return hostnames;
+    }
+
+    private static String hostnameFromUrl(String url) {
+        if (url == null || url.isEmpty()) {
+            return null;
+        }
+        try {
+            return new URL(url).getHost();
+        } catch (Exception e) {
+            return url;
+        }
     }
 
     static final class Plan {

@@ -16,10 +16,12 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import org.agrona.MutableDirectBuffer;
 import io.aeron.Image;
 import io.aeron.cluster.service.Cluster;
 import org.agrona.concurrent.IdleStrategy;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
@@ -29,6 +31,7 @@ import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import java.io.File;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -39,15 +42,20 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -386,6 +394,141 @@ public class AeronConsensusEngineTest {
         assertEquals(0, pendingDurabilityCount(tracker));
     }
 
+    @Test
+    public void stepDownAsLeaderClosesInternalClientAndClearsLeader() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
+        when(cluster.memberId()).thenReturn(3);
+        setField(engine, "cluster", cluster);
+        setField(engine, "currentLeader", "http://self:8080");
+
+        io.aeron.cluster.client.AeronCluster client = mock(io.aeron.cluster.client.AeronCluster.class);
+        when(client.isClosed()).thenReturn(false);
+        setField(engine, "internalClusterClient", client);
+
+        assertTrue(engine.stepDownAsLeader());
+        verify(client).close();
+        assertNull(getField(engine, "internalClusterClient"));
+        assertNull(getField(engine, "currentLeader"));
+        assertEquals(ValidatorRole.FOLLOWER, getField(engine, "currentRole"));
+    }
+
+    @Test
+    public void stepDownAsLeaderReturnsFalseWhenInternalClientUnavailable() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
+        setField(engine, "cluster", cluster);
+
+        assertFalse(engine.stepDownAsLeader());
+    }
+
+    @Test
+    public void stepDownAsLeaderReturnsFalseWhenNodeIsNotLeader() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.role()).thenReturn(Cluster.Role.FOLLOWER);
+        setField(engine, "cluster", cluster);
+
+        assertFalse(engine.stepDownAsLeader());
+    }
+
+    @Test
+    public void sendQueueSegmentOffersDurabilityMessage() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+
+        assertTrue(engine.sendQueueSegment("proposal-1", 3, 2));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_QUEUE_SEGMENT, offer.templateId);
+        assertTrue(offer.json.contains("\"proposalId\":\"proposal-1\""));
+        assertTrue(offer.json.contains("\"totalMembers\":3"));
+        assertTrue(offer.json.contains("\"requiredAcks\":2"));
+    }
+
+    @Test
+    public void sendStartTransactionOffersTransactionMessageWithTerm() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+        setField(engine, "currentTerm", 7);
+
+        assertTrue(engine.sendStartTransactionThroughIngress("tx-1", "corr-1", 5000L, "0xabc"));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_START_TRANSACTION, offer.templateId);
+        assertTrue(offer.json.contains("\"transactionId\":\"tx-1\""));
+        assertTrue(offer.json.contains("\"correlationId\":\"corr-1\""));
+        assertTrue(offer.json.contains("\"initiatorWallet\":\"0xabc\""));
+        assertTrue(offer.json.contains("\"timeoutMs\":5000"));
+        assertTrue(offer.json.contains("\"term\":7"));
+    }
+
+    @Test
+    public void sendDeleteThroughIngressOffersDeleteProposal() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+        setField(engine, "currentTerm", 4);
+
+        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/site", "sig-1", "proposal-2"));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL, offer.templateId);
+        assertTrue(offer.json.contains("\"walletAddress\":\"0xabc\""));
+        assertTrue(offer.json.contains("\"path\":\"/content/site\""));
+        assertTrue(offer.json.contains("\"proposalId\":\"proposal-2\""));
+        assertTrue(offer.json.contains("\"term\":4"));
+    }
+
+    @Test
+    public void sendWriteThroughIngressWithIdOffersWriteProposal() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+        setField(engine, "currentTerm", 9);
+
+        assertTrue(engine.sendWriteThroughIngressWithId(
+            "0xabc",
+            "/content/write",
+            "page",
+            "{\"title\":\"Oak\"}",
+            "sig-2",
+            "cid-1",
+            "proposal-3"
+        ));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, offer.templateId);
+        assertTrue(offer.json.contains("\"walletAddress\":\"0xabc\""));
+        assertTrue(offer.json.contains("\"path\":\"/content/write\""));
+        assertTrue(offer.json.contains("\"ipfsCid\":\"cid-1\""));
+        assertTrue(offer.json.contains("\"proposalId\":\"proposal-3\""));
+        assertTrue(offer.json.contains("\"term\":9"));
+    }
+
+    @Test
+    public void sendGCExecuteThroughIngressOffersGcExecuteMessageForLeader() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+
+        assertTrue(engine.sendGCExecuteThroughIngress("gc-1", 5));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE, offer.templateId);
+        assertTrue(offer.json.contains("\"proposalId\":\"gc-1\""));
+        assertTrue(offer.json.contains("\"executorId\":5"));
+    }
+
+    @Test
+    public void sendGCExecuteThroughIngressRejectsFollower() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.role()).thenReturn(Cluster.Role.FOLLOWER);
+        setField(engine, "cluster", cluster);
+
+        assertFalse(engine.sendGCExecuteThroughIngress("gc-1", 5));
+    }
+
     private AeronConsensusEngine createEngine() {
         return createEngine(mockFileStore, null, new AeronBackgroundCoordinator(), mockNodeStore);
     }
@@ -461,10 +604,49 @@ public class AeronConsensusEngineTest {
         return field.get(target);
     }
 
+    private io.aeron.cluster.client.AeronCluster installHealthyClient(AeronConsensusEngine engine,
+                                                                       Cluster.Role role) throws Exception {
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.role()).thenReturn(role);
+        when(cluster.memberId()).thenReturn(3);
+        setField(engine, "cluster", cluster);
+        setField(engine, "idleStrategy", mock(IdleStrategy.class));
+
+        io.aeron.cluster.client.AeronCluster client = mock(io.aeron.cluster.client.AeronCluster.class);
+        when(client.isClosed()).thenReturn(false);
+        when(client.clusterSessionId()).thenReturn(99L);
+        when(client.offer(any(MutableDirectBuffer.class), eq(0), anyInt())).thenReturn(1L);
+        setField(engine, "internalClusterClient", client);
+        return client;
+    }
+
+    private static CapturedOffer captureOffer(io.aeron.cluster.client.AeronCluster client) {
+        ArgumentCaptor<MutableDirectBuffer> bufferCaptor = ArgumentCaptor.forClass(MutableDirectBuffer.class);
+        ArgumentCaptor<Integer> lengthCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(client).offer(bufferCaptor.capture(), eq(0), lengthCaptor.capture());
+        MutableDirectBuffer buffer = bufferCaptor.getValue();
+        int totalLength = lengthCaptor.getValue();
+        SimpleMessageHeader.HeaderInfo header = SimpleMessageHeader.decode(buffer, 0);
+        byte[] jsonBytes = new byte[totalLength - SimpleMessageHeader.ENCODED_LENGTH];
+        buffer.getBytes(SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+        String json = new String(jsonBytes, StandardCharsets.UTF_8);
+        return new CapturedOffer(header.templateId, json);
+    }
+
     private static int pendingDurabilityCount(DurabilityAckTracker tracker) throws Exception {
         Field pendingField = DurabilityAckTracker.class.getDeclaredField("pending");
         pendingField.setAccessible(true);
         Map<?, ?> pending = (Map<?, ?>) pendingField.get(tracker);
         return pending.size();
+    }
+
+    private static final class CapturedOffer {
+        private final int templateId;
+        private final String json;
+
+        private CapturedOffer(int templateId, String json) {
+            this.templateId = templateId;
+            this.json = json;
+        }
     }
 }

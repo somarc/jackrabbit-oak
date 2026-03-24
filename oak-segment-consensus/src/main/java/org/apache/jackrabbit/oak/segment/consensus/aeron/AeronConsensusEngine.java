@@ -139,6 +139,8 @@ public class AeronConsensusEngine implements ClusteredService {
     private final AeronBackgroundCoordinator backgroundCoordinator;
     private final LeaderDiscoveryService leaderDiscoveryService;
     private final AeronIngressWritePayloadBuilder ingressWritePayloadBuilder;
+    private final AeronClusterStateView clusterStateView;
+    private final AeronIngressEndpointPlanner internalIngressEndpointPlanner;
     private final HeadStateService headStateService;
     
     // Aeron Cluster components
@@ -316,6 +318,8 @@ public class AeronConsensusEngine implements ClusteredService {
             ? backgroundCoordinator
             : new AeronBackgroundCoordinator();
         this.ingressWritePayloadBuilder = new AeronIngressWritePayloadBuilder();
+        this.clusterStateView = new AeronClusterStateView(selfUrl, peerUrls, nodeIdToUrl, this::isSameUrlByPort);
+        this.internalIngressEndpointPlanner = AeronIngressEndpointPlanner.systemFromUrls(selfUrl, peerUrls);
         this.leaderDiscoveryService = AeronEngineComponentFactory.createLeaderDiscoveryService(nodeIdToUrl, peerUrls, selfUrl);
         this.messageDispatcher = AeronEngineComponentFactory.createMessageDispatcher(
             new MessageDispatcher.WriteCallback() {
@@ -665,38 +669,19 @@ public class AeronConsensusEngine implements ClusteredService {
         // ✈️ AERON NATIVE: Create internal AeronCluster client for sending writes through ingress
         // This allows us to send messages from within the ClusteredService
         // Uses UDP to connect to the cluster for reliable message delivery
-        if (aeronDirectoryName != null && !aeronDirectoryName.isEmpty() && peerUrls != null && !peerUrls.isEmpty()) {
+        if (aeronDirectoryName != null && !aeronDirectoryName.isEmpty()
+                && selfUrl != null && !selfUrl.isEmpty()) {
             try {
-                // Build ingress endpoints from peer URLs
-                // Format: "0=host1:port1,1=host2:port2,2=host3:port3"
-                StringBuilder ingressEndpoints = new StringBuilder();
-                for (int i = 0; i < peerUrls.size(); i++) {
-                    if (i > 0) ingressEndpoints.append(",");
-                    String url = peerUrls.get(i);
-                    // Extract hostname and port from URL
-                    try {
-                        java.net.URL parsedUrl = new java.net.URL(url);
-                        String host = parsedUrl.getHost();
-                        int port = parsedUrl.getPort() != -1 ? parsedUrl.getPort() : 8090;
-                        ingressEndpoints.append(i).append("=").append(host).append(":").append(port);
-                    } catch (Exception e) {
-                        log.warn("Failed to parse peer URL {}: {}", url, e.getMessage());
-                    }
-                }
-                
-                // Create AeronCluster client using UDP with localhost endpoints for same-process communication
-                // The cluster's ingress is UDP, so we must use UDP too (with localhost for efficiency)
-                // NOTE: We defer client creation until first write to avoid timeout during cluster startup
-                log.info("✈️  Internal AeronCluster client will be created on-demand (UDP localhost - same process)");
+                log.info("✈️  Internal AeronCluster client will be created on-demand (UDP distributed network)");
                 log.info("   Aeron directory: {}", aeronDirectoryName);
-                log.info("   Will use UDP with localhost endpoints for same-process communication");
+                log.info("   Ingress endpoints will be resolved lazily on first write attempt");
                 // Don't create client here - create it lazily on first write attempt
             } catch (Exception e) {
                 log.error("Failed to create internal AeronCluster client", e);
                 // Continue without internal client - writes will fail but service can still start
             }
         } else {
-            log.warn("Aeron directory name or peer URLs not set - cannot create internal cluster client");
+            log.warn("Aeron directory name or node URLs not set - cannot create internal cluster client");
         }
         
         log.info("Aeron Cluster service started successfully");
@@ -896,145 +881,25 @@ public class AeronConsensusEngine implements ClusteredService {
             log.warn("⚠️  Cannot create internal cluster client - aeron directory not set");
             return;
         }
-        
-        // ✈️ AERON CLUSTER INGRESS: Use UDP for cluster communication
-        // UDP with ingressEndpoints provides reliable message delivery via Raft
-        // This is the standard Aeron Cluster pattern for multi-node clusters
-        
-        // Build ingress endpoints from ALL cluster nodes (like production does)
-        // CRITICAL: Use Aeron cluster ports (PORT_BASE + nodeId * PORTS_PER_NODE + CLIENT_FACING_PORT_OFFSET)
-        // Build ingress endpoints from ALL cluster nodes
-        // IMPORTANT: Use Aeron cluster ports, NOT HTTP API ports
-        // Include ALL nodes (0, 1, 2, ...) for proper leader election
-        StringBuilder ingressEndpointsBuilder = new StringBuilder();
-        
-        // Get current node ID from cluster
-        int currentNodeId = cluster != null ? cluster.memberId() : -1;
-        log.info("   Current node ID: {}", currentNodeId);
-        
-        // Build complete list of all node URLs (self + peers)
-        java.util.List<String> allNodeUrls = new java.util.ArrayList<>();
-        if (selfUrl != null && !selfUrl.isEmpty()) {
-            allNodeUrls.add(selfUrl); // Node 0 (self)
+        AeronIngressEndpointPlanner.Plan ingressPlan = internalIngressEndpointPlanner.plan();
+        String ingressEndpointsStr = ingressPlan.ingressEndpoints;
+        if (ingressEndpointsStr == null || ingressEndpointsStr.isEmpty()) {
+            log.warn("⚠️  Cannot create internal cluster client - no valid ingress endpoints available");
+            return;
         }
-        if (peerUrls != null && !peerUrls.isEmpty()) {
-            allNodeUrls.addAll(peerUrls); // Nodes 1, 2, ...
-        }
-        
-        // Build ingress endpoints for all nodes (like production ingressEndpoints() helper)
-        // CRITICAL: Use IP addresses from validator-network (not client-network)
-        // The cluster is configured with validator-network IPs, so ingress endpoints must match
-        // We need to detect the validator-network subnet and use IPs from that subnet
-        
-        // Detect validator-network subnet by resolving a peer (like AeronClusterLauncher does)
-        final String validatorSubnet;
-        String detectedSubnet = null;
-        if (peerUrls != null && !peerUrls.isEmpty()) {
-            try {
-                java.net.URL peerUrl = new java.net.URL(peerUrls.get(0));
-                String peerHostname = peerUrl.getHost();
-                String peerIP = java.net.InetAddress.getByName(peerHostname).getHostAddress();
-                if (peerIP.startsWith("172.")) {
-                    String[] parts = peerIP.split("\\.");
-                    if (parts.length >= 3) {
-                        detectedSubnet = parts[0] + "." + parts[1] + "." + parts[2];
-                        log.info("   Detected validator-network subnet: {}.x (from peer {})", detectedSubnet, peerHostname);
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("Could not detect validator-network subnet: {}", e.getMessage());
-            }
-        }
-        validatorSubnet = detectedSubnet; // Make final for lambda
-        
-        // Helper to get validator-network IP (prefer IPs from validator-network subnet)
-        java.util.function.Function<String, String> resolveToValidatorNetworkIP = (hostname) -> {
-            try {
-                // First try simple resolution
-                String ip = java.net.InetAddress.getByName(hostname).getHostAddress();
-                
-                // If we detected validator-network subnet, prefer IPs from that subnet
-                if (validatorSubnet != null && ip.startsWith(validatorSubnet + ".")) {
-                    log.debug("   Resolved {} → {} (validator-network)", hostname, ip);
-                    return ip;
-                }
-                
-                // If not from validator-network, try to find validator-network IP via interface enumeration
-                if (validatorSubnet != null) {
-                    try {
-                        java.util.Enumeration<java.net.NetworkInterface> interfaces = java.net.NetworkInterface.getNetworkInterfaces();
-                        while (interfaces.hasMoreElements()) {
-                            java.net.NetworkInterface iface = interfaces.nextElement();
-                            if (iface.isLoopback() || !iface.isUp()) continue;
-                            java.util.Enumeration<java.net.InetAddress> addresses = iface.getInetAddresses();
-                            while (addresses.hasMoreElements()) {
-                                java.net.InetAddress addr = addresses.nextElement();
-                                if (addr instanceof java.net.Inet4Address && !addr.isLoopbackAddress()) {
-                                    String candidateIP = addr.getHostAddress();
-                                    if (candidateIP.startsWith(validatorSubnet + ".")) {
-                                        log.info("   Resolved {} → {} (validator-network IP from interface {})", hostname, candidateIP, iface.getName());
-                                        return candidateIP;
-                                    }
-                                }
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.debug("Interface enumeration failed: {}", e.getMessage());
-                    }
-                }
-                
-                log.debug("   Resolved {} → {} (may not be validator-network)", hostname, ip);
-                return ip;
-            } catch (java.net.UnknownHostException e) {
-                log.warn("Failed to resolve hostname {} to IP: {}", hostname, e.getMessage());
-                return hostname; // Fallback to hostname
-            }
-        };
-        
-        for (int nodeId = 0; nodeId < allNodeUrls.size(); nodeId++) {
-            if (nodeId > 0) ingressEndpointsBuilder.append(",");
-            String url = allNodeUrls.get(nodeId);
-            try {
-                java.net.URL parsedUrl = new java.net.URL(url);
-                String hostname = parsedUrl.getHost();
-                
-                // Resolve to validator-network IP
-                String host = resolveToValidatorNetworkIP.apply(hostname);
-                
-                // Calculate Aeron cluster port using public method (like production)
-                int clientPort = AeronClusterLauncher.calculatePort(nodeId, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET);
-                ingressEndpointsBuilder.append(nodeId).append("=").append(host).append(":").append(clientPort);
-                log.info("   Node {} ingress endpoint: {}:{}", nodeId, host, clientPort);
-            } catch (Exception e) {
-                log.warn("Failed to parse node URL {}: {}", url, e.getMessage());
-            }
-        }
-        
-        String ingressEndpointsStr = ingressEndpointsBuilder.length() > 0 ? ingressEndpointsBuilder.toString() : null;
         
         log.info("✈️  Creating internal AeronCluster client for ingress (UDP - distributed network)...");
         log.info("   Aeron directory: {}", aeronDirectoryName);
         log.info("   Using UDP endpoints for distributed network communication");
-        log.info("   Ingress endpoints: {} (extracted from peer URLs)", ingressEndpointsStr);
+        log.info("   Ingress endpoints: {} (resolved from configured node URLs)", ingressEndpointsStr);
         
         try {
             // Retry connection with backoff (like production)
             int maxRetries = 10;
             for (int attempt = 0; attempt < maxRetries; attempt++) {
                 try {
-                    // Extract hostname from self URL for egress channel (distributed network)
-                    // For distributed deployment, use the validator's own network address
-                    String egressHostname = "0.0.0.0"; // Bind to all interfaces for distributed access
-                    try {
-                        java.net.URL selfUrlParsed = new java.net.URL(selfUrl);
-                        String host = selfUrlParsed.getHost();
-                        if (host != null && !host.isEmpty() && !"localhost".equals(host) && !"127.0.0.1".equals(host)) {
-                            egressHostname = host; // Use configured hostname/IP for distributed deployment
-                        }
-                    } catch (Exception e) {
-                        log.debug("Using default egress binding (0.0.0.0) - will bind to all interfaces");
-                    }
-                    
+                    String egressHostname = ingressPlan.clientIp;
+
                     // Create egress listener for receiving responses
                     io.aeron.cluster.client.EgressListener egressListener = (clusterSessionId, timestamp, message, header, offset, length) -> {
                         // Basic egress listener - just log that we received a message
@@ -2351,76 +2216,15 @@ public class AeronConsensusEngine implements ClusteredService {
         if (cluster == null) {
             return null;
         }
-        
-        java.util.Map<String, Object> state = new java.util.HashMap<>();
-        
-        // ✈️ AERON NATIVE: Use Aeron's native APIs directly (what's available)
-        Cluster.Role role = cluster.role();
-        state.put("role", role.name());
-        state.put("isLeader", role == Cluster.Role.LEADER);
-        int selfMemberId = cluster.memberId();
-        if (selfMemberId < 0) {
-            selfMemberId = findNodeIdByUrl(selfUrl);
-        }
-        state.put("memberId", selfMemberId);
-        state.put("clusterTime", cluster.time());
-        state.put("logPosition", cluster.logPosition());
-        
-        // Use our tracking for fields not directly available from Cluster API
-        state.put("term", getCurrentTerm());
-        state.put("epoch", getCurrentEpoch());
-        state.put("ethereumEpoch", getCurrentEthereumEpoch());
-        
-        // Build members list using only local/cached leader state.
-        java.util.List<java.util.Map<String, Object>> members = new java.util.ArrayList<>();
-        String leaderUrl = getCurrentLeaderHint();
-
-        // Add self to members list
-        java.util.Map<String, Object> selfInfo = new java.util.HashMap<>();
-        selfInfo.put("memberId", selfMemberId);
-        selfInfo.put("url", selfUrl);
-        selfInfo.put("role", role.name());
-        selfInfo.put("status", "ACTIVE");
-        // Add wallet info for self
-        if (wallet != null) {
-            selfInfo.put("walletAddress", wallet.getWalletAddress());
-            selfInfo.put("publicKey", wallet.getPublicKeyHex());
-        }
-        members.add(selfInfo);
-        
-        // Add all known peers from peerUrls (primary source)
-        if (peerUrls != null) {
-            for (String peerUrl : peerUrls) {
-                // Skip self if already added (compare by port to handle localhost vs 127.0.0.1)
-                if (isSameUrlByPort(peerUrl, selfUrl)) {
-                    continue;
-                }
-                
-                java.util.Map<String, Object> memberInfo = new java.util.HashMap<>();
-                // Try to find member ID from nodeIdToUrl mapping
-                int memberId = -1;
-                for (java.util.Map.Entry<Integer, String> entry : nodeIdToUrl.entrySet()) {
-                    if (isSameUrlByPort(entry.getValue(), peerUrl)) {
-                        memberId = entry.getKey();
-                        break;
-                    }
-                }
-                memberInfo.put("memberId", memberId);
-                memberInfo.put("url", peerUrl);
-                // Determine role: if this is the leader URL, mark as LEADER, else FOLLOWER
-                // Compare by port to handle localhost vs 127.0.0.1 differences
-                String memberRole = (leaderUrl != null && isSameUrlByPort(peerUrl, leaderUrl)) ? "LEADER" : "FOLLOWER";
-                memberInfo.put("role", memberRole);
-                memberInfo.put("status", "ACTIVE");
-                members.add(memberInfo);
-            }
-        }
-        
-        state.put("members", members);
-        state.put("memberCount", members.size());
-        state.put("currentLeader", leaderUrl);
-        
-        return state;
+        return clusterStateView.buildNativeClusterState(
+            cluster,
+            getCurrentLeaderHint(),
+            getWalletAddress(),
+            getPublicKeyHex(),
+            getCurrentTerm(),
+            getCurrentEpoch(),
+            getCurrentEthereumEpoch()
+        );
     }
 
     /**
@@ -2445,18 +2249,6 @@ public class AeronConsensusEngine implements ClusteredService {
         return currentLeader;
     }
 
-    private int findNodeIdByUrl(String url) {
-        if (url == null || nodeIdToUrl == null) {
-            return -1;
-        }
-        for (java.util.Map.Entry<Integer, String> entry : nodeIdToUrl.entrySet()) {
-            if (isSameUrlByPort(entry.getValue(), url)) {
-                return entry.getKey();
-            }
-        }
-        return -1;
-    }
-    
     /**
      * Extract URL from Aeron endpoint string.
     /**
@@ -2595,20 +2387,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return Leader's member ID or -1 if unknown
      */
     public int getLeaderMemberId() {
-        if (cluster != null && cluster.role() == Cluster.Role.LEADER) {
-            return cluster.memberId();
-        }
-        
-        // Try to find leader from current leader URL
-        if (currentLeader != null && nodeIdToUrl != null) {
-            for (java.util.Map.Entry<Integer, String> entry : nodeIdToUrl.entrySet()) {
-                if (entry.getValue().equals(currentLeader)) {
-                    return entry.getKey();
-                }
-            }
-        }
-        
-        return -1; // Leader unknown
+        return clusterStateView.resolveLeaderMemberId(cluster, currentLeader);
     }
     
     /**
@@ -3101,21 +2880,7 @@ public class AeronConsensusEngine implements ClusteredService {
         if (cluster == null) {
             return null;
         }
-        
-        java.util.Map<String, Object> status = new java.util.HashMap<>();
-        status.put("role", cluster.role().name());
-        status.put("myLogPosition", cluster.logPosition());
-        status.put("leaderLogPosition", leaderLogPosition);
-        
-        long lag = getReplicationLag();
-        status.put("replicationLag", lag);
-        status.put("lagThreshold", 1000L); // Alert if lag > 1000 messages
-        status.put("healthy", lag >= 0 && lag < 1000);
-        if (lag < 0) {
-            status.put("reason", "leader_log_position_unknown");
-        }
-        
-        return status;
+        return clusterStateView.buildReplicationLagStatus(cluster, leaderLogPosition, getReplicationLag());
     }
     
     private void markHeartbeat() {

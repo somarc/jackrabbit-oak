@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import org.junit.Test;
 
@@ -122,5 +123,38 @@ public class AeronIngressEndpointPlannerTest {
 
         assertEquals("0=10.0.0.1:9402,1=10.0.0.2:9502", plan.ingressEndpoints);
         assertEquals("10.0.0.2", plan.clientIp);
+    }
+
+    @Test
+    public void fromUrlsExtractsHostnamesBeforePlanning() {
+        AeronIngressEndpointPlanner planner = AeronIngressEndpointPlanner.fromUrls(
+            "http://self-host:8080",
+            List.of("http://peer-1:8081", "http://peer-2:8082"),
+            hostname -> {
+                if ("self-host".equals(hostname)) {
+                    return "10.0.0.10";
+                }
+                if ("peer-1".equals(hostname)) {
+                    return "172.18.0.11";
+                }
+                if ("peer-2".equals(hostname)) {
+                    return "172.18.0.12";
+                }
+                return "10.0.0.99";
+            },
+            () -> Arrays.asList(
+                new AeronClusterAddressResolver.CandidateAddress("en0", "172.18.0.10")
+            )
+        );
+
+        AeronIngressEndpointPlanner.Plan plan = planner.plan();
+
+        assertEquals(
+            "0=172.18.0.10:" + AeronClusterLauncher.calculatePort(0, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET)
+                + ",1=172.18.0.11:" + AeronClusterLauncher.calculatePort(1, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET)
+                + ",2=172.18.0.12:" + AeronClusterLauncher.calculatePort(2, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET),
+            plan.ingressEndpoints
+        );
+        assertEquals("172.18.0.10", plan.clientIp);
     }
 }
