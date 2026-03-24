@@ -27,7 +27,6 @@ import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
-import java.math.BigInteger;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -271,24 +270,6 @@ public class DashboardHandler {
         endpoints.add(item);
     }
     
-    private void appendSummaryCard(StringBuilder html, String label, String value, String caption) {
-        html.append("<div class='card'>");
-        html.append("<div class='card-label'>").append(FormatUtils.escapeHtml(label)).append("</div>");
-        html.append("<div class='card-value'>").append(FormatUtils.escapeHtml(value)).append("</div>");
-        if (caption != null && !caption.isEmpty()) {
-            html.append("<div class='card-caption'>").append(FormatUtils.escapeHtml(caption)).append("</div>");
-        }
-        html.append("</div>");
-    }
-    
-    private void appendMiniCard(StringBuilder html, String label, String value, String color, String caption) {
-        html.append("<div style='background: rgba(15,23,42,0.6); padding: 12px; border-radius: 6px; border-left: 3px solid ").append(color).append(";'>\n");
-        html.append("<div style='color: #94a3b8; font-size: 0.75em; margin-bottom: 6px;'>").append(FormatUtils.escapeHtml(label)).append("</div>\n");
-        html.append("<div style='font-size: 1.5em; font-weight: 600; color: ").append(color).append(";'>").append(FormatUtils.escapeHtml(value)).append("</div>\n");
-        html.append("<div style='color: #94a3b8; font-size: 0.75em; margin-top: 6px;'>").append(FormatUtils.escapeHtml(caption)).append("</div>\n");
-        html.append("</div>\n");
-    }
-
     private String formatTimestamp(long epochMillis) {
         if (epochMillis <= 0) {
             return "-";
@@ -296,30 +277,6 @@ public class DashboardHandler {
         return DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
                 .withZone(ZoneId.systemDefault())
                 .format(Instant.ofEpochMilli(epochMillis));
-    }
-
-    private String formatRelativeTime(long epochMillis) {
-        if (epochMillis <= 0) {
-            return "-";
-        }
-        long diffMillis = System.currentTimeMillis() - epochMillis;
-        if (diffMillis < 1000) {
-            return "just now";
-        }
-        long seconds = diffMillis / 1000;
-        if (seconds < 60) {
-            return seconds + "s ago";
-        }
-        long minutes = seconds / 60;
-        if (minutes < 60) {
-            return minutes + "m ago";
-        }
-        long hours = minutes / 60;
-        if (hours < 24) {
-            return hours + "h ago";
-        }
-        long days = hours / 24;
-        return days + "d ago";
     }
 
     private String formatUptime(long uptimeMs) {
@@ -361,10 +318,6 @@ public class DashboardHandler {
         return value != null ? value.toString() : fallback;
     }
 
-    private String safeUrl(String url) {
-        return url != null ? url : "-";
-    }
-
     private int resolveLeaderNodeId(Map<String, Object> clusterState, String role, int nodeId) {
         int leaderNode = asInt(clusterState.get("leaderNodeId"),
             asInt(clusterState.get("leaderMemberId"), -1));
@@ -400,14 +353,6 @@ public class DashboardHandler {
         return -1;
     }
 
-    private String describeNode(String url, int memberId) {
-        String name = shortName(url);
-        if (memberId >= 0) {
-            return name + " (#" + memberId + ")";
-        }
-        return name;
-    }
-
     private String shortName(String url) {
         if (url == null || url.isEmpty()) {
             return "Unknown";
@@ -418,39 +363,6 @@ public class DashboardHandler {
         } catch (Exception e) {
             return url;
         }
-    }
-
-    /**
-     * Format Wei to ETH (simplified - assumes 18 decimals).
-     */
-    private String formatWeiToEth(BigInteger wei) {
-        if (wei == null || wei.equals(BigInteger.ZERO)) {
-            return "0";
-        }
-        // Simple formatting: divide by 10^18
-        BigInteger eth = wei.divide(BigInteger.valueOf(10).pow(18));
-        BigInteger remainder = wei.remainder(BigInteger.valueOf(10).pow(18));
-        if (remainder.equals(BigInteger.ZERO)) {
-            return eth.toString();
-        }
-        String remainderStr = remainder.toString();
-        // Pad with zeros if needed
-        while (remainderStr.length() < 18) {
-            remainderStr = "0" + remainderStr;
-        }
-        // Take first 6 decimal places
-        return eth.toString() + "." + remainderStr.substring(0, Math.min(6, remainderStr.length()));
-    }
-    
-    private String formatLeaderLabel(String leaderUrl) {
-        if (leaderUrl == null || leaderUrl.isEmpty()) {
-            return "Unknown";
-        }
-        String name = shortName(leaderUrl);
-        if (leaderUrl.equals(context.selfUrl)) {
-            return name + " (self)";
-        }
-        return name;
     }
     
     /**

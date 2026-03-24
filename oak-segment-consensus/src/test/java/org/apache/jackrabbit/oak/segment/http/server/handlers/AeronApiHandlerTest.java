@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import com.sun.net.httpserver.HttpServer;
 import io.aeron.cluster.service.Cluster;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
@@ -29,9 +30,12 @@ import org.junit.Test;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.Field;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -153,6 +157,17 @@ public class AeronApiHandlerTest {
     }
 
     @Test
+    public void testGetClusterStateDataReturnsNullWhenNativeStateMissing() {
+        ServerContext context = newContext();
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.getNativeClusterState()).thenReturn(null);
+        context.aeronConsensusEngine = engine;
+
+        AeronApiHandler handler = new AeronApiHandler(context);
+        assertEquals(null, handler.getClusterStateData());
+    }
+
+    @Test
     public void testHandleValidatorIdentitiesReturnsSelfIdentity() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
@@ -168,6 +183,59 @@ public class AeronApiHandlerTest {
         assertTrue(json.contains("\"knownWallets\":1"));
         assertTrue(json.contains("\"walletAddress\":\"0x2222222222222222222222222222222222222222\""));
         assertTrue(json.contains("\"publicKey\":\"0xabc123\""));
+    }
+
+    @Test
+    public void testHandleValidatorIdentitiesReturnsServiceUnavailableWithoutEngine() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        AeronApiHandler handler = new AeronApiHandler(newContext());
+        handler.handleValidatorIdentities(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"Aeron Cluster consensus not configured\""));
+    }
+
+    @Test
+    public void testGetValidatorIdentitiesDataIncludesRemoteFollowerIdentityAndSkipsBlankFollowers() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/v1/aeron/cluster-state", exchange -> {
+            byte[] body = ("{\"memberId\":7,\"role\":\"follower\",\"validatorIdentity\":{"
+                + "\"walletAddress\":\"0x3333333333333333333333333333333333333333\","
+                + "\"publicKey\":\"0xdef456\"}}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(HttpServletResponse.SC_OK, body.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(body);
+            }
+        });
+        server.start();
+
+        try {
+            ServerContext context = newContext();
+            AeronConsensusEngine engine = baseEngine();
+            when(engine.getAllFollowers()).thenReturn(Arrays.asList(null, "", "http://localhost:" + server.getAddress().getPort()));
+            context.aeronConsensusEngine = engine;
+
+            AeronApiHandler handler = new AeronApiHandler(context);
+            Map<String, Object> payload = handler.getValidatorIdentitiesData();
+
+            assertNotNull(payload);
+            assertEquals(2, payload.get("totalValidators"));
+            assertEquals(2L, payload.get("knownWallets"));
+
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> validators = (List<Map<String, Object>>) payload.get("validators");
+            assertEquals(2, validators.size());
+            Map<String, Object> remote = validators.get(1);
+            assertEquals(7, remote.get("memberId"));
+            assertEquals("FOLLOWER", remote.get("role"));
+            assertEquals("ACTIVE", remote.get("status"));
+            assertEquals("0x3333333333333333333333333333333333333333", remote.get("walletAddress"));
+            assertEquals("0xdef456", remote.get("publicKey"));
+        } finally {
+            server.stop(0);
+        }
     }
 
     @Test
@@ -194,6 +262,18 @@ public class AeronApiHandlerTest {
         assertTrue(json.contains("\"totalFollowers\":2"));
         assertTrue(json.contains("\"currentEpoch\":21"));
         assertTrue(json.contains("\"ethereumEpoch\":34"));
+    }
+
+    @Test
+    public void testHandleRaftMetricsReturnsServiceUnavailableWithoutEngine() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        AeronApiHandler handler = new AeronApiHandler(newContext());
+        handler.handleRaftMetrics(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"Aeron Cluster consensus not configured\""));
     }
 
     @Test
@@ -244,6 +324,40 @@ public class AeronApiHandlerTest {
         assertTrue(json.contains("\"url\":\"http://validator-3:8090\""));
         assertTrue(json.contains("\"role\":\"FOLLOWER\""));
         assertTrue(json.contains("\"isSelf\":false"));
+    }
+
+    @Test
+    public void testHandleNodeStatusUsesExplicitUrlParameterAndMarksSelf() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getParameter("url")).thenReturn("http://validator-2:8090");
+
+        ServerContext context = newContext();
+        AeronConsensusEngine engine = baseEngine();
+        when(engine.getLastHeartbeatTime()).thenReturn(9876L);
+        context.aeronConsensusEngine = engine;
+
+        AeronApiHandler handler = new AeronApiHandler(context);
+        handler.handleNodeStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"nodeId\":2"));
+        assertTrue(json.contains("\"role\":\"LEADER\""));
+        assertTrue(json.contains("\"isSelf\":true"));
+    }
+
+    @Test
+    public void testHandleNodeStatusReturnsServiceUnavailableWithoutEngine() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        AeronApiHandler handler = new AeronApiHandler(newContext());
+        handler.handleNodeStatus(mock(HttpServletRequest.class), response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"Aeron Cluster consensus not configured\""));
     }
 
     @Test
@@ -313,6 +427,37 @@ public class AeronApiHandlerTest {
     }
 
     @Test
+    public void testHandleLeadershipHistoryDefaultsOnNonNumericLimit() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getParameter("limit")).thenReturn("abc");
+
+        ServerContext context = newContext();
+        AeronConsensusEngine engine = baseEngine();
+        when(engine.getLeadershipHistory(10)).thenReturn(new ArrayList<>());
+        context.aeronConsensusEngine = engine;
+
+        AeronApiHandler handler = new AeronApiHandler(context);
+        handler.handleLeadershipHistory(request, response);
+
+        verify(engine).getLeadershipHistory(10);
+        assertTrue(body.toString().contains("\"limit\":10"));
+    }
+
+    @Test
+    public void testHandleLeadershipHistoryReturnsServiceUnavailableWithoutEngine() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        AeronApiHandler handler = new AeronApiHandler(newContext());
+        handler.handleLeadershipHistory(mock(HttpServletRequest.class), response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"Aeron Cluster consensus not configured\""));
+    }
+
+    @Test
     public void testHandleReplicationLagReturnsNotFoundWhenUnavailable() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
@@ -351,6 +496,18 @@ public class AeronApiHandlerTest {
         assertTrue(json.contains("\"role\":\"FOLLOWER\""));
         assertTrue(json.contains("\"replicationLag\":12"));
         assertTrue(json.contains("\"healthy\":false"));
+    }
+
+    @Test
+    public void testHandleReplicationLagReturnsServiceUnavailableWithoutEngine() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        AeronApiHandler handler = new AeronApiHandler(newContext());
+        handler.handleReplicationLag(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"Aeron Cluster consensus not configured\""));
     }
 
     @Test

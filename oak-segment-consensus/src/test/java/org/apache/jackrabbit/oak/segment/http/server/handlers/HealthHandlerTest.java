@@ -16,7 +16,10 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.MediaDriverHealthMonitor;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -108,6 +111,41 @@ public class HealthHandlerTest {
     }
 
     @Test
+    public void testHandleHealthIncludesBlobStoreAndCommitProgress() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        ServerContext context = newContext(Files.createTempDirectory("health-progress"));
+        context.blobStoreType = "ipfs";
+        context.blobStore = mock(org.apache.jackrabbit.oak.spi.blob.BlobStore.class);
+
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.isClusterHealthy()).thenReturn(true);
+        when(engine.getReachableValidatorCount()).thenReturn(3);
+        when(engine.getTotalMemberCount()).thenReturn(3);
+        when(engine.getQuorumSize()).thenReturn(2);
+        when(engine.getCurrentRole()).thenReturn(ValidatorRole.LEADER);
+        when(engine.getCommittedHead()).thenReturn("committed-head");
+        when(engine.getLatestHead()).thenReturn("latest-head");
+        when(engine.getLatestEpochSeen()).thenReturn(12);
+        when(engine.getLastCommittedEpoch()).thenReturn(11);
+        context.aeronConsensusEngine = engine;
+
+        HealthHandler handler = newHandler(context);
+        handler.handleHealth(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"blobStoreType\":\"ipfs\""));
+        assertTrue(json.contains("\"blobStoreActive\":true"));
+        assertTrue(json.contains("\"committedHead\":\"committed-head\""));
+        assertTrue(json.contains("\"latestHead\":\"latest-head\""));
+        assertTrue(json.contains("\"latestEpochSeen\":12"));
+        assertTrue(json.contains("\"committedEpoch\":11"));
+    }
+
+    @Test
     public void testHandleClusterHealthUnavailableWithoutEngine() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
@@ -149,6 +187,33 @@ public class HealthHandlerTest {
         assertTrue(json.contains("\"unhealthyReason\":\"session_timeout\""));
         assertTrue(json.contains("\"reachableCount\":1"));
         assertTrue(json.contains("\"hasQuorum\":false"));
+        assertTrue(json.contains("\"leaderUrl\":\"http://leader:8090\""));
+    }
+
+    @Test
+    public void testHandleClusterHealthHealthy() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext(Files.createTempDirectory("health-cluster-healthy"));
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.isClusterHealthy()).thenReturn(true);
+        when(engine.getReachableValidatorCount()).thenReturn(3);
+        when(engine.getTotalMemberCount()).thenReturn(3);
+        when(engine.getQuorumSize()).thenReturn(2);
+        when(engine.hasQuorum()).thenReturn(true);
+        when(engine.getLastHeartbeatTime()).thenReturn(4321L);
+        when(engine.getHeartbeatAgeMs()).thenReturn(55L);
+        when(engine.getCurrentLeaderHint()).thenReturn("http://leader:8090");
+        context.aeronConsensusEngine = engine;
+
+        HealthHandler handler = newHandler(context);
+        handler.handleClusterHealth(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"status\":\"UP\""));
+        assertTrue(json.contains("\"success\":true"));
+        assertTrue(json.contains("\"hasQuorum\":true"));
         assertTrue(json.contains("\"leaderUrl\":\"http://leader:8090\""));
     }
 
@@ -214,6 +279,70 @@ public class HealthHandlerTest {
     }
 
     @Test
+    public void testHandleDeepHealthDegradedSubsystemsAndMediaDriver() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        Path storeDirectory = Files.createTempDirectory("health-deep-degraded");
+        ServerContext context = new ServerContext(null, null, storeDirectory, "http://localhost:8090");
+        context.blobStoreType = "s3";
+
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.isClusterHealthy()).thenReturn(false);
+        when(engine.getUnhealthyReason()).thenReturn("session_timeout");
+        when(engine.getReachableValidatorCount()).thenReturn(1);
+        when(engine.getTotalMemberCount()).thenReturn(3);
+        when(engine.getQuorumSize()).thenReturn(2);
+        when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
+        when(engine.getHeartbeatAgeMs()).thenReturn(444L);
+        when(engine.getCurrentLeaderHint()).thenReturn(null);
+        when(engine.isLeader()).thenReturn(false);
+        when(engine.getCurrentEpoch()).thenReturn(9);
+        when(engine.getCurrentTerm()).thenReturn(4);
+        context.aeronConsensusEngine = engine;
+
+        CrashHandler crashHandler = mock(CrashHandler.class);
+        when(crashHandler.getState()).thenReturn("CRASHED");
+        when(crashHandler.hasCrashed()).thenReturn(true);
+        when(crashHandler.shouldForceBootstrap()).thenReturn(true);
+
+        MediaDriverHealthMonitor healthMonitor = mock(MediaDriverHealthMonitor.class);
+        when(healthMonitor.isHealthy()).thenReturn(false);
+        when(healthMonitor.getHealthStatus()).thenReturn("DEGRADED");
+        when(healthMonitor.getErrorCount()).thenReturn(2L);
+        when(healthMonitor.getTimeoutCount()).thenReturn(3L);
+        when(healthMonitor.getBackpressureCount()).thenReturn(4L);
+        when(healthMonitor.getFreeSpaceMB()).thenReturn(512L);
+
+        AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
+        when(launcher.getCrashHandler()).thenReturn(crashHandler);
+        when(launcher.getHealthMonitor()).thenReturn(healthMonitor);
+        context.aeronClusterLauncher = launcher;
+
+        HealthHandler handler = new HealthHandler(
+            null,
+            null,
+            storeDirectory,
+            engine,
+            context.registeredClients,
+            context.registeredValidators,
+            context
+        );
+        handler.handleDeepHealth(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        String json = body.toString();
+        assertTrue(json.contains("FileStore not initialized"));
+        assertTrue(json.contains("NodeStore not initialized"));
+        assertTrue(json.contains("\"status\":\"UNHEALTHY\""));
+        assertTrue(json.contains("\"unhealthyReason\":\"session_timeout\""));
+        assertTrue(json.contains("\"status\":\"DEGRADED\""));
+        assertTrue(json.contains("\"hasCrashed\":true"));
+        assertTrue(json.contains("\"type\":\"s3\""));
+        assertTrue(json.contains("\"error\":\"BlobStore not initialized\""));
+        assertTrue(json.matches("(?s).*\"overall\":\\{[^}]*\"status\":\"DEGRADED\"[^}]*}.*"));
+    }
+
+    @Test
     public void testHandleGetOpsHealthSnapshotUsesCacheOnSecondCall() throws Exception {
         ServerContext context = newContext(Files.createTempDirectory("health-ops-cache"));
         AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
@@ -274,6 +403,25 @@ public class HealthHandlerTest {
         assertTrue(json.contains("\"degraded\":true"));
         assertTrue(json.contains("\"degradedReason\":\"STALE_CACHE_FALLBACK\""));
         assertTrue(json.contains("\"hit\":true"));
+    }
+
+    @Test
+    public void testHandleGetOpsHealthSnapshotReturnsServiceUnavailableWithoutCache() throws Exception {
+        ServerContext context = newContext(Files.createTempDirectory("health-ops-upstream"));
+        AeronConsensusEngine brokenEngine = mock(AeronConsensusEngine.class);
+        when(brokenEngine.isClusterHealthy()).thenThrow(new RuntimeException("boom"));
+        context.aeronConsensusEngine = brokenEngine;
+
+        HealthHandler handler = newHandler(context);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        handler.handleGetOpsHealthSnapshot(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"ops.v1\""));
+        assertTrue(json.contains("\"degraded\":true"));
+        assertTrue(json.contains("\"degradedReason\":\"UPSTREAM_UNAVAILABLE\""));
     }
 
     private static ServerContext newContext(Path storeDirectory) {

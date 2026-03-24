@@ -190,6 +190,53 @@ public class DashboardHandlerTest {
     }
 
     @Test
+    public void testHandleDashboardFallsBackWhenClusterProbeFails() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        ServerContext context = newContext();
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.getNativeClusterState()).thenThrow(new RuntimeException("boom"));
+        context.aeronConsensusEngine = engine;
+
+        DashboardHandler handler = new DashboardHandler(context);
+        handler.handleDashboard(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String html = body.toString();
+        assertTrue(html.contains("<div class='k'>Role</div><div class='v'>UNKNOWN</div>"));
+        assertTrue(html.contains("<div class='k'>Node</div><div class='v'>UNKNOWN</div>"));
+        assertTrue(html.contains("<div class='k'>Leader</div><div class='v'>UNKNOWN</div>"));
+    }
+
+    @Test
+    public void testHandleDashboardUsesLeaderMemberIdWhenProvided() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        ServerContext context = newContext();
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        Map<String, Object> nativeState = new HashMap<>();
+        nativeState.put("role", "FOLLOWER");
+        nativeState.put("memberId", 2);
+        nativeState.put("leaderMemberId", 1);
+        nativeState.put("memberCount", 5);
+        nativeState.put("leadershipTerm", 7L);
+        when(engine.getNativeClusterState()).thenReturn(nativeState);
+        context.aeronConsensusEngine = engine;
+
+        DashboardHandler handler = new DashboardHandler(context);
+        handler.handleDashboard(response);
+
+        String html = body.toString();
+        assertTrue(html.contains("<div class='k'>Leader</div><div class='v'>1</div>"));
+        assertTrue(html.contains("<div class='k'>Term</div><div class='v'>7</div>"));
+        assertTrue(html.contains("<div class='k'>Members</div><div class='v'>5</div>"));
+    }
+
+    @Test
     public void testHandleExplorerUiRendersSepoliaModeBadge() throws Exception {
         System.setProperty("oak.blockchain.mode", "sepolia");
         BlockchainConfig.reset();

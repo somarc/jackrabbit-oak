@@ -273,6 +273,42 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
+    public void testHandleProposeWriteRejectsTransactionHashWithoutHexPrefix() throws Exception {
+        ServerContext context = readyContext();
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn("abcdef12");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Invalid ethereumTxHash format: must start with '0x'"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsTooShortTransactionHash() throws Exception {
+        ServerContext context = readyContext();
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn("0xabc");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Invalid ethereumTxHash: too short"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
     public void testHandleProposeWriteRejectsInvalidProposalIdFormat() throws Exception {
         ServerContext context = readyContext();
         WriteProposalHandler handler = new WriteProposalHandler(context);
@@ -421,6 +457,45 @@ public class WriteProposalHandlerTest {
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("Organization name must be alphanumeric, hyphens, underscores only"));
         assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsUnregisteredWalletOutsideMockMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mainnet");
+        BlockchainConfig.reset();
+
+        ServerContext context = readyContext();
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_FORBIDDEN);
+        assertTrue(body.toString().contains("not registered. Please register via /v1/register-client"));
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsWalletMismatchForExplicitClientId() throws Exception {
+        ServerContext context = readyContext();
+        context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author", "0x2222222222222222222222222222222222222222"));
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("clientId")).thenReturn("client-1");
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_FORBIDDEN);
+        assertTrue(body.toString().contains("Path enforcement violation"));
     }
 
     @Test
