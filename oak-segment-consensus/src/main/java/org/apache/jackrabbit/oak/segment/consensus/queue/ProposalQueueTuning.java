@@ -36,7 +36,7 @@ final class ProposalQueueTuning {
     static final String DEFAULT_RELEASE_MODE = "adaptive-active";
     static final boolean DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED = false;
     static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED = true;
-    static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER = true;
+    static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER = false;
     static final long DEFAULT_PAYLOAD_INLINE_MAX_BYTES = 8L * 1024L;
     static final long DEFAULT_PAYLOAD_SPILL_SOFT_PENDING = DEFAULT_MAX_PENDING_MESSAGES;
     static final long DEFAULT_PAYLOAD_SPILL_MAX_BYTES = 2L * 1024L * 1024L * 1024L;

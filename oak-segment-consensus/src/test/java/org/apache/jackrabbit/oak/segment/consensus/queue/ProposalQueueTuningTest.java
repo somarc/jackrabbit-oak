@@ -144,11 +144,11 @@ public class ProposalQueueTuningTest {
     }
 
     @Test
-    public void testValidatorHostedBinaryPolicyDefaultsPreserveCompatibility() {
+    public void testValidatorHostedBinaryPolicyDefaultsToCapabilityEntitlement() {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
         assertTrue(tuning.isValidatorHostedBinaryUploadEnabled());
-        assertTrue(tuning.isValidatorHostedBinaryRequiresPriorityTier());
+        assertFalse(tuning.isValidatorHostedBinaryRequiresPriorityTier());
     }
 
     @Test
