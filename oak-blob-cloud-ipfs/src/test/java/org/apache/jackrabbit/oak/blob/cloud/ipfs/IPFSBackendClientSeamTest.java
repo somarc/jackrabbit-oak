@@ -68,6 +68,23 @@ public class IPFSBackendClientSeamTest {
     }
 
     @Test
+    public void testInitTreatsEmptyEndpointAsUnset() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        AtomicReference<String> endpointRef = new AtomicReference<>();
+        IPFSBackend backend = new IPFSBackend(endpoint -> {
+            endpointRef.set(endpoint);
+            return client;
+        });
+        backend.setIpfsApiEndpoint("");
+
+        backend.init();
+
+        assertEquals("/ip4/127.0.0.1/tcp/5001", endpointRef.get());
+        assertEquals("/ip4/127.0.0.1/tcp/5001", backend.getIpfsApiEndpoint());
+        backend.close();
+    }
+
+    @Test
     public void testWriteReadExistsRecordAndDeleteRoundTrip() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
         client.addResults.add(new MerkleNode(CID_ONE));
@@ -146,6 +163,31 @@ public class IPFSBackendClientSeamTest {
     }
 
     @Test
+    public void testGetRecordRejectsCachedCidWhenBlockStatReturnsNull() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(new MerkleNode(CID_ONE));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        File tempFile = File.createTempFile("oak-ipfs-null-stat", ".bin");
+        Files.writeString(tempFile.toPath(), "missing");
+        DataIdentifier id = new DataIdentifier("blob-null-stat");
+
+        backend.write(id, tempFile);
+
+        assertFalse(backend.exists(id));
+        try {
+            backend.getRecord(id);
+            fail("Expected missing block stat to reject cached record");
+        } catch (DataStoreException e) {
+            assertTrue(e.getMessage().contains("Record not found"));
+        }
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
     public void testMetadataLifecycleAndPrefixDeletion() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
         client.addResults.add(new MerkleNode(CID_ONE));
@@ -174,6 +216,29 @@ public class IPFSBackendClientSeamTest {
         assertFalse(backend.metadataRecordExists("pref-two"));
         assertEquals(List.of(CID_ONE, CID_TWO), client.pinRemoveCalls);
         tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testMetadataPrefixOperationsIgnoreNonMatchingEntries() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(new MerkleNode(CID_TWO));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        backend.addMetadataRecord(new ByteArrayInputStream("one".getBytes(StandardCharsets.UTF_8)), "pref-one");
+        backend.addMetadataRecord(new ByteArrayInputStream("two".getBytes(StandardCharsets.UTF_8)), "other-one");
+
+        List<DataRecord> prefRecords = backend.getAllMetadataRecords("pref");
+        assertEquals(1, prefRecords.size());
+        assertEquals(new DataIdentifier("META_pref-one"), prefRecords.get(0).getIdentifier());
+
+        backend.deleteAllMetadataRecords("pref");
+
+        assertFalse(backend.metadataRecordExists("pref-one"));
+        assertTrue(backend.metadataRecordExists("other-one"));
+        assertEquals(List.of(CID_ONE), client.pinRemoveCalls);
         backend.close();
     }
 
@@ -254,6 +319,28 @@ public class IPFSBackendClientSeamTest {
         } catch (DataStoreException e) {
             assertTrue(e.getMessage().contains("Failed to add metadata: failing-meta"));
         }
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testRecordLengthReturnsNegativeOneWhenCidWasEvicted() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(new MerkleNode(CID_ONE));
+        client.blockStats.put(CID_ONE, Map.of("Size", 5));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        File tempFile = File.createTempFile("oak-ipfs-evicted", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        DataIdentifier id = new DataIdentifier("blob-evicted");
+        backend.write(id, tempFile);
+
+        DataRecord record = backend.getRecord(id);
+        backend.deleteRecord(id);
+
+        assertEquals(-1L, record.getLength());
 
         tempFile.delete();
         backend.close();
