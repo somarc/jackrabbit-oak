@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof;
 import org.junit.After;
 import org.junit.Test;
@@ -134,6 +135,63 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
             assertNotNull(status);
             assertEquals(ProposalState.REJECTED, status.getState());
             assertTrue(status.getRejectionReason().contains("does not match declared ethereumTxHash"));
+        } finally {
+            queueManager.stop();
+        }
+    }
+
+    @Test
+    public void testVerifierRejectsDeleteWhenProofKindIsWriteInChainBackedMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        String proposalId = "0x2222222222222222222222222222222222222222222222222222222222222222";
+        String declaredTxHash = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        String walletAddress = "0x1234567890abcdef1234567890abcdef12345678";
+
+        EvmBridge evmBridge = mock(EvmBridge.class);
+        when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
+        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
+        when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
+            declaredTxHash,
+            123L,
+            walletAddress,
+            "0x1111111111111111111111111111111111111111",
+            proposalId,
+            "1",
+            ValidatorEarningsTracker.PaymentTier.STANDARD,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.ETH,
+            0,
+            12
+        ));
+
+        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+        when(beaconClient.getCachedCurrentEpoch()).thenReturn(10L);
+        when(beaconClient.getCachedFinalizedEpoch()).thenReturn(8L);
+
+        ProposalQueueManagerOptimized queueManager = new ProposalQueueManagerOptimized(
+            evmBridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient
+        );
+        queueManager.start();
+        try {
+            queueManager.queueDeleteProposal(
+                proposalId,
+                declaredTxHash,
+                walletAddress,
+                "/oak-chain/12/34/56/0x1234567890abcdef1234567890abcdef12345678/content/page-delete",
+                "",
+                ValidatorEarningsTracker.PaymentTier.STANDARD
+            );
+
+            assertTrue(waitForCondition(() -> rejectedCount(queueManager) == 1L, 5_000L));
+            ProposalStatus status = queueManager.getProposalStatus(proposalId);
+            assertNotNull(status);
+            assertEquals(ProposalState.REJECTED, status.getState());
+            assertTrue(status.getRejectionReason().contains("proposal kind does not match"));
         } finally {
             queueManager.stop();
         }

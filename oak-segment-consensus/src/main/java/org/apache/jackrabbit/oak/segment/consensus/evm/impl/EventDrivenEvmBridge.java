@@ -105,6 +105,20 @@ public class EventDrivenEvmBridge implements EvmBridge {
             new TypeReference<Address>() {},       // preferredValidator
             new TypeReference<Uint256>() {}        // timestamp
         ));
+
+    // ProposalSettled event definition (matches ValidatorPaymentV4)
+    private static final Event PROPOSAL_SETTLED_EVENT = new Event("ProposalSettled",
+        Arrays.asList(
+            new TypeReference<Bytes32>(true) {},   // proposalId (indexed)
+            new TypeReference<Address>(true) {},   // payer (indexed)
+            new TypeReference<Uint8>() {},         // proposalKind
+            new TypeReference<Uint8>() {},         // paymentClass
+            new TypeReference<Uint256>() {},       // amount
+            new TypeReference<Uint8>(true) {},     // paymentToken (indexed)
+            new TypeReference<Uint32>() {},        // capabilityFlags
+            new TypeReference<Address>() {},       // preferredValidator
+            new TypeReference<Uint256>() {}        // timestamp
+        ));
     
     // Event listeners (for real mode - Web3j subscriptions)
     private final CopyOnWriteArrayList<Consumer<WriteAuthorizedEvent>> eventListeners = new CopyOnWriteArrayList<>();
@@ -200,6 +214,9 @@ public class EventDrivenEvmBridge implements EvmBridge {
             proposalId,
             BASE_FEE.toString(), // Mock payment amount
             null,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.UNKNOWN,
+            0,
             1 // 1 confirmation (just "mined")
         );
         
@@ -330,7 +347,10 @@ public class EventDrivenEvmBridge implements EvmBridge {
             amount,
             blockNumber,
             txHash,
-            paymentTier
+            paymentTier,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.UNKNOWN,
+            0
         );
         
         if (mockMode) {
@@ -382,7 +402,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
     /**
      * Start Web3j event subscription (for real Sepolia/Mainnet).
      * 
-     * <p>Subscribes to WriteAuthorized events from OakWriteAuthorizationV5 contract.
+     * <p>Subscribes to payment/authorization events from the configured contract.
      * Events are processed as they arrive and stored as PaymentProofs.
      */
     private void startWeb3jEventSubscription() {
@@ -417,26 +437,29 @@ public class EventDrivenEvmBridge implements EvmBridge {
                 contractAddress
             );
             
-            // Add event topic
-            String eventSignature = EventEncoder.encode(WRITE_AUTHORIZED_EVENT);
-            filter.addSingleTopic(eventSignature);
-            
-            log.info("📡 Subscribing to WriteAuthorized events on contract: {}", contractAddress);
+            // Subscribe to all supported Oak payment event signatures.
+            filter.addOptionalTopics(
+                EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
+                EventEncoder.encode(PROPOSAL_PAID_EVENT),
+                EventEncoder.encode(PROPOSAL_SETTLED_EVENT)
+            );
+
+            log.info("📡 Subscribing to Oak payment events on contract: {}", contractAddress);
             
             // Subscribe to events
             eventSubscription = web3j.ethLogFlowable(filter)
                 .subscribe(
                     ethLog -> {
                         try {
-                            WriteAuthorizedEvent event = parseWriteAuthorizedLog(ethLog);
+                            WriteAuthorizedEvent event = parsePaymentLog(ethLog);
                             if (event == null) {
                                 return;
                             }
-                            log.info("📨 Received WriteAuthorized event: proposalId={}, payer={}, block={}",
-                                event.proposalId, event.payer, event.blockNumber);
+                            log.info("📨 Received Oak payment event: proposalId={}, payer={}, kind={}, block={}",
+                                event.proposalId, event.payer, event.proposalKind, event.blockNumber);
                             processWriteAuthorizedEvent(event);
                         } catch (Exception e) {
-                            log.error("Error parsing WriteAuthorized event", e);
+                            log.error("Error parsing Oak payment event", e);
                         }
                     },
                     error -> {
@@ -498,7 +521,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
             );
             filter.addOptionalTopics(
                 EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
-                EventEncoder.encode(PROPOSAL_PAID_EVENT)
+                EventEncoder.encode(PROPOSAL_PAID_EVENT),
+                EventEncoder.encode(PROPOSAL_SETTLED_EVENT)
             );
             filter.addOptionalTopics(proposalId);
 
@@ -543,6 +567,9 @@ public class EventDrivenEvmBridge implements EvmBridge {
             proof.getProposalId(),
             proof.getAmountWei(),
             proof.getPaymentTier(),
+            proof.getProposalKind(),
+            proof.getPaymentToken(),
+            proof.getCapabilityFlags(),
             confirmations
         );
         payments.put(proof.getProposalId(), refreshed);
@@ -575,12 +602,16 @@ public class EventDrivenEvmBridge implements EvmBridge {
         String signature = ethLog.getTopics().get(0);
         String writeAuthorizedSignature = EventEncoder.encode(WRITE_AUTHORIZED_EVENT);
         String proposalPaidSignature = EventEncoder.encode(PROPOSAL_PAID_EVENT);
+        String proposalSettledSignature = EventEncoder.encode(PROPOSAL_SETTLED_EVENT);
 
         if (writeAuthorizedSignature.equalsIgnoreCase(signature)) {
             return parseWriteAuthorizedLog(ethLog);
         }
         if (proposalPaidSignature.equalsIgnoreCase(signature)) {
             return parseProposalPaidLog(ethLog);
+        }
+        if (proposalSettledSignature.equalsIgnoreCase(signature)) {
+            return parseProposalSettledLog(ethLog);
         }
         return null;
     }
@@ -609,7 +640,10 @@ public class EventDrivenEvmBridge implements EvmBridge {
             amount,
             eventBlockNumber,
             txHash,
-            null
+            null,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.UNKNOWN,
+            0
         );
     }
 
@@ -628,6 +662,9 @@ public class EventDrivenEvmBridge implements EvmBridge {
         }
         BigInteger amount = Numeric.toBigInt(data.substring(0, 66));
         ValidatorEarningsTracker.PaymentTier paymentTier = decodePaymentTier(data.substring(66, 130));
+        PaymentProof.PaymentToken paymentToken = decodePaymentToken(
+            ethLog.getTopics().size() > 3 ? ethLog.getTopics().get(3) : null
+        );
         long blockNumber = ethLog.getBlockNumber() != null
             ? ethLog.getBlockNumber().longValue()
             : currentBlock;
@@ -640,7 +677,51 @@ public class EventDrivenEvmBridge implements EvmBridge {
             amount,
             blockNumber,
             txHash,
-            paymentTier
+            paymentTier,
+            PaymentProof.ProposalKind.WRITE,
+            paymentToken,
+            0
+        );
+    }
+
+    private WriteAuthorizedEvent parseProposalSettledLog(
+            org.web3j.protocol.core.methods.response.Log ethLog) {
+        if (ethLog.getTopics() == null || ethLog.getTopics().size() < 4) {
+            return null;
+        }
+        String proposalId = ethLog.getTopics().get(1);
+        String payer = "0x" + ethLog.getTopics().get(2).substring(26);
+        String shardHash = "0x0";
+
+        String data = ethLog.getData();
+        if (data == null || data.length() < 386) {
+            return null;
+        }
+
+        PaymentProof.ProposalKind proposalKind = decodeProposalKind(dataWord(data, 0));
+        if (proposalKind == null) {
+            return null;
+        }
+        ValidatorEarningsTracker.PaymentTier paymentTier = decodePaymentTier(dataWord(data, 1));
+        BigInteger amount = Numeric.toBigInt(dataWord(data, 2));
+        PaymentProof.PaymentToken paymentToken = decodePaymentToken(ethLog.getTopics().get(3));
+        int capabilityFlags = Numeric.toBigInt(dataWord(data, 3)).intValue();
+        long blockNumber = ethLog.getBlockNumber() != null
+            ? ethLog.getBlockNumber().longValue()
+            : currentBlock;
+        String txHash = ethLog.getTransactionHash();
+
+        return new WriteAuthorizedEvent(
+            proposalId,
+            payer,
+            shardHash,
+            amount,
+            blockNumber,
+            txHash,
+            paymentTier,
+            proposalKind,
+            paymentToken,
+            capabilityFlags
         );
     }
     
@@ -678,6 +759,9 @@ public class EventDrivenEvmBridge implements EvmBridge {
             event.proposalId,
             event.amount.toString(),
             event.paymentTier,
+            event.proposalKind,
+            event.paymentToken,
+            event.capabilityFlags,
             1 // 1 confirmation (just mined)
         );
         
@@ -717,6 +801,9 @@ public class EventDrivenEvmBridge implements EvmBridge {
         public final long blockNumber;
         public final String txHash;
         public final ValidatorEarningsTracker.PaymentTier paymentTier;
+        public final PaymentProof.ProposalKind proposalKind;
+        public final PaymentProof.PaymentToken paymentToken;
+        public final int capabilityFlags;
         
         public WriteAuthorizedEvent(
                 String proposalId,
@@ -725,7 +812,10 @@ public class EventDrivenEvmBridge implements EvmBridge {
                 BigInteger amount,
                 long blockNumber,
                 String txHash,
-                ValidatorEarningsTracker.PaymentTier paymentTier) {
+                ValidatorEarningsTracker.PaymentTier paymentTier,
+                PaymentProof.ProposalKind proposalKind,
+                PaymentProof.PaymentToken paymentToken,
+                int capabilityFlags) {
             this.proposalId = proposalId;
             this.payer = payer;
             this.shardHash = shardHash;
@@ -733,12 +823,42 @@ public class EventDrivenEvmBridge implements EvmBridge {
             this.blockNumber = blockNumber;
             this.txHash = txHash;
             this.paymentTier = paymentTier;
+            this.proposalKind = proposalKind;
+            this.paymentToken = paymentToken;
+            this.capabilityFlags = capabilityFlags;
         }
         
         @Override
         public String toString() {
-            return String.format("WriteAuthorizedEvent{proposalId=%s, payer=%s, amount=%s, tier=%s, block=%d, txHash=%s}",
-                proposalId, payer, amount, paymentTier, blockNumber, txHash);
+            return String.format(
+                "WriteAuthorizedEvent{proposalId=%s, payer=%s, kind=%s, amount=%s, tier=%s, token=%s, capabilityFlags=%d, block=%d, txHash=%s}",
+                proposalId, payer, proposalKind, amount, paymentTier, paymentToken, capabilityFlags, blockNumber, txHash
+            );
+        }
+    }
+
+    private static String dataWord(String data, int wordIndex) {
+        int start = 2 + (wordIndex * 64);
+        int end = start + 64;
+        if (data == null || data.length() < end) {
+            return null;
+        }
+        return "0x" + data.substring(start, end);
+    }
+
+    private PaymentProof.ProposalKind decodeProposalKind(String encodedWord) {
+        if (encodedWord == null || encodedWord.isEmpty()) {
+            return null;
+        }
+        int code = Numeric.toBigInt(encodedWord).intValue();
+        switch (code) {
+            case 0:
+                return PaymentProof.ProposalKind.WRITE;
+            case 1:
+                return PaymentProof.ProposalKind.DELETE;
+            default:
+                log.warn("Unknown proposal kind code in ProposalSettled event: {}", code);
+                return null;
         }
     }
 
@@ -757,6 +877,22 @@ public class EventDrivenEvmBridge implements EvmBridge {
             default:
                 log.warn("Unknown payment tier code in ProposalPaid event: {}", code);
                 return null;
+        }
+    }
+
+    private PaymentProof.PaymentToken decodePaymentToken(String encodedTopicOrWord) {
+        if (encodedTopicOrWord == null || encodedTopicOrWord.isEmpty()) {
+            return PaymentProof.PaymentToken.UNKNOWN;
+        }
+        int code = Numeric.toBigInt(encodedTopicOrWord).intValue();
+        switch (code) {
+            case 0:
+                return PaymentProof.PaymentToken.ETH;
+            case 1:
+                return PaymentProof.PaymentToken.USDC;
+            default:
+                log.warn("Unknown payment token code in payment event: {}", code);
+                return PaymentProof.PaymentToken.UNKNOWN;
         }
     }
 }

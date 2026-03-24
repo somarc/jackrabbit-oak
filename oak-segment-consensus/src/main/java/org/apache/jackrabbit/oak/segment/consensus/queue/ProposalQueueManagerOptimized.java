@@ -2368,6 +2368,20 @@ public class ProposalQueueManagerOptimized {
                             rejectProposal(proposal, "Confirmed transaction hash does not match declared ethereumTxHash");
                             continue;
                         }
+
+                        org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind expectedKind =
+                            proposal.getType() == QueuedProposal.ProposalType.DELETE
+                                ? org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.DELETE
+                                : org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.WRITE;
+                        if (proof.getProposalKind() != expectedKind) {
+                            verifierRejectedCount.incrementAndGet();
+                            rejectProposal(
+                                proposal,
+                                "Confirmed proposal kind does not match queued proposal type (expected "
+                                    + expectedKind + ", got " + proof.getProposalKind() + ")"
+                            );
+                            continue;
+                        }
                     }
                     
                     // Verify payment amount is present and positive.
@@ -2631,6 +2645,11 @@ public class ProposalQueueManagerOptimized {
                 proposalId,
                 "1000000000000000",
                 proposal.getTier(),
+                proposal.getType() == QueuedProposal.ProposalType.DELETE
+                    ? org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.DELETE
+                    : org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.WRITE,
+                org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.PaymentToken.ETH,
+                0,
                 requiredConfirmations
             );
         } catch (Exception e) {

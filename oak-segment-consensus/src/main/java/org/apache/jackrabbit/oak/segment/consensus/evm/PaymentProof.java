@@ -27,6 +27,23 @@ import org.jetbrains.annotations.Nullable;
  * for the right to write or unpublish content in Blockchain AEM.
  */
 public interface PaymentProof {
+
+    /**
+     * Proposal kind settled by the payment contract.
+     */
+    enum ProposalKind {
+        WRITE,
+        DELETE
+    }
+
+    /**
+     * Payment token used for settlement.
+     */
+    enum PaymentToken {
+        UNKNOWN,
+        ETH,
+        USDC
+    }
     
     /**
      * Get the transaction hash on the blockchain.
@@ -68,9 +85,12 @@ public interface PaymentProof {
     String getProposalId();
     
     /**
-     * Get the amount paid in wei (smallest unit).
+     * Get the amount paid in the token's smallest unit.
      *
-     * @return amount in wei
+     * <p>The method name is retained for compatibility with older Oak payment
+     * bridges, but V4 settlement proofs may carry non-ETH token units.
+     *
+     * @return amount in base units
      */
     @NotNull
     String getAmountWei();
@@ -83,6 +103,35 @@ public interface PaymentProof {
     @Nullable
     default ValidatorEarningsTracker.PaymentTier getPaymentTier() {
         return null;
+    }
+
+    /**
+     * Get the proposal kind settled on-chain when available.
+     *
+     * @return settled proposal kind, defaults to {@link ProposalKind#WRITE}
+     */
+    @NotNull
+    default ProposalKind getProposalKind() {
+        return ProposalKind.WRITE;
+    }
+
+    /**
+     * Get the payment token used for settlement.
+     *
+     * @return token used for settlement, defaults to {@link PaymentToken#UNKNOWN}
+     */
+    @NotNull
+    default PaymentToken getPaymentToken() {
+        return PaymentToken.UNKNOWN;
+    }
+
+    /**
+     * Get on-chain capability flags when the proof source provides them.
+     *
+     * @return settlement capability flags, or {@code 0} when unavailable
+     */
+    default int getCapabilityFlags() {
+        return 0;
     }
     
     /**

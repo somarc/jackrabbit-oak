@@ -33,6 +33,9 @@ public class SimplePaymentProof implements PaymentProof {
     private final String proposalId;
     private final String amountWei;
     private final ValidatorEarningsTracker.PaymentTier paymentTier;
+    private final PaymentProof.ProposalKind proposalKind;
+    private final PaymentProof.PaymentToken paymentToken;
+    private final int capabilityFlags;
     private final int confirmations;
     
     public SimplePaymentProof(
@@ -43,7 +46,19 @@ public class SimplePaymentProof implements PaymentProof {
             @NotNull String proposalId,
             @NotNull String amountWei,
             int confirmations) {
-        this(transactionHash, blockNumber, fromAddress, contractAddress, proposalId, amountWei, null, confirmations);
+        this(
+            transactionHash,
+            blockNumber,
+            fromAddress,
+            contractAddress,
+            proposalId,
+            amountWei,
+            null,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.UNKNOWN,
+            0,
+            confirmations
+        );
     }
 
     public SimplePaymentProof(
@@ -55,6 +70,33 @@ public class SimplePaymentProof implements PaymentProof {
             @NotNull String amountWei,
             @Nullable ValidatorEarningsTracker.PaymentTier paymentTier,
             int confirmations) {
+        this(
+            transactionHash,
+            blockNumber,
+            fromAddress,
+            contractAddress,
+            proposalId,
+            amountWei,
+            paymentTier,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.UNKNOWN,
+            0,
+            confirmations
+        );
+    }
+
+    public SimplePaymentProof(
+            @NotNull String transactionHash,
+            long blockNumber,
+            @NotNull String fromAddress,
+            @NotNull String contractAddress,
+            @NotNull String proposalId,
+            @NotNull String amountWei,
+            @Nullable ValidatorEarningsTracker.PaymentTier paymentTier,
+            @NotNull PaymentProof.ProposalKind proposalKind,
+            @NotNull PaymentProof.PaymentToken paymentToken,
+            int capabilityFlags,
+            int confirmations) {
         this.transactionHash = transactionHash;
         this.blockNumber = blockNumber;
         this.fromAddress = fromAddress;
@@ -62,6 +104,9 @@ public class SimplePaymentProof implements PaymentProof {
         this.proposalId = proposalId;
         this.amountWei = amountWei;
         this.paymentTier = paymentTier;
+        this.proposalKind = proposalKind;
+        this.paymentToken = paymentToken;
+        this.capabilityFlags = capabilityFlags;
         this.confirmations = confirmations;
     }
     
@@ -105,6 +150,23 @@ public class SimplePaymentProof implements PaymentProof {
     public ValidatorEarningsTracker.PaymentTier getPaymentTier() {
         return paymentTier;
     }
+
+    @Override
+    @NotNull
+    public PaymentProof.ProposalKind getProposalKind() {
+        return proposalKind;
+    }
+
+    @Override
+    @NotNull
+    public PaymentProof.PaymentToken getPaymentToken() {
+        return paymentToken;
+    }
+
+    @Override
+    public int getCapabilityFlags() {
+        return capabilityFlags;
+    }
     
     @Override
     public int getConfirmations() {
@@ -124,7 +186,10 @@ public class SimplePaymentProof implements PaymentProof {
                 ", confirmations=" + confirmations +
                 ", from='" + fromAddress + '\'' +
                 ", proposalId='" + proposalId + '\'' +
+                ", kind=" + proposalKind +
                 ", tier=" + paymentTier +
+                ", token=" + paymentToken +
+                ", capabilityFlags=" + capabilityFlags +
                 ", amount=" + amountWei + " wei" +
                 '}';
     }

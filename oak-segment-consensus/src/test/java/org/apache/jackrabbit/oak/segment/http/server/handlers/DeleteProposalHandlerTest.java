@@ -160,7 +160,7 @@ public class DeleteProposalHandlerTest {
     }
 
     @Test
-    public void testHandleDeleteProposalRejectsChainBackedModeForV1() throws Exception {
+    public void testHandleDeleteProposalRejectsMissingProposalIdInChainBackedMode() throws Exception {
         System.setProperty("oak.blockchain.mode", "sepolia");
         org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
 
@@ -180,9 +180,45 @@ public class DeleteProposalHandlerTest {
 
         handler.handleDeleteProposal(request, response);
 
-        verify(response).setStatus(HttpServletResponse.SC_NOT_IMPLEMENTED);
-        assertTrue(body.toString().contains("\"code\":\"delete_chain_mode_unsupported\""));
-        assertTrue(body.toString().contains("Delete proposals are only supported in MOCK mode"));
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("client-supplied proposalId"));
+    }
+
+    @Test
+    public void testHandleDeleteProposalQueuesChainBackedDeleteWithClientProposalId() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        String proposalId = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedContent(nodeStore, VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.gcAccountManager = new GCAccountManager();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        when(request.getParameter("proposalId")).thenReturn(proposalId);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        verify(context.proposalQueueManager).queueDeleteProposal(
+            eq(proposalId),
+            eq(PRIORITY_TX_HASH),
+            eq(VALID_WALLET),
+            eq(contentPath),
+            eq(VALID_SIGNATURE),
+            eq(ValidatorEarningsTracker.PaymentTier.STANDARD)
+        );
+        assertTrue(body.toString().contains("\"proposalId\":\"" + proposalId + "\""));
+        assertTrue(body.toString().contains("\"proposalIdSource\":\"client\""));
     }
 
     @Test

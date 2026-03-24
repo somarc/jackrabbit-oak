@@ -223,6 +223,9 @@ public class EvmBridgeTest {
         assertEquals("Contract address should match", "0xContractAddress", payment.getContractAddress());
         assertEquals("Proposal ID should match", "proposal-789", payment.getProposalId());
         assertEquals("Amount should match", "5000000000000000", payment.getAmountWei());
+        assertEquals("Proposal kind should default to WRITE", PaymentProof.ProposalKind.WRITE, payment.getProposalKind());
+        assertEquals("Payment token should default to UNKNOWN", PaymentProof.PaymentToken.UNKNOWN, payment.getPaymentToken());
+        assertEquals("Capability flags should default to zero", 0, payment.getCapabilityFlags());
         assertEquals("Confirmations should match", 20, payment.getConfirmations());
     }
     
@@ -238,4 +241,3 @@ public class EvmBridgeTest {
         assertFalse("Bridge should not be running after stop", newBridge.isRunning());
     }
 }
-

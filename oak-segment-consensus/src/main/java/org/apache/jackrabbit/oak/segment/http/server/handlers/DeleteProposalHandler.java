@@ -189,17 +189,6 @@ public class DeleteProposalHandler {
 
             log.debug("🗑️  DELETE PROPOSAL: client={}, wallet={}, path={}", clientId, wallet, contentPath);
 
-            if (!blockchainConfig.isMockMode()) {
-                context.apiRejectedRequests.incrementAndGet();
-                ApiErrorUtil.sendJsonError(
-                    response,
-                    HttpServletResponse.SC_NOT_IMPLEMENTED,
-                    "delete_chain_mode_unsupported",
-                    "Delete proposals are only supported in MOCK mode for oak-chain v1. SEPOLIA/MAINNET delete payment flow is not merge-ready."
-                );
-                return;
-            }
-
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // ETHEREUM PAYMENT REQUIRED: Deletes flow through same pipeline as writes
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -223,8 +212,31 @@ public class DeleteProposalHandler {
                 }
             }
 
-            // Generate unique proposal ID for this delete
-            String proposalId = java.util.UUID.randomUUID().toString();
+            String clientProposalId = request.getParameter("proposalId");
+            String proposalId;
+            if (clientProposalId != null && !clientProposalId.trim().isEmpty()) {
+                proposalId = clientProposalId.trim();
+                if (!isValidClientProposalId(proposalId)) {
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                        "Invalid proposalId format. Expected 0x-prefixed 32-byte hex or UUID.");
+                    return;
+                }
+                if (proposalId.startsWith("0X")) {
+                    proposalId = "0x" + proposalId.substring(2);
+                }
+            } else if (!blockchainConfig.isMockMode()) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "Chain-backed deletes require a client-supplied proposalId from the settlement contract flow (expected 0x-prefixed 32-byte hex).");
+                return;
+            } else {
+                proposalId = java.util.UUID.randomUUID().toString();
+            }
+
+            if (!blockchainConfig.isMockMode() && !isChainBackedProposalId(proposalId)) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "Chain-backed deletes require proposalId to be a 0x-prefixed 32-byte hex value. UUID proposalIds are mock-only.");
+                return;
+            }
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // GC DEBT TRACKING: Track debt when content is deleted (deferred cost)
@@ -287,6 +299,7 @@ public class DeleteProposalHandler {
             payload.put("ackState", "ACCEPTED");
             payload.put("links", links);
             payload.put("proposalId", proposalId);
+            payload.put("proposalIdSource", clientProposalId != null && !clientProposalId.trim().isEmpty() ? "client" : "server");
             payload.put("type", "DELETE");
             payload.put("state", "PENDING");
             payload.put("message", "Delete proposal queued, waiting for Ethereum confirmation");
@@ -413,6 +426,21 @@ public class DeleteProposalHandler {
             default:
                 return null;
         }
+    }
+
+    private static boolean isValidClientProposalId(String proposalId) {
+        if (proposalId == null) {
+            return false;
+        }
+        String value = proposalId.trim();
+        if (value.matches("(?i)^0x[a-f0-9]{64}$")) {
+            return true;
+        }
+        return value.matches("(?i)^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
+    }
+
+    private static boolean isChainBackedProposalId(String proposalId) {
+        return proposalId != null && proposalId.trim().matches("(?i)^0x[a-f0-9]{64}$");
     }
 
 }
