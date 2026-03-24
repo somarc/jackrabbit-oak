@@ -145,6 +145,26 @@ public class SegmentHttpServer {
         log.info("   - TLS: {}", tlsConfig.isEnabled() ? "enabled" : "disabled");
         log.info("   - Prometheus metrics enabled at /metrics");
     }
+
+    SegmentHttpServer(Server server,
+                      ServerContext context,
+                      RequestRouter router,
+                      TlsConfiguration tlsConfig,
+                      FileStore fileStore,
+                      NodeStore nodeStore,
+                      Path storeDirectory) {
+        this.server = server;
+        this.context = context;
+        this.router = router;
+        this.tlsConfig = tlsConfig;
+        this.fileStore = fileStore;
+        this.nodeStore = nodeStore;
+        this.storeDirectory = storeDirectory;
+        this.joinProofFactory = null;
+        this.peerUrlResolver = null;
+        this.peerJsonHttpClient = null;
+        this.peerAnnouncementClient = null;
+    }
     
     /**
      * Set the Aeron Cluster consensus engine (Raft-based mode).
@@ -322,9 +342,25 @@ public class SegmentHttpServer {
      * Note: FileStore is owned by GlobalStoreServer, don't close it here!
      */
     public void stop() throws Exception {
+        Exception failure = null;
         if (server != null) {
-            server.stop();
-            log.info("SegmentHttpServer stopped");
+            try {
+                server.stop();
+                log.info("SegmentHttpServer stopped");
+            } catch (Exception e) {
+                failure = e;
+            }
+        }
+        try {
+            router.close();
+        } catch (RuntimeException e) {
+            if (failure == null) {
+                throw e;
+            }
+            failure.addSuppressed(e);
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
     

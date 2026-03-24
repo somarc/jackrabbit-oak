@@ -62,21 +62,23 @@ public class CidApiHandlerTest {
         Path storageDir = Files.createTempDirectory("cid-get");
         try {
             ServerContext context = newContext(storageDir);
-            context.cidMappingService = new CidMappingService(storageDir);
-            context.cidMappingService.registerMapping(OAK_BLOB_ID, CID);
+            try (CidMappingService cidMappingService = new CidMappingService(storageDir)) {
+                context.cidMappingService = cidMappingService;
+                cidMappingService.registerMapping(OAK_BLOB_ID, CID);
 
-            StringWriter body = new StringWriter();
-            HttpServletResponse response = responseWithBody(body);
-            HttpServletRequest request = request("/api/cid/" + OAK_BLOB_ID);
+                StringWriter body = new StringWriter();
+                HttpServletResponse response = responseWithBody(body);
+                HttpServletRequest request = request("/api/cid/" + OAK_BLOB_ID);
 
-            new CidApiHandler(context).handleGetCid(request, response);
+                new CidApiHandler(context).handleGetCid(request, response);
 
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            String json = body.toString();
-            assertTrue(json.contains("\"oakBlobId\":\"" + OAK_BLOB_ID + "\""));
-            assertTrue(json.contains("\"ipfsCid\":\"" + CID + "\""));
-            assertTrue(json.contains("\"gatewayUrl\":\"https://ipfs.io/ipfs/" + CID + "\""));
-            assertTrue(json.contains("\"localUrl\":\"http://localhost:8099/ipfs/" + CID + "\""));
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                String json = body.toString();
+                assertTrue(json.contains("\"oakBlobId\":\"" + OAK_BLOB_ID + "\""));
+                assertTrue(json.contains("\"ipfsCid\":\"" + CID + "\""));
+                assertTrue(json.contains("\"gatewayUrl\":\"https://ipfs.io/ipfs/" + CID + "\""));
+                assertTrue(json.contains("\"localUrl\":\"http://localhost:8099/ipfs/" + CID + "\""));
+            }
         } finally {
             deleteRecursively(storageDir);
         }
@@ -87,19 +89,21 @@ public class CidApiHandlerTest {
         Path storageDir = Files.createTempDirectory("cid-reverse");
         try {
             ServerContext context = newContext(storageDir);
-            context.cidMappingService = new CidMappingService(storageDir);
-            context.cidMappingService.registerMapping(OAK_BLOB_ID, CID);
+            try (CidMappingService cidMappingService = new CidMappingService(storageDir)) {
+                context.cidMappingService = cidMappingService;
+                cidMappingService.registerMapping(OAK_BLOB_ID, CID);
 
-            StringWriter body = new StringWriter();
-            HttpServletResponse response = responseWithBody(body);
-            HttpServletRequest request = request("/api/cid/reverse/" + CID);
+                StringWriter body = new StringWriter();
+                HttpServletResponse response = responseWithBody(body);
+                HttpServletRequest request = request("/api/cid/reverse/" + CID);
 
-            new CidApiHandler(context).handleReverseLookup(request, response);
+                new CidApiHandler(context).handleReverseLookup(request, response);
 
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            String json = body.toString();
-            assertTrue(json.contains("\"ipfsCid\":\"" + CID + "\""));
-            assertTrue(json.contains("\"oakBlobId\":\"" + NORMALIZED_OAK_BLOB_ID + "\""));
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                String json = body.toString();
+                assertTrue(json.contains("\"ipfsCid\":\"" + CID + "\""));
+                assertTrue(json.contains("\"oakBlobId\":\"" + NORMALIZED_OAK_BLOB_ID + "\""));
+            }
         } finally {
             deleteRecursively(storageDir);
         }
@@ -110,15 +114,17 @@ public class CidApiHandlerTest {
         Path storageDir = Files.createTempDirectory("cid-gateway");
         try {
             ServerContext context = newContext(storageDir);
-            context.cidMappingService = new CidMappingService(storageDir);
-            context.cidMappingService.registerMapping(OAK_BLOB_ID, CID);
+            try (CidMappingService cidMappingService = new CidMappingService(storageDir)) {
+                context.cidMappingService = cidMappingService;
+                cidMappingService.registerMapping(OAK_BLOB_ID, CID);
 
-            HttpServletResponse response = mock(HttpServletResponse.class);
-            HttpServletRequest request = request("/api/cid/gateway/" + OAK_BLOB_ID);
+                HttpServletResponse response = mock(HttpServletResponse.class);
+                HttpServletRequest request = request("/api/cid/gateway/" + OAK_BLOB_ID);
 
-            new CidApiHandler(context).handleGatewayRedirect(request, response);
+                new CidApiHandler(context).handleGatewayRedirect(request, response);
 
-            verify(response).sendRedirect("https://ipfs.io/ipfs/" + CID);
+                verify(response).sendRedirect("https://ipfs.io/ipfs/" + CID);
+            }
         } finally {
             deleteRecursively(storageDir);
         }
@@ -129,22 +135,24 @@ public class CidApiHandlerTest {
         Path storageDir = Files.createTempDirectory("cid-stats");
         try {
             ServerContext context = newContext(storageDir);
-            context.cidMappingService = new CidMappingService(storageDir);
-            context.cidMappingService.registerMapping(OAK_BLOB_ID, CID);
-            context.cidMappingService.getCid(OAK_BLOB_ID);
-            context.cidMappingService.getCid("missing");
+            try (CidMappingService cidMappingService = new CidMappingService(storageDir)) {
+                context.cidMappingService = cidMappingService;
+                cidMappingService.registerMapping(OAK_BLOB_ID, CID);
+                cidMappingService.getCid(OAK_BLOB_ID);
+                cidMappingService.getCid("missing");
 
-            StringWriter body = new StringWriter();
-            HttpServletResponse response = responseWithBody(body);
+                StringWriter body = new StringWriter();
+                HttpServletResponse response = responseWithBody(body);
 
-            new CidApiHandler(context).handleStats(request("/api/cid/stats"), response);
+                new CidApiHandler(context).handleStats(request("/api/cid/stats"), response);
 
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            String json = body.toString();
-            assertTrue(json.contains("\"totalMappings\":1"));
-            assertTrue(json.contains("\"cacheHits\":1"));
-            assertTrue(json.contains("\"cacheMisses\":1"));
-            assertTrue(json.contains("\"currentSize\":1"));
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                String json = body.toString();
+                assertTrue(json.contains("\"totalMappings\":1"));
+                assertTrue(json.contains("\"cacheHits\":1"));
+                assertTrue(json.contains("\"cacheMisses\":1"));
+                assertTrue(json.contains("\"currentSize\":1"));
+            }
         } finally {
             deleteRecursively(storageDir);
         }

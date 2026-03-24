@@ -19,15 +19,24 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
+import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
+import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
+import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
+import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -36,6 +45,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -123,6 +133,39 @@ public class GlobalStoreServerLifecycleTest {
 
         verify(aeronClusterService).shutdown();
         verifyNoInteractions(launcher);
+    }
+
+    @Test
+    public void testStopShutsDownManagedContextComponents() throws Exception {
+        GlobalStoreServer server = new GlobalStoreServer(8090, "/tmp/test-store");
+        SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
+        FileStore fileStore = mock(FileStore.class);
+        ProposalQueueManagerOptimized proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        BeaconChainClient beaconChainClient = mock(BeaconChainClient.class);
+        EvmBridge evmBridge = mock(EvmBridge.class);
+        GCProposalManager gcProposalManager = mock(GCProposalManager.class);
+        PeriodicGCJob periodicGCJob = mock(PeriodicGCJob.class);
+        AeronPrometheusMetrics aeronPrometheusMetrics = mock(AeronPrometheusMetrics.class);
+        ServerContext context = new ServerContext(fileStore, mock(NodeStore.class), Paths.get("/tmp/test-store"), "http://self:8090");
+        context.proposalQueueManager = proposalQueueManager;
+        context.evmBridge = evmBridge;
+        context.gcProposalManager = gcProposalManager;
+        context.periodicGCJob = periodicGCJob;
+        context.aeronPrometheusMetrics = aeronPrometheusMetrics;
+        when(proposalQueueManager.getBeaconClient()).thenReturn(beaconChainClient);
+        when(httpServer.getContext()).thenReturn(context);
+
+        setField(server, "httpServer", httpServer);
+        setField(server, "fileStore", fileStore);
+
+        server.stop();
+
+        verify(proposalQueueManager).stop();
+        verify(beaconChainClient).stopBackgroundPolling();
+        verify(evmBridge).stop();
+        verify(gcProposalManager).shutdown();
+        verify(periodicGCJob).stop();
+        verify(aeronPrometheusMetrics).close();
     }
 
     private static void setField(Object target, String name, Object value) throws Exception {

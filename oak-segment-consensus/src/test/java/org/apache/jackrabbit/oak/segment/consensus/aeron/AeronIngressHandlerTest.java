@@ -17,13 +17,16 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.aeron.cluster.service.ClientSession;
 import io.aeron.cluster.service.Cluster;
 import io.aeron.logbuffer.Header;
 import org.agrona.DirectBuffer;
+import org.agrona.concurrent.UnsafeBuffer;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -82,39 +85,50 @@ public class AeronIngressHandlerTest {
     @Test
     public void handleMessageRunsCallbacksForGenesisMessages() {
         AtomicInteger heartbeats = new AtomicInteger();
-        AtomicInteger genesis = new AtomicInteger();
+        AtomicReference<String> genesis = new AtomicReference<>();
+        String payload = "{\"command\":\"CREATE_GENESIS\",\"timestamp\":42,\"genesisValidator\":\"http://leader:8090\"}";
+        buffer = bufferWithPayload(payload);
         handler.setHeartbeatCallback(heartbeats::incrementAndGet);
-        handler.setGenesisCallback(genesis::incrementAndGet);
+        handler.setGenesisCallback(genesis::set);
         when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(0, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1));
+            .thenReturn(new SimpleMessageHeader.HeaderInfo(payload.getBytes(StandardCharsets.UTF_8).length,
+                SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1));
 
         boolean result = handler.handleMessage(
             session,
             123L,
             buffer,
             0,
-            SimpleMessageHeader.ENCODED_LENGTH,
+            SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length,
             header,
             cluster
         );
 
         assertTrue(result);
         assertEquals(1, heartbeats.get());
-        assertEquals(1, genesis.get());
-        verify(dispatcher, never()).dispatch(eq(123L), eq(buffer), eq(0), eq(SimpleMessageHeader.ENCODED_LENGTH));
+        assertEquals(payload, genesis.get());
+        verify(dispatcher, never()).dispatch(eq(123L), eq(buffer), eq(0),
+            eq(SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length));
     }
 
     @Test
     public void handleMessageAcceptsGenesisAndSnapshotWithoutDispatcher() {
+        String payload = "{\"command\":\"CREATE_GENESIS\",\"timestamp\":7,\"genesisValidator\":\"http://leader:8090\"}";
+        buffer = bufferWithPayload(payload);
         when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(0, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1))
+            .thenReturn(new SimpleMessageHeader.HeaderInfo(payload.getBytes(StandardCharsets.UTF_8).length,
+                SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1))
             .thenReturn(new SimpleMessageHeader.HeaderInfo(0, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT, 1, 1));
 
-        assertTrue(handler.handleMessage(session, 123L, buffer, 0, SimpleMessageHeader.ENCODED_LENGTH, header, cluster));
-        assertTrue(handler.handleMessage(session, 124L, buffer, 0, SimpleMessageHeader.ENCODED_LENGTH, header, cluster));
+        assertTrue(handler.handleMessage(session, 123L, buffer, 0,
+            SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length, header, cluster));
+        assertTrue(handler.handleMessage(session, 124L, buffer, 0,
+            SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length, header, cluster));
 
-        verify(dispatcher, never()).dispatch(eq(123L), eq(buffer), eq(0), eq(SimpleMessageHeader.ENCODED_LENGTH));
-        verify(dispatcher, never()).dispatch(eq(124L), eq(buffer), eq(0), eq(SimpleMessageHeader.ENCODED_LENGTH));
+        verify(dispatcher, never()).dispatch(eq(123L), eq(buffer), eq(0),
+            eq(SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length));
+        verify(dispatcher, never()).dispatch(eq(124L), eq(buffer), eq(0),
+            eq(SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length));
     }
 
     @Test
@@ -182,5 +196,12 @@ public class AeronIngressHandlerTest {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
         return (AtomicInteger) field.get(target);
+    }
+
+    private static DirectBuffer bufferWithPayload(String payload) {
+        byte[] payloadBytes = payload.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = new byte[SimpleMessageHeader.ENCODED_LENGTH + payloadBytes.length];
+        System.arraycopy(payloadBytes, 0, bytes, SimpleMessageHeader.ENCODED_LENGTH, payloadBytes.length);
+        return new UnsafeBuffer(bytes);
     }
 }

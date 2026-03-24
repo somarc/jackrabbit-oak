@@ -26,6 +26,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * CID Mapping Service - Coordinates Oak blob IDs with IPFS CIDs at scale.
@@ -81,7 +86,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 
  * @see org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSBackend
  */
-public class CidMappingService {
+public class CidMappingService implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(CidMappingService.class);
 
@@ -96,6 +101,8 @@ public class CidMappingService {
 
     /** Directory for persistent storage */
     private final Path storageDir;
+    private final ExecutorService persistExecutor;
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     /** Statistics */
     private long totalMappings = 0;
@@ -109,6 +116,11 @@ public class CidMappingService {
      */
     public CidMappingService(Path storageDir) {
         this.storageDir = storageDir;
+        this.persistExecutor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "cid-mapping-persist");
+            thread.setDaemon(true);
+            return thread;
+        });
         loadMappings();
         log.info("✅ CidMappingService initialized with {} mappings from {}", 
             totalMappings, storageDir);
@@ -251,15 +263,21 @@ public class CidMappingService {
      * Persist mappings to storage asynchronously.
      */
     private void persistMappingsAsync() {
-        // Use a simple async approach for POC
-        // In production, use a proper executor with batching
-        new Thread(() -> {
-            try {
-                persistMappings();
-            } catch (Exception e) {
-                log.error("Failed to persist CID mappings: {}", e.getMessage());
-            }
-        }, "cid-mapping-persist").start();
+        if (closed.get()) {
+            log.debug("Skipping CID mapping persistence because service is closed");
+            return;
+        }
+        try {
+            persistExecutor.execute(() -> {
+                try {
+                    persistMappings();
+                } catch (RuntimeException e) {
+                    log.error("Failed to persist CID mappings", e);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            log.debug("Skipping CID mapping persistence during shutdown");
+        }
     }
 
     /**
@@ -280,6 +298,25 @@ public class CidMappingService {
 
         } catch (IOException e) {
             log.error("Failed to persist CID mappings to {}: {}", mappingFile, e.getMessage());
+        }
+    }
+
+    @Override
+    public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        persistExecutor.shutdown();
+        try {
+            if (!persistExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                persistExecutor.shutdownNow();
+                if (!persistExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    log.warn("Timed out waiting for CID mapping persistence to stop");
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            persistExecutor.shutdownNow();
         }
     }
 
@@ -311,4 +348,3 @@ public class CidMappingService {
         }
     }
 }
-

@@ -38,7 +38,7 @@ import java.util.Map;
  * <p>This class replaces the large if-else chain in SegmentHttpServer with
  * a cleaner routing mechanism that delegates to specialized handler classes.</p>
  */
-public class RequestRouter {
+public class RequestRouter implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(RequestRouter.class);
 
@@ -59,6 +59,7 @@ public class RequestRouter {
     private final EventStreamHandler eventStreamHandler;
     private final OsgiConfigApiHandler osgiConfigApiHandler;
     private final EventBroadcaster eventBroadcaster;
+    private final org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager;
     private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
     private final RateLimiter rateLimiter;
@@ -109,12 +110,11 @@ public class RequestRouter {
         this.leaderConsensusHandler = new LeaderConsensusHandler(context);
         
         // Binary upload handler (ADR 020 - lazy upload on confirmation)
-        org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager sessionManager = 
-            new org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager();
-        this.binaryUploadHandler = new BinaryUploadHandler(sessionManager);
-        
+        this.uploadSessionManager = new org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager();
+        this.binaryUploadHandler = new BinaryUploadHandler(uploadSessionManager);
+
         // Make session manager available in context for dashboard metrics
-        context.setUploadSessionManager(sessionManager);
+        context.setUploadSessionManager(uploadSessionManager);
         
         // CID API handler (Oak ↔ IPFS CID mapping)
         this.cidApiHandler = new CidApiHandler(context);
@@ -972,6 +972,48 @@ public class RequestRouter {
      */
     public EventBroadcaster getEventBroadcaster() {
         return eventBroadcaster;
+    }
+
+    @Override
+    public void close() {
+        try {
+            consensusApiHandler.close();
+        } catch (RuntimeException e) {
+            log.warn("Failed to close consensus API handler", e);
+        }
+        try {
+            eventBroadcaster.shutdown();
+        } catch (RuntimeException e) {
+            log.warn("Failed to shutdown event broadcaster", e);
+        }
+        try {
+            uploadSessionManager.shutdown();
+        } catch (RuntimeException e) {
+            log.warn("Failed to shutdown upload session manager", e);
+        }
+        if (context.cidMappingService != null) {
+            try {
+                context.cidMappingService.close();
+            } catch (RuntimeException e) {
+                log.warn("Failed to close CID mapping service", e);
+            }
+        }
+        try {
+            rateLimiter.shutdown();
+        } catch (RuntimeException e) {
+            log.warn("Failed to shutdown rate limiter", e);
+        }
+        if (chatHandler instanceof AutoCloseable) {
+            try {
+                ((AutoCloseable) chatHandler).close();
+            } catch (Exception e) {
+                log.warn("Failed to close chat handler", e);
+            }
+        }
+        context.eventBroadcaster = null;
+        context.uploadSessionManager = null;
+        context.cidMappingService = null;
+        chatHandler = null;
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -70,7 +70,7 @@ final class AeronEngineComponentFactory {
     static AeronIngressHandler createIngressHandler(AeronMessageCodec codec,
                                                     MessageDispatcher dispatcher,
                                                     Runnable heartbeatCallback,
-                                                    Runnable genesisCallback) {
+                                                    java.util.function.Consumer<String> genesisCallback) {
         AeronIngressHandler handler = new AeronIngressHandler(codec, dispatcher);
         handler.setHeartbeatCallback(heartbeatCallback);
         handler.setGenesisCallback(genesisCallback);

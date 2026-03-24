@@ -16,9 +16,16 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import io.aeron.Image;
 import io.aeron.cluster.service.Cluster;
+import org.agrona.concurrent.IdleStrategy;
+import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
+import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
+import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
+import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
+import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import java.io.File;
 import java.lang.reflect.Field;
@@ -39,6 +46,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -217,6 +225,127 @@ public class AeronConsensusEngineTest {
     }
 
     @Test
+    public void stopStopsBeaconClientPollingWhenPresent() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+        setField(engine, "beaconClient", beaconClient);
+
+        engine.stop();
+
+        verify(beaconClient).stopBackgroundPolling();
+    }
+
+    @Test
+    public void onStartRestoresSnapshotAndUpdatesEpochWhenHeadMatches() {
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString()).thenReturn("head-1");
+        SnapshotService snapshotService = mock(SnapshotService.class);
+        SnapshotService.SnapshotState snapshotState =
+            new SnapshotService.SnapshotState("head-1", 42, 1234L, 1);
+        Image snapshotImage = mock(Image.class);
+        IdleStrategy idleStrategy = mock(IdleStrategy.class);
+        Cluster cluster = mock(Cluster.class, RETURNS_DEEP_STUBS);
+        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
+        when(cluster.idleStrategy()).thenReturn(idleStrategy);
+        when(snapshotService.restoreSnapshot(snapshotImage, idleStrategy)).thenReturn(snapshotState);
+
+        AeronConsensusEngine engine = createEngine(fileStore, snapshotService);
+
+        engine.onStart(cluster, snapshotImage);
+
+        verify(snapshotService).restoreSnapshot(snapshotImage, idleStrategy);
+        assertEquals(42, engine.getCurrentEpoch());
+        assertTrue(engine.isLeader());
+    }
+
+    @Test
+    public void onStartWithSnapshotAndNoStateStartsFresh() {
+        SnapshotService snapshotService = mock(SnapshotService.class);
+        Image snapshotImage = mock(Image.class);
+        IdleStrategy idleStrategy = mock(IdleStrategy.class);
+        Cluster cluster = mock(Cluster.class, RETURNS_DEEP_STUBS);
+        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
+        when(cluster.idleStrategy()).thenReturn(idleStrategy);
+        when(snapshotService.restoreSnapshot(snapshotImage, idleStrategy)).thenReturn(null);
+
+        AeronConsensusEngine engine = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), snapshotService);
+
+        engine.onStart(cluster, snapshotImage);
+
+        assertEquals(0, engine.getCurrentEpoch());
+    }
+
+    @Test
+    public void onStartFailsWhenSnapshotHeadDoesNotMatchFileStore() {
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString()).thenReturn("file-head");
+        SnapshotService snapshotService = mock(SnapshotService.class);
+        Image snapshotImage = mock(Image.class);
+        IdleStrategy idleStrategy = mock(IdleStrategy.class);
+        Cluster cluster = mock(Cluster.class, RETURNS_DEEP_STUBS);
+        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
+        when(cluster.idleStrategy()).thenReturn(idleStrategy);
+        when(snapshotService.restoreSnapshot(snapshotImage, idleStrategy)).thenReturn(
+            new SnapshotService.SnapshotState("snapshot-head", 7, 999L, 1)
+        );
+
+        AeronConsensusEngine engine = createEngine(fileStore, snapshotService);
+
+        try {
+            engine.onStart(cluster, snapshotImage);
+            fail("Expected snapshot mismatch to fail startup");
+        } catch (RuntimeException e) {
+            assertTrue(e.getMessage().contains("Snapshot load failed"));
+        }
+    }
+
+    @Test
+    public void onStartWithFreshLeaderSchedulesGenesisBootstrapWhenMissing() {
+        RecordingTaskScheduler scheduler = new RecordingTaskScheduler();
+        AeronBackgroundCoordinator backgroundCoordinator =
+            new AeronBackgroundCoordinator(scheduler, 7L, 11L, 13L);
+        Cluster cluster = mock(Cluster.class, RETURNS_DEEP_STUBS);
+        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
+        when(cluster.idleStrategy()).thenReturn(mock(IdleStrategy.class));
+
+        AeronConsensusEngine engine = createEngine(
+            mock(FileStore.class, RETURNS_DEEP_STUBS),
+            new SnapshotService(),
+            backgroundCoordinator,
+            new MemoryNodeStore()
+        );
+
+        engine.onStart(cluster, null);
+
+        assertEquals(1, scheduler.tasks.size());
+        assertEquals("genesis-creator", scheduler.tasks.get(0).name);
+    }
+
+    @Test
+    public void onRoleChangeToLeaderSkipsGenesisBootstrapWhenGenesisExists() throws Exception {
+        RecordingTaskScheduler scheduler = new RecordingTaskScheduler();
+        AeronBackgroundCoordinator backgroundCoordinator =
+            new AeronBackgroundCoordinator(scheduler, 7L, 11L, 13L);
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedGenesis(nodeStore);
+        Cluster cluster = mock(Cluster.class, RETURNS_DEEP_STUBS);
+        when(cluster.memberId()).thenReturn(7);
+        when(cluster.time()).thenReturn(12345L);
+
+        AeronConsensusEngine engine = createEngine(
+            mock(FileStore.class, RETURNS_DEEP_STUBS),
+            new SnapshotService(),
+            backgroundCoordinator,
+            nodeStore
+        );
+        setField(engine, "cluster", cluster);
+
+        engine.onRoleChange(Cluster.Role.LEADER);
+
+        assertTrue(scheduler.tasks.isEmpty());
+    }
+
+    @Test
     public void durabilityAckFailureInvokesFailureCallbackAndClearsPendingState() throws Exception {
         AeronConsensusEngine engine = createEngine();
         AeronConsensusEngine.DurabilityStatusCallback callback =
@@ -258,15 +387,66 @@ public class AeronConsensusEngineTest {
     }
 
     private AeronConsensusEngine createEngine() {
+        return createEngine(mockFileStore, null, new AeronBackgroundCoordinator(), mockNodeStore);
+    }
+
+    private AeronConsensusEngine createEngine(FileStore fileStore, SnapshotService snapshotService) {
+        return createEngine(fileStore, snapshotService, new AeronBackgroundCoordinator(), mockNodeStore);
+    }
+
+    private AeronConsensusEngine createEngine(FileStore fileStore,
+                                              SnapshotService snapshotService,
+                                              AeronBackgroundCoordinator backgroundCoordinator,
+                                              NodeStore nodeStore) {
         return new AeronConsensusEngine(
-            mockFileStore,
-            mockNodeStore,
+            fileStore,
+            nodeStore,
             "http://self:8080",
             List.of(),
             mockWallet,
             storeDirectory.getAbsolutePath(),
-            null
+            null,
+            snapshotService,
+            backgroundCoordinator
         );
+    }
+
+    private static void seedGenesis(MemoryNodeStore nodeStore) throws Exception {
+        NodeBuilder root = nodeStore.getRoot().builder();
+        root.child("oak-chain")
+            .child("00")
+            .child("00")
+            .child("00")
+            .child("0x0000000000000000000000000000000000000000")
+            .child("content")
+            .child("genesis");
+        nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+    }
+
+    private static final class RecordingTaskScheduler implements AeronBackgroundCoordinator.TaskScheduler {
+        private final List<ScheduledTask> tasks = new ArrayList<>();
+
+        @Override
+        public void schedule(String name, long delayMs, Runnable task) {
+            tasks.add(new ScheduledTask(name, delayMs, task));
+        }
+
+        @Override
+        public void close() {
+            tasks.clear();
+        }
+    }
+
+    private static final class ScheduledTask {
+        private final String name;
+        private final long delayMs;
+        private final Runnable runnable;
+
+        private ScheduledTask(String name, long delayMs, Runnable runnable) {
+            this.name = name;
+            this.delayMs = delayMs;
+            this.runnable = runnable;
+        }
     }
 
     private static void setField(Object target, String name, Object value) throws Exception {

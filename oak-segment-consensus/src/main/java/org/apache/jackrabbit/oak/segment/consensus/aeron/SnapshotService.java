@@ -218,87 +218,12 @@ public class SnapshotService {
             log.error("Cannot create store directory: {}", storeDirectory);
             return null;
         }
-
-        final java.util.concurrent.atomic.AtomicReference<String> headRef =
-            new java.util.concurrent.atomic.AtomicReference<>();
-        final java.util.concurrent.atomic.AtomicInteger epochRef = new java.util.concurrent.atomic.AtomicInteger(0);
-        final java.util.concurrent.atomic.AtomicLong timestampRef = new java.util.concurrent.atomic.AtomicLong(0);
-        final java.util.concurrent.atomic.AtomicInteger fileCountRef = new java.util.concurrent.atomic.AtomicInteger(0);
-        final java.util.concurrent.atomic.AtomicBoolean metadataReceived =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
-
-        final java.util.concurrent.atomic.AtomicReference<FileReceiver> currentFileReceiver =
-            new java.util.concurrent.atomic.AtomicReference<>();
+        SnapshotRestoreSession restoreSession = new SnapshotRestoreSession(storeDir);
 
         io.aeron.FragmentAssembler fragmentAssembler = new io.aeron.FragmentAssembler(
             (buffer, offset, length, header) -> {
-                if (length < SimpleMessageHeader.ENCODED_LENGTH) {
-                    log.warn("⚠️  Snapshot fragment too short: {} bytes", length);
-                    return;
-                }
-
                 try {
-                    SimpleMessageHeader.HeaderInfo headerInfo = SimpleMessageHeader.decode(buffer, offset);
-                    if (headerInfo.templateId != SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
-                        return;
-                    }
-
-                    int payloadOffset = offset + SimpleMessageHeader.ENCODED_LENGTH;
-                    int maxPayloadLength = Math.max(0, length - SimpleMessageHeader.ENCODED_LENGTH);
-                    int payloadLength = Math.min(headerInfo.blockLength, maxPayloadLength);
-                    if (payloadLength == 0) {
-                        return;
-                    }
-
-                    byte[] payload = new byte[payloadLength];
-                    buffer.getBytes(payloadOffset, payload);
-
-                    String payloadStr = new String(payload, 0, Math.min(200, payloadLength),
-                        java.nio.charset.StandardCharsets.UTF_8);
-
-                    if (payloadStr.contains("\"type\":\"metadata\"")) {
-                        String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
-                        String head = extractJsonField(json, "head");
-                        Long epochValue = extractJsonFieldLong(json, "ethereumEpoch");
-                        if (epochValue == null) {
-                            epochValue = extractJsonFieldLong(json, "epoch");
-                        }
-                        Long timestampValue = extractJsonFieldLong(json, "timestamp");
-
-                        if (head != null && epochValue != null && timestampValue != null) {
-                            headRef.set(head);
-                            epochRef.set(epochValue.intValue());
-                            timestampRef.set(timestampValue);
-                            metadataReceived.set(true);
-                            log.info("   ✅ Metadata received: head={}, epoch={}", head, epochRef.get());
-                        }
-                    } else if (payloadStr.contains("\"type\":\"file_header\"")) {
-                        String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
-                        String fileType = extractJsonField(json, "fileType");
-                        String fileName = extractJsonField(json, "fileName");
-                        Long fileSize = extractJsonFieldLong(json, "fileSize");
-
-                        if (fileName != null && fileSize != null) {
-                            FileReceiver prev = currentFileReceiver.get();
-                            if (prev != null) {
-                                prev.close();
-                            }
-
-                            File targetFile = new File(storeDirectory, fileName);
-                            FileReceiver receiver = new FileReceiver(targetFile, fileSize);
-                            currentFileReceiver.set(receiver);
-                            fileCountRef.incrementAndGet();
-                            log.info("   📥 Receiving {}: {} ({} bytes)",
-                                fileType, fileName, fileSize);
-                        }
-                    } else {
-                        FileReceiver receiver = currentFileReceiver.get();
-                        if (receiver != null) {
-                            receiver.writeChunk(payload, 0, payloadLength);
-                        } else {
-                            log.debug("Received snapshot chunk but no active receiver");
-                        }
-                    }
+                    restoreSession.onFragment(buffer, offset, length);
                 } catch (Exception e) {
                     log.error("❌ Failed to process snapshot fragment", e);
                 }
@@ -318,112 +243,17 @@ public class SnapshotService {
             }
             strategy.idle(fragments);
         }
-
-        FileReceiver finalReceiver = currentFileReceiver.get();
-        if (finalReceiver != null) {
-            finalReceiver.close();
-        }
-
-        if (!metadataReceived.get()) {
-            log.warn("⚠️  Snapshot restoration incomplete: no metadata received");
-            return null;
-        }
-
-        log.info("✅ Snapshot restored: head={}, epoch={}, files={}, fragments={}",
-            headRef.get(), epochRef.get(), fileCountRef.get(), fragmentsPolled);
-
-        return new SnapshotState(headRef.get(), epochRef.get(), timestampRef.get(), fileCountRef.get());
-    }
-
-    /**
-     * Extract a field from JSON string (simple parser for snapshot metadata).
-     */
-    private String extractJsonField(String json, String field) {
-        String pattern = "\"" + field + "\":";
-        int start = json.indexOf(pattern);
-        if (start < 0) {
-            return null;
-        }
-
-        start += pattern.length();
-        while (start < json.length() && Character.isWhitespace(json.charAt(start))) {
-            start++;
-        }
-
-        if (start >= json.length()) {
-            return null;
-        }
-
-        if (json.charAt(start) == '"') {
-            start++;
-            int end = json.indexOf('"', start);
-            if (end < 0) {
+        try {
+            SnapshotState snapshotState = restoreSession.complete();
+            if (snapshotState == null) {
                 return null;
             }
-            return json.substring(start, end);
-        }
 
-        int end = start;
-        while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) {
-            end++;
-        }
-        return json.substring(start, end);
-    }
-
-    private Long extractJsonFieldLong(String json, String field) {
-        String value = extractJsonField(json, field);
-        if (value == null || value.isEmpty()) {
-            return null;
-        }
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    /**
-     * Helper class to receive and write file chunks during snapshot restore.
-     */
-    private static class FileReceiver {
-        private final File targetFile;
-        private final long expectedSize;
-        private long bytesReceived;
-        private java.io.FileOutputStream fos;
-
-        FileReceiver(File targetFile, long expectedSize) throws Exception {
-            this.targetFile = targetFile;
-            this.expectedSize = expectedSize;
-            this.bytesReceived = 0;
-
-            File parent = targetFile.getParentFile();
-            if (parent != null) {
-                parent.mkdirs();
-            }
-
-            this.fos = new java.io.FileOutputStream(targetFile);
-        }
-
-        void writeChunk(byte[] data, int offset, int length) throws Exception {
-            fos.write(data, offset, length);
-            bytesReceived += length;
-        }
-
-        void close() {
-            try {
-                if (fos != null) {
-                    fos.close();
-                }
-
-                if (bytesReceived == expectedSize) {
-                    log.debug("✅ Snapshot file complete: {} ({} bytes)", targetFile.getName(), bytesReceived);
-                } else {
-                    log.warn("⚠️  Snapshot file size mismatch: {} (expected {}, got {})",
-                        targetFile.getName(), expectedSize, bytesReceived);
-                }
-            } catch (Exception e) {
-                log.warn("❌ Failed to close snapshot file: {} - {}", targetFile.getName(), e.getMessage());
-            }
+            log.info("✅ Snapshot restored: head={}, epoch={}, files={}, fragments={}",
+                snapshotState.head, snapshotState.epoch, snapshotState.fileCount, fragmentsPolled);
+            return snapshotState;
+        } finally {
+            restoreSession.close();
         }
     }
     

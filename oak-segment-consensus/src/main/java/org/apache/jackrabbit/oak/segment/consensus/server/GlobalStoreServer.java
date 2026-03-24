@@ -26,6 +26,7 @@ import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
+import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -374,6 +375,7 @@ public class GlobalStoreServer {
     public void stop() {
         log.info("Shutting down global store server...");
         running = false;
+        ServerContext serverContext = httpServer != null ? httpServer.getContext() : null;
         
         // Stop bootstrap (StandbyClientSync + StandbyServerSync)
         if (bootstrap != null) {
@@ -422,6 +424,8 @@ public class GlobalStoreServer {
             }
         }
 
+        shutdownManagedContext(serverContext);
+
         if (readViewResources != null) {
             try {
                 readViewResources.close();
@@ -438,6 +442,66 @@ public class GlobalStoreServer {
                 log.info("✅ FileStore closed");
             } catch (Exception e) {
                 log.warn("Error closing FileStore: {}", e.getMessage());
+            }
+        }
+    }
+
+    private void shutdownManagedContext(ServerContext serverContext) {
+        if (serverContext == null) {
+            return;
+        }
+
+        if (serverContext.proposalQueueManager != null) {
+            try {
+                serverContext.proposalQueueManager.stop();
+                log.info("✅ Proposal queue manager stopped");
+            } catch (Exception e) {
+                log.warn("Error stopping proposal queue manager: {}", e.getMessage());
+            }
+        }
+
+        if (serverContext.proposalQueueManager != null && serverContext.proposalQueueManager.getBeaconClient() != null) {
+            try {
+                serverContext.proposalQueueManager.getBeaconClient().stopBackgroundPolling();
+                log.info("✅ Proposal queue BeaconChainClient stopped");
+            } catch (Exception e) {
+                log.warn("Error stopping proposal queue BeaconChainClient: {}", e.getMessage());
+            }
+        }
+
+        if (serverContext.evmBridge != null) {
+            try {
+                serverContext.evmBridge.stop();
+                log.info("✅ EVM bridge stopped");
+            } catch (Exception e) {
+                log.warn("Error stopping EVM bridge: {}", e.getMessage());
+            }
+        }
+
+        if (serverContext.gcProposalManager != null) {
+            try {
+                serverContext.gcProposalManager.shutdown();
+                log.info("✅ GC proposal manager stopped");
+            } catch (Exception e) {
+                log.warn("Error stopping GC proposal manager: {}", e.getMessage());
+            }
+        }
+
+        if (serverContext.periodicGCJob != null) {
+            try {
+                serverContext.periodicGCJob.stop();
+                log.info("✅ Periodic GC job stopped");
+            } catch (Exception e) {
+                log.warn("Error stopping periodic GC job: {}", e.getMessage());
+            }
+        }
+
+        if (serverContext.aeronPrometheusMetrics != null) {
+            try {
+                serverContext.aeronPrometheusMetrics.close();
+                log.info("✅ Aeron Prometheus metrics stopped");
+            } catch (Exception e) {
+                log.warn("Error stopping Aeron Prometheus metrics: {}", e.getMessage());
             }
         }
     }

@@ -128,7 +128,6 @@ public class AeronConsensusEngine implements ClusteredService {
     private final SegmentReplicator replicator;
     private final String storeDirectory;
     private final org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager backpressureManager;
-    private final org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     private final DurabilityAckTracker durabilityAckTracker = new DurabilityAckTracker();
     private final TransactionLifecycleManager transactionLifecycleManager;
     private final PeerProbeMode peerProbeMode;
@@ -136,6 +135,8 @@ public class AeronConsensusEngine implements ClusteredService {
     // ✅ PRODUCTION REFACTOR: Service layer components (extracted from monolithic class)
     private final MessageDispatcher messageDispatcher;
     private final SnapshotService snapshotService;
+    private final AeronGenesisInitializer genesisInitializer;
+    private final AeronBackgroundCoordinator backgroundCoordinator;
     private final LeaderDiscoveryService leaderDiscoveryService;
     private final HeadStateService headStateService;
     
@@ -259,13 +260,40 @@ public class AeronConsensusEngine implements ClusteredService {
             org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet,
             String storeDirectory,
             org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
+        this(fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore,
+            AeronEngineComponentFactory.createSnapshotService(fileStore, storeDirectory),
+            new AeronBackgroundCoordinator());
+    }
+
+    AeronConsensusEngine(
+            FileStore fileStore,
+            NodeStore nodeStore,
+            String selfUrl,
+            List<String> peerUrls,
+            org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet,
+            String storeDirectory,
+            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore,
+            SnapshotService snapshotService) {
+        this(fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore, snapshotService,
+            new AeronBackgroundCoordinator());
+    }
+
+    AeronConsensusEngine(
+            FileStore fileStore,
+            NodeStore nodeStore,
+            String selfUrl,
+            List<String> peerUrls,
+            org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet,
+            String storeDirectory,
+            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore,
+            SnapshotService snapshotService,
+            AeronBackgroundCoordinator backgroundCoordinator) {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.selfUrl = selfUrl;
         this.peerUrls = peerUrls;
         this.wallet = wallet;
         this.storeDirectory = storeDirectory;
-        this.blobStore = blobStore;
         this.replicator = AeronEngineComponentFactory.createSegmentReplicator(fileStore);
         this.backpressureManager = AeronEngineComponentFactory.createBackpressureManager();
         this.transactionLifecycleManager = new TransactionLifecycleManager(resolveTransactionLifecycleDirectory(storeDirectory));
@@ -279,7 +307,13 @@ public class AeronConsensusEngine implements ClusteredService {
         // This allows us to map Aeron Cluster leaderMemberId to validator URL
         
         // ✅ PRODUCTION REFACTOR: Initialize service layer components
-        this.snapshotService = AeronEngineComponentFactory.createSnapshotService(fileStore, storeDirectory);
+        this.snapshotService = snapshotService != null
+            ? snapshotService
+            : AeronEngineComponentFactory.createSnapshotService(fileStore, storeDirectory);
+        this.genesisInitializer = new AeronGenesisInitializer(fileStore, nodeStore, blobStore);
+        this.backgroundCoordinator = backgroundCoordinator != null
+            ? backgroundCoordinator
+            : new AeronBackgroundCoordinator();
         this.leaderDiscoveryService = AeronEngineComponentFactory.createLeaderDiscoveryService(nodeIdToUrl, peerUrls, selfUrl);
         this.messageDispatcher = AeronEngineComponentFactory.createMessageDispatcher(
             new MessageDispatcher.WriteCallback() {
@@ -537,6 +571,10 @@ public class AeronConsensusEngine implements ClusteredService {
         // No head broadcast timer to stop in deterministic consensus mode.
         stopReconnectScheduler();
         stopTransactionTimeoutScheduler();
+        if (beaconClient != null) {
+            beaconClient.stopBackgroundPolling();
+        }
+        backgroundCoordinator.close();
         
         // Aeron Cluster components are closed by AeronClusterLauncher.close()
         // which handles: MediaDriver, Archive, ConsensusModule, ClusteredService
@@ -601,43 +639,7 @@ public class AeronConsensusEngine implements ClusteredService {
         
         // Load snapshot if present (ensures consistent initial state)
         if (snapshotImage != null) {
-            log.info("Loading snapshot from image");
-            
-            try {
-                SnapshotService.SnapshotState snapshotState = snapshotService.restoreSnapshot(
-                    snapshotImage,
-                    idleStrategy != null ? idleStrategy : new org.agrona.concurrent.BusySpinIdleStrategy()
-                );
-                
-                if (snapshotState != null) {
-                    log.info("Snapshot metadata - HEAD: {}, Epoch: {}, Timestamp: {}", 
-                        snapshotState.head, snapshotState.epoch, snapshotState.timestamp);
-                    
-                    // Verify FileStore HEAD matches snapshot HEAD
-                    String fileStoreHead = fileStore.getHead().getRecordId().toString();
-                    if (!snapshotState.head.equals(fileStoreHead)) {
-                        log.error("CRITICAL: HEAD mismatch - Snapshot: {}, FileStore: {}. Validators must start from identical state. " +
-                            "Solution: Copy segmentstore from validator-0 before starting.", 
-                            snapshotState.head, fileStoreHead);
-                        
-                        throw new IllegalStateException(
-                            String.format("FileStore HEAD (%s) doesn't match snapshot HEAD (%s). " +
-                                "Validators must start from identical state. " +
-                                "Copy segmentstore from validator-0 to other validators before starting.",
-                                fileStoreHead, snapshotState.head));
-                    }
-                    
-                    // Restore state
-                    currentEthereumEpoch = snapshotState.epoch;
-                    
-                    log.info("Snapshot loaded successfully - HEAD verified: {}", snapshotState.head);
-                } else {
-                    log.warn("Snapshot image present but no snapshot data found - starting fresh");
-                }
-            } catch (Exception e) {
-                log.error("Failed to load snapshot", e);
-                throw new RuntimeException("Snapshot load failed - cannot start with inconsistent state", e);
-            }
+            restoreSnapshotOnStart(snapshotImage);
         } else {
             log.info("Starting fresh (no snapshot)");
             
@@ -655,40 +657,7 @@ public class AeronConsensusEngine implements ClusteredService {
         // So we must create genesis here if we're the initial leader
         if (cluster.role() == Cluster.Role.LEADER && snapshotImage == null) {
             log.info("🎬 Initial leader detected on fresh cluster - checking for genesis");
-            
-            if (nodeStore != null) {
-                try {
-                    // Check if genesis node exists
-                    org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
-                    boolean genesisExists = root.getChildNode("oak-chain")
-                        .getChildNode("00")
-                        .getChildNode("00")
-                        .getChildNode("00")
-                        .getChildNode("0x0000000000000000000000000000000000000000")
-                        .getChildNode("content")
-                        .getChildNode("genesis")
-                        .exists();
-                    
-                    if (!genesisExists) {
-                        log.info("🎬 Network genesis: No genesis detected on initial leader - creating genesis");
-                        
-                        // Trigger genesis creation in background thread
-                        // (don't block onStart callback)
-                        new Thread(() -> {
-                            try {
-                                Thread.sleep(2000); // Wait 2s for cluster to stabilize
-                                createGenesisViaConsensus();
-                            } catch (Exception e) {
-                                log.error("❌ Failed to create genesis", e);
-                            }
-                        }, "genesis-creator").start();
-                    } else {
-                        log.info("Genesis already exists, skipping creation");
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to check for genesis existence: {}", e.getMessage());
-                }
-            }
+            scheduleGenesisBootstrapIfMissing("initial leader");
         }
         
         // ✈️ AERON NATIVE: Create internal AeronCluster client for sending writes through ingress
@@ -729,6 +698,55 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         
         log.info("Aeron Cluster service started successfully");
+    }
+
+    private void restoreSnapshotOnStart(Image snapshotImage) {
+        log.info("Loading snapshot from image");
+
+        try {
+            SnapshotService.SnapshotState snapshotState = snapshotService.restoreSnapshot(
+                snapshotImage,
+                idleStrategy != null ? idleStrategy : new org.agrona.concurrent.BusySpinIdleStrategy()
+            );
+
+            if (snapshotState == null) {
+                log.warn("Snapshot image present but no snapshot data found - starting fresh");
+                return;
+            }
+
+            log.info(
+                "Snapshot metadata - HEAD: {}, Epoch: {}, Timestamp: {}",
+                snapshotState.head,
+                snapshotState.epoch,
+                snapshotState.timestamp
+            );
+            verifySnapshotHead(snapshotState);
+            currentEthereumEpoch = snapshotState.epoch;
+            log.info("Snapshot loaded successfully - HEAD verified: {}", snapshotState.head);
+        } catch (Exception e) {
+            log.error("Failed to load snapshot", e);
+            throw new RuntimeException("Snapshot load failed - cannot start with inconsistent state", e);
+        }
+    }
+
+    private void verifySnapshotHead(SnapshotService.SnapshotState snapshotState) {
+        String fileStoreHead = fileStore.getHead().getRecordId().toString();
+        if (snapshotState.head.equals(fileStoreHead)) {
+            return;
+        }
+
+        log.error(
+            "CRITICAL: HEAD mismatch - Snapshot: {}, FileStore: {}. Validators must start from identical state. Solution: Copy segmentstore from validator-0 before starting.",
+            snapshotState.head,
+            fileStoreHead
+        );
+        throw new IllegalStateException(
+            String.format(
+                "FileStore HEAD (%s) doesn't match snapshot HEAD (%s). Validators must start from identical state. Copy segmentstore from validator-0 to other validators before starting.",
+                fileStoreHead,
+                snapshotState.head
+            )
+        );
     }
     
     @Override
@@ -797,7 +815,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 SimpleMessageHeader.HeaderInfo headerInfo = SimpleMessageHeader.decode(buffer, offset);
                 if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
                     log.info("🎬 GENESIS proposal received via Aeron - creating genesis on this node");
-                    applyGenesisCreation();
+                    applyGenesisCreation(readGenesisProposal(buffer, offset, length, headerInfo.blockLength));
                     log.info("✅ Genesis creation complete on this node");
                     return;
                 }
@@ -814,6 +832,17 @@ public class AeronConsensusEngine implements ClusteredService {
                 log.error("❌ Failed to process replicated message", e);
             }
         }
+    }
+
+    private String readGenesisProposal(DirectBuffer buffer, int offset, int length, int blockLength) {
+        int payloadOffset = offset + SimpleMessageHeader.ENCODED_LENGTH;
+        int payloadLength = Math.max(0, Math.min(blockLength, length - SimpleMessageHeader.ENCODED_LENGTH));
+        if (payloadLength == 0) {
+            return "{}";
+        }
+        byte[] payload = new byte[payloadLength];
+        buffer.getBytes(payloadOffset, payload);
+        return new String(payload, java.nio.charset.StandardCharsets.UTF_8).trim();
     }
     
     
@@ -2140,43 +2169,7 @@ public class AeronConsensusEngine implements ClusteredService {
             if (leaderTracker != null) {
                 leaderTracker.notifyBecameLeader(memberId);
             }
-            
-            // NEW GENESIS ARCHITECTURE: Create genesis as first consensus write
-            // Check if genesis exists - if not, create it as first consensus write
-            if (nodeStore != null) {
-                try {
-                    // Check if genesis node exists at wallet-scoped path
-                    // Path: /oak-chain/00/00/00/0x0000.../content/genesis
-                    org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
-                    boolean genesisExists = root.getChildNode("oak-chain")
-                        .getChildNode("00")
-                        .getChildNode("00")
-                        .getChildNode("00")
-                        .getChildNode("0x0000000000000000000000000000000000000000")
-                        .getChildNode("content")
-                        .getChildNode("genesis")
-                        .exists();
-                    
-                    if (!genesisExists) {
-                        log.info("Network genesis: No genesis detected on new leader - creating genesis as first consensus write");
-                        
-                        // Trigger genesis creation in background thread
-                        // (don't block onRoleChange callback)
-                        new Thread(() -> {
-                            try {
-                                Thread.sleep(2000); // Wait 2s for cluster to stabilize
-                                createGenesisViaConsensus();
-                            } catch (Exception e) {
-                                log.error("❌ Failed to create genesis", e);
-                            }
-                        }, "genesis-creator").start();
-                    } else {
-                        log.debug("Genesis already exists, skipping creation");
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to check for genesis existence: {}", e.getMessage());
-                }
-            }
+            scheduleGenesisBootstrapIfMissing("new leader");
         } else if (previousRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Stepped down from LEADER (term: {})", currentTerm);
             if (leaderTracker != null) {
@@ -2216,6 +2209,7 @@ public class AeronConsensusEngine implements ClusteredService {
             }
         }
         stopTransactionTimeoutScheduler();
+        backgroundCoordinator.close();
         
         // Cleanup resources
         if (beaconClient != null) {
@@ -2894,38 +2888,19 @@ public class AeronConsensusEngine implements ClusteredService {
      * ✅ REFACTORED: Delegates to LeaderDiscoveryService for leader discovery.
      */
     private void discoverLeaderFromPeers() {
-        // Run in background thread to avoid blocking
-        java.util.concurrent.ExecutorService executor = 
-            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
-                Thread t = new Thread(r, "aeron-leader-discovery");
-                t.setDaemon(true);
-                return t;
-            });
-        
-        executor.submit(() -> {
-            try {
-                Thread.sleep(3000); // Wait 3s for cluster to stabilize
-                log.debug("Starting Aeron Cluster leader discovery");
-                
-                // ✅ REFACTORED: Delegate to LeaderDiscoveryService
-                String leaderUrl = leaderDiscoveryService.discoverLeader(cluster);
-                if (leaderUrl != null) {
-                    this.currentLeader = leaderUrl;
-                    log.info("Discovered leader via LeaderDiscoveryService: {} (background discovery)", leaderUrl);
-                } else {
-                    log.debug("Could not discover leader from LeaderDiscoveryService (will retry)");
-                    // Try again after a longer delay
-                    Thread.sleep(5000);
-                    leaderUrl = leaderDiscoveryService.discoverLeader(cluster);
-                    if (leaderUrl != null) {
-                        this.currentLeader = leaderUrl;
-                        log.info("Discovered leader via LeaderDiscoveryService: {} (retry)", leaderUrl);
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("Aeron Cluster leader discovery failed: {}", e.getMessage());
-            }
+        backgroundCoordinator.scheduleLeaderDiscovery(cluster, leaderDiscoveryService, leaderUrl -> {
+            this.currentLeader = leaderUrl;
+            log.info("Discovered leader via LeaderDiscoveryService: {}", leaderUrl);
         });
+    }
+
+    private void scheduleGenesisBootstrapIfMissing(String reason) {
+        boolean scheduled = backgroundCoordinator.scheduleGenesisCreationIfMissing(nodeStore, this::createGenesisViaConsensus);
+        if (scheduled) {
+            log.info("Network genesis: No genesis detected on {} - creating genesis as first consensus write", reason);
+        } else {
+            log.debug("Genesis already exists or could not be inspected, skipping bootstrap for {}", reason);
+        }
     }
     
     
@@ -3075,8 +3050,9 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         
         try {
-            // Build minimal genesis command (empty JSON, just the command itself)
-            String json = "{\"command\":\"CREATE_GENESIS\"}";
+            AeronGenesisInitializer.GenesisProposal proposal =
+                AeronGenesisInitializer.GenesisProposal.create(System.currentTimeMillis(), selfUrl);
+            String json = proposal.toJson();
             byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             
             // Encode message with GENESIS template ID
@@ -3104,7 +3080,8 @@ public class AeronConsensusEngine implements ClusteredService {
                 false
             );
             if (sent) {
-                log.info("✅ GENESIS proposal sent through Aeron - all nodes will create genesis identically");
+                log.info("✅ GENESIS proposal sent through Aeron - validator={}, timestamp={}",
+                    proposal.getGenesisValidatorUrl(), proposal.getTimestamp());
             }
             
         } catch (Exception e) {
@@ -3113,468 +3090,10 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Apply genesis creation on all nodes (called when GENESIS message is received via Aeron).
-     * This method is deterministic - all nodes create identical genesis structure.
-     * 
-     * <p><strong>GENESIS AS THE HELPER NODE</strong></p>
-     * <p>The genesis node is not sacred scripture - it's the self-documenting root that teaches
-     * anyone who reads it how to use this network. It's the de facto how-to guide embedded
-     * in the content itself.</p>
-     * 
-     * <p>Structure:
-     * <ul>
-     *   <li><code>/genesis</code> - Root with network identity and ethos</li>
-     *   <li><code>/genesis/getting-started</code> - Step-by-step quickstart guide</li>
-     *   <li><code>/genesis/api</code> - Complete HTTP API reference</li>
-     *   <li><code>/genesis/examples</code> - Working curl commands and code samples</li>
-     *   <li><code>/genesis/architecture</code> - How the system works</li>
-     *   <li><code>/genesis/economics</code> - Pricing tiers and payment flow</li>
-     *   <li><code>/genesis/troubleshooting</code> - Common issues and solutions</li>
-     * </ul>
+     * Apply a replicated genesis proposal on all nodes.
      */
-    private void applyGenesisCreation() {
-        log.info("🎬 Creating genesis (triggered via Aeron consensus)");
-        
-        try {
-            // Use zero address for genesis (Ethereum convention)
-            String GENESIS_ADDRESS = "0x0000000000000000000000000000000000000000";
-            String genesisPath = "/oak-chain/00/00/00/" + GENESIS_ADDRESS + "/content/genesis";
-            long timestamp = System.currentTimeMillis();
-            String genesisDate = new java.util.Date(timestamp).toString();
-            
-            log.info("Creating genesis - Path: {}, Wallet: {}", genesisPath, GENESIS_ADDRESS);
-            
-            // Create genesis using NodeStore directly
-            org.apache.jackrabbit.oak.spi.state.NodeState root = nodeStore.getRoot();
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder rootBuilder = root.builder();
-            
-            // Navigate/create path: oak-chain/00/00/00/0x0000.../content/genesis
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder oakChain = rootBuilder.child("oak-chain");
-            oakChain.setProperty("jcr:primaryType", "nt:unstructured");
-            
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder level1 = oakChain.child("00");
-            level1.setProperty("jcr:primaryType", "nt:unstructured");
-            
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder level2 = level1.child("00");
-            level2.setProperty("jcr:primaryType", "nt:unstructured");
-            
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder level3 = level2.child("00");
-            level3.setProperty("jcr:primaryType", "nt:unstructured");
-            
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesisWallet = level3.child(GENESIS_ADDRESS);
-            genesisWallet.setProperty("jcr:primaryType", "nt:unstructured");
-            genesisWallet.setProperty("wallet", GENESIS_ADDRESS);
-            genesisWallet.setProperty("role", "genesis");
-            genesisWallet.setProperty("walletCreated", timestamp);
-            genesisWallet.setProperty("nodeType", "wallet-root");
-            genesisWallet.setProperty("description", "Genesis wallet - Network documentation and bootstrap identity");
-            genesisWallet.setProperty("contentCount", 1L);
-            genesisWallet.setProperty("totalWrites", 1L);
-            genesisWallet.setProperty("lastWrite", timestamp);
-            genesisWallet.setProperty("owner", "OakChain Network");
-            genesisWallet.setProperty("verified", true);
-            
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder content = genesisWallet.child("content");
-            content.setProperty("jcr:primaryType", "nt:unstructured");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // GENESIS ROOT - Network Identity & Ethos
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesis = content.child("genesis");
-            genesis.setProperty("jcr:primaryType", "nt:unstructured");
-            genesis.setProperty("jcr:created", timestamp);
-            genesis.setProperty("jcr:title", "OakChain Network - Self-Documenting Genesis");
-            genesis.setProperty("jcr:description", "This node is the living documentation for the OakChain network. " +
-                "Read the child nodes to learn how to use this system.");
-            genesis.setProperty("tagline", "Billions of enterprise content rides these rails. We're making it decentralized.");
-            genesis.setProperty("ethos", "Trust the data, not the operator. Determinism first. Availability without ambiguity.");
-            genesis.setProperty("northStar", "Make content verifiable, portable, and durable at global enterprise scale.");
-            genesis.setProperty("version", "1.0.0");
-            genesis.setProperty("chainId", "oak-blockchain-aem");
-            genesis.setProperty("genesisTimestamp", timestamp);
-            genesis.setProperty("genesisDate", genesisDate);
-            genesis.setProperty("genesisValidator", selfUrl);
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 1. GETTING STARTED - The quickstart guide
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder gettingStarted = genesis.child("getting-started");
-            gettingStarted.setProperty("jcr:primaryType", "nt:unstructured");
-            gettingStarted.setProperty("jcr:title", "Getting Started with OakChain");
-            gettingStarted.setProperty("jcr:description", "Everything you need to write your first content to the blockchain");
-            
-            // Prerequisites
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder prereqs = gettingStarted.child("1-prerequisites");
-            prereqs.setProperty("jcr:primaryType", "nt:unstructured");
-            prereqs.setProperty("title", "Prerequisites");
-            prereqs.setProperty("item-1", "An Ethereum wallet (MetaMask recommended)");
-            prereqs.setProperty("item-2", "Some ETH for transaction fees (Sepolia testnet for testing)");
-            prereqs.setProperty("item-3", "curl or any HTTP client");
-            prereqs.setProperty("note", "No SDK required - it's just HTTP + signatures");
-            
-            // Connect
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder connect = gettingStarted.child("2-connect");
-            connect.setProperty("jcr:primaryType", "nt:unstructured");
-            connect.setProperty("title", "Connect to a Validator");
-            connect.setProperty("description", "Find a validator endpoint and check its health");
-            connect.setProperty("curl-health", "curl http://VALIDATOR:8090/health");
-            connect.setProperty("curl-status", "curl http://VALIDATOR:8090/v1/status");
-            connect.setProperty("response-healthy", "{\"status\":\"healthy\",\"role\":\"LEADER\"|\"FOLLOWER\"}");
-            
-            // Write Content
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder writeContent = gettingStarted.child("3-write-content");
-            writeContent.setProperty("jcr:primaryType", "nt:unstructured");
-            writeContent.setProperty("title", "Write Your First Content");
-            writeContent.setProperty("step-1", "Sign a message with your wallet: 'OakChain Write: {path} at {timestamp}'");
-            writeContent.setProperty("step-2", "POST to /v1/propose-write with your wallet, signature, path, and content");
-            writeContent.setProperty("step-3", "Wait for finality (check /v1/proposal-status/{id})");
-            writeContent.setProperty("step-4", "Your content is now on the blockchain!");
-            writeContent.setProperty("curl-example", "curl -X POST http://VALIDATOR:8090/v1/propose-write " +
-                "-d 'walletAddress=0xYOUR_WALLET' " +
-                "-d 'signature=0xYOUR_SIG' " +
-                "-d 'path=/my-content' " +
-                "-d 'content={\"title\":\"Hello OakChain\"}'");
-            
-            // Read Content
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder readContent = gettingStarted.child("4-read-content");
-            readContent.setProperty("jcr:primaryType", "nt:unstructured");
-            readContent.setProperty("title", "Read Content");
-            readContent.setProperty("description", "Reading is free and doesn't require a wallet");
-            readContent.setProperty("curl-read", "curl http://VALIDATOR:8090/v1/content/0xWALLET/path/to/content");
-            readContent.setProperty("curl-list", "curl http://VALIDATOR:8090/v1/content/0xWALLET");
-            readContent.setProperty("note", "Content is available from any validator - they all have the same state");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 2. API REFERENCE - Complete HTTP endpoint documentation
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder api = genesis.child("api");
-            api.setProperty("jcr:primaryType", "nt:unstructured");
-            api.setProperty("jcr:title", "API Reference");
-            api.setProperty("jcr:description", "Complete HTTP API for interacting with OakChain validators");
-            api.setProperty("baseUrl", "http://VALIDATOR:8090");
-            api.setProperty("contentType", "application/x-www-form-urlencoded or application/json");
-            
-            // Health & Status
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder apiHealth = api.child("health-status");
-            apiHealth.setProperty("jcr:primaryType", "nt:unstructured");
-            apiHealth.setProperty("GET_health", "Health check - returns {status, role, epoch}");
-            apiHealth.setProperty("GET_v1_status", "Detailed status - cluster info, HEAD, validators");
-            apiHealth.setProperty("GET_v1_cluster_info", "Cluster membership and leader info");
-            apiHealth.setProperty("GET_root", "Dashboard UI (HTML)");
-            
-            // Content Operations
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder apiContent = api.child("content-operations");
-            apiContent.setProperty("jcr:primaryType", "nt:unstructured");
-            apiContent.setProperty("POST_v1_propose_write", "Propose a write - requires wallet, signature, path, content");
-            apiContent.setProperty("POST_v1_propose_delete", "Propose a delete - requires wallet, signature, path");
-            apiContent.setProperty("GET_v1_content_wallet_path", "Read content at path");
-            apiContent.setProperty("GET_v1_content_wallet", "List content for wallet");
-            apiContent.setProperty("GET_v1_proposal_status_id", "Check proposal status");
-            
-            // Binary Operations (IPFS)
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder apiBinary = api.child("binary-operations");
-            apiBinary.setProperty("jcr:primaryType", "nt:unstructured");
-            apiBinary.setProperty("POST_v1_binary_declare_intent", "Declare intent to upload binary - returns intentToken");
-            apiBinary.setProperty("GET_v1_binary_check_intent_token", "Check upload status");
-            apiBinary.setProperty("POST_v1_binary_complete_upload", "Complete upload with IPFS CID");
-            apiBinary.setProperty("note", "Binaries are stored on IPFS, only CIDs are stored on-chain");
-            
-            // Segment Transfer (for validators/Sling)
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder apiSegments = api.child("segment-transfer");
-            apiSegments.setProperty("jcr:primaryType", "nt:unstructured");
-            apiSegments.setProperty("GET_journal_log", "Journal file for segment sync");
-            apiSegments.setProperty("GET_manifest", "Segment manifest");
-            apiSegments.setProperty("GET_segments_id", "Fetch specific segment by ID");
-            apiSegments.setProperty("note", "Used by Sling authors for read-only replication");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 3. EXAMPLES - Working code samples
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder examples = genesis.child("examples");
-            examples.setProperty("jcr:primaryType", "nt:unstructured");
-            examples.setProperty("jcr:title", "Working Examples");
-            examples.setProperty("jcr:description", "Copy-paste examples for common operations");
-            
-            // JavaScript/Browser Example
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder jsExample = examples.child("javascript-browser");
-            jsExample.setProperty("jcr:primaryType", "nt:unstructured");
-            jsExample.setProperty("title", "JavaScript (Browser with MetaMask)");
-            jsExample.setProperty("code", 
-                "// 1. Connect wallet\\n" +
-                "const accounts = await ethereum.request({ method: 'eth_requestAccounts' });\\n" +
-                "const wallet = accounts[0];\\n\\n" +
-                "// 2. Sign message\\n" +
-                "const path = '/my-page';\\n" +
-                "const timestamp = Date.now();\\n" +
-                "const message = `OakChain Write: ${path} at ${timestamp}`;\\n" +
-                "const signature = await ethereum.request({\\n" +
-                "  method: 'personal_sign',\\n" +
-                "  params: [message, wallet]\\n" +
-                "});\\n\\n" +
-                "// 3. Submit write\\n" +
-                "const response = await fetch('http://validator:8090/v1/propose-write', {\\n" +
-                "  method: 'POST',\\n" +
-                "  headers: { 'Content-Type': 'application/json' },\\n" +
-                "  body: JSON.stringify({\\n" +
-                "    walletAddress: wallet,\\n" +
-                "    signature: signature,\\n" +
-                "    path: path,\\n" +
-                "    content: { title: 'Hello OakChain', body: 'My first content' }\\n" +
-                "  })\\n" +
-                "});");
-            
-            // curl Example
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder curlExample = examples.child("curl");
-            curlExample.setProperty("jcr:primaryType", "nt:unstructured");
-            curlExample.setProperty("title", "curl Commands");
-            curlExample.setProperty("check-health", "curl http://localhost:8090/health");
-            curlExample.setProperty("get-status", "curl http://localhost:8090/v1/status | jq .");
-            curlExample.setProperty("read-genesis", "curl http://localhost:8090/v1/content/0x0000000000000000000000000000000000000000/genesis");
-            curlExample.setProperty("list-content", "curl http://localhost:8090/v1/content/0xYOUR_WALLET");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 4. ARCHITECTURE - How the system works
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder architecture = genesis.child("architecture");
-            architecture.setProperty("jcr:primaryType", "nt:unstructured");
-            architecture.setProperty("jcr:title", "System Architecture");
-            architecture.setProperty("jcr:description", "How OakChain works under the hood");
-            
-            // Core Components
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder components = architecture.child("components");
-            components.setProperty("jcr:primaryType", "nt:unstructured");
-            components.setProperty("oak-segment-store", "Apache Oak TarMK - proven content storage from Adobe AEM");
-            components.setProperty("aeron-cluster", "High-performance Raft consensus (io.aeron.cluster)");
-            components.setProperty("ethereum", "External time oracle + payment verification");
-            components.setProperty("ipfs", "Content-addressed binary storage");
-            components.setProperty("http-api", "RESTful interface for all operations");
-            
-            // Wallet-Scoped Paths
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder paths = architecture.child("wallet-scoped-paths");
-            paths.setProperty("jcr:primaryType", "nt:unstructured");
-            paths.setProperty("pattern", "/oak-chain/{shard-level-1}/{shard-level-2}/{shard-level-3}/{wallet}/content/{path}");
-            paths.setProperty("example", "/oak-chain/74/2d/35/0x742d35Cc6634C0532925a3b844Bc9e7595f1b3E8/content/my-page");
-            paths.setProperty("sharding", "First 3 bytes of wallet address create 3-level directory structure");
-            paths.setProperty("benefit", "Segment isolation - each wallet's content is naturally partitioned");
-            
-            // Consensus Model
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder consensus = architecture.child("consensus");
-            consensus.setProperty("jcr:primaryType", "nt:unstructured");
-            consensus.setProperty("algorithm", "Raft (via Aeron Cluster)");
-            consensus.setProperty("quorum", "Majority of validators must agree");
-            consensus.setProperty("leader-election", "Automatic - leader handles all writes");
-            consensus.setProperty("replication", "All writes replicated to all validators synchronously");
-            consensus.setProperty("finality", "Immediate local finality with adaptive verified-release scheduling; Ethereum beacon state remains a compatibility and confirmation signal");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 5. ECONOMICS - Pricing and payment
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder economics = genesis.child("economics");
-            economics.setProperty("jcr:primaryType", "nt:unstructured");
-            economics.setProperty("jcr:title", "Transaction Pricing");
-            economics.setProperty("jcr:description", "How much operations cost and why");
-            economics.setProperty("philosophy", "Fragmentation costs more - incentivize batching for efficiency");
-            
-            // Pricing Tiers
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder pricing = economics.child("pricing-tiers");
-            pricing.setProperty("jcr:primaryType", "nt:unstructured");
-            pricing.setProperty("priority-price", "0.01 ETH");
-            pricing.setProperty("priority-release", "Compatibility price class; may use direct release if enabled");
-            pricing.setProperty("priority-use-case", "Premium routing / explicit entitlements");
-            pricing.setProperty("express-price", "0.002 ETH");
-            pricing.setProperty("express-release", "Adaptive release with no fixed epoch wait");
-            pricing.setProperty("express-use-case", "Compatibility price class for time-sensitive updates");
-            pricing.setProperty("standard-price", "0.001 ETH");
-            pricing.setProperty("standard-release", "Adaptive release with no fixed epoch wait");
-            pricing.setProperty("standard-use-case", "Default economic class for bulk content and scheduled updates");
-            
-            // Payment Flow
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder paymentFlow = economics.child("payment-flow");
-            paymentFlow.setProperty("jcr:primaryType", "nt:unstructured");
-            paymentFlow.setProperty("step-1", "User signs write proposal with wallet");
-            paymentFlow.setProperty("step-2", "Validator verifies signature and stages proposal in the adaptive packing buffer");
-            paymentFlow.setProperty("step-3", "Release governor sends work immediately when Aeron is healthy or buffers under pressure");
-            paymentFlow.setProperty("step-4", "Payment verified on Ethereum (ValidatorPayment contract)");
-            paymentFlow.setProperty("step-5", "Content becomes permanent");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 6. TROUBLESHOOTING - Common issues
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder troubleshooting = genesis.child("troubleshooting");
-            troubleshooting.setProperty("jcr:primaryType", "nt:unstructured");
-            troubleshooting.setProperty("jcr:title", "Troubleshooting Guide");
-            troubleshooting.setProperty("jcr:description", "Common issues and how to fix them");
-            
-            // Common Issues
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder issues = troubleshooting.child("common-issues");
-            issues.setProperty("jcr:primaryType", "nt:unstructured");
-            issues.setProperty("issue-signature-invalid", "SIGNATURE_INVALID: Ensure you're signing the exact message format 'OakChain Write: {path} at {timestamp}'");
-            issues.setProperty("issue-not-leader", "NOT_LEADER: You hit a follower - retry or use the leader URL from /v1/cluster-info");
-            issues.setProperty("issue-path-forbidden", "PATH_FORBIDDEN: You can only write to paths under your wallet address");
-            issues.setProperty("issue-epoch-stale", "EPOCH_STALE: Your timestamp is too old - use current time");
-            issues.setProperty("issue-payment-required", "PAYMENT_REQUIRED: Transaction needs payment - check ValidatorPayment contract");
-            
-            // Health Checks
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder healthChecks = troubleshooting.child("health-checks");
-            healthChecks.setProperty("jcr:primaryType", "nt:unstructured");
-            healthChecks.setProperty("check-1", "curl /health - should return {status: healthy}");
-            healthChecks.setProperty("check-2", "curl /v1/status - check role is LEADER or FOLLOWER (not CANDIDATE)");
-            healthChecks.setProperty("check-3", "curl /v1/cluster-info - verify all validators are connected");
-            healthChecks.setProperty("check-4", "Check logs for '❌' emoji - indicates errors");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 7. ABOUT - Project information
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder about = genesis.child("about");
-            about.setProperty("jcr:primaryType", "nt:unstructured");
-            about.setProperty("jcr:title", "About OakChain");
-            about.setProperty("mission", "Decentralizing enterprise content management");
-            about.setProperty("foundation", "Built on Apache Oak - the proven content repository behind Adobe AEM");
-            about.setProperty("value-proposition", "Billions of dollars of enterprise content already runs on Oak. " +
-                "We're adding decentralization, cryptographic ownership, and blockchain finality.");
-            about.setProperty("philosophy", "Bitcoin-tight reliability meets enterprise content management");
-            about.setProperty("principles", "Fail Loud, Fail Fast, Never Silently Corrupt");
-            about.setProperty("team", "somarc + AI collaborators - distributed intelligence building distributed systems");
-            about.setProperty("license", "Apache 2.0");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 7b. THESIS - The big idea in plain language
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder thesis = genesis.child("thesis");
-            thesis.setProperty("jcr:primaryType", "nt:unstructured");
-            thesis.setProperty("jcr:title", "The Thesis");
-            thesis.setProperty("premise-1", "Enterprise content is the most valuable data no one can prove.");
-            thesis.setProperty("premise-2", "Audit trails should be data, not policy.");
-            thesis.setProperty("premise-3", "Determinism is the only safe way to scale trust.");
-            thesis.setProperty("result", "OakChain makes content provable, portable, and economically secure.");
-            thesis.setProperty("audience", "Builders who want boring reliability and bold guarantees.");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 7c. BOLD BETS - What we are willing to be wrong about
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder boldBets = genesis.child("bold-bets");
-            boldBets.setProperty("jcr:primaryType", "nt:unstructured");
-            boldBets.setProperty("bet-1", "Every serious enterprise will demand verifiable content history.");
-            boldBets.setProperty("bet-2", "AEM-scale systems can be decentralized without losing performance.");
-            boldBets.setProperty("bet-3", "Proof of custody will become the default compliance standard.");
-            boldBets.setProperty("bet-4", "Developers will choose APIs over platforms if guarantees are stronger.");
-            boldBets.setProperty("bet-4", "Developers will choose systems with stronger guarantees over familiar platforms.");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 7d. GUARANTEES - What the system must always hold true
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder guarantees = genesis.child("guarantees");
-            guarantees.setProperty("jcr:primaryType", "nt:unstructured");
-            guarantees.setProperty("determinism", "Same inputs, same state on every validator.");
-            guarantees.setProperty("auditability", "Every change is traceable by ID, time, and signer.");
-            guarantees.setProperty("durability", "Committed content survives validator loss.");
-            guarantees.setProperty("portability", "Content is readable without privileged infrastructure.");
-            guarantees.setProperty("integrity", "Signatures bind authorship to the data path.");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 7e. NON-GOALS - What we intentionally do not optimize for
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder nonGoals = genesis.child("non-goals");
-            nonGoals.setProperty("jcr:primaryType", "nt:unstructured");
-            nonGoals.setProperty("non-goal-1", "We do not chase maximal throughput at the expense of determinism.");
-            nonGoals.setProperty("non-goal-2", "We do not require custodial identity or closed networks.");
-            nonGoals.setProperty("non-goal-3", "We do not hide failures; we surface them early and loudly.");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 7f. OPERATOR OATH - Expectations for validator operators
-            // ═══════════════════════════════════════════════════════════════════════════════
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder oath = genesis.child("operator-oath");
-            oath.setProperty("jcr:primaryType", "nt:unstructured");
-            oath.setProperty("oath-1", "Run the node as if the audit depends on you.");
-            oath.setProperty("oath-2", "Do not change history. Fix the system.");
-            oath.setProperty("oath-3", "Measure everything; guess nothing.");
-            oath.setProperty("oath-4", "If it fails, document the failure in the chain.");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // 8. IPFS & GENESIS IMAGE
-            // ═══════════════════════════════════════════════════════════════════════════════
-            String ipfsCid = null;
-            
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder genesisImage = genesis.child("do-it-live.jpeg");
-            genesisImage.setProperty("jcr:primaryType", "nt:file");
-            genesisImage.setProperty("jcr:created", timestamp);
-            
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder imageContent = genesisImage.child("jcr:content");
-            imageContent.setProperty("jcr:primaryType", "nt:resource");
-            imageContent.setProperty("jcr:mimeType", "image/jpeg");
-            imageContent.setProperty("jcr:lastModified", timestamp);
-            
-            try {
-                java.io.InputStream imageStream = getClass().getClassLoader()
-                    .getResourceAsStream("genesis-assets/do-it-live.jpeg");
-                
-                if (imageStream != null && blobStore != null) {
-                    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-                    byte[] buffer = new byte[8192];
-                    int read;
-                    while ((read = imageStream.read(buffer)) != -1) {
-                        baos.write(buffer, 0, read);
-                    }
-                    byte[] imageBytes = baos.toByteArray();
-                    long imageSize = imageBytes.length;
-                    imageStream.close();
-                    
-                    String blobId = blobStore.writeBlob(new java.io.ByteArrayInputStream(imageBytes));
-                    org.apache.jackrabbit.oak.api.Blob blob = 
-                        ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore)
-                            .createBlob(new java.io.ByteArrayInputStream(imageBytes));
-                    
-                    imageContent.setProperty("jcr:data", blob);
-                    imageContent.setProperty("jcr:blobId", blobId);
-                    imageContent.setProperty("size", imageSize);
-                    
-                    if (blobId != null && (blobId.startsWith("Qm") || blobId.startsWith("baf"))) {
-                        ipfsCid = blobId.split("#")[0];
-                    }
-                    
-                    log.info("✅ Genesis image uploaded: {} bytes, blobId={}", imageSize, blobId);
-                } else if (blobStore == null) {
-                    log.warn("⚠️  BlobStore not configured - genesis image will not be uploaded");
-                } else {
-                    log.warn("⚠️  Genesis image resource not found: genesis-assets/do-it-live.jpeg");
-                }
-            } catch (Exception e) {
-                log.error("Failed to upload genesis image", e);
-            }
-            
-            org.apache.jackrabbit.oak.spi.state.NodeBuilder ipfsInfo = genesis.child("ipfs");
-            ipfsInfo.setProperty("jcr:primaryType", "nt:unstructured");
-            ipfsInfo.setProperty("enabled", blobStore != null);
-            ipfsInfo.setProperty("genesisImageCid", ipfsCid != null ? ipfsCid : "N/A (BlobStore fallback)");
-            ipfsInfo.setProperty("gateway", "https://ipfs.io/ipfs/");
-            ipfsInfo.setProperty("description", "Binaries stored via IPFS - content-addressed, decentralized, immutable");
-            
-            // ═══════════════════════════════════════════════════════════════════════════════
-            // COMMIT
-            // ═══════════════════════════════════════════════════════════════════════════════
-            log.info("📝 Committing genesis structure to local FileStore...");
-            ((org.apache.jackrabbit.oak.segment.SegmentNodeStore) nodeStore).merge(
-                rootBuilder, 
-                org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE, 
-                org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY
-            );
-            String newHead = fileStore.getHead().getRecordId().toString10();
-            log.info("✅ Genesis committed locally - HEAD: {}", newHead);
-            
-            log.info("✅ Genesis created deterministically via Aeron consensus");
-            
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("🎊 GENESIS NODE CREATED - The Self-Documenting Root");
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("   Path: /oak-chain/00/00/00/0x0000.../content/genesis");
-            log.info("   Child nodes: getting-started, api, examples, architecture, economics, troubleshooting, about");
-            log.info("   Read it: curl http://localhost:8090/v1/content/0x0000000000000000000000000000000000000000/genesis");
-            log.info("   HEAD: {}", newHead);
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            
-        } catch (Exception e) {
-            log.error("Exception during genesis creation", e);
-        }
+    private void applyGenesisCreation(String genesisProposalJson) {
+        genesisInitializer.initializeGenesisContent(genesisProposalJson);
     }
     
     /**

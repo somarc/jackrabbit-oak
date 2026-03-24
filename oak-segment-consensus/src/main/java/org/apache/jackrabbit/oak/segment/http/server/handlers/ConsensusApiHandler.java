@@ -33,7 +33,7 @@ import java.io.IOException;
  * This class encapsulates the logic for handling signed write transactions, proposal status queries,
  * and GC cost estimation in the Aeron-based consensus network.
  */
-public class ConsensusApiHandler {
+public class ConsensusApiHandler implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(ConsensusApiHandler.class);
 
@@ -208,6 +208,11 @@ public class ConsensusApiHandler {
             return;
         }
         context.proposalQueueManager.updateDurability(proposalId, state, durableHead, error);
+    }
+
+    @Override
+    public void close() {
+        flushService.close();
     }
 
     /**

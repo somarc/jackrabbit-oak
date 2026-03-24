@@ -63,7 +63,7 @@ final class ProposalPayloadStore {
         this.payloadDirectory = payloadDirectory;
         this.ephemeralDirectory = ephemeralDirectory;
         try {
-            Files.createDirectories(payloadDirectory);
+            ensurePayloadDirectory();
             this.totalBytes.set(scanCurrentBytes());
         } catch (IOException e) {
             throw new IllegalStateException("Failed to initialize proposal payload store at " + payloadDirectory, e);
@@ -81,6 +81,7 @@ final class ProposalPayloadStore {
         byte[] payloadBytes = message.getBytes(StandardCharsets.UTF_8);
         String payloadRef = proposalId + ".payload";
         Path target = payloadDirectory.resolve(payloadRef);
+        ensurePayloadDirectoryQuietly();
         long existingBytes = sizeIfExists(target);
         long projected = totalBytes.get() - existingBytes + payloadBytes.length;
         if (maxTotalBytes > 0L && projected > maxTotalBytes) {
@@ -154,9 +155,22 @@ final class ProposalPayloadStore {
             Files.walk(payloadDirectory)
                 .sorted(java.util.Comparator.reverseOrder())
                 .forEach(this::deleteIfExistsQuietly);
+            totalBytes.set(0L);
         } catch (IOException e) {
             log.debug("Failed to cleanup ephemeral payload store {}: {}", payloadDirectory, e.getMessage());
         }
+    }
+
+    private void ensurePayloadDirectoryQuietly() {
+        try {
+            ensurePayloadDirectory();
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to initialize proposal payload store at " + payloadDirectory, e);
+        }
+    }
+
+    private void ensurePayloadDirectory() throws IOException {
+        Files.createDirectories(payloadDirectory);
     }
 
     private long scanCurrentBytes() throws IOException {

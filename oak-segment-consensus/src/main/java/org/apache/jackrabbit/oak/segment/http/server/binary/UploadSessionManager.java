@@ -245,5 +245,12 @@ public class UploadSessionManager {
             this.total = total;
         }
     }
-}
 
+    /**
+     * Shutdown the manager and discard all in-memory session state.
+     */
+    public void shutdown() {
+        sessions.clear();
+        log.info("📝 UploadSessionManager shutdown");
+    }
+}

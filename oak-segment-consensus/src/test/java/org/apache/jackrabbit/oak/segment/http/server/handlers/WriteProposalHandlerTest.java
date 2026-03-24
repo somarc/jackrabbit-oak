@@ -536,21 +536,23 @@ public class WriteProposalHandlerTest {
                     ClientRegistration.CLIENT_TYPE_ENTERPRISE
                 )
             );
-            context.cidMappingService = new CidMappingService(storageDir);
-            WriteProposalHandler handler = new WriteProposalHandler(context);
-            HttpServletRequest request = request();
-            when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
-            when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
-            when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
-            when(request.getParameter("ipfsCid")).thenReturn("QmUnknownCid");
-            StringWriter body = new StringWriter();
-            HttpServletResponse response = responseWithBody(body);
+            try (CidMappingService cidMappingService = new CidMappingService(storageDir)) {
+                context.cidMappingService = cidMappingService;
+                WriteProposalHandler handler = new WriteProposalHandler(context);
+                HttpServletRequest request = request();
+                when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+                when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+                when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+                when(request.getParameter("ipfsCid")).thenReturn("QmUnknownCid");
+                StringWriter body = new StringWriter();
+                HttpServletResponse response = responseWithBody(body);
 
-            handler.handleProposeWrite(request, response);
+                handler.handleProposeWrite(request, response);
 
-            verify(response).setStatus(422);
-            assertTrue(body.toString().contains("\"code\":\"unknown_ipfs_cid\""));
-            assertEquals(1L, context.apiRejectedRequests.get());
+                verify(response).setStatus(422);
+                assertTrue(body.toString().contains("\"code\":\"unknown_ipfs_cid\""));
+                assertEquals(1L, context.apiRejectedRequests.get());
+            }
         } finally {
             Files.deleteIfExists(storageDir.resolve("cid-mappings.properties"));
             Files.deleteIfExists(storageDir);

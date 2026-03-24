@@ -78,6 +78,8 @@ import java.util.Comparator;
 import java.util.UUID;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -87,6 +89,36 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class RequestRouterTest {
+
+    @Test
+    public void testCloseShutsDownOwnedServices() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-close-owned-services");
+            try {
+                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
+                context.cidMappingService = new CidMappingService(storeDirectory);
+                RequestRouter router = new RequestRouter(context);
+
+                org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager =
+                    context.uploadSessionManager;
+                uploadSessionManager.createSession("0xabc", 128L, "text/plain", null);
+                context.cidMappingService.registerMapping(
+                    "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
+                    "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
+                );
+                assertTrue(uploadSessionManager.getStats().total > 0);
+
+                router.close();
+
+                assertEquals(0, uploadSessionManager.getStats().total);
+                assertNull(context.uploadSessionManager);
+                assertNull(context.eventBroadcaster);
+                assertNull(context.cidMappingService);
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
 
     @Test
     public void testApiBrowserDisabledWhenHeadlessToggleIsFalse() throws Exception {
@@ -876,17 +908,18 @@ public class RequestRouterTest {
                     "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
                     "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
                 );
-                RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
-                HttpServletRequest request = request("GET", "/api/cid/stats");
-                HttpServletResponse response = responseWithBody();
+                try (RequestRouter router = new RequestRouter(context)) {
+                    Request baseRequest = mock(Request.class);
+                    HttpServletRequest request = request("GET", "/api/cid/stats");
+                    HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                    router.route(baseRequest, request, response);
 
-                verify(baseRequest).setHandled(true);
-                verify(response).setStatus(HttpServletResponse.SC_OK);
-                assertTrue(body.toString().contains("\"totalMappings\":1"));
-                assertTrue(body.toString().contains("\"currentSize\":1"));
+                    verify(baseRequest).setHandled(true);
+                    verify(response).setStatus(HttpServletResponse.SC_OK);
+                    assertTrue(body.toString().contains("\"totalMappings\":1"));
+                    assertTrue(body.toString().contains("\"currentSize\":1"));
+                }
             } finally {
                 deleteRecursively(storeDirectory);
             }
@@ -904,21 +937,22 @@ public class RequestRouterTest {
                     "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
                     "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
                 );
-                RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
-                HttpServletRequest request = request(
-                    "GET",
-                    "/api/cid/gateway/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
-                );
-                when(request.getPathInfo()).thenReturn(
-                    "/api/cid/gateway/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
-                );
-                HttpServletResponse response = responseWithBody();
+                try (RequestRouter router = new RequestRouter(context)) {
+                    Request baseRequest = mock(Request.class);
+                    HttpServletRequest request = request(
+                        "GET",
+                        "/api/cid/gateway/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
+                    );
+                    when(request.getPathInfo()).thenReturn(
+                        "/api/cid/gateway/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
+                    );
+                    HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                    router.route(baseRequest, request, response);
 
-                verify(baseRequest).setHandled(true);
-                verify(response).sendRedirect("https://ipfs.io/ipfs/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+                    verify(baseRequest).setHandled(true);
+                    verify(response).sendRedirect("https://ipfs.io/ipfs/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+                }
             } finally {
                 deleteRecursively(storeDirectory);
             }
@@ -936,22 +970,23 @@ public class RequestRouterTest {
                     "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
                     "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
                 );
-                RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
-                HttpServletRequest request = request(
-                    "GET",
-                    "/api/cid/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
-                );
-                when(request.getPathInfo()).thenReturn(
-                    "/api/cid/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
-                );
-                HttpServletResponse response = responseWithBody();
+                try (RequestRouter router = new RequestRouter(context)) {
+                    Request baseRequest = mock(Request.class);
+                    HttpServletRequest request = request(
+                        "GET",
+                        "/api/cid/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
+                    );
+                    when(request.getPathInfo()).thenReturn(
+                        "/api/cid/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
+                    );
+                    HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                    router.route(baseRequest, request, response);
 
-                verify(baseRequest).setHandled(true);
-                verify(response).setStatus(HttpServletResponse.SC_OK);
-                assertTrue(body.toString().contains("\"ipfsCid\":\"Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3\""));
+                    verify(baseRequest).setHandled(true);
+                    verify(response).setStatus(HttpServletResponse.SC_OK);
+                    assertTrue(body.toString().contains("\"ipfsCid\":\"Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3\""));
+                }
             } finally {
                 deleteRecursively(storeDirectory);
             }
@@ -969,17 +1004,18 @@ public class RequestRouterTest {
                     "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
                     "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
                 );
-                RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
-                HttpServletRequest request = request("GET", "/api/cid/reverse/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
-                when(request.getPathInfo()).thenReturn("/api/cid/reverse/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
-                HttpServletResponse response = responseWithBody();
+                try (RequestRouter router = new RequestRouter(context)) {
+                    Request baseRequest = mock(Request.class);
+                    HttpServletRequest request = request("GET", "/api/cid/reverse/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+                    when(request.getPathInfo()).thenReturn("/api/cid/reverse/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+                    HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                    router.route(baseRequest, request, response);
 
-                verify(baseRequest).setHandled(true);
-                verify(response).setStatus(HttpServletResponse.SC_OK);
-                assertTrue(body.toString().contains("\"oakBlobId\":\"ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442\""));
+                    verify(baseRequest).setHandled(true);
+                    verify(response).setStatus(HttpServletResponse.SC_OK);
+                    assertTrue(body.toString().contains("\"oakBlobId\":\"ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442\""));
+                }
             } finally {
                 deleteRecursively(storeDirectory);
             }

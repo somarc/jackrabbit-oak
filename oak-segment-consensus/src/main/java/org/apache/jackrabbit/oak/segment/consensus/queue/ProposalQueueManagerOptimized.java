@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
 import org.agrona.concurrent.Agent;
-import org.agrona.concurrent.AgentRunner;
 import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingMillisIdleStrategy;
@@ -129,11 +128,9 @@ public class ProposalQueueManagerOptimized {
     private final EvmBridge evmBridge;
     private final RaftAppendCallback raftAppendCallback;
     private final BackpressureManager backpressureManager;
+    private final ProposalQueueAgentRuntime agentRuntime;
     
     // Agents (3-agent architecture)
-    private AgentRunner aeronSenderAgent;
-    private AgentRunner[] evmVerifierAgents;
-    private AgentRunner releaseFinalizerAgent;
     private volatile boolean running = false;
 
     private final int verifierThreads;
@@ -247,6 +244,7 @@ public class ProposalQueueManagerOptimized {
         this.raftAppendCallback = raftAppendCallback;
         this.backpressureManager = backpressureManager;
         this.beaconClient = beaconClient;
+        this.agentRuntime = new ProposalQueueAgentRuntime();
         this.adaptivePackingBuffer = new AdaptivePackingBuffer();
         this.backpressureOverflowBuffer = new BackpressureOverflowBuffer();
         ProposalQueueTuning resolved = tuning != null ? tuning : ProposalQueueTuningRegistry.get();
@@ -300,59 +298,21 @@ public class ProposalQueueManagerOptimized {
                 java.util.concurrent.TimeUnit.MILLISECONDS
             );
         }
-        
-        // Agent 1: Aeron Sender (FAST path - batch send finalized proposals)
-        aeronSenderAgent = new AgentRunner(
-            createBackoffIdleStrategy(),
-            throwable -> log.error("Error in Aeron sender agent", throwable),
-            null,
-            new AeronSenderAgent()
+        agentRuntime.start(
+            this::createBackoffIdleStrategy,
+            AeronSenderAgent::new,
+            verifierThreads,
+            () -> new SleepingMillisIdleStrategy(1),
+            ignored -> new EvmVerifierAgent(),
+            () -> new SleepingMillisIdleStrategy(25),
+            ReleaseFinalizerAgent::new,
+            log
         );
-        
-        // Agent 2: EVM Verifier (SLOW path - 3-checkpoint security verification)
-        evmVerifierAgents = new AgentRunner[verifierThreads];
-        for (int i = 0; i < verifierThreads; i++) {
-            evmVerifierAgents[i] = new AgentRunner(
-                // Lower idle delay cuts verifier queue wait under load.
-                new SleepingMillisIdleStrategy(1),
-                throwable -> log.error("Error in EVM verifier agent", throwable),
-                null,
-                new EvmVerifierAgent()
-            );
-        }
-        
-        // Agent 3: Release Finalizer (PERIODIC - drains adaptive packing / overflow)
-        releaseFinalizerAgent = new AgentRunner(
-            new SleepingMillisIdleStrategy(25),
-            throwable -> log.error("Error in release finalizer agent", throwable),
-            null,
-            new ReleaseFinalizerAgent()
-        );
-        
-        // Start all agents on separate threads
-        AgentRunner.startOnThread(aeronSenderAgent, r -> {
-            Thread t = new Thread(r, "aeron-sender");
-            t.setDaemon(true);
-            return t;
-        });
-        for (int i = 0; i < evmVerifierAgents.length; i++) {
-            final int threadIndex = i;
-            AgentRunner.startOnThread(evmVerifierAgents[i], r -> {
-                Thread t = new Thread(r, "evm-verifier-" + threadIndex);
-                t.setDaemon(true);
-                return t;
-            });
-        }
-        AgentRunner.startOnThread(releaseFinalizerAgent, r -> {
-            Thread t = new Thread(r, "release-finalizer");
-            t.setDaemon(true);
-            return t;
-        });
         
         log.info("✅ ProposalQueueManager started (tri-agent + adaptive release)");
         log.info("   - Aeron Sender Agent: BackoffIdleStrategy (ultra-low latency)");
         log.info("   - EVM Verifier Agents: {} thread(s), SleepingIdleStrategy (1ms idle, 3-checkpoint security)",
-            evmVerifierAgents.length);
+            agentRuntime.getVerifierThreadCount());
         log.info("   - Release Finalizer Agent: SleepingMillisIdleStrategy(25ms)");
         log.info("   - Max batch size: {}", maxMessageBatch);
         log.info("   - Required payment confirmations: {}", requiredConfirmations);
@@ -1501,35 +1461,7 @@ public class ProposalQueueManagerOptimized {
      */
     public void stop() {
         running = false;
-        
-        if (aeronSenderAgent != null) {
-            try {
-                aeronSenderAgent.close();
-            } catch (Exception e) {
-                log.error("Error closing Aeron sender agent", e);
-            }
-        }
-        
-        if (evmVerifierAgents != null) {
-            for (AgentRunner evmVerifierAgent : evmVerifierAgents) {
-                if (evmVerifierAgent == null) {
-                    continue;
-                }
-                try {
-                    evmVerifierAgent.close();
-                } catch (Exception e) {
-                    log.error("Error closing EVM verifier agent", e);
-                }
-            }
-        }
-        
-        if (releaseFinalizerAgent != null) {
-            try {
-                releaseFinalizerAgent.close();
-            } catch (Exception e) {
-                log.error("Error closing release finalizer agent", e);
-            }
-        }
+        agentRuntime.stop(log);
 
         if (persistenceScheduler != null) {
             persistenceScheduler.shutdown();
@@ -1539,6 +1471,7 @@ public class ProposalQueueManagerOptimized {
                 Thread.currentThread().interrupt();
             }
             flushPersistedProposals();
+            persistenceScheduler = null;
         }
         persistCounterState();
         if (payloadStore != null) {

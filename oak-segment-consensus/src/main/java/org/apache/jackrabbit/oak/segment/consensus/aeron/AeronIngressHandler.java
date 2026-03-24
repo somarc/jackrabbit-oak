@@ -26,8 +26,10 @@ import org.osgi.service.component.annotations.Reference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * Handles Aeron ingress messages and delegates to the MessageDispatcher.
@@ -43,7 +45,7 @@ public class AeronIngressHandler {
     private final AeronMessageCodec codec;
     private final MessageDispatcher dispatcher;
     private Runnable heartbeatCallback;
-    private Runnable genesisCallback;
+    private Consumer<String> genesisCallback;
 
     @Activate
     public AeronIngressHandler(@Reference AeronMessageCodec codec,
@@ -56,7 +58,7 @@ public class AeronIngressHandler {
         this.heartbeatCallback = heartbeatCallback;
     }
 
-    public void setGenesisCallback(Runnable genesisCallback) {
+    public void setGenesisCallback(Consumer<String> genesisCallback) {
         this.genesisCallback = genesisCallback;
     }
 
@@ -86,7 +88,7 @@ public class AeronIngressHandler {
             if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
                 log.info("🎬 GENESIS proposal received via Aeron - creating genesis on this node");
                 if (genesisCallback != null) {
-                    genesisCallback.run();
+                    genesisCallback.accept(readGenesisProposal(buffer, offset, length, headerInfo.blockLength));
                 }
                 log.info("✅ Genesis creation complete on this node");
                 return true;
@@ -122,5 +124,16 @@ public class AeronIngressHandler {
         } else {
             dispatchFailSuppressed.incrementAndGet();
         }
+    }
+
+    private String readGenesisProposal(DirectBuffer buffer, int offset, int length, int blockLength) {
+        int payloadOffset = offset + codec.headerLength();
+        int payloadLength = Math.max(0, Math.min(blockLength, length - codec.headerLength()));
+        if (payloadLength == 0) {
+            return "{}";
+        }
+        byte[] payload = new byte[payloadLength];
+        buffer.getBytes(payloadOffset, payload);
+        return new String(payload, StandardCharsets.UTF_8).trim();
     }
 }
