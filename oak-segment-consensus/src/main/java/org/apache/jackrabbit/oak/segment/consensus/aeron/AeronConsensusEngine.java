@@ -138,6 +138,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final AeronGenesisInitializer genesisInitializer;
     private final AeronBackgroundCoordinator backgroundCoordinator;
     private final LeaderDiscoveryService leaderDiscoveryService;
+    private final AeronIngressWritePayloadBuilder ingressWritePayloadBuilder;
     private final HeadStateService headStateService;
     
     // Aeron Cluster components
@@ -314,6 +315,7 @@ public class AeronConsensusEngine implements ClusteredService {
         this.backgroundCoordinator = backgroundCoordinator != null
             ? backgroundCoordinator
             : new AeronBackgroundCoordinator();
+        this.ingressWritePayloadBuilder = new AeronIngressWritePayloadBuilder();
         this.leaderDiscoveryService = AeronEngineComponentFactory.createLeaderDiscoveryService(nodeIdToUrl, peerUrls, selfUrl);
         this.messageDispatcher = AeronEngineComponentFactory.createMessageDispatcher(
             new MessageDispatcher.WriteCallback() {
@@ -1321,45 +1323,17 @@ public class AeronConsensusEngine implements ClusteredService {
             internalClusterClient.isClosed());
         
         try {
-            // Build JSON write proposal
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
-            json.append("\"path\":\"").append(escapeJson(path)).append("\",");
-            json.append("\"contentType\":\"").append(escapeJson(contentType != null ? contentType : "page")).append("\",");
-            json.append("\"message\":\"").append(escapeJson(message != null ? message : "")).append("\",");
-            json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
-            if (shouldIncludeTerm()) {
-                json.append(",\"term\":").append(getIngressTerm());
-            }
-            if (ipfsCid != null && !ipfsCid.isEmpty()) {
-                json.append(",\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\"");
-            }
-            if (proposalId != null && !proposalId.isEmpty()) {
-                json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
-            }
-            json.append("}");
-            
-            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            
-            // ✈️ AERON SBE MESSAGE FORMAT: Encode message with SBE header
-            // Header includes MessageHeaderEncoder.ENCODED_LENGTH (8 bytes) before message data
-            // Structure: blockLength (2) + templateId (2) + schemaId (2) + version (2) = 8 bytes
-            int blockLength = jsonBytes.length; // Length of message payload (excluding header)
-            int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL;
-            
-            // Allocate buffer: SBE header (8 bytes) + JSON payload
-            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
-            );
-            
-            // Encode SBE message header for Aeron cluster protocol
-            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
-                messageBuffer, 0, blockLength, templateId);
-            
-            // Write JSON payload after header
-            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+            AeronIngressWritePayloadBuilder.EncodedMessage encoded =
+                ingressWritePayloadBuilder.buildWriteProposal(
+                    walletAddress,
+                    path,
+                    contentType,
+                    message,
+                    signature,
+                    shouldIncludeTerm() ? Integer.valueOf(getIngressTerm()) : null,
+                    ipfsCid,
+                    proposalId
+                );
             
             // ✈️ AERON CLUSTER: Send message through internal AeronCluster client
             // This is the correct way to send messages - AeronCluster.offer() sends through ingress
@@ -1390,8 +1364,8 @@ public class AeronConsensusEngine implements ClusteredService {
                 boolean sent = egressHandler.offerWithRetry(
                     internalClusterClient,
                     idleStrategy,
-                    messageBuffer,
-                    totalLength,
+                    encoded.buffer,
+                    encoded.totalLength,
                     "write ingress",
                     100,
                     () -> {
@@ -1455,49 +1429,23 @@ public class AeronConsensusEngine implements ClusteredService {
             blobId);
         
         try {
-            // Build JSON write proposal WITH blobId and mimeType
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
-            json.append("\"path\":\"").append(escapeJson(path)).append("\",");
-            json.append("\"contentType\":\"").append(escapeJson(contentType != null ? contentType : "page")).append("\",");
-            json.append("\"message\":\"").append(escapeJson(message != null ? message : "")).append("\",");
-            json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
-            if (shouldIncludeTerm()) {
-                json.append(",\"term\":").append(getIngressTerm());
-            }
-            
-            // Add blobId and mimeType if present
+            AeronIngressWritePayloadBuilder.EncodedMessage encoded =
+                ingressWritePayloadBuilder.buildWriteProposalWithBinary(
+                    walletAddress,
+                    path,
+                    contentType,
+                    message,
+                    signature,
+                    shouldIncludeTerm() ? Integer.valueOf(getIngressTerm()) : null,
+                    blobId,
+                    mimeType,
+                    ipfsCid,
+                    proposalId
+                );
+            log.debug("📤 Sending write with binary - JSON size: {} bytes", encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH);
             if (blobId != null && !blobId.isEmpty()) {
-                json.append(",\"blobId\":\"").append(escapeJson(blobId)).append("\"");
-                json.append(",\"mimeType\":\"").append(escapeJson(mimeType != null ? mimeType : "application/octet-stream")).append("\"");
                 log.info("📎 Including blobId in Aeron JSON: {}", blobId);
             }
-            if (ipfsCid != null && !ipfsCid.isEmpty()) {
-                json.append(",\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\"");
-            }
-            if (proposalId != null && !proposalId.isEmpty()) {
-                json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
-            }
-            
-            json.append("}");
-            
-            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            log.debug("📤 Sending write with binary - JSON size: {} bytes", jsonBytes.length);
-            
-            // ✈️ AERON SBE MESSAGE FORMAT
-            int blockLength = jsonBytes.length;
-            int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL;
-            
-            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
-            );
-            
-            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
-                messageBuffer, 0, blockLength, templateId);
-            
-            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
             
             try {
                 if (internalClusterClient.isClosed()) {
@@ -1516,8 +1464,8 @@ public class AeronConsensusEngine implements ClusteredService {
                 boolean sent = egressHandler.offerWithRetry(
                     internalClusterClient,
                     idleStrategy,
-                    messageBuffer,
-                    totalLength,
+                    encoded.buffer,
+                    encoded.totalLength,
                     "write (binary) ingress",
                     100,
                     () -> {
@@ -1572,37 +1520,14 @@ public class AeronConsensusEngine implements ClusteredService {
         log.info("🗑️  SENDING DELETE through ingress: wallet={}, path={}", walletAddress, path);
         
         try {
-            // Build JSON delete proposal (simpler than write)
-            StringBuilder json = new StringBuilder();
-            json.append("{");
-            json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
-            json.append("\"path\":\"").append(escapeJson(path)).append("\",");
-            json.append("\"signature\":\"").append(escapeJson(signature != null ? signature : "")).append("\"");
-            if (shouldIncludeTerm()) {
-                json.append(",\"term\":").append(getIngressTerm());
-            }
-            if (proposalId != null && !proposalId.isEmpty()) {
-                json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
-            }
-            json.append("}");
-            
-            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            
-            // Encode message with SBE header (DELETE template ID)
-            int blockLength = jsonBytes.length;
-            int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL;
-            
-            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
-            );
-            
-            // Encode SBE header
-            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
-                messageBuffer, 0, blockLength, templateId);
-            
-            // Write JSON payload
-            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+            AeronIngressWritePayloadBuilder.EncodedMessage encoded =
+                ingressWritePayloadBuilder.buildDeleteProposal(
+                    walletAddress,
+                    path,
+                    signature,
+                    shouldIncludeTerm() ? Integer.valueOf(getIngressTerm()) : null,
+                    proposalId
+                );
             
             // Check session health
             if (internalClusterClient.isClosed()) {
@@ -1621,8 +1546,8 @@ public class AeronConsensusEngine implements ClusteredService {
             boolean sent = egressHandler.offerWithRetry(
                 internalClusterClient,
                 idleStrategy,
-                messageBuffer,
-                totalLength,
+                encoded.buffer,
+                encoded.totalLength,
                 "delete ingress",
                 100,
                 () -> {
@@ -1685,81 +1610,31 @@ public class AeronConsensusEngine implements ClusteredService {
         log.debug("🔍DEBUG_BATCH [4]: Building JSON batch with {} proposals", proposals.size());
         
         try {
-            // Build JSON array of write proposals
-            StringBuilder json = new StringBuilder();
-            json.append("{\"batch\":[");
-            
-            boolean first = true;
             for (org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal proposal : proposals) {
-                if (!first) {
-                    json.append(",");
+                log.debug("🔍 Serializing proposal: path={}, blobId={}", proposal.getPath(), proposal.getBlobId());
+                if (proposal.getBlobId() != null && !proposal.getBlobId().isEmpty()) {
+                    log.info("📎 Including blobId in Aeron JSON: {}", proposal.getBlobId());
                 }
-                first = false;
-                
-                json.append("{");
-                json.append("\"proposalId\":\"").append(escapeJson(proposal.getProposalId())).append("\",");
-                if (shouldIncludeTerm()) {
-                    json.append("\"term\":").append(getIngressTerm()).append(",");
+                if (proposal.getIpfsCid() != null && !proposal.getIpfsCid().isEmpty()) {
+                    log.debug("🔗 Including ipfsCid in Aeron JSON: {}", proposal.getIpfsCid());
                 }
-                json.append("\"walletAddress\":\"").append(escapeJson(proposal.getWalletAddress())).append("\",");
-                json.append("\"path\":\"").append(escapeJson(proposal.getPath())).append("\",");
-                json.append("\"contentType\":\"").append(escapeJson(proposal.getContentType() != null ? proposal.getContentType() : "page")).append("\",");
-                json.append("\"message\":\"").append(escapeJson(proposal.getMessage() != null ? proposal.getMessage() : "")).append("\",");
-                json.append("\"signature\":\"").append(escapeJson(proposal.getSignature() != null ? proposal.getSignature() : "")).append("\"");
-                
-                // Add intentToken if present (ADR 020 - lazy binary upload)
-                if (proposal.getIntentToken() != null && !proposal.getIntentToken().isEmpty()) {
-                    json.append(",\"intentToken\":\"").append(escapeJson(proposal.getIntentToken())).append("\"");
-                }
-                
-                // Add blobId and mimeType if present (eager binary upload)
-                String pBlobId = proposal.getBlobId();
-                log.debug("🔍 Serializing proposal: path={}, blobId={}", proposal.getPath(), pBlobId);
-                if (pBlobId != null && !pBlobId.isEmpty()) {
-                    json.append(",\"blobId\":\"").append(escapeJson(pBlobId)).append("\"");
-                    json.append(",\"mimeType\":\"").append(escapeJson(proposal.getMimeType() != null ? proposal.getMimeType() : "application/octet-stream")).append("\"");
-                    log.info("📎 Including blobId in Aeron JSON: {}", pBlobId);
-                }
-                
-                // ADR 016: Add ipfsCid if present (client-side IPFS upload)
-                String pIpfsCid = proposal.getIpfsCid();
-                if (pIpfsCid != null && !pIpfsCid.isEmpty()) {
-                    json.append(",\"ipfsCid\":\"").append(escapeJson(pIpfsCid)).append("\"");
-                    log.debug("🔗 Including ipfsCid in Aeron JSON: {}", pIpfsCid);
-                }
-                
-                json.append("}");
             }
-            
-            json.append("]}");
-            
-            byte[] jsonBytes = json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+            AeronIngressWritePayloadBuilder.EncodedMessage encoded =
+                ingressWritePayloadBuilder.buildWriteBatch(
+                    proposals,
+                    shouldIncludeTerm() ? Integer.valueOf(getIngressTerm()) : null
+                );
             
             log.debug("🔍DEBUG_BATCH [5]: JSON built - size: {} bytes, first 100 chars: {}", 
-                jsonBytes.length, json.substring(0, Math.min(100, json.length())));
-            
-            // ✈️ AERON SBE MESSAGE FORMAT: Encode message with SBE header
-            int blockLength = jsonBytes.length;
-            int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH; // New template ID for batches
+                encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH,
+                encoded.json.substring(0, Math.min(100, encoded.json.length())));
             
             log.debug("🔍DEBUG_BATCH [6]: Encoding SBE header - blockLength: {}, templateId: {} (WRITE_BATCH)", 
-                blockLength, templateId);
-            
-            // Allocate buffer: SBE header (8 bytes) + JSON payload
-            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(
-                new byte[totalLength]
-            );
-            
-            // Encode SBE message header for Aeron cluster protocol
-            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
-                messageBuffer, 0, blockLength, templateId);
-            
-            // Write JSON payload after header
-            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
+                encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH, encoded.templateId);
             
             // ✈️ AERON CLUSTER: Send batch message through internal AeronCluster client
-            log.debug("🔍DEBUG_BATCH [7]: About to call internalClusterClient.offer() - totalLength: {} bytes", totalLength);
+            log.debug("🔍DEBUG_BATCH [7]: About to call internalClusterClient.offer() - totalLength: {} bytes", encoded.totalLength);
             
             try {
                 // 🔍 HEALTH CHECK: Verify session is open before offering batch
@@ -1786,8 +1661,8 @@ public class AeronConsensusEngine implements ClusteredService {
                 boolean sent = egressHandler.offerWithRetry(
                     internalClusterClient,
                     idleStrategy,
-                    messageBuffer,
-                    totalLength,
+                    encoded.buffer,
+                    encoded.totalLength,
                     "batch ingress",
                     100,
                     () -> {
