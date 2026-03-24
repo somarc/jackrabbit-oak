@@ -40,16 +40,6 @@ public class HttpGCJournalFile implements GCJournalFile {
         this.http2ClientPool = http2ClientPool;
     }
     
-    /**
-     * Legacy constructor for backward compatibility.
-     * @deprecated Use constructor with Http2ClientPool instead
-     */
-    @Deprecated
-    public HttpGCJournalFile(String baseUrl, HttpClientPool httpClientPool) {
-        this(baseUrl, new Http2ClientPool());
-        log.warn("Using deprecated HttpClientPool constructor - consider upgrading to Http2ClientPool");
-    }
-    
     @Override
     public void writeLine(String line) throws IOException {
         // No-op for read-only HTTP mount
@@ -77,4 +67,3 @@ public class HttpGCJournalFile implements GCJournalFile {
         // Silently ignore truncation - this is expected for read-only stores
     }
 }
-

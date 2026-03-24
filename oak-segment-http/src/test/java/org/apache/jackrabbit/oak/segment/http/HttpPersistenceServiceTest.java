@@ -16,12 +16,18 @@
  */
 package org.apache.jackrabbit.oak.segment.http;
 
+import org.apache.jackrabbit.oak.segment.spi.persistence.GCJournalFile;
+import org.apache.jackrabbit.oak.segment.spi.persistence.ManifestFile;
+import org.apache.jackrabbit.oak.segment.spi.persistence.RepositoryLock;
+import org.apache.jackrabbit.oak.segment.spi.persistence.SegmentArchiveManager;
 import org.apache.jackrabbit.oak.segment.spi.persistence.SegmentNodeStorePersistence;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceRegistration;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.Dictionary;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -32,6 +38,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -114,6 +121,34 @@ public class HttpPersistenceServiceTest {
     }
 
     @Test
+    public void testLazyMountSleepsBeforeRetryingAndThenRegisters() throws Exception {
+        AtomicInteger probeCalls = new AtomicInteger();
+        HttpPersistenceService service = new HttpPersistenceService((url, timeoutMs) -> probeCalls.incrementAndGet() > 1);
+        BundleContext bundleContext = mock(BundleContext.class);
+        @SuppressWarnings("unchecked")
+        ServiceRegistration<SegmentNodeStorePersistence> registration = mock(ServiceRegistration.class);
+        when(bundleContext.registerService(
+            eq(SegmentNodeStorePersistence.class),
+            same((SegmentNodeStorePersistence) service),
+            any(Dictionary.class)
+        )).thenReturn(registration);
+
+        service.activate(bundleContext, config(true, 0, 250));
+
+        waitFor(() -> probeCalls.get() >= 2, 1000);
+        waitFor(service::isValidatorAvailable, 1000);
+
+        verify(bundleContext).registerService(
+            eq(SegmentNodeStorePersistence.class),
+            same((SegmentNodeStorePersistence) service),
+            any(Dictionary.class)
+        );
+
+        service.deactivate();
+        verify(registration).unregister();
+    }
+
+    @Test
     public void testLazyMountDoesNotRegisterWhileProbeStaysUnavailable() throws Exception {
         AtomicInteger probeCalls = new AtomicInteger();
         HttpPersistenceService service = new HttpPersistenceService((url, timeoutMs) -> {
@@ -133,6 +168,116 @@ public class HttpPersistenceServiceTest {
         );
 
         service.deactivate();
+    }
+
+    @Test
+    public void testDefaultConstructorAndDelegateMethodsAreUsable() throws Exception {
+        assertNotNull(new HttpPersistenceService());
+
+        HttpPersistenceService service = new HttpPersistenceService((url, timeoutMs) -> false);
+        BundleContext bundleContext = mock(BundleContext.class);
+        @SuppressWarnings("unchecked")
+        ServiceRegistration<SegmentNodeStorePersistence> registration = mock(ServiceRegistration.class);
+        when(bundleContext.registerService(
+            eq(SegmentNodeStorePersistence.class),
+            same((SegmentNodeStorePersistence) service),
+            any(Dictionary.class)
+        )).thenReturn(registration);
+
+        service.activate(bundleContext, config(false, 10, 3000));
+
+        SegmentArchiveManager archiveManager = service.createArchiveManager(false, false, null, null, null);
+        GCJournalFile gcJournalFile = service.getGCJournalFile();
+        ManifestFile manifestFile = service.getManifestFile();
+        RepositoryLock lock = service.lockRepository();
+
+        assertNotNull(archiveManager);
+        assertTrue(service.segmentFilesExist());
+        assertNotNull(gcJournalFile);
+        assertNotNull(manifestFile);
+        lock.unlock();
+
+        service.deactivate();
+        verify(registration).unregister();
+    }
+
+    @Test
+    public void testLazyMountInterruptsSleepingHealthCheckThreadOnDeactivate() throws Exception {
+        AtomicInteger probeCalls = new AtomicInteger();
+        HttpPersistenceService service = new HttpPersistenceService((url, timeoutMs) -> {
+            probeCalls.incrementAndGet();
+            return false;
+        });
+        BundleContext bundleContext = mock(BundleContext.class);
+
+        service.activate(bundleContext, config(true, 5, 250));
+        waitFor(() -> probeCalls.get() > 0, 1000);
+        Thread.sleep(50L);
+
+        service.deactivate();
+    }
+
+    @Test
+    public void testDeactivateRestoresInterruptStatusWhenJoinIsInterrupted() throws Exception {
+        AtomicInteger probeCalls = new AtomicInteger();
+        HttpPersistenceService service = new HttpPersistenceService((url, timeoutMs) -> {
+            probeCalls.incrementAndGet();
+            return false;
+        });
+        BundleContext bundleContext = mock(BundleContext.class);
+
+        service.activate(bundleContext, config(true, 5, 250));
+        waitFor(() -> probeCalls.get() > 0, 1000);
+        Thread.sleep(50L);
+
+        Thread.currentThread().interrupt();
+        try {
+            service.deactivate();
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    public void testRegisterPersistenceServiceIsIdempotentAndDeactivateHandlesAlreadyUnregistered() throws Exception {
+        HttpPersistenceService service = new HttpPersistenceService((url, timeoutMs) -> false);
+        BundleContext bundleContext = mock(BundleContext.class);
+        @SuppressWarnings("unchecked")
+        ServiceRegistration<SegmentNodeStorePersistence> registration = mock(ServiceRegistration.class);
+        when(bundleContext.registerService(
+            eq(SegmentNodeStorePersistence.class),
+            same((SegmentNodeStorePersistence) service),
+            any(Dictionary.class)
+        )).thenReturn(registration);
+        doThrow(new IllegalStateException("already gone")).when(registration).unregister();
+
+        service.activate(bundleContext, config(false, 10, 3000));
+        invokePrivate(service, "registerPersistenceService");
+
+        verify(bundleContext).registerService(
+            eq(SegmentNodeStorePersistence.class),
+            same((SegmentNodeStorePersistence) service),
+            any(Dictionary.class)
+        );
+
+        service.deactivate();
+        verify(registration).unregister();
+    }
+
+    @Test
+    public void testHealthCheckThreadExitsImmediatelyWhenAlreadyAvailableOrStopped() throws Exception {
+        HttpPersistenceService availableService = new HttpPersistenceService((url, timeoutMs) -> false);
+        setAtomicBoolean(availableService, "validatorAvailable", true);
+        setField(availableService, "globalStoreUrl", "http://oak-global-store:8090");
+        invokePrivate(availableService, "startHealthCheckThread");
+        getThread(availableService).join(1000L);
+
+        HttpPersistenceService stoppedService = new HttpPersistenceService((url, timeoutMs) -> false);
+        setAtomicBoolean(stoppedService, "running", false);
+        setField(stoppedService, "globalStoreUrl", "http://oak-global-store:8090");
+        invokePrivate(stoppedService, "startHealthCheckThread");
+        getThread(stoppedService).join(1000L);
     }
 
     private static HttpPersistenceService.Configuration config(boolean lazyMount, int intervalSeconds, int timeoutMs) {
@@ -158,5 +303,29 @@ public class HttpPersistenceServiceTest {
     @FunctionalInterface
     private interface Check {
         boolean satisfied();
+    }
+
+    private static void invokePrivate(HttpPersistenceService service, String methodName) throws Exception {
+        Method method = HttpPersistenceService.class.getDeclaredMethod(methodName);
+        method.setAccessible(true);
+        method.invoke(service);
+    }
+
+    private static void setField(HttpPersistenceService service, String fieldName, Object value) throws Exception {
+        Field field = HttpPersistenceService.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(service, value);
+    }
+
+    private static void setAtomicBoolean(HttpPersistenceService service, String fieldName, boolean value) throws Exception {
+        Field field = HttpPersistenceService.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        ((java.util.concurrent.atomic.AtomicBoolean) field.get(service)).set(value);
+    }
+
+    private static Thread getThread(HttpPersistenceService service) throws Exception {
+        Field field = HttpPersistenceService.class.getDeclaredField("healthCheckThread");
+        field.setAccessible(true);
+        return (Thread) field.get(service);
     }
 }

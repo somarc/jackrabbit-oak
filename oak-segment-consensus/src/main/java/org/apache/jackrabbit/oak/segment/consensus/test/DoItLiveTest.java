@@ -22,8 +22,8 @@ import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
+import org.apache.jackrabbit.oak.segment.http.Http2ClientPool;
 import org.apache.jackrabbit.oak.segment.http.HttpSegmentArchiveManager;
-import org.apache.jackrabbit.oak.segment.http.HttpClientPool;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -165,8 +165,8 @@ public class DoItLiveTest {
     private void readSegmentsViaHttp() throws Exception {
         log.info("Connecting to HTTP Segment Server: {}", HTTP_BASE_URL);
         
-        // Create HTTP client pool for connection reuse
-        HttpClientPool httpClientPool = new HttpClientPool();
+        // Create HTTP/2 client pool for multiplexed segment reads
+        Http2ClientPool httpClientPool = new Http2ClientPool();
         
         // Create HTTP segment archive manager
         HttpSegmentArchiveManager httpManager = new HttpSegmentArchiveManager(

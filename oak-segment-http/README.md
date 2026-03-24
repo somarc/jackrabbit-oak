@@ -43,7 +43,6 @@ See [LazyHttpNodeStore.java](../oak-segment-consensus/src/main/java/org/apache/j
 | `HttpJournalFile` | Remote `journal.log` access |
 | `HttpManifestFile` | Remote manifest access |
 | `HttpGCJournalFile` | Remote GC journal access |
-| `HttpClientPool` | Shared HTTP/1.1 connection pool |
 | `Http2ClientPool` | HTTP/2 client pool for higher-throughput fetches |
 | `ValidatorAuthHelper` | Optional auth-header helper for protected validator endpoints |
 

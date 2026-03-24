@@ -30,6 +30,23 @@ class HttpValidatorHealthProbe implements ValidatorHealthProbe {
 
     private static final Logger log = LoggerFactory.getLogger(HttpValidatorHealthProbe.class);
 
+    @FunctionalInterface
+    interface HttpClientFactory {
+        CloseableHttpClient create(RequestConfig requestConfig);
+    }
+
+    private final HttpClientFactory clientFactory;
+
+    HttpValidatorHealthProbe() {
+        this(requestConfig -> HttpClients.custom()
+            .setDefaultRequestConfig(requestConfig)
+            .build());
+    }
+
+    HttpValidatorHealthProbe(HttpClientFactory clientFactory) {
+        this.clientFactory = clientFactory;
+    }
+
     @Override
     public boolean isAvailable(String baseUrl, int timeoutMs) {
         RequestConfig requestConfig = RequestConfig.custom()
@@ -38,9 +55,7 @@ class HttpValidatorHealthProbe implements ValidatorHealthProbe {
             .setConnectionRequestTimeout(timeoutMs)
             .build();
 
-        try (CloseableHttpClient client = HttpClients.custom()
-                .setDefaultRequestConfig(requestConfig)
-                .build()) {
+        try (CloseableHttpClient client = clientFactory.create(requestConfig)) {
 
             String url = baseUrl + "/journal.log";
             HttpGet request = new HttpGet(url);

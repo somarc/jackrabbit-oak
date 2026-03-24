@@ -90,6 +90,11 @@ public class Http2ClientPool {
         
         log.info("HTTP/2 Client Pool initialized (version preference: HTTP/2 with HTTP/1.1 fallback)");
     }
+
+    Http2ClientPool(HttpClient httpClient) {
+        this.httpClient = httpClient;
+        this.executor = null;
+    }
     
     /**
      * Get the HTTP/2 client.

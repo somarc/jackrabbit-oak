@@ -62,28 +62,34 @@ public class ValidatorAuthHelper {
      * @return The auth token, or null if not configured (POC mode)
      */
     public static String getAuthToken() {
-        if (!tokenInitialized) {
-            synchronized (ValidatorAuthHelper.class) {
-                if (!tokenInitialized) {
-                    // Try system property first, then environment variable
-                    String token = System.getProperty(TOKEN_PROPERTY_NAME);
-                    if (token == null || token.trim().isEmpty()) {
-                        token = System.getenv(TOKEN_ENV_VAR_NAME);
-                    }
-                    
-                    if (token != null && !token.trim().isEmpty()) {
-                        cachedToken = token.trim();
-                        log.debug("Validator auth token configured (from {} or {})", 
-                            TOKEN_PROPERTY_NAME, TOKEN_ENV_VAR_NAME);
-                    } else {
-                        cachedToken = null;
-                        log.debug("No validator auth token configured - requests will be unauthenticated (POC mode)");
-                    }
-                    tokenInitialized = true;
+        synchronized (ValidatorAuthHelper.class) {
+            if (!tokenInitialized) {
+                // Try system property first, then environment variable
+                String token = normalizeToken(System.getProperty(TOKEN_PROPERTY_NAME));
+                if (token == null) {
+                    token = normalizeToken(System.getenv(TOKEN_ENV_VAR_NAME));
                 }
+
+                if (token != null) {
+                    cachedToken = token;
+                    log.debug("Validator auth token configured (from {} or {})",
+                        TOKEN_PROPERTY_NAME, TOKEN_ENV_VAR_NAME);
+                } else {
+                    cachedToken = null;
+                    log.debug("No validator auth token configured - requests will be unauthenticated (POC mode)");
+                }
+                tokenInitialized = true;
             }
+            return cachedToken;
         }
-        return cachedToken;
+    }
+
+    private static String normalizeToken(String token) {
+        if (token == null) {
+            return null;
+        }
+        String trimmedToken = token.trim();
+        return trimmedToken.isEmpty() ? null : trimmedToken;
     }
     
     /**
@@ -119,4 +125,3 @@ public class ValidatorAuthHelper {
         return getAuthToken() != null;
     }
 }
-

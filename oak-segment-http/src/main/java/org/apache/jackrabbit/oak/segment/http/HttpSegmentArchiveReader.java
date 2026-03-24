@@ -57,16 +57,6 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
         log.debug("Initialized HttpSegmentArchiveReader (HTTP/2) for archive: {} at: {}", archiveName, this.baseUrl);
     }
     
-    /**
-     * Legacy constructor for backward compatibility with HttpClientPool.
-     * @deprecated Use constructor with Http2ClientPool instead
-     */
-    @Deprecated
-    public HttpSegmentArchiveReader(String baseUrl, String archiveName, IOMonitor ioMonitor, HttpClientPool httpClientPool) throws IOException {
-        this(baseUrl, archiveName, ioMonitor, new Http2ClientPool());
-        log.warn("Using deprecated HttpClientPool constructor - consider upgrading to Http2ClientPool for better performance");
-    }
-
     @Override
     public String getName() {
         return archiveName;

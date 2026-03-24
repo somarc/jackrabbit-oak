@@ -18,6 +18,8 @@ package org.apache.jackrabbit.oak.segment.http;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import org.apache.http.StatusLine;
+import org.apache.http.client.methods.CloseableHttpResponse;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -29,6 +31,11 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class HttpValidatorHealthProbeTest {
 
@@ -70,6 +77,38 @@ public class HttpValidatorHealthProbeTest {
         HttpValidatorHealthProbe probe = new HttpValidatorHealthProbe();
 
         assertFalse(probe.isAvailable("http://127.0.0.1:1", 100));
+    }
+
+    @Test
+    public void testReportsUnavailableWhenResponseCloseFails() throws Exception {
+        CloseableHttpResponse response = mock(CloseableHttpResponse.class);
+        org.apache.http.impl.client.CloseableHttpClient client = mock(org.apache.http.impl.client.CloseableHttpClient.class);
+        StatusLine statusLine = mock(StatusLine.class);
+        when(statusLine.getStatusCode()).thenReturn(200);
+        when(response.getStatusLine()).thenReturn(statusLine);
+        when(client.execute(any())).thenReturn(response);
+        doThrow(new IOException("close failed")).when(response).close();
+
+        HttpValidatorHealthProbe probe = new HttpValidatorHealthProbe(requestConfig -> client);
+
+        assertFalse(probe.isAvailable(baseUrl, 1000));
+    }
+
+    @Test
+    public void testRuntimeFailureDuringStatusReadIsPropagated() throws Exception {
+        CloseableHttpResponse response = mock(CloseableHttpResponse.class);
+        org.apache.http.impl.client.CloseableHttpClient client = mock(org.apache.http.impl.client.CloseableHttpClient.class);
+        when(client.execute(any())).thenReturn(response);
+        when(response.getStatusLine()).thenThrow(new RuntimeException("status failed"));
+
+        HttpValidatorHealthProbe probe = new HttpValidatorHealthProbe(requestConfig -> client);
+
+        try {
+            probe.isAvailable(baseUrl, 1000);
+            fail("Expected runtime status failure to propagate");
+        } catch (RuntimeException e) {
+            assertTrue(e.getMessage().contains("status failed"));
+        }
     }
 
     private static void respond(HttpExchange exchange, int statusCode, byte[] body) throws IOException {

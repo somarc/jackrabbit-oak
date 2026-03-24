@@ -81,14 +81,9 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
                                                      FileStoreMonitor fileStoreMonitor,
                                                      RemoteStoreMonitor remoteStoreMonitor) {
         log.debug("Creating HttpSegmentArchiveManager (HTTP/2, mmap={}, offHeapAccess={})", mmap, offHeapAccess);
-        try {
-            HttpSegmentArchiveManager manager = new HttpSegmentArchiveManager(baseUrl, ioMonitor, http2ClientPool);
-            log.debug("HttpSegmentArchiveManager (HTTP/2) created successfully");
-            return manager;
-        } catch (Exception e) {
-            log.error("Failed to create HttpSegmentArchiveManager", e);
-            throw e;
-        }
+        HttpSegmentArchiveManager manager = new HttpSegmentArchiveManager(baseUrl, ioMonitor, http2ClientPool);
+        log.debug("HttpSegmentArchiveManager (HTTP/2) created successfully");
+        return manager;
     }
     
     @Override
@@ -102,37 +97,19 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
     @Override
     public JournalFile getJournalFile() {
         log.debug("Creating HttpJournalFile (HTTP/2) for: {}", baseUrl);
-        try {
-            HttpJournalFile journalFile = new HttpJournalFile(baseUrl, writeAccessController, http2ClientPool);
-            return journalFile;
-        } catch (Exception e) {
-            log.error("Failed to create HttpJournalFile", e);
-            throw e;
-        }
+        return new HttpJournalFile(baseUrl, writeAccessController, http2ClientPool);
     }
     
     @Override
     public GCJournalFile getGCJournalFile() throws IOException {
         log.debug("Creating HttpGCJournalFile (HTTP/2) for: {}", baseUrl);
-        try {
-            HttpGCJournalFile gcFile = new HttpGCJournalFile(baseUrl, http2ClientPool);
-            return gcFile;
-        } catch (Exception e) {
-            log.error("Failed to create HttpGCJournalFile", e);
-            throw e;
-        }
+        return new HttpGCJournalFile(baseUrl, http2ClientPool);
     }
     
     @Override
     public ManifestFile getManifestFile() throws IOException {
         log.debug("Creating HttpManifestFile (HTTP/2) for: {}", baseUrl);
-        try {
-            HttpManifestFile manifestFile = new HttpManifestFile(baseUrl, http2ClientPool);
-            return manifestFile;
-        } catch (Exception e) {
-            log.error("Failed to create HttpManifestFile", e);
-            throw e;
-        }
+        return new HttpManifestFile(baseUrl, http2ClientPool);
     }
     
     @Override
@@ -152,4 +129,3 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
         }
     }
 }
-

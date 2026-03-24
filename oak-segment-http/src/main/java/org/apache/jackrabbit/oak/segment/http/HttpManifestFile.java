@@ -39,16 +39,6 @@ public class HttpManifestFile implements ManifestFile {
         this.http2ClientPool = http2ClientPool;
     }
     
-    /**
-     * Legacy constructor for backward compatibility.
-     * @deprecated Use constructor with Http2ClientPool instead
-     */
-    @Deprecated
-    public HttpManifestFile(String baseUrl, HttpClientPool httpClientPool) {
-        this(baseUrl, new Http2ClientPool());
-        log.warn("Using deprecated HttpClientPool constructor - consider upgrading to Http2ClientPool");
-    }
-    
     @Override
     public boolean exists() {
         String manifestUrl = baseUrl + "/manifest";
@@ -80,4 +70,3 @@ public class HttpManifestFile implements ManifestFile {
         // DO NOT throw exception - Oak initialization requires this to succeed
     }
 }
-

@@ -111,6 +111,20 @@ public class HttpRemoteMetadataFileTest {
     }
 
     @Test
+    public void testManifestWrapsNullMessageFailure() throws Exception {
+        RecordingStringPool pool = new RecordingStringPool();
+        pool.failure = new RuntimeException();
+        HttpManifestFile manifestFile = new HttpManifestFile("http://validator.example", pool);
+
+        try {
+            manifestFile.load();
+            fail("Expected IOException");
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("Failed to fetch manifest via HTTP/2"));
+        }
+    }
+
+    @Test
     public void testGcJournalReadsLinesAndHandles404() throws Exception {
         RecordingStringPool pool = new RecordingStringPool();
         pool.response = "gc-1\ngc-2\n";
@@ -138,6 +152,20 @@ public class HttpRemoteMetadataFileTest {
 
         gcJournalFile.writeLine("ignored");
         gcJournalFile.truncate();
+    }
+
+    @Test
+    public void testGcJournalWrapsNullMessageFailure() throws Exception {
+        RecordingStringPool pool = new RecordingStringPool();
+        pool.failure = new RuntimeException();
+        HttpGCJournalFile gcJournalFile = new HttpGCJournalFile("http://validator.example", pool);
+
+        try {
+            gcJournalFile.readLines();
+            fail("Expected IOException");
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("Failed to fetch gc.log via HTTP/2"));
+        }
     }
 
     private static final class RecordingStringPool extends Http2ClientPool {

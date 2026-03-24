@@ -97,6 +97,26 @@ public class HttpSegmentArchiveTransportTest {
     }
 
     @Test
+    public void testReadSegmentWrapsNullMessageFailures() throws Exception {
+        RecordingHttp2ClientPool pool = new RecordingHttp2ClientPool();
+        pool.getFailure = new RuntimeException();
+        UUID uuid = UUID.randomUUID();
+        HttpSegmentArchiveReader reader = new HttpSegmentArchiveReader(
+            "http://validator.example",
+            "data00000a.tar",
+            new IOMonitorAdapter(),
+            pool
+        );
+
+        try {
+            reader.readSegment(uuid.getMostSignificantBits(), uuid.getLeastSignificantBits());
+            fail("Expected IOException");
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("Failed to fetch segment via HTTP/2"));
+        }
+    }
+
+    @Test
     public void testReadSegmentToBufferParsesArchiveFileName() throws Exception {
         RecordingHttp2ClientPool pool = new RecordingHttp2ClientPool();
         pool.segmentData = new byte[] {1, 2, 3};
@@ -117,6 +137,47 @@ public class HttpSegmentArchiveTransportTest {
         assertArrayEquals(new byte[] {1, 2, 3}, actual);
         assertNull(reader.doReadDataFile(".gph"));
         assertEquals("http:/validator.example/data00000a.tar", reader.archivePathAsFile().getPath());
+    }
+
+    @Test
+    public void testReadSegmentToBufferSupportsRawUuidAndClose() throws Exception {
+        RecordingHttp2ClientPool pool = new RecordingHttp2ClientPool();
+        pool.segmentData = new byte[] {4, 5, 6};
+        String uuid = UUID.randomUUID().toString();
+        HttpSegmentArchiveReader reader = new HttpSegmentArchiveReader(
+            "http://validator.example",
+            "data00000a.tar",
+            new IOMonitorAdapter(),
+            pool
+        );
+
+        Buffer target = Buffer.allocate(8);
+        reader.doReadSegmentToBuffer(uuid, target);
+        byte[] actual = new byte[3];
+        target.get(actual);
+
+        assertEquals("http://validator.example/segments/" + uuid, pool.lastGetUrl);
+        assertArrayEquals(new byte[] {4, 5, 6}, actual);
+        reader.close();
+    }
+
+    @Test
+    public void testReadSegmentToBufferWrapsFailures() throws Exception {
+        RecordingHttp2ClientPool pool = new RecordingHttp2ClientPool();
+        pool.getFailure = new RuntimeException("buffer boom");
+        HttpSegmentArchiveReader reader = new HttpSegmentArchiveReader(
+            "http://validator.example",
+            "data00000a.tar",
+            new IOMonitorAdapter(),
+            pool
+        );
+
+        try {
+            reader.doReadSegmentToBuffer(UUID.randomUUID().toString(), Buffer.allocate(8));
+            fail("Expected IOException");
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("Failed to fetch segment via HTTP/2"));
+        }
     }
 
     @Test

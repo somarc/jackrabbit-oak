@@ -47,16 +47,6 @@ public class HttpJournalFile implements JournalFile {
         log.debug("Initialized HttpJournalFile (HTTP/2) for: {} (stats: {})", baseUrl, http2ClientPool.getPoolStats());
     }
     
-    /**
-     * Legacy constructor for backward compatibility.
-     * @deprecated Use constructor with Http2ClientPool instead
-     */
-    @Deprecated
-    public HttpJournalFile(String baseUrl, WriteAccessController writeAccessController, HttpClientPool httpClientPool) {
-        this(baseUrl, writeAccessController, new Http2ClientPool());
-        log.warn("Using deprecated HttpClientPool constructor - consider upgrading to Http2ClientPool");
-    }
-    
     @Override
     public JournalFileReader openJournalReader() throws IOException {
         String url = baseUrl + "/journal.log";

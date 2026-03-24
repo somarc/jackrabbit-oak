@@ -67,16 +67,6 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
         log.debug("Initialized HttpSegmentArchiveManager (HTTP/2) for: {} (stats: {})", this.baseUrl, http2ClientPool.getPoolStats());
     }
     
-    /**
-     * Legacy constructor for backward compatibility with HttpClientPool.
-     * @deprecated Use constructor with Http2ClientPool instead
-     */
-    @Deprecated
-    public HttpSegmentArchiveManager(String baseUrl, IOMonitor ioMonitor, HttpClientPool httpClientPool) {
-        this(baseUrl, ioMonitor, new Http2ClientPool());
-        log.warn("Using deprecated HttpClientPool constructor - consider upgrading to Http2ClientPool for better performance");
-    }
-
     @Override
     public List<String> listArchives() throws IOException {
         // No archive listing endpoint - assume a single archive (standard Oak naming)
@@ -240,4 +230,3 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
         }
     }
 }
-

@@ -86,4 +86,27 @@ public class ValidatorAuthHelperTest {
         verify(connection, never()).setRequestProperty(eq(ValidatorAuthHelper.AUTHORIZATION_HEADER), anyString());
         verify(request, never()).setHeader(eq(ValidatorAuthHelper.AUTHORIZATION_HEADER), anyString());
     }
+
+    @Test
+    public void testBlankSystemPropertyIsTreatedAsMissing() {
+        System.setProperty(ValidatorAuthHelper.TOKEN_PROPERTY_NAME, "   ");
+
+        assertNull(ValidatorAuthHelper.getAuthToken());
+        assertFalse(ValidatorAuthHelper.isAuthEnabled());
+    }
+
+    @Test
+    public void testCachedTokenDoesNotReinitializeAfterFirstRead() {
+        System.setProperty(ValidatorAuthHelper.TOKEN_PROPERTY_NAME, "Bearer original-token");
+
+        assertEquals("Bearer original-token", ValidatorAuthHelper.getAuthToken());
+
+        System.setProperty(ValidatorAuthHelper.TOKEN_PROPERTY_NAME, "Bearer updated-token");
+        assertEquals("Bearer original-token", ValidatorAuthHelper.getAuthToken());
+    }
+
+    @Test
+    public void testUtilityClassCanBeInstantiated() {
+        assertNotNull(new ValidatorAuthHelper());
+    }
 }
