@@ -144,6 +144,31 @@ public class WriteApplicationServiceTest {
     }
 
     @Test
+    public void testApplyWriteUsesConfiguredGatewayBaseForStoredIpfsGateway() throws Exception {
+        withProperty("ipfs.gateway.base", "http://127.0.0.1:8099/ipfs/", () -> {
+            FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
+            MemoryNodeStore nodeStore = new MemoryNodeStore();
+            FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+            WriteApplicationService service = new WriteApplicationService(fileStore, nodeStore, null, flushService);
+
+            service.applyWrite(
+                WALLET,
+                PATH,
+                "asset",
+                "plain-text",
+                "0xsig",
+                null,
+                null,
+                null,
+                "bafybeigdyrzt5",
+                null);
+
+            NodeState contentNode = contentNode(nodeStore, PATH);
+            assertEquals("http://127.0.0.1:8099/ipfs/bafybeigdyrzt5", stringProperty(contentNode, "ipfsGateway"));
+        });
+    }
+
+    @Test
     public void testApplyWriteUsesLateBoundNodeStoreWhenResolvingBinaryEventCid() {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
@@ -277,5 +302,28 @@ public class WriteApplicationServiceTest {
             values.add(value);
         }
         return values;
+    }
+
+    private static void withProperty(String key, String value, ThrowingRunnable runnable) throws Exception {
+        String previous = System.getProperty(key);
+        try {
+            if (value == null) {
+                System.clearProperty(key);
+            } else {
+                System.setProperty(key, value);
+            }
+            runnable.run();
+        } finally {
+            if (previous == null) {
+                System.clearProperty(key);
+            } else {
+                System.setProperty(key, previous);
+            }
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 }

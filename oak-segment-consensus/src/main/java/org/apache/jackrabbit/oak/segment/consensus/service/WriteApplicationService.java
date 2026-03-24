@@ -22,6 +22,7 @@ import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
+import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
@@ -237,7 +238,7 @@ public class WriteApplicationService {
             } else if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 // Pure IPFS reference without local blob
                 contentNode.setProperty("ipfsCid", ipfsCid);
-                contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + ipfsCid);
+                contentNode.setProperty("ipfsGateway", IpfsGatewayUrls.gatewayUrl(ipfsCid));
                 log.debug("🔗 Stored pure IPFS reference (no local blob): ipfsCid={}", ipfsCid);
             }
             
@@ -494,14 +495,14 @@ public class WriteApplicationService {
             // Handle IPFS CID
             if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 contentNode.setProperty("ipfsCid", ipfsCid);
-                contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + ipfsCid);
+                contentNode.setProperty("ipfsGateway", IpfsGatewayUrls.gatewayUrl(ipfsCid));
                 log.info("✅ Binary stored with client-provided IPFS CID: jcr:blobId={}, ipfsCid={}", blobId, ipfsCid);
             } else {
                 // Try to derive CID from validator's IPFSDataStore (legacy path)
                 String derivedCid = tryDeriveCidFromBlobStore(blobStore, blobId);
                 if (derivedCid != null) {
                     contentNode.setProperty("ipfsCid", derivedCid);
-                    contentNode.setProperty("ipfsGateway", "https://ipfs.io/ipfs/" + derivedCid);
+                    contentNode.setProperty("ipfsGateway", IpfsGatewayUrls.gatewayUrl(derivedCid));
                     log.info("✅ Binary stored with validator-derived IPFS CID (legacy): jcr:blobId={}, ipfsCid={}", blobId, derivedCid);
                 } else {
                     log.info("✅ Binary stored (no IPFS CID - client should provide): jcr:blobId={}", blobId);

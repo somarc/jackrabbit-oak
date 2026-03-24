@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.apache.jackrabbit.oak.api.Blob;
 import org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob;
+import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
@@ -127,7 +128,8 @@ final class AeronGenesisInitializer {
             ipfsInfo.setProperty("jcr:primaryType", "nt:unstructured");
             ipfsInfo.setProperty("enabled", blobStore != null);
             ipfsInfo.setProperty("genesisImageCid", ipfsCid != null ? ipfsCid : "N/A (BlobStore fallback)");
-            ipfsInfo.setProperty("gateway", "https://ipfs.io/ipfs/");
+            ipfsInfo.setProperty("gateway", IpfsGatewayUrls.gatewayBase());
+            ipfsInfo.setProperty("localGateway", IpfsGatewayUrls.localGatewayBase());
             ipfsInfo.setProperty("description", "Binaries stored via IPFS - content-addressed, decentralized, immutable");
 
             nodeStore.merge(rootBuilder, EmptyHook.INSTANCE, CommitInfo.EMPTY);

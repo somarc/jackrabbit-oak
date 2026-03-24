@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
@@ -48,8 +49,8 @@ import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
  * {
  *   "oakBlobId": "ed06f9cb...",
  *   "ipfsCid": "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3",
- *   "gatewayUrl": "https://ipfs.io/ipfs/Qmf4F3...",
- *   "localUrl": "http://localhost:8099/ipfs/Qmf4F3..."
+ *   "gatewayUrl": "http://127.0.0.1:8099/ipfs/Qmf4F3...",
+ *   "localUrl": "http://127.0.0.1:8099/ipfs/Qmf4F3..."
  * }
  * </pre>
  */
@@ -91,8 +92,8 @@ public class CidApiHandler {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("oakBlobId", oakBlobId);
         payload.put("ipfsCid", cid.get());
-        payload.put("gatewayUrl", "https://ipfs.io/ipfs/" + cid.get());
-        payload.put("localUrl", "http://localhost:8099/ipfs/" + cid.get());
+        payload.put("gatewayUrl", IpfsGatewayUrls.gatewayUrl(cid.get()));
+        payload.put("localUrl", IpfsGatewayUrls.localGatewayUrl(cid.get()));
         sendJson(response, 200, JsonOutputUtil.toJson(payload));
     }
 

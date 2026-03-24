@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.RecordId;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
@@ -344,8 +345,8 @@ final class GenesisInitializer {
             ipfsInfo.setProperty("jcr:primaryType", "nt:unstructured");
             ipfsInfo.setProperty("enabled", blobStore != null);
             ipfsInfo.setProperty("genesisImageCid", ipfsCid != null ? ipfsCid : "N/A (BlobStore fallback)");
-            ipfsInfo.setProperty("gateway", "https://ipfs.io/ipfs/");
-            ipfsInfo.setProperty("localGateway", "http://localhost:8080/ipfs/");
+            ipfsInfo.setProperty("gateway", IpfsGatewayUrls.gatewayBase());
+            ipfsInfo.setProperty("localGateway", IpfsGatewayUrls.localGatewayBase());
             ipfsInfo.setProperty("description", "Binaries stored via IPFS - content-addressed, decentralized, immutable");
 
             // Commit the IMMORTAL GENESIS
@@ -357,8 +358,8 @@ final class GenesisInitializer {
                 ipfsSection =
                     "      ✅ Genesis Image: do-it-live.jpeg\n"
                         + "      ✅ IPFS CID: " + ipfsCid + "\n"
-                        + "      ✅ Public Gateway: https://ipfs.io/ipfs/" + ipfsCid + "\n"
-                        + "      ✅ Local Gateway: http://localhost:8080/ipfs/" + ipfsCid;
+                        + "      ✅ Gateway: " + IpfsGatewayUrls.gatewayUrl(ipfsCid) + "\n"
+                        + "      ✅ Local Gateway: " + IpfsGatewayUrls.localGatewayUrl(ipfsCid);
             } else if (blobStore != null) {
                 ipfsSection = "      ✅ Genesis Image: do-it-live.jpeg (via BlobStore)";
             } else {

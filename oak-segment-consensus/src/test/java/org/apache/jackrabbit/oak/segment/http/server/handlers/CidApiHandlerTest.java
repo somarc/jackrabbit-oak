@@ -77,8 +77,36 @@ public class CidApiHandlerTest {
                 assertTrue(json.contains("\"oakBlobId\":\"" + OAK_BLOB_ID + "\""));
                 assertTrue(json.contains("\"ipfsCid\":\"" + CID + "\""));
                 assertTrue(json.contains("\"gatewayUrl\":\"https://ipfs.io/ipfs/" + CID + "\""));
-                assertTrue(json.contains("\"localUrl\":\"http://localhost:8099/ipfs/" + CID + "\""));
+                assertTrue(json.contains("\"localUrl\":\"http://127.0.0.1:8099/ipfs/" + CID + "\""));
             }
+        } finally {
+            deleteRecursively(storageDir);
+        }
+    }
+
+    @Test
+    public void testHandleGetCidUsesConfiguredGatewayUrls() throws Exception {
+        Path storageDir = Files.createTempDirectory("cid-get-configured");
+        try {
+            withProperty("ipfs.gateway.base", "http://127.0.0.1:8099/ipfs/", () -> {
+                withProperty("ipfs.local.gateway.base", "http://127.0.0.1:8099/ipfs/", () -> {
+                    ServerContext context = newContext(storageDir);
+                    try (CidMappingService cidMappingService = new CidMappingService(storageDir)) {
+                        context.cidMappingService = cidMappingService;
+                        cidMappingService.registerMapping(OAK_BLOB_ID, CID);
+
+                        StringWriter body = new StringWriter();
+                        HttpServletResponse response = responseWithBody(body);
+                        HttpServletRequest request = request("/api/cid/" + OAK_BLOB_ID);
+
+                        new CidApiHandler(context).handleGetCid(request, response);
+
+                        String json = body.toString();
+                        assertTrue(json.contains("\"gatewayUrl\":\"http://127.0.0.1:8099/ipfs/" + CID + "\""));
+                        assertTrue(json.contains("\"localUrl\":\"http://127.0.0.1:8099/ipfs/" + CID + "\""));
+                    }
+                });
+            });
         } finally {
             deleteRecursively(storageDir);
         }
@@ -179,6 +207,24 @@ public class CidApiHandlerTest {
         return response;
     }
 
+    private static void withProperty(String key, String value, ThrowingRunnable runnable) throws Exception {
+        String previous = System.getProperty(key);
+        try {
+            if (value == null) {
+                System.clearProperty(key);
+            } else {
+                System.setProperty(key, value);
+            }
+            runnable.run();
+        } finally {
+            if (previous == null) {
+                System.clearProperty(key);
+            } else {
+                System.setProperty(key, previous);
+            }
+        }
+    }
+
     private static void deleteRecursively(Path dir) throws IOException {
         if (dir == null || !Files.exists(dir)) {
             return;
@@ -207,5 +253,10 @@ public class CidApiHandlerTest {
         if (lastFailure != null) {
             throw lastFailure;
         }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 }

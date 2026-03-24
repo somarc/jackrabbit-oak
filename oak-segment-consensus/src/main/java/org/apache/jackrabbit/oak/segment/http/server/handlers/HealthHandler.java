@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
@@ -322,7 +323,8 @@ public class HealthHandler {
                 blobStore.put("status", "UP");
                 if ("ipfs".equalsIgnoreCase(blobStoreType)) {
                     blobStore.put("cidMappingAvailable", context.cidMappingService != null);
-                    blobStore.put("ipfsGateway", "http://127.0.0.1:8080/ipfs/");
+                    blobStore.put("ipfsGateway", IpfsGatewayUrls.gatewayBase());
+                    blobStore.put("ipfsLocalGateway", IpfsGatewayUrls.localGatewayBase());
                 } else {
                     blobStore.put("note", blobStoreType + " storage configured");
                 }

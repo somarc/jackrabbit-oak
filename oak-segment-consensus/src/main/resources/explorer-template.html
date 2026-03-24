@@ -619,7 +619,7 @@
                     const propClass = getPropClass(key, value);
                     const propIcon = getPropIcon(key, value);
                     div.className = 'property ' + propClass;
-                    const valueHtml = formatPropValue(key, value);
+                    const valueHtml = formatPropValue(key, value, node.properties);
                     div.innerHTML = '<span class="prop-icon">' + propIcon + '</span>' +
                         '<div class="prop-content"><span class="prop-name">' + key + '</span>' +
                         '<span class="prop-type">' + getPropType(value) + '</span><br>' +
@@ -680,12 +680,13 @@
             return 'String';
         }
 
-        function formatPropValue(key, value) {
+        function formatPropValue(key, value, props = {}) {
             if (value === null || value === undefined) return '<em>null</em>';
             
             // IPFS links
             if (key === 'ipfsCid' && value) {
-                return '<a href="https://ipfs.io/ipfs/' + value + '" target="_blank">' + value + '</a>';
+                const gatewayUrl = props.ipfsGateway || ('ipfs://' + value);
+                return '<a href="' + gatewayUrl + '" target="_blank">' + value + '</a>';
             }
             if (key === 'ipfsGateway' && value) {
                 return '<a href="' + value + '" target="_blank">' + value + '</a>';
@@ -730,4 +731,3 @@
     </script>
 </body>
 </html>
-
