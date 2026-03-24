@@ -399,6 +399,11 @@
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
+        <configuration>
+          <skip>${skip.coverage}</skip>
+          <dataFile>${project.build.directory}/coverage-reports/jacoco-ut.exec</dataFile>
+          <outputDirectory>${project.reporting.outputDirectory}/jacoco-ut</outputDirectory>
+        </configuration>
         <executions>
           <execution>
             <id>pre-unit-test</id>
