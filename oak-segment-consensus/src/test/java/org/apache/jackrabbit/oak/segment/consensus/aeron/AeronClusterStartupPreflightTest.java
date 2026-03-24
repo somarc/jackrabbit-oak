@@ -102,4 +102,22 @@ public class AeronClusterStartupPreflightTest {
         assertFalse(result.staleDriverDirectoryDeleted);
         assertFalse(result.forceBootstrap);
     }
+
+    @Test
+    public void runIgnoresEmptyDriverDirectory() throws Exception {
+        File emptyDriverDir = tempFolder.newFolder("empty-driver");
+
+        CrashHandler crashHandler = mock(CrashHandler.class);
+        when(crashHandler.hasCrashed()).thenReturn(false);
+        when(crashHandler.shouldForceBootstrap()).thenReturn(false);
+
+        AeronClusterStartupPreflight.PreflightResult result =
+            new AeronClusterStartupPreflight(0, crashHandler).run(emptyDriverDir.getAbsolutePath());
+
+        assertTrue(emptyDriverDir.exists());
+        assertFalse(result.hasCrashMarkers);
+        assertFalse(result.staleDriverDirectoryDetected);
+        assertFalse(result.staleDriverDirectoryDeleted);
+        assertFalse(result.forceBootstrap);
+    }
 }

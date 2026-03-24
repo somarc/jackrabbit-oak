@@ -72,6 +72,11 @@ interface IpfsClient {
     void writeFile(String path, byte[] data) throws Exception;
 
     /**
+     * Creates or replaces an IPFS Files entry that points at the supplied CID.
+     */
+    void linkCid(String cid, String path) throws Exception;
+
+    /**
      * Reads a file from the IPFS Files namespace.
      */
     byte[] readFile(String path) throws Exception;

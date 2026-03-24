@@ -62,8 +62,10 @@ public class DefaultIpfsClientTest {
             client.pinRemove(CID);
             client.ensureDirectory("/oak/ipfs/metadata");
             client.writeFile("/oak/ipfs/metadata/payload.bin", CONTENT);
+            client.linkCid(CID, "/oak/ipfs/content/payload.bin");
             assertTrue(client.fileExists("/oak/ipfs/metadata"));
             assertTrue(client.fileExists("/oak/ipfs/metadata/payload.bin"));
+            assertTrue(client.fileExists("/oak/ipfs/content/payload.bin"));
             assertEquals(CONTENT.length, client.fileSize("/oak/ipfs/metadata/payload.bin"));
             assertEquals(List.of("payload.bin"), client.listFiles("/oak/ipfs/metadata"));
             assertArrayEquals(CONTENT, client.readFile("/oak/ipfs/metadata/payload.bin"));
@@ -113,6 +115,11 @@ public class DefaultIpfsClientTest {
             assertTrue(writeRequest.query.contains("create=true"));
             assertTrue(writeRequest.query.contains("parents=true"));
             assertTrue(writeRequest.query.contains("truncate=true"));
+
+            RequestSnapshot copyRequest = node.firstRequest("/api/v0/files/cp");
+            assertEquals("POST", copyRequest.method);
+            assertTrue(copyRequest.query.contains("arg=%2Fipfs%2F" + CID));
+            assertTrue(copyRequest.query.contains("arg=%2Foak%2Fipfs%2Fcontent%2Fpayload.bin"));
 
             RequestSnapshot lsRequest = node.firstRequest("/api/v0/files/ls");
             assertEquals("POST", lsRequest.method);
@@ -199,6 +206,15 @@ public class DefaultIpfsClientTest {
                 respondJson(exchange, "{\"Message\":\"ok\"}");
                 return;
             }
+            if ("/api/v0/files/cp".equals(path)) {
+                String[] args = queryArgs(exchange);
+                if (args.length >= 2) {
+                    createDirectory(parent(args[1]));
+                    files.put(args[1], ("copied:" + args[0]).getBytes(StandardCharsets.UTF_8));
+                }
+                respondJson(exchange, "{\"Message\":\"ok\"}");
+                return;
+            }
             if ("/api/v0/files/stat".equals(path)) {
                 String target = queryArg(exchange);
                 if (files.containsKey(target)) {
@@ -249,16 +265,22 @@ public class DefaultIpfsClientTest {
         }
 
         private String queryArg(HttpExchange exchange) throws IOException {
+            String[] args = queryArgs(exchange);
+            return args.length > 0 ? args[0] : "";
+        }
+
+        private String[] queryArgs(HttpExchange exchange) throws IOException {
             String rawQuery = exchange.getRequestURI().getRawQuery();
             if (rawQuery == null || rawQuery.isEmpty()) {
-                return "";
+                return new String[0];
             }
+            List<String> args = new ArrayList<>();
             for (String param : rawQuery.split("&")) {
                 if (param.startsWith("arg=")) {
-                    return URLDecoder.decode(param.substring(4), StandardCharsets.UTF_8.name());
+                    args.add(URLDecoder.decode(param.substring(4), StandardCharsets.UTF_8.name()));
                 }
             }
-            return "";
+            return args.toArray(new String[0]);
         }
 
         private void createDirectory(String path) {

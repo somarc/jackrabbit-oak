@@ -188,7 +188,12 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
                 return store;
                 
             } catch (Exception e) {
-                LOG.warn("❌ LazyHttpNodeStore[{}] failed to connect: {}", mountName, e.getMessage());
+                String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                if (initialized.get()) {
+                    LOG.warn("❌ LazyHttpNodeStore[{}] failed to reconnect: {}", mountName, message);
+                } else {
+                    LOG.info("⏳ LazyHttpNodeStore[{}] remote mount not ready yet: {}", mountName, message);
+                }
                 circuitBreaker.recordFailure(e);
                 return null;
             }

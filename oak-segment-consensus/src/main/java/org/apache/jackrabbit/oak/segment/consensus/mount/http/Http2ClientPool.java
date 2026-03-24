@@ -175,6 +175,22 @@ public class Http2ClientPool {
      *         {@code false}
      */
     public boolean exists(String url) {
+        return exists(url, true);
+    }
+
+    /**
+     * Variant of {@link #exists(String)} that suppresses warning-level logs
+     * when the probe is expected to race startup.
+     *
+     * @param url the resource URL
+     * @return {@code true} when the endpoint returns HTTP 200, otherwise
+     *         {@code false}
+     */
+    public boolean existsQuietly(String url) {
+        return exists(url, false);
+    }
+
+    private boolean exists(String url, boolean warnOnFailure) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -193,7 +209,12 @@ public class Http2ClientPool {
             
             return response.statusCode() == 200;
         } catch (Exception e) {
-            log.warn("HEAD request failed for {}: {}", url, e.getMessage());
+            String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            if (warnOnFailure) {
+                log.warn("HEAD request failed for {}: {}", url, message);
+            } else {
+                log.debug("HEAD request failed during quiet probe for {}: {}", url, message);
+            }
             return false;
         }
     }

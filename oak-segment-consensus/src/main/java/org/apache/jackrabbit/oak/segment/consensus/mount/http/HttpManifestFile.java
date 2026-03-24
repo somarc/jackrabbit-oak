@@ -55,7 +55,7 @@ public class HttpManifestFile implements ManifestFile {
     public boolean exists() {
         String manifestUrl = baseUrl + "/manifest";
         log.debug("Checking if manifest exists via HTTP/2 at: {}", manifestUrl);
-        return http2ClientPool.exists(manifestUrl);
+        return http2ClientPool.existsQuietly(manifestUrl);
     }
     
     @Override

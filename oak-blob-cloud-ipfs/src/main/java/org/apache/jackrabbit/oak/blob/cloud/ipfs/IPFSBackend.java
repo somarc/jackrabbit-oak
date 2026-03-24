@@ -38,6 +38,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -162,8 +163,11 @@ public class IPFSBackend extends AbstractSharedBackend {
             
             try {
                 persistCidMapping(identifier, cid);
+                persistContentReference(identifier, cid);
                 cidCache.put(identifier, cid);
             } catch (Exception e) {
+                deleteContentReferenceQuietly(identifier);
+                deleteCidMappingQuietly(identifier);
                 try {
                     ipfs.pinRemove(cid);
                 } catch (Exception cleanupFailure) {
@@ -269,11 +273,21 @@ public class IPFSBackend extends AbstractSharedBackend {
             }
             
             LOG.debug("🗑️  Unpinning CID from IPFS: {}", cid);
-            
-            // Unpinning makes the content eligible for later IPFS garbage collection.
-            ipfs.pinRemove(cid);
-            
+
+            // The MFS content link is the durable retention root for this blob.
+            deleteContentReference(identifier);
             deleteCidMapping(identifier);
+
+            // Unpinning makes the content eligible for later IPFS garbage collection.
+            try {
+                ipfs.pinRemove(cid);
+            } catch (Exception e) {
+                if (isNotPinned(e)) {
+                    LOG.debug("CID {} was not directly pinned at delete time; relying on removed MFS link", cid);
+                } else {
+                    throw e;
+                }
+            }
             
             LOG.info("✅ Unpinned binary from IPFS: {} (CID: {})", identifier, cid);
             
@@ -477,6 +491,7 @@ public class IPFSBackend extends AbstractSharedBackend {
     private void ensureNamespace() throws Exception {
         ipfs.ensureDirectory(ipfsFilesRoot);
         ipfs.ensureDirectory(blobIndexDirectory());
+        ipfs.ensureDirectory(contentDirectory());
         ipfs.ensureDirectory(metadataDirectory());
     }
 
@@ -513,12 +528,40 @@ public class IPFSBackend extends AbstractSharedBackend {
         ipfs.writeFile(blobIndexPath(identifier), cid.getBytes(StandardCharsets.UTF_8));
     }
 
+    private void persistContentReference(DataIdentifier identifier, String cid) throws Exception {
+        ensureNamespace();
+        ipfs.linkCid(cid, contentPath(identifier));
+    }
+
     private void deleteCidMapping(DataIdentifier identifier) throws Exception {
         String path = blobIndexPath(identifier);
         if (ipfs.fileExists(path)) {
             ipfs.deleteFile(path);
         }
         cidCache.remove(identifier);
+    }
+
+    private void deleteCidMappingQuietly(DataIdentifier identifier) {
+        try {
+            deleteCidMapping(identifier);
+        } catch (Exception e) {
+            LOG.debug("Failed to clean up CID mapping for {} after write error: {}", identifier, e.getMessage());
+        }
+    }
+
+    private void deleteContentReference(DataIdentifier identifier) throws Exception {
+        String path = contentPath(identifier);
+        if (ipfs.fileExists(path)) {
+            ipfs.deleteFile(path);
+        }
+    }
+
+    private void deleteContentReferenceQuietly(DataIdentifier identifier) {
+        try {
+            deleteContentReference(identifier);
+        } catch (Exception e) {
+            LOG.debug("Failed to clean up content reference for {} after write error: {}", identifier, e.getMessage());
+        }
     }
 
     private List<DataIdentifier> loadPersistedIdentifiers() throws DataStoreException {
@@ -586,6 +629,14 @@ public class IPFSBackend extends AbstractSharedBackend {
         return joinPath(ipfsFilesRoot, "blob-index");
     }
 
+    private String contentPath(DataIdentifier identifier) {
+        return joinPath(contentDirectory(), encodeName(identifier.toString()));
+    }
+
+    private String contentDirectory() {
+        return joinPath(ipfsFilesRoot, "content");
+    }
+
     private String metadataDirectory() {
         return joinPath(ipfsFilesRoot, "metadata");
     }
@@ -644,6 +695,21 @@ public class IPFSBackend extends AbstractSharedBackend {
 
     private static String joinPath(String root, String child) {
         return "/".equals(root) ? "/" + child : root + "/" + child;
+    }
+
+    private static boolean isNotPinned(Exception e) {
+        Throwable current = e;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null) {
+                String lower = message.toLowerCase(Locale.ROOT);
+                if (lower.contains("not pinned")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
     
     /**

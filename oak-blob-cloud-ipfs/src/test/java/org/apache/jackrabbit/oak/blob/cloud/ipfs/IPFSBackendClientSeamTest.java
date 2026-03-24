@@ -109,6 +109,7 @@ public class IPFSBackendClientSeamTest {
         assertEquals(CID_ONE, backend.getCID(id));
         assertEquals(Map.of("blob-1", CID_ONE), backend.getAllCIDMappings());
         assertEquals(List.of(CID_ONE), client.pinAddCalls);
+        assertEquals(List.of(CID_ONE + "@/oak/ipfs/content/YmxvYi0x"), client.linkCidCalls);
         assertTrue(backend.exists(id));
 
         try (InputStream stream = backend.read(id)) {
@@ -456,6 +457,28 @@ public class IPFSBackendClientSeamTest {
         backend.close();
     }
 
+    @Test
+    public void testDeleteRecordIgnoresMissingDirectPinWhenContentIsRetainedViaFilesLink() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(new MerkleNode(CID_ONE));
+        client.blockStats.put(CID_ONE, Map.of("Size", 5));
+        client.pinRemoveFailure = new RuntimeException("path is not pinned");
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        File tempFile = File.createTempFile("oak-ipfs-indirect", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        DataIdentifier id = new DataIdentifier("blob-indirect");
+
+        backend.write(id, tempFile);
+        backend.deleteRecord(id);
+
+        assertFalse(backend.exists(id));
+        assertNull(backend.getCID(id));
+        tempFile.delete();
+        backend.close();
+    }
+
     private static final class RecordingIpfsClient implements IpfsClient {
 
         private final Queue<MerkleNode> addResults = new ArrayDeque<>();
@@ -463,6 +486,7 @@ public class IPFSBackendClientSeamTest {
         private final Map<String, Map<String, Object>> blockStats = new HashMap<>();
         private final List<String> pinAddCalls = new ArrayList<>();
         private final List<String> pinRemoveCalls = new ArrayList<>();
+        private final List<String> linkCidCalls = new ArrayList<>();
         private final Map<String, byte[]> files = new LinkedHashMap<>();
         private final Set<String> directories = new HashSet<>();
 
@@ -547,6 +571,17 @@ public class IPFSBackendClientSeamTest {
             String normalized = normalize(path);
             createDirectory(parent(normalized));
             files.put(normalized, data.clone());
+        }
+
+        @Override
+        public void linkCid(String cid, String path) throws Exception {
+            if (fileWriteFailure != null) {
+                throw fileWriteFailure;
+            }
+            String normalized = normalize(path);
+            createDirectory(parent(normalized));
+            files.put(normalized, cid.getBytes(StandardCharsets.UTF_8));
+            linkCidCalls.add(cid + "@" + normalized);
         }
 
         @Override

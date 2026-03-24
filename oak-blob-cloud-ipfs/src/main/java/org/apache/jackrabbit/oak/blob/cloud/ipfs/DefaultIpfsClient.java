@@ -91,6 +91,15 @@ final class DefaultIpfsClient implements IpfsClient {
     }
 
     @Override
+    public void linkCid(String cid, String path) throws Exception {
+        ensureDirectory(parent(path));
+        if (fileExists(path)) {
+            ipfs.files.rm(path, false, true);
+        }
+        ipfs.files.cp("/ipfs/" + cid, path, true);
+    }
+
+    @Override
     public byte[] readFile(String path) throws Exception {
         return ipfs.files.read(path);
     }
@@ -141,5 +150,13 @@ final class DefaultIpfsClient implements IpfsClient {
     private static String extractName(String path) {
         int separator = path.lastIndexOf('/');
         return separator >= 0 ? path.substring(separator + 1) : path;
+    }
+
+    private static String parent(String path) {
+        int separator = path.lastIndexOf('/');
+        if (separator <= 0) {
+            return "/";
+        }
+        return path.substring(0, separator);
     }
 }

@@ -40,7 +40,7 @@ final class AeronClusterStartupPreflight {
 
         File aeronDir = new File(aeronDirectoryName);
         boolean hasCrashMarkers = crashHandler != null && crashHandler.hasCrashed();
-        boolean staleDriverDirectoryDetected = aeronDir.exists();
+        boolean staleDriverDirectoryDetected = hasResidualDriverState(aeronDir);
         boolean staleDriverDirectoryDeleted = false;
 
         if (hasCrashMarkers || staleDriverDirectoryDetected) {
@@ -85,6 +85,15 @@ final class AeronClusterStartupPreflight {
             staleDriverDirectoryDeleted,
             forceBootstrap
         );
+    }
+
+    private static boolean hasResidualDriverState(File aeronDir) {
+        if (!aeronDir.exists()) {
+            return false;
+        }
+
+        File[] children = aeronDir.listFiles();
+        return children != null && children.length > 0;
     }
 
     private void cleanupAeronDirectoryIfRequested() {

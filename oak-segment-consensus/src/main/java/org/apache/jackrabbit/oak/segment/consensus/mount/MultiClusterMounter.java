@@ -176,7 +176,7 @@ public class MultiClusterMounter {
                         remoteMounts.put(entry.mountName, (Closeable) remoteStore);
                     }
                     
-                    LOG.info("     ✅ Connected");
+                    LOG.info("     ✅ Registered (lazy remote mount)");
                 } catch (Exception e) {
                     LOG.warn("     ❌ Failed to connect: {}", e.getMessage());
                     // Continue with other mounts - graceful degradation
