@@ -20,13 +20,16 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public class TransactionLifecycleManagerTest {
@@ -112,5 +115,106 @@ public class TransactionLifecycleManagerTest {
 
         TransactionLifecycleManager.TransitionResult committed = reloaded.onCommit("tx-4", "corr-4");
         assertTrue(committed.isApplied());
+    }
+
+    @Test
+    public void canTransitionsDefaultTimeoutAndSyntheticAbortPathsAreCovered() throws Exception {
+        AtomicLong now = new AtomicLong(30_000L);
+        Path dir = tempFolder.newFolder("tx-lifecycle-can").toPath();
+        TransactionLifecycleManager manager = new TransactionLifecycleManager(dir, now::get, 1000);
+
+        assertEquals("missing transactionId", manager.onStart(" ", "corr", 100L, "0xabc").getReason());
+        assertEquals("missing transactionId", manager.canStart(null).getReason());
+        assertTrue(manager.canStart("tx-open").isApplied());
+        assertNull(manager.canStart("tx-open").getRecord());
+
+        TransactionLifecycleManager.TransitionResult started =
+            manager.onStart("tx-open", null, 0L, "0xabc");
+        assertTrue(started.isApplied());
+        assertEquals(30_000L, started.getRecord().timeoutMs);
+
+        assertTrue(manager.canStart("tx-open").isIdempotent());
+        assertTrue(manager.canCommit("tx-open").isApplied());
+        assertEquals(TransactionLifecycleManager.TxStatus.STARTED, manager.canAbort("tx-open").getRecord().status);
+
+        TransactionLifecycleManager.TransitionResult aborted =
+            manager.onAbort("tx-open", "corr-open", "manual");
+        assertTrue(aborted.isApplied());
+        assertEquals(TransactionLifecycleManager.TxStatus.ABORTED, aborted.getRecord().status);
+        assertEquals("corr-open", aborted.getRecord().correlationId);
+        assertEquals("manual", aborted.getRecord().abortReason);
+
+        assertTrue(manager.canAbort("tx-open").isIdempotent());
+        assertEquals("cannot commit terminal transaction: ABORTED", manager.canCommit("tx-open").getReason());
+        assertEquals("cannot commit terminal transaction: ABORTED", manager.onCommit("tx-open", "corr-open").getReason());
+
+        TransactionLifecycleManager.TransitionResult syntheticAbort =
+            manager.onAbort("tx-synthetic", "corr-synth", "missing");
+        assertTrue(syntheticAbort.isApplied());
+        assertEquals(TransactionLifecycleManager.TxStatus.ABORTED, syntheticAbort.getRecord().status);
+        assertEquals("corr-synth", syntheticAbort.getRecord().correlationId);
+        assertTrue(manager.canAbort("tx-synthetic").isIdempotent());
+
+        Map<String, Object> stats = manager.stats();
+        assertEquals(0, stats.get("active"));
+        assertEquals(2, stats.get("terminal"));
+        assertEquals(0L, stats.get("committed"));
+        assertEquals(2L, stats.get("aborted"));
+        assertEquals(0L, stats.get("timedOut"));
+    }
+
+    @Test
+    public void timeoutStatsAndTerminalEvictionAreTracked() throws Exception {
+        AtomicLong now = new AtomicLong(40_000L);
+        Path dir = tempFolder.newFolder("tx-lifecycle-eviction").toPath();
+        TransactionLifecycleManager manager = new TransactionLifecycleManager(dir, now::get, 1);
+
+        assertTrue(manager.onStart("tx-timeout", "corr-timeout", 50L, "0xaaa").isApplied());
+        now.set(40_100L);
+        List<TransactionLifecycleManager.TxRecord> expired = manager.expireTimedOut();
+        assertEquals(1, expired.size());
+        assertEquals(TransactionLifecycleManager.TxStatus.TIMED_OUT, expired.get(0).status);
+        assertTrue(manager.canAbort("tx-timeout").isIdempotent());
+        assertTrue(manager.onAbort("tx-timeout", "corr-timeout", "ignored").isIdempotent());
+
+        for (int i = 0; i <= 100; i++) {
+            assertTrue(manager.onAbort("tx-" + i, "corr-" + i, "manual").isApplied());
+        }
+
+        Map<String, Object> stats = manager.stats();
+        assertEquals(0, stats.get("active"));
+        assertEquals(100, stats.get("terminal"));
+        assertEquals(100L, stats.get("aborted"));
+        assertEquals(0L, stats.get("timedOut"));
+        assertFalse(manager.get("tx-timeout").isPresent());
+        assertFalse(manager.get("tx-0").isPresent());
+        assertTrue(manager.get("tx-100").isPresent());
+    }
+
+    @Test
+    public void corruptStateAndPersistFailuresDoNotBreakTransitions() throws Exception {
+        AtomicLong now = new AtomicLong(50_000L);
+        Path corruptDir = tempFolder.newFolder("tx-lifecycle-corrupt").toPath();
+        Files.write(corruptDir.resolve("transaction-lifecycle.bin"), new byte[] {1, 2, 3, 4});
+
+        TransactionLifecycleManager reloadedFromCorrupt =
+            new TransactionLifecycleManager(corruptDir, now::get, 1000);
+        assertFalse(reloadedFromCorrupt.get("tx-missing").isPresent());
+        assertTrue(reloadedFromCorrupt.canStart("tx-missing").isApplied());
+
+        Path persistFailureDir = tempFolder.newFolder("tx-lifecycle-persist-failure").toPath();
+        Files.createDirectory(persistFailureDir.resolve("transaction-lifecycle.bin.tmp"));
+        TransactionLifecycleManager persistFailureManager =
+            new TransactionLifecycleManager(persistFailureDir, now::get, 1000);
+
+        TransactionLifecycleManager.TransitionResult started =
+            persistFailureManager.onStart("tx-persist-failure", null, 5L, "0xdef");
+        assertTrue(started.isApplied());
+        assertTrue(persistFailureManager.get("tx-persist-failure").isPresent());
+
+        TransactionLifecycleManager afterRestart =
+            new TransactionLifecycleManager(persistFailureDir, now::get, 1000);
+        assertFalse(afterRestart.get("tx-persist-failure").isPresent());
+        assertEquals("unknown transaction", afterRestart.onCommit("tx-persist-failure", "corr").getReason());
     }
 }

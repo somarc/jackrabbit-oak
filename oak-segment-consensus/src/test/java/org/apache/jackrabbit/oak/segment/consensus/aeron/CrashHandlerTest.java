@@ -98,4 +98,34 @@ public class CrashHandlerTest {
         assertTrue(handler.isShutdownScheduled());
         assertEquals("node-force-bootstrap", handler.getState());
     }
+
+    @Test
+    public void handleCrashDistinguishesTimeoutsFromCorruptedState() throws Exception {
+        CrashHandler timeoutHandler = new CrashHandler(temporaryFolder.newFolder("crash-timeout"), 1);
+        timeoutHandler.handleCrash(new DriverTimeoutException("MediaDriver timeout"));
+
+        assertTrue(timeoutHandler.hasCrashed());
+        assertEquals(1, timeoutHandler.getCrashCount());
+        assertFalse(timeoutHandler.shouldForceBootstrap());
+
+        CrashHandler corruptedHandler = new CrashHandler(temporaryFolder.newFolder("crash-segment"), 1);
+        corruptedHandler.handleCrash(new AeronException("segment not found"));
+
+        assertTrue(corruptedHandler.shouldForceBootstrap());
+        assertEquals("node-force-bootstrap", corruptedHandler.getState());
+    }
+
+    @Test
+    public void resetClearsNumberedCrashMarkersToo() throws Exception {
+        CrashHandler handler = new CrashHandler(temporaryFolder.newFolder("crash-reset"), 1);
+        handler.handleCrash(new AeronException("boom"));
+        handler.markShutdownScheduled();
+
+        handler.reset();
+
+        assertFalse(handler.hasCrashed());
+        assertFalse(handler.shouldForceBootstrap());
+        assertEquals("None", handler.getState());
+        assertTrue(handler.isShutdownScheduled());
+    }
 }

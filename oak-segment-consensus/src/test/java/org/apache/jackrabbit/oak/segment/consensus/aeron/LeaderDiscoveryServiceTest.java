@@ -28,6 +28,7 @@ import org.agrona.concurrent.IdleStrategy;
 import org.junit.Test;
 
 import java.io.OutputStream;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -193,16 +194,45 @@ public class LeaderDiscoveryServiceTest {
 
         assertEquals("LEADER", extractJsonField(service, "{\"role\":\"LEADER\"}", "role"));
         assertEquals("null", extractJsonField(service, "{\"leaderUrl\":null}", "leaderUrl"));
+        assertEquals("true", extractJsonField(service, "{\"leader\":true}", "leader"));
+        assertEquals("42", extractJsonField(service, "{\"leaderId\":42}", "leaderId"));
         assertNull(extractJsonField(service, "{\"other\":1}", "role"));
         assertTrue(service.isSameUrl("http://localhost:8090", "http://localhost:8090"));
         assertFalse(service.isSameUrl(null, "http://localhost:8090"));
         assertFalse(service.isSameUrl("http://localhost:8090", "http://localhost:8091"));
+        assertFalse(service.isSameUrl("http://[invalid", "http://localhost:8090"));
+    }
+
+    @Test
+    public void testKnownLeaderHintCanFallBackToCacheOnly() throws Exception {
+        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        setField(service, "cachedLeaderUrl", "http://cached-only:8090");
+        setField(service, "cachedLeaderTimestamp", System.currentTimeMillis());
+        setField(service, "knownLeaderUrl", null);
+
+        assertEquals("http://cached-only:8090", service.getKnownLeaderHint());
+    }
+
+    @Test
+    public void testDiscoverLeaderHandlesClusterExceptionsGracefully() {
+        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        Cluster cluster = mock(Cluster.class);
+        when(cluster.role()).thenThrow(new IllegalStateException("boom"));
+
+        assertNull(service.discoverLeader(cluster));
+        assertNull(service.getCachedLeaderUrl());
     }
 
     private static String extractJsonField(LeaderDiscoveryService service, String json, String field) throws Exception {
         Method method = LeaderDiscoveryService.class.getDeclaredMethod("extractJsonField", String.class, String.class);
         method.setAccessible(true);
         return (String) method.invoke(service, json, field);
+    }
+
+    private static void setField(Object target, String name, Object value) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
     }
 
     private static HttpServer startServer(String path, int status, String body) throws Exception {

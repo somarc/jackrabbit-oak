@@ -16,12 +16,26 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import io.aeron.Aeron;
+import io.aeron.cluster.service.ClusteredService;
+import io.aeron.cluster.service.ClusteredServiceContainer;
 import org.junit.After;
 import org.junit.Test;
 
+import java.io.File;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 public class AeronClusterLauncherTest {
 
@@ -83,5 +97,104 @@ public class AeronClusterLauncherTest {
 
         assertEquals(5, config.timeoutMinutes);
         assertEquals("environment-profile", config.source);
+    }
+
+    @Test
+    public void helperMethodsHandleBlankAndInvalidValues() throws Exception {
+        assertNull(invokeParsePositiveInt(null));
+        assertNull(invokeParsePositiveInt(" "));
+        assertNull(invokeParsePositiveInt("-1"));
+        assertNull(invokeParsePositiveInt("nope"));
+        assertEquals(Integer.valueOf(3), invokeParsePositiveInt("3"));
+
+        System.clearProperty("aeron.socket.so_sndbuf");
+        assertEquals(16, invokeGetPositiveIntProperty("aeron.socket.so_sndbuf", 16));
+
+        System.setProperty("aeron.socket.so_sndbuf", "bad");
+        assertEquals(16, invokeGetPositiveIntProperty("aeron.socket.so_sndbuf", 16));
+
+        System.setProperty("aeron.socket.so_sndbuf", "32");
+        assertEquals(32, invokeGetPositiveIntProperty("aeron.socket.so_sndbuf", 16));
+
+        assertEquals("first", invokeFirstNonBlank("first", "second"));
+        assertEquals("second", invokeFirstNonBlank(" ", "second"));
+        assertNull(invokeFirstNonBlank(" ", null));
+    }
+
+    @Test
+    public void accessorsAndShutdownBehaveWithoutLaunchingCluster() throws Exception {
+        AeronClusterLauncher launcher = new AeronClusterLauncher(
+            1,
+            List.of("node-0", "node-1"),
+            new File("."),
+            mock(ClusteredService.class),
+            mock(AeronClusterAddressResolver.class),
+            mock(AeronClusterErrorPolicy.class)
+        );
+
+        assertEquals(AeronClusterLauncher.getPortBase(), launcher.getClusterBasePort());
+        assertEquals(AeronClusterLauncher.calculatePort(1, 7), AeronClusterLauncher.calculatePort(
+            AeronClusterLauncher.getPortBase(), 1, 7));
+        assertEquals("node-1", invokeGetHostname(launcher));
+        assertNull(launcher.getAeron());
+
+        ClusteredServiceContainer container = mock(ClusteredServiceContainer.class);
+        ClusteredServiceContainer.Context context = mock(ClusteredServiceContainer.Context.class);
+        Aeron aeron = mock(Aeron.class);
+        when(container.context()).thenReturn(context);
+        when(context.aeron()).thenReturn(aeron);
+        setField(launcher, "container", container);
+        assertSame(aeron, launcher.getAeron());
+
+        CrashHandler crashHandler = mock(CrashHandler.class);
+        MediaDriverHealthMonitor healthMonitor = mock(MediaDriverHealthMonitor.class);
+        setField(launcher, "crashHandler", crashHandler);
+        setField(launcher, "healthMonitor", healthMonitor);
+        assertSame(crashHandler, launcher.getCrashHandler());
+        assertSame(healthMonitor, launcher.getHealthMonitor());
+
+        org.agrona.concurrent.ShutdownSignalBarrier barrier = mock(org.agrona.concurrent.ShutdownSignalBarrier.class);
+        setField(launcher, "barrier", barrier);
+        launcher.awaitShutdown();
+        verify(barrier).await();
+
+        launcher.shutdown();
+        assertTrue(((AtomicBoolean) getField(launcher, "shutdownScheduled")).get());
+    }
+
+    private static Integer invokeParsePositiveInt(String value) throws Exception {
+        Method method = AeronClusterLauncher.class.getDeclaredMethod("parsePositiveInt", String.class);
+        method.setAccessible(true);
+        return (Integer) method.invoke(null, value);
+    }
+
+    private static int invokeGetPositiveIntProperty(String key, int defaultValue) throws Exception {
+        Method method = AeronClusterLauncher.class.getDeclaredMethod("getPositiveIntProperty", String.class, int.class);
+        method.setAccessible(true);
+        return (Integer) method.invoke(null, key, defaultValue);
+    }
+
+    private static String invokeFirstNonBlank(String first, String second) throws Exception {
+        Method method = AeronClusterLauncher.class.getDeclaredMethod("firstNonBlank", String.class, String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, first, second);
+    }
+
+    private static String invokeGetHostname(AeronClusterLauncher launcher) throws Exception {
+        Method method = AeronClusterLauncher.class.getDeclaredMethod("getHostname");
+        method.setAccessible(true);
+        return (String) method.invoke(launcher);
+    }
+
+    private static void setField(Object target, String name, Object value) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    private static Object getField(Object target, String name) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(target);
     }
 }
