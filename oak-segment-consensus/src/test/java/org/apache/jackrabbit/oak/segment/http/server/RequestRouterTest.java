@@ -927,12 +927,16 @@ public class RequestRouterTest {
                 when(request.getParameter("signature")).thenReturn("0xabcdef12");
                 when(request.getParameter("contentPath")).thenReturn(contentPath);
                 when(request.getParameter("ethereumTxHash")).thenReturn("0xabcdef123456789f");
+                when(request.getParameter("proposalId")).thenReturn(
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
                 HttpServletResponse response = responseWithBody();
 
                 router.route(baseRequest, request, response);
 
                 verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+                assertTrue(body.toString().contains(
+                    "\"proposalId\":\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""));
                 assertTrue(body.toString().contains("\"type\":\"DELETE\""));
                 assertTrue(body.toString().contains("\"status\":\"accepted\""));
             } finally {

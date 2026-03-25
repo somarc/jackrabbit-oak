@@ -192,6 +192,12 @@ public class HttpRemoteMetadataFileTest {
         }
 
         @Override
+        public boolean existsQuietly(String url) {
+            lastExistsUrl = url;
+            return existsResult;
+        }
+
+        @Override
         public String getPoolStats() {
             return "stub";
         }
