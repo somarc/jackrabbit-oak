@@ -90,7 +90,6 @@ public class WriteProposalHandler {
             String ethereumTxHash = null;
             String clientProposalId = null;
             String intentToken = null;
-            String paymentTier = null;
             String organization = null;  // ADR 037: Organization-scoped content paths
             String ipfsCid = null;        // ADR 016: Client-side IPFS upload - CID from client
             byte[] binaryBytes = null;
@@ -131,7 +130,6 @@ public class WriteProposalHandler {
                             case "ethereumTxHash": ethereumTxHash = value; break;
                             case "proposalId": clientProposalId = value; break;
                             case "intentToken": intentToken = value; break;
-                            case "paymentTier": paymentTier = value; break;
                             case "organization": organization = value; break;  // ADR 037
                             case "ipfsCid": ipfsCid = value; break;  // ADR 016: Client-side IPFS CID
                         }
@@ -149,7 +147,6 @@ public class WriteProposalHandler {
                 ethereumTxHash = request.getParameter("ethereumTxHash");
                 clientProposalId = request.getParameter("proposalId");
                 intentToken = request.getParameter("intentToken");
-                paymentTier = request.getParameter("paymentTier");
                 organization = request.getParameter("organization");  // ADR 037
                 ipfsCid = request.getParameter("ipfsCid");  // ADR 016: Client-side IPFS CID
 
@@ -566,13 +563,6 @@ public class WriteProposalHandler {
                     return;
                 }
             }
-            if (usesValidatorHostedBinary
-                && ProposalQueuePolicy.isValidatorHostedBinaryRequiresPriorityTier()
-                && !isPriorityTier(paymentTier)) {
-                log.info("Validator-hosted binary proposal will rely on settlement capability proof instead of API-side priority gating: wallet={}, requestedTier={}",
-                    normalizedWallet, paymentTier != null ? paymentTier : "standard");
-            }
-
             // ============================================================
             // BINARY UPLOAD TO BLOBSTORE
             // Supports: Multipart (preferred), base64 (legacy), ADR 020 (future)
@@ -672,29 +662,9 @@ public class WriteProposalHandler {
                 return;
             }
 
-            // ============================================================
-            // PAYMENT TIER VALIDATION
-            // ============================================================
-            // Validate tier if provided (defaults to STANDARD if missing)
-            if (paymentTier != null && !paymentTier.isEmpty()) {
-                String normalizedTier = paymentTier.trim().toLowerCase();
-                if (!normalizedTier.equals("standard") && !normalizedTier.equals("express") && !normalizedTier.equals("priority")) {
-                    context.apiRejectedRequests.incrementAndGet();
-                    log.warn("❌ API REJECTED: Invalid payment tier: {}", paymentTier);
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "Invalid paymentTier: '" + paymentTier + "'. Must be 'standard', 'express', or 'priority'."
-                    );
-                    return;
-                }
-            }
-
-            // Parse payment tier from request (defaults to STANDARD)
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier =
-                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
-
             // Queue proposal (waiting for Ethereum confirmation)
-            log.debug("📥 Queuing proposal {} (tx: {}, tier: {}, intentToken: {}, blobId: {}), waiting for Ethereum confirmation",
-                proposalId, ethereumTxHash, tier, intentToken != null ? intentToken : "none", blobId != null ? blobId : "none");
+            log.debug("📥 Queuing proposal {} (tx: {}, intentToken: {}, blobId: {}), waiting for Ethereum confirmation",
+                proposalId, ethereumTxHash, intentToken != null ? intentToken : "none", blobId != null ? blobId : "none");
 
             context.proposalQueueManager.queueProposal(
                 proposalId,
@@ -704,7 +674,6 @@ public class WriteProposalHandler {
                 contentType != null ? contentType : "page",
                 message != null ? message : "",  // Keep message clean, no blob embedding
                 signature, // Already validated - no fallback needed
-                tier,  // Pass payment tier for priority handling
                 intentToken,  // Pass intentToken for lazy binary upload (ADR 020)
                 blobId,
                 mimeType != null ? mimeType : "application/octet-stream",
@@ -772,10 +741,6 @@ public class WriteProposalHandler {
 
     private static boolean isChainBackedProposalId(String proposalId) {
         return proposalId != null && proposalId.trim().matches("(?i)^0x[a-f0-9]{64}$");
-    }
-
-    private static boolean isPriorityTier(String paymentTier) {
-        return paymentTier != null && paymentTier.trim().equalsIgnoreCase("priority");
     }
 
 }

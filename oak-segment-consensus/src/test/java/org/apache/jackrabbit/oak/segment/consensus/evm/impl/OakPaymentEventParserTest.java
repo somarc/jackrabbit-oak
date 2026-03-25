@@ -75,6 +75,15 @@ public class OakPaymentEventParserTest {
             new TypeReference<Uint256>() {}
         ));
 
+    private static final Event PROPOSAL_SETTLED_V5_EVENT = new Event("ProposalSettledV5",
+        Arrays.asList(
+            new TypeReference<Bytes32>(true) {},
+            new TypeReference<Address>(true) {},
+            new TypeReference<Uint8>() {},
+            new TypeReference<Uint256>() {},
+            new TypeReference<Uint32>() {}
+        ));
+
     private final OakPaymentEventParser parser = new OakPaymentEventParser();
 
     @Test
@@ -90,7 +99,8 @@ public class OakPaymentEventParserTest {
             Arrays.asList(
                 EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
                 EventEncoder.encode(PROPOSAL_PAID_EVENT),
-                EventEncoder.encode(PROPOSAL_SETTLED_EVENT)
+                EventEncoder.encode(PROPOSAL_SETTLED_EVENT),
+                EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT)
             ),
             topicValues((Filter.FilterTopic<?>) filter.getTopics().get(0))
         );
@@ -185,6 +195,37 @@ public class OakPaymentEventParserTest {
             + paddedUint(BigInteger.valueOf(1_710_000_001L)));
 
         assertNull(parser.parsePaymentLog(ethLog, 55L));
+    }
+
+    @Test
+    public void parsePaymentLogDecodesProposalSettledV5WithoutTier() {
+        String proposalId = "0x9999999999999999999999999999999999999999999999999999999999999999";
+        String payer = "0x8888888888888888888888888888888888888888";
+        BigInteger amount = new BigInteger("3250000");
+
+        Log ethLog = new Log();
+        ethLog.setTransactionHash("0x7777777777777777777777777777777777777777777777777777777777777777");
+        ethLog.setTopics(Arrays.asList(
+            EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT),
+            proposalId,
+            paddedAddressTopic(payer)
+        ));
+        ethLog.setData("0x"
+            + paddedUint(BigInteger.ONE)
+            + paddedUint(amount)
+            + paddedUint(BigInteger.ONE));
+
+        EventDrivenEvmBridge.WriteAuthorizedEvent event = parser.parsePaymentLog(ethLog, 43211L);
+
+        assertNotNull(event);
+        assertEquals(proposalId, event.proposalId);
+        assertEquals(payer, event.payer);
+        assertEquals(amount, event.amount);
+        assertEquals(43211L, event.blockNumber);
+        assertEquals(PaymentProof.ProposalKind.DELETE, event.proposalKind);
+        assertEquals(PaymentProof.PaymentToken.ETH, event.paymentToken);
+        assertEquals(1, event.capabilityFlags);
+        assertNull(event.paymentTier);
     }
 
     @Test

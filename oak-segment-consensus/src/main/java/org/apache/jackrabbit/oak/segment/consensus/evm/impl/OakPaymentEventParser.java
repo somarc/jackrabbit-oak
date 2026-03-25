@@ -73,11 +73,21 @@ final class OakPaymentEventParser {
             new TypeReference<Uint256>() {}
         ));
 
+    private static final Event PROPOSAL_SETTLED_V5_EVENT = new Event("ProposalSettledV5",
+        Arrays.asList(
+            new TypeReference<Bytes32>(true) {},
+            new TypeReference<Address>(true) {},
+            new TypeReference<Uint8>() {},
+            new TypeReference<Uint256>() {},
+            new TypeReference<Uint32>() {}
+        ));
+
     void addSupportedEventTopics(EthFilter filter) {
         filter.addOptionalTopics(
             EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
             EventEncoder.encode(PROPOSAL_PAID_EVENT),
-            EventEncoder.encode(PROPOSAL_SETTLED_EVENT)
+            EventEncoder.encode(PROPOSAL_SETTLED_EVENT),
+            EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT)
         );
     }
 
@@ -111,6 +121,9 @@ final class OakPaymentEventParser {
         }
         if (EventEncoder.encode(PROPOSAL_SETTLED_EVENT).equalsIgnoreCase(signature)) {
             return parseProposalSettledLog(ethLog, currentBlock);
+        }
+        if (EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT).equalsIgnoreCase(signature)) {
+            return parseProposalSettledV5Log(ethLog, currentBlock);
         }
         return null;
     }
@@ -192,6 +205,34 @@ final class OakPaymentEventParser {
             proposalKind,
             decodePaymentToken(ethLog.getTopics().get(3)),
             Numeric.toBigInt(dataWord(data, 3)).intValue()
+        );
+    }
+
+    private EventDrivenEvmBridge.WriteAuthorizedEvent parseProposalSettledV5Log(Log ethLog, long currentBlock) {
+        if (ethLog.getTopics() == null || ethLog.getTopics().size() < 3) {
+            return null;
+        }
+        String data = ethLog.getData();
+        if (data == null || data.length() < 194) {
+            return null;
+        }
+
+        PaymentProof.ProposalKind proposalKind = decodeProposalKind(dataWord(data, 0));
+        if (proposalKind == null) {
+            return null;
+        }
+
+        return new EventDrivenEvmBridge.WriteAuthorizedEvent(
+            ethLog.getTopics().get(1),
+            "0x" + ethLog.getTopics().get(2).substring(26),
+            "0x0",
+            Numeric.toBigInt(dataWord(data, 1)),
+            ethLog.getBlockNumber() != null ? ethLog.getBlockNumber().longValue() : currentBlock,
+            ethLog.getTransactionHash(),
+            null,
+            proposalKind,
+            PaymentProof.PaymentToken.ETH,
+            Numeric.toBigInt(dataWord(data, 2)).intValue()
         );
     }
 

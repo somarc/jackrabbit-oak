@@ -128,22 +128,10 @@ public @interface ProposalQueueTuningConfig {
     String release_mode() default ProposalQueueTuning.DEFAULT_RELEASE_MODE;
 
     @AttributeDefinition(
-        name = "Priority Direct Release Enabled",
-        description = "When enabled, PRIORITY proposals bypass the scheduler and release directly to Aeron after verification as a compatibility entitlement."
-    )
-    boolean priority_direct_release_enabled() default ProposalQueueTuning.DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED;
-
-    @AttributeDefinition(
         name = "Validator-Hosted Binary Upload Enabled",
         description = "Enable validator-hosted binary upload handling on write proposals."
     )
     boolean validator_hosted_binary_upload_enabled() default ProposalQueueTuning.DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED;
-
-    @AttributeDefinition(
-        name = "Validator Binary Requires Priority Tier",
-        description = "Legacy compatibility toggle. Go-live entitlement for validator-hosted binary uploads is verified from settlement capability flags; this flag only preserves older priority-tier assumptions where operators still need them."
-    )
-    boolean validator_hosted_binary_requires_priority_tier() default ProposalQueueTuning.DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER;
 
     @AttributeDefinition(
         name = "Payload Inline Max Bytes",

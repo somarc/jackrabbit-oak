@@ -48,7 +48,7 @@ import static org.junit.Assert.*;
  * </ul>
  * 
  * <p>This tests the same code path used in production, ensuring test coverage
- * of adaptive release, payment tiers, and retry logic.
+ * of adaptive release, compatibility tier overlays, and retry logic.
  */
 public class ProposalQueueIntegrationTest {
     
@@ -187,7 +187,6 @@ public class ProposalQueueIntegrationTest {
         System.clearProperty("oak.proposal.persistence.flush.batch");
         System.clearProperty("oak.consensus.max.pending.messages");
         System.clearProperty("oak.proposal.confirmation.required");
-        System.clearProperty("oak.proposal.priority.direct.release.enabled");
         System.clearProperty("oak.proposal.payload.inline.max.bytes");
         System.clearProperty("oak.proposal.payload.spill.soft.pending");
         System.clearProperty("oak.proposal.payload.spill.max.bytes");
@@ -204,7 +203,7 @@ public class ProposalQueueIntegrationTest {
         String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/page-123";
         
         // Step 1: Queue proposal (simulating POST /v1/propose-write)
-        // Using PRIORITY tier for immediate processing (bypasses epoch batching)
+        // Compatibility tier metadata should not affect adaptive release behavior.
         queueManager.queueProposal(
             proposalId,
             ethereumTxHash,
@@ -287,8 +286,7 @@ public class ProposalQueueIntegrationTest {
     }
 
     @Test
-    public void testPriorityTierCanRouteThroughSchedulerWhenDirectReleaseDisabled() throws InterruptedException {
-        System.setProperty("oak.proposal.priority.direct.release.enabled", "false");
+    public void testPriorityTaggedProposalStillRoutesThroughAdaptiveScheduler() throws InterruptedException {
         System.setProperty("oak.proposal.release.mode", "adaptive-active");
         recreateQueueManager();
 
@@ -318,20 +316,18 @@ public class ProposalQueueIntegrationTest {
             ethereumTxHash
         );
 
-        assertTrue("Priority proposal should still process when direct release is disabled",
+        assertTrue("Priority-tagged proposal should still process under adaptive release",
             raftAppendLatch.await(10, TimeUnit.SECONDS));
 
         Map<String, Object> stats = queueManager.getQueueStats();
-        assertEquals(Boolean.FALSE, stats.get("priorityDirectReleaseEnabled"));
-        assertEquals("Priority direct-send counter should remain zero when direct release is disabled",
+        assertEquals("Priority direct-send counter should remain zero when adaptive release is authoritative",
             0L, longStat(stats, "priorityProposalsSent"));
         assertTrue("Proposal should drain through the scheduled/batched path instead",
             longStat(stats, "batchedProposalsSent") >= 1L);
     }
 
     @Test
-    public void testProofTierOverridesRequestedPriorityForCompatibilityRouting() throws InterruptedException {
-        System.setProperty("oak.proposal.priority.direct.release.enabled", "true");
+    public void testProofTierDoesNotChangeAdaptiveRouting() throws InterruptedException {
         System.setProperty("oak.proposal.release.mode", "adaptive-active");
         recreateQueueManager();
 
@@ -362,11 +358,10 @@ public class ProposalQueueIntegrationTest {
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD
         );
 
-        assertTrue("Proposal should still process after tier reconciliation",
+        assertTrue("Proposal should still process when proof tier differs",
             raftAppendLatch.await(10, TimeUnit.SECONDS));
 
         Map<String, Object> stats = queueManager.getQueueStats();
-        assertEquals(Boolean.TRUE, stats.get("priorityDirectReleaseEnabled"));
         assertEquals("Priority direct-send counter should remain zero when proof resolves to standard",
             0L, longStat(stats, "priorityProposalsSent"));
         assertTrue("Proposal should drain through the normal scheduled/batched path",
@@ -375,7 +370,6 @@ public class ProposalQueueIntegrationTest {
 
     @Test
     public void testSingleProposalRemainsVerifiedUntilIngressAcceptsIt() throws Exception {
-        System.setProperty("oak.proposal.priority.direct.release.enabled", "false");
         System.setProperty("oak.proposal.release.mode", "adaptive-active");
 
         CountDownLatch rejectedOnce = new CountDownLatch(1);
@@ -450,8 +444,7 @@ public class ProposalQueueIntegrationTest {
     }
 
     @Test
-    public void testPriorityDirectReleaseFallsBackToScheduledQueueWhenIngressRejectsIt() throws Exception {
-        System.setProperty("oak.proposal.priority.direct.release.enabled", "true");
+    public void testPriorityTaggedProposalRetriesThroughAdaptiveQueueWhenIngressRejectsIt() throws Exception {
         System.setProperty("oak.proposal.release.mode", "adaptive-active");
 
         CountDownLatch rejectedOnce = new CountDownLatch(1);
@@ -507,9 +500,9 @@ public class ProposalQueueIntegrationTest {
             ethereumTxHash
         );
 
-        assertTrue("Priority proposal should see a rejected direct-release attempt first",
+        assertTrue("Priority-tagged proposal should see an ingress rejection first",
             rejectedOnce.await(10, TimeUnit.SECONDS));
-        assertTrue("Priority proposal should remain verified after direct-release rejection",
+        assertTrue("Priority-tagged proposal should remain verified after ingress rejection",
             waitForCondition(() -> {
                 QueuedProposal proposal = queueManager.getProposal(proposalId);
                 return proposal != null && proposal.getState() == ProposalState.VERIFIED;
@@ -517,20 +510,20 @@ public class ProposalQueueIntegrationTest {
 
         allowIngress.set(true);
 
-        assertTrue("Priority proposal should later drain through the scheduled queue",
+        assertTrue("Priority-tagged proposal should later drain through the adaptive queue",
             accepted.await(10, TimeUnit.SECONDS));
-        assertTrue("Fallback path should require at least two attempts",
+        assertTrue("Adaptive retry path should require at least two attempts",
             attempts.get() >= 2);
-        assertTrue("Priority proposal should become processed only after fallback acceptance",
+        assertTrue("Priority-tagged proposal should become processed only after acceptance",
             waitForCondition(() -> {
                 QueuedProposal proposal = queueManager.getProposal(proposalId);
                 return proposal != null && proposal.getState() == ProposalState.PROCESSED;
             }, 5_000, 25));
 
         Map<String, Object> stats = queueManager.getQueueStats();
-        assertEquals("Direct priority sends should not be counted when the fast path was rejected",
+        assertEquals("Direct priority sends should remain zero when adaptive release is authoritative",
             0L, longStat(stats, "priorityProposalsSent"));
-        assertTrue("Priority fallback should use the scheduled/batched sender path",
+        assertTrue("Adaptive retry should use the scheduled/batched sender path",
             longStat(stats, "batchedProposalsSent") >= 1L);
     }
     
@@ -1172,7 +1165,6 @@ public class ProposalQueueIntegrationTest {
         queueManager.stop();
 
         System.setProperty("oak.proposal.payload.inline.max.bytes", "4");
-        System.setProperty("oak.proposal.priority.direct.release.enabled", "true");
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
         Path persistenceDir = Files.createTempDirectory("proposal-payload-spill");
         CountDownLatch latch = new CountDownLatch(1);

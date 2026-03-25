@@ -306,7 +306,7 @@ final class AeronGenesisInitializer {
         NodeBuilder pricing = economics.child("pricing-tiers");
         pricing.setProperty("jcr:primaryType", "nt:unstructured");
         pricing.setProperty("priority-price", "0.01 ETH");
-        pricing.setProperty("priority-release", "Compatibility price class; may use direct release if enabled");
+        pricing.setProperty("priority-release", "Compatibility price class; adaptive release remains authoritative");
         pricing.setProperty("priority-use-case", "Premium routing / explicit entitlements");
         pricing.setProperty("express-price", "0.002 ETH");
         pricing.setProperty("express-release", "Adaptive release with no fixed epoch wait");

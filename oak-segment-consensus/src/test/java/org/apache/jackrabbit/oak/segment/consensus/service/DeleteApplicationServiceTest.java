@@ -41,6 +41,9 @@ public class DeleteApplicationServiceTest {
     private static final String EXISTING_PATH = "/oak-chain/aa/bb/cc/" + WALLET + "/Acme/content/doc-1";
     private static final String MISSING_TARGET_PATH = "/oak-chain/aa/bb/cc/" + WALLET + "/Acme/content/doc-2";
     private static final String MISSING_BRANCH_PATH = "/oak-chain/aa/bb/cc/" + WALLET + "/Missing/content/doc-9";
+    private static final String LARGE_DELETE_ROOT_PATH = "/oak-chain/aa/bb/cc/" + WALLET + "/Acme/content/wallet-root";
+    private static final String LARGE_DELETE_DESCENDANT_PATH = LARGE_DELETE_ROOT_PATH + "/branch-99/leaf-99";
+    private static final String LARGE_DELETE_SIBLING_PATH = "/oak-chain/aa/bb/cc/" + WALLET + "/Acme/content/keep-me";
 
     @Test
     public void testApplyDeleteRemovesNodeAndInvokesCallbacks() throws Exception {
@@ -197,6 +200,26 @@ public class DeleteApplicationServiceTest {
         assertTrue(failureMessage.get().contains("Invalid path format"));
     }
 
+    @Test
+    public void testApplyDeleteRemovesLargeSubtreeInSingleOperation() throws Exception {
+        FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
+        MemoryNodeStore nodeStore = seededLargeDeleteNodeStore();
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        when(flushService.onChangeApplied()).thenReturn(true);
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+
+        assertTrue(nodeAt(nodeStore, LARGE_DELETE_DESCENDANT_PATH).exists());
+        assertTrue(nodeAt(nodeStore, LARGE_DELETE_SIBLING_PATH).exists());
+
+        String newHead = service.applyDelete(WALLET, LARGE_DELETE_ROOT_PATH, "0xsig", "proposal-large-delete");
+
+        assertEquals("new-head", newHead);
+        assertFalse(nodeAt(nodeStore, LARGE_DELETE_ROOT_PATH).exists());
+        assertFalse(nodeAt(nodeStore, LARGE_DELETE_DESCENDANT_PATH).exists());
+        assertTrue(nodeAt(nodeStore, LARGE_DELETE_SIBLING_PATH).exists());
+        verify(flushService).onChangeApplied();
+    }
+
     private static FileStore fileStoreWithHeads(String previousHead, String currentHead) {
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         when(fileStore.getHead().getRecordId().toString()).thenReturn(previousHead);
@@ -212,6 +235,35 @@ public class DeleteApplicationServiceTest {
             current = current.child(part);
         }
         current.setProperty("contentType", "page");
+        nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        return nodeStore;
+    }
+
+    private static MemoryNodeStore seededLargeDeleteNodeStore() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        NodeBuilder root = nodeStore.getRoot().builder();
+
+        NodeBuilder deleteRoot = root;
+        for (String part : LARGE_DELETE_ROOT_PATH.substring(1).split("/")) {
+            deleteRoot = deleteRoot.child(part);
+        }
+        deleteRoot.setProperty("contentType", "wallet");
+
+        for (int branch = 0; branch < 100; branch++) {
+            NodeBuilder branchBuilder = deleteRoot.child("branch-" + branch);
+            branchBuilder.setProperty("branchIndex", branch);
+            for (int leaf = 0; leaf < 100; leaf++) {
+                NodeBuilder leafBuilder = branchBuilder.child("leaf-" + leaf);
+                leafBuilder.setProperty("leafIndex", leaf);
+            }
+        }
+
+        NodeBuilder sibling = root;
+        for (String part : LARGE_DELETE_SIBLING_PATH.substring(1).split("/")) {
+            sibling = sibling.child(part);
+        }
+        sibling.setProperty("contentType", "page");
+
         nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
         return nodeStore;
     }

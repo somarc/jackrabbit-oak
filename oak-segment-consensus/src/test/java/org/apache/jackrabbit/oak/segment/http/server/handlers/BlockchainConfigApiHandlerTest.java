@@ -85,7 +85,11 @@ public class BlockchainConfigApiHandlerTest {
         assertTrue(json.contains("\"schedulerModel\":\"adaptive-capacity\""));
         assertTrue(json.contains("\"gasPriceGwei\":3"));
         assertTrue(json.contains("\"estimatedTotalWei\":"));
-        assertTrue(json.contains("\"releaseBehavior\":\"Compatibility price class; adaptive release has no fixed delay.\""));
+        assertTrue(json.contains("\"proposalKinds\":"));
+        assertTrue(json.contains("\"WRITE\":"));
+        assertTrue(json.contains("\"DELETE\":"));
+        assertTrue(json.contains("\"releaseBehavior\":\"Additive content mutation. Verified proposals are scheduled adaptively under Aeron backpressure.\""));
+        assertTrue(json.contains("\"releaseBehavior\":\"Additive delete tombstone. Downstream cleanup, GC debt, and storage reclamation remain delete-specific.\""));
         assertTrue(json.contains("\"maxDelay\":\"Adaptive (no fixed epoch wait)\""));
     }
 }

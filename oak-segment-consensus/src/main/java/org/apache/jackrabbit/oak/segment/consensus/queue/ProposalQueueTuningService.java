@@ -39,7 +39,7 @@ public final class ProposalQueueTuningService {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromConfig(config);
         ProposalQueueTuningRegistry.set(tuning);
         log.info("ProposalQueueTuningService activated");
-        log.info("QUEUE_TUNING_SOURCE source=osgi-config-admin persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={} required_confirmations={} release_mode={} priority_direct_release_enabled={} validator_hosted_binary_upload_enabled={} validator_hosted_binary_requires_priority_tier={}",
+        log.info("QUEUE_TUNING_SOURCE source=osgi-config-admin persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={} required_confirmations={} release_mode={} validator_hosted_binary_upload_enabled={}",
             tuning.isPersistenceEnabled(),
             tuning.getMaxMessageBatch(),
             tuning.getFinalizationChunkSize(),
@@ -49,9 +49,7 @@ public final class ProposalQueueTuningService {
             tuning.getCounterRotationIntervalMs(),
             tuning.getRequiredConfirmations(),
             tuning.getReleaseMode().configValue(),
-            tuning.isPriorityDirectReleaseEnabled(),
-            tuning.isValidatorHostedBinaryUploadEnabled(),
-            tuning.isValidatorHostedBinaryRequiresPriorityTier());
+            tuning.isValidatorHostedBinaryUploadEnabled());
         log.info("  maxMessageBatch: {}", tuning.getMaxMessageBatch());
         log.info("  finalizationChunkSize: {}", tuning.getFinalizationChunkSize());
         log.info("  finalizationChunkDelayMs: {}", tuning.getFinalizationChunkDelayMs());
@@ -69,9 +67,7 @@ public final class ProposalQueueTuningService {
         log.info("  backpressureParkNanos: {}", tuning.getBackpressureParkNanos());
         log.info("  counterRotationIntervalMs: {}", tuning.getCounterRotationIntervalMs());
         log.info("  releaseMode: {}", tuning.getReleaseMode().configValue());
-        log.info("  priorityDirectReleaseEnabled: {}", tuning.isPriorityDirectReleaseEnabled());
         log.info("  validatorHostedBinaryUploadEnabled: {}", tuning.isValidatorHostedBinaryUploadEnabled());
-        log.info("  validatorHostedBinaryRequiresPriorityTier: {}", tuning.isValidatorHostedBinaryRequiresPriorityTier());
     }
 
     @Modified

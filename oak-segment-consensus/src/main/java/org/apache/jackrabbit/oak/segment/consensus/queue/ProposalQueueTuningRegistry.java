@@ -39,7 +39,7 @@ final class ProposalQueueTuningRegistry {
         }
         ProposalQueueTuning fallback = ProposalQueueTuning.fromSystemProperties();
         if (FALLBACK_WARNED.compareAndSet(false, true)) {
-            log.warn("QUEUE_TUNING_SOURCE source=system-properties persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={} release_mode={} required_confirmations={} priority_direct_release_enabled={} validator_hosted_binary_upload_enabled={} validator_hosted_binary_requires_priority_tier={}",
+            log.warn("QUEUE_TUNING_SOURCE source=system-properties persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={} release_mode={} required_confirmations={} validator_hosted_binary_upload_enabled={}",
                 fallback.isPersistenceEnabled(),
                 fallback.getMaxMessageBatch(),
                 fallback.getFinalizationChunkSize(),
@@ -49,9 +49,7 @@ final class ProposalQueueTuningRegistry {
                 fallback.getCounterRotationIntervalMs(),
                 fallback.getReleaseMode().configValue(),
                 fallback.getRequiredConfirmations(),
-                fallback.isPriorityDirectReleaseEnabled(),
-                fallback.isValidatorHostedBinaryUploadEnabled(),
-                fallback.isValidatorHostedBinaryRequiresPriorityTier());
+                fallback.isValidatorHostedBinaryUploadEnabled());
         }
         return fallback;
     }

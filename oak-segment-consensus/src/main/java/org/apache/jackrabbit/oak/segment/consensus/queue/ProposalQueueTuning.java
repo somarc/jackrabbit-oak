@@ -34,9 +34,7 @@ final class ProposalQueueTuning {
     static final long DEFAULT_BACKPRESSURE_PARK_NANOS = 1_000_000L;
     static final long DEFAULT_COUNTER_ROTATION_INTERVAL_MS = 24L * 60L * 60L * 1000L;
     static final String DEFAULT_RELEASE_MODE = "adaptive-active";
-    static final boolean DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED = false;
     static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED = true;
-    static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER = false;
     static final long DEFAULT_PAYLOAD_INLINE_MAX_BYTES = 8L * 1024L;
     static final long DEFAULT_PAYLOAD_SPILL_SOFT_PENDING = DEFAULT_MAX_PENDING_MESSAGES;
     static final long DEFAULT_PAYLOAD_SPILL_MAX_BYTES = 2L * 1024L * 1024L * 1024L;
@@ -60,9 +58,7 @@ final class ProposalQueueTuning {
     private final long backpressureParkNanos;
     private final long counterRotationIntervalMs;
     private final AdaptiveReleaseMode releaseMode;
-    private final boolean priorityDirectReleaseEnabled;
     private final boolean validatorHostedBinaryUploadEnabled;
-    private final boolean validatorHostedBinaryRequiresPriorityTier;
     private final long payloadInlineMaxBytes;
     private final long payloadSpillSoftPending;
     private final long payloadSpillMaxBytes;
@@ -86,9 +82,7 @@ final class ProposalQueueTuning {
                                 long backpressureParkNanos,
                                 long counterRotationIntervalMs,
                                 AdaptiveReleaseMode releaseMode,
-                                boolean priorityDirectReleaseEnabled,
                                 boolean validatorHostedBinaryUploadEnabled,
-                                boolean validatorHostedBinaryRequiresPriorityTier,
                                 long payloadInlineMaxBytes,
                                 long payloadSpillSoftPending,
                                 long payloadSpillMaxBytes,
@@ -111,9 +105,7 @@ final class ProposalQueueTuning {
         this.backpressureParkNanos = backpressureParkNanos;
         this.counterRotationIntervalMs = counterRotationIntervalMs;
         this.releaseMode = releaseMode != null ? releaseMode : AdaptiveReleaseMode.ADAPTIVE_ACTIVE;
-        this.priorityDirectReleaseEnabled = priorityDirectReleaseEnabled;
         this.validatorHostedBinaryUploadEnabled = validatorHostedBinaryUploadEnabled;
-        this.validatorHostedBinaryRequiresPriorityTier = validatorHostedBinaryRequiresPriorityTier;
         this.payloadInlineMaxBytes = payloadInlineMaxBytes;
         this.payloadSpillSoftPending = payloadSpillSoftPending;
         this.payloadSpillMaxBytes = payloadSpillMaxBytes;
@@ -183,17 +175,9 @@ final class ProposalQueueTuning {
         AdaptiveReleaseMode releaseMode = AdaptiveReleaseMode.fromValue(
             System.getProperty("oak.proposal.release.mode", DEFAULT_RELEASE_MODE)
         );
-        boolean priorityDirectReleaseEnabled = Boolean.parseBoolean(System.getProperty(
-            "oak.proposal.priority.direct.release.enabled",
-            String.valueOf(DEFAULT_PRIORITY_DIRECT_RELEASE_ENABLED)
-        ));
         boolean validatorHostedBinaryUploadEnabled = Boolean.parseBoolean(System.getProperty(
             "oak.proposal.validator.binary.upload.enabled",
             String.valueOf(DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED)
-        ));
-        boolean validatorHostedBinaryRequiresPriorityTier = Boolean.parseBoolean(System.getProperty(
-            "oak.proposal.validator.binary.requires.priority",
-            String.valueOf(DEFAULT_VALIDATOR_HOSTED_BINARY_REQUIRES_PRIORITY_TIER)
         ));
         long payloadInlineMaxBytes = Long.getLong(
             "oak.proposal.payload.inline.max.bytes",
@@ -233,9 +217,7 @@ final class ProposalQueueTuning {
             backpressureParkNanos,
             counterRotationIntervalMs,
             releaseMode,
-            priorityDirectReleaseEnabled,
             validatorHostedBinaryUploadEnabled,
-            validatorHostedBinaryRequiresPriorityTier,
             clampLong(payloadInlineMaxBytes, 0L),
             clampLong(payloadSpillSoftPending, 1L),
             clampLong(payloadSpillMaxBytes, 1L),
@@ -273,9 +255,7 @@ final class ProposalQueueTuning {
             config.backpressure_park_nanos(),
             clampLong(config.counter_rotation_interval_ms(), 0L),
             AdaptiveReleaseMode.fromValue(config.release_mode()),
-            config.priority_direct_release_enabled(),
             config.validator_hosted_binary_upload_enabled(),
-            config.validator_hosted_binary_requires_priority_tier(),
             clampLong(config.payload_inline_max_bytes(), 0L),
             clampLong(config.payload_spill_soft_pending(), 1L),
             clampLong(config.payload_spill_max_bytes(), 1L),
@@ -352,16 +332,8 @@ final class ProposalQueueTuning {
         return releaseMode;
     }
 
-    boolean isPriorityDirectReleaseEnabled() {
-        return priorityDirectReleaseEnabled;
-    }
-
     boolean isValidatorHostedBinaryUploadEnabled() {
         return validatorHostedBinaryUploadEnabled;
-    }
-
-    boolean isValidatorHostedBinaryRequiresPriorityTier() {
-        return validatorHostedBinaryRequiresPriorityTier;
     }
 
     long getPayloadInlineMaxBytes() {

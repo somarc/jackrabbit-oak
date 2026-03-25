@@ -520,14 +520,6 @@ public class OsgiConfigApiHandler {
             "Verified release pipeline mode (adaptive-shadow or adaptive-active; epoch is accepted as a deprecated alias for adaptive-active)",
             "oak.proposal.release.mode"));
         schema.add(schemaEntry(
-            "proposalQueueTuning.priority_direct_release_enabled",
-            "boolean",
-            false,
-            "runtime-readable",
-            "guarded",
-            "Enable direct Aeron release for PRIORITY proposals after verification as a compatibility entitlement",
-            "oak.proposal.priority.direct.release.enabled"));
-        schema.add(schemaEntry(
             "proposalQueueTuning.validator_hosted_binary_upload_enabled",
             "boolean",
             true,
@@ -535,14 +527,6 @@ public class OsgiConfigApiHandler {
             "guarded",
             "Enable validator-hosted binary upload handling",
             "oak.proposal.validator.binary.upload.enabled"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.validator_hosted_binary_requires_priority_tier",
-            "boolean",
-            true,
-            "runtime-readable",
-            "guarded",
-            "Legacy compatibility toggle. Validator-hosted binary entitlement is now verified from settlement capability flags; this flag only preserves older priority-tier assumptions where operators still need them.",
-            "oak.proposal.validator.binary.requires.priority"));
 
         schema.add(schemaEntry(
             "rateLimiterTuning.enabled",

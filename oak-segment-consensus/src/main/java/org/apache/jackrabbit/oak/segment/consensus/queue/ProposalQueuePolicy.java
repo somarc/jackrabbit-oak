@@ -36,15 +36,7 @@ public final class ProposalQueuePolicy {
         return ProposalQueueTuningRegistry.get().getReleaseMode().configValue();
     }
 
-    public static boolean isPriorityDirectReleaseEnabled() {
-        return ProposalQueueTuningRegistry.get().isPriorityDirectReleaseEnabled();
-    }
-
     public static boolean isValidatorHostedBinaryUploadEnabled() {
         return ProposalQueueTuningRegistry.get().isValidatorHostedBinaryUploadEnabled();
-    }
-
-    public static boolean isValidatorHostedBinaryRequiresPriorityTier() {
-        return ProposalQueueTuningRegistry.get().isValidatorHostedBinaryRequiresPriorityTier();
     }
 }

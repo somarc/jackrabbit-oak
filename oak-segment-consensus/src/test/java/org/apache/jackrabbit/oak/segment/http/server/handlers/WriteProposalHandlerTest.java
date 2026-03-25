@@ -78,7 +78,6 @@ public class WriteProposalHandlerTest {
         System.clearProperty("oak.blockchain.rpcUrl");
         System.clearProperty("oak.blockchain.contractAddress");
         System.clearProperty("oak.proposal.validator.binary.upload.enabled");
-        System.clearProperty("oak.proposal.validator.binary.requires.priority");
         BlockchainConfig.reset();
     }
 
@@ -493,23 +492,37 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
-    public void testHandleProposeWriteRejectsInvalidPaymentTierWhenQueueConfigured() throws Exception {
+    public void testHandleProposeWriteIgnoresLegacyPaymentTierWhenQueueConfigured() throws Exception {
         ServerContext context = readyContext();
-        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        when(queueManager.queueProposal(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+            nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
+        )).thenReturn(new QueuedProposal(
+            "proposal-1",
+            VALID_TX_HASH,
+            null,
+            System.currentTimeMillis(),
+            System.currentTimeMillis() + 300_000L,
+            ProposalState.PENDING
+        ));
         WriteProposalHandler handler = new WriteProposalHandler(context);
         HttpServletRequest request = request();
         when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
         when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
         when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
         when(request.getParameter("paymentTier")).thenReturn("gold");
+        when(request.getParameter("message")).thenReturn("hello");
+        when(request.getParameter("contentType")).thenReturn("page");
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
 
         handler.handleProposeWrite(request, response);
 
-        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        assertTrue(body.toString().contains("Invalid paymentTier: 'gold'. Must be 'standard', 'express', or 'priority'."));
-        assertEquals(1L, context.apiRejectedRequests.get());
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        assertTrue(body.toString().contains("\"status\":\"accepted\""));
+        assertEquals(1L, context.apiAcceptedRequests.get());
     }
 
     @Test
@@ -683,7 +696,7 @@ public class WriteProposalHandlerTest {
         when(context.cidMappingService.getOakBlobId("QmKnownCid")).thenReturn(Optional.of("blob-1"));
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            any(), nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
+            nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,
@@ -718,8 +731,9 @@ public class WriteProposalHandlerTest {
         context.proposalQueueManager = queueManager;
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.nullable(String.class),
-            org.mockito.ArgumentMatchers.nullable(String.class), anyString(),
+            org.mockito.ArgumentMatchers.nullable(String.class),
+            org.mockito.ArgumentMatchers.nullable(String.class),
+            anyString(),
             org.mockito.ArgumentMatchers.nullable(String.class)
         )).thenThrow(new java.util.concurrent.RejectedExecutionException("queue_overloaded"));
         WriteProposalHandler handler = new WriteProposalHandler(context);
@@ -740,7 +754,7 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
-    public void testHandleProposeWriteAcceptsValidatorHostedBinaryWithoutPriorityByDefault() throws Exception {
+    public void testHandleProposeWriteAcceptsValidatorHostedBinaryWhenUploadEnabled() throws Exception {
         System.setProperty("oak.blockchain.mode", "mock");
         BlockchainConfig.reset();
         ServerContext context = readyContext();
@@ -748,8 +762,9 @@ public class WriteProposalHandlerTest {
         context.proposalQueueManager = queueManager;
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.nullable(String.class),
-            org.mockito.ArgumentMatchers.nullable(String.class), anyString(),
+            org.mockito.ArgumentMatchers.nullable(String.class),
+            org.mockito.ArgumentMatchers.nullable(String.class),
+            anyString(),
             org.mockito.ArgumentMatchers.nullable(String.class)
         )).thenReturn(new QueuedProposal(
             "proposal-1",
@@ -764,7 +779,6 @@ public class WriteProposalHandlerTest {
         when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
         when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
         when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
-        when(request.getParameter("paymentTier")).thenReturn("standard");
         when(request.getParameter("binaryData")).thenReturn("AQID");
         when(request.getParameter("mimeType")).thenReturn("application/octet-stream");
         StringWriter body = new StringWriter();
@@ -777,17 +791,17 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
-    public void testHandleProposeWriteAllowsValidatorHostedBinaryWhenPriorityRequirementDisabled() throws Exception {
+    public void testHandleProposeWriteAllowsValidatorHostedBinaryWhenCapabilityEnabled() throws Exception {
         System.setProperty("oak.blockchain.mode", "mock");
-        System.setProperty("oak.proposal.validator.binary.requires.priority", "false");
         BlockchainConfig.reset();
         ServerContext context = readyContext();
         ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
         context.proposalQueueManager = queueManager;
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.nullable(String.class),
-            org.mockito.ArgumentMatchers.nullable(String.class), anyString(),
+            org.mockito.ArgumentMatchers.nullable(String.class),
+            org.mockito.ArgumentMatchers.nullable(String.class),
+            anyString(),
             org.mockito.ArgumentMatchers.nullable(String.class)
         )).thenReturn(new QueuedProposal(
             "proposal-1",
@@ -802,7 +816,6 @@ public class WriteProposalHandlerTest {
         when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
         when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
         when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
-        when(request.getParameter("paymentTier")).thenReturn("standard");
         when(request.getParameter("binaryData")).thenReturn("AQID");
         when(request.getParameter("mimeType")).thenReturn("application/octet-stream");
         when(request.getParameter("contentType")).thenReturn("page");
@@ -820,7 +833,6 @@ public class WriteProposalHandlerTest {
     public void testHandleProposeWriteAcceptsMultipartBinaryUpload() throws Exception {
         System.setProperty("oak.blockchain.mode", "mock");
         System.setProperty("oak.proposal.validator.binary.upload.enabled", "true");
-        System.setProperty("oak.proposal.validator.binary.requires.priority", "false");
         BlockchainConfig.reset();
 
         ServerContext context = readyContext();
@@ -832,7 +844,7 @@ public class WriteProposalHandlerTest {
         when(blobStore.writeBlob(any())).thenReturn("blob-1");
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            any(), nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
+            nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,
@@ -869,7 +881,6 @@ public class WriteProposalHandlerTest {
         when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
         when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
         when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
-        when(request.getParameter("paymentTier")).thenReturn("priority");
         when(request.getParameter("binaryData")).thenReturn("AQID");
         when(request.getParameter("mimeType")).thenReturn("application/octet-stream");
         StringWriter body = new StringWriter();
@@ -970,7 +981,6 @@ public class WriteProposalHandlerTest {
             fieldPart("walletAddress", VALID_WALLET),
             fieldPart("signature", VALID_SIGNATURE),
             fieldPart("ethereumTxHash", VALID_TX_HASH),
-            fieldPart("paymentTier", "priority"),
             fieldPart("contentType", "page"),
             fieldPart("message", "hello"),
             filePart("binary", "asset.bin", "application/octet-stream", new byte[] {1, 2, 3})

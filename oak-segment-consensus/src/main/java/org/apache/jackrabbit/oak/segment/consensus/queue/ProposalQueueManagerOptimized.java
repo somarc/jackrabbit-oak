@@ -80,9 +80,6 @@ public class ProposalQueueManagerOptimized {
     private final java.util.concurrent.atomic.AtomicInteger batchSentSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
     private final java.util.concurrent.atomic.AtomicLong lastEpochQueueLogMs = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicInteger epochQueueSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
-    private final java.util.concurrent.atomic.AtomicLong lastPriorityLogMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicInteger prioritySuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
-    
     // Configuration
     private final long confirmationTimeoutMs;
     private final int requiredConfirmations;
@@ -98,7 +95,6 @@ public class ProposalQueueManagerOptimized {
     private final long finalizationChunkDelayMs;
     private final AdaptiveReleaseMode releaseMode;
     private final AdaptiveReleaseGovernor adaptiveReleaseGovernor;
-    private final boolean priorityDirectReleaseEnabled;
     
     // Queues
     private final org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient;
@@ -135,7 +131,7 @@ public class ProposalQueueManagerOptimized {
 
     private final int verifierThreads;
     
-    // Metrics: Priority tier routing
+    // Metrics: legacy compatibility tier routing
     private final java.util.concurrent.atomic.AtomicLong priorityProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong batchedProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
     
@@ -261,7 +257,6 @@ public class ProposalQueueManagerOptimized {
         this.verifierThreads = resolved.getVerifierThreads();
         this.releaseMode = resolved.getReleaseMode();
         this.adaptiveReleaseGovernor = AdaptiveReleaseGovernor.fromTuning(resolved);
-        this.priorityDirectReleaseEnabled = resolved.isPriorityDirectReleaseEnabled();
         this.processedRetentionMs = resolved.getProcessedRetentionMs();
         this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
         this.persistenceFlushBatch = resolved.getPersistenceFlushBatch();
@@ -317,7 +312,6 @@ public class ProposalQueueManagerOptimized {
         log.info("   - Max batch size: {}", maxMessageBatch);
         log.info("   - Required payment confirmations: {}", requiredConfirmations);
         log.info("   - Release mode: {}", releaseMode.configValue());
-        log.info("   - Priority direct release: {}", priorityDirectReleaseEnabled);
         if (persistenceStore != null) {
             if (isAsyncPersistenceEnabled()) {
                 log.info("   - Proposal persistence: async (flush every {}ms or {} changes)",
@@ -477,22 +471,13 @@ public class ProposalQueueManagerOptimized {
         // Per-epoch proposal counts (for triangular pipeline visualization)
         // Group by SUBMISSION EPOCH (simpler, shows when proposals entered the queue)
         java.util.Map<Long, Long> proposalsByEpoch = new java.util.HashMap<>();
-        java.util.Map<Long, java.util.Map<String, Long>> proposalsByEpochAndTier = new java.util.HashMap<>();
-        
         for (QueuedProposal proposal : allProposals.values()) {
             if (proposal.getState() == ProposalState.VERIFIED || proposal.getState() == ProposalState.PENDING) {
                 long epoch = proposal.getEpoch();
                 proposalsByEpoch.merge(epoch, 1L, Long::sum);
-                
-                // Track by tier
-                String tierName = proposal.getTier() != null ? proposal.getTier().name() : "STANDARD";
-                proposalsByEpochAndTier
-                    .computeIfAbsent(epoch, k -> new java.util.HashMap<>())
-                    .merge(tierName, 1L, Long::sum);
             }
         }
         stats.put("proposalsByEpoch", proposalsByEpoch);
-        stats.put("proposalsByEpochAndTier", proposalsByEpochAndTier);
         
         // Backpressure stats
         long backpressurePendingRaw = backpressureManager.getPendingCount();
@@ -558,7 +543,6 @@ public class ProposalQueueManagerOptimized {
         stats.put("runtimeStageCounts", runtimeStages);
         stats.put("releaseMode", releaseMode.configValue());
         stats.put("requiredConfirmations", requiredConfirmations);
-        stats.put("priorityDirectReleaseEnabled", priorityDirectReleaseEnabled);
         stats.put("adaptiveReleaseGovernorState", adaptiveDecision.getState().name());
         stats.put("adaptiveReleaseAction", adaptiveDecision.getAction().name());
         stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.getReasonCodes());
@@ -566,8 +550,7 @@ public class ProposalQueueManagerOptimized {
         releasePolicy.put("scheduler", "adaptive");
         releasePolicy.put("releaseMode", releaseMode.configValue());
         releasePolicy.put("requiredConfirmations", requiredConfirmations);
-        releasePolicy.put("priorityDirectReleaseEnabled", priorityDirectReleaseEnabled);
-        releasePolicy.put("note", "Verified proposals drain through the adaptive governor. Tier-specific epoch delays are retired.");
+        releasePolicy.put("note", "Verified proposals drain through the adaptive governor. Tier-specific queue behavior is retired.");
         stats.put("releasePolicy", releasePolicy);
         java.util.Map<String, Object> releaseFlow = new java.util.LinkedHashMap<>();
         releaseFlow.put("scheduler", "adaptive");
@@ -787,17 +770,15 @@ public class ProposalQueueManagerOptimized {
                                        long confirmedBlockNumber) {
         adaptivePackingBuffer.addProposal(proposal, proposal.getVerifiedTimestampMs());
         logRateLimitedInfo(lastEpochQueueLogMs, epochQueueSuppressed,
-            "📥 Proposal added to adaptive packing buffer: {} | wallet: {} | epoch: {} | tier: {}",
+            "📥 Proposal added to adaptive packing buffer: {} | wallet: {} | epoch: {}",
             proposal.getProposalId().substring(0, 8),
             proposal.getWalletAddress().substring(0, 10),
-            proposal.getEpoch(),
-            proposal.getTier());
-        log.debug("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, tier: {}, wallet: {}) → queued for adaptive release",
+            proposal.getEpoch());
+        log.debug("🔒 Proposal {} VERIFIED (tx: {}, block: {}, epoch: {}, wallet: {}) → queued for adaptive release",
             proposal.getProposalId(),
             txHashSummary,
             confirmedBlockNumber,
             proposal.getEpoch(),
-            proposal.getTier(),
             proposal.getWalletAddress());
     }
 
@@ -807,11 +788,6 @@ public class ProposalQueueManagerOptimized {
             proposal.setVerifiedTimestampMs(Math.max(proposal.getTimestamp(), nowMs));
         }
 
-        if (shouldDirectReleasePriority(proposal)) {
-            queueReleaseBatch(java.util.Collections.singletonList(proposal), "restored-priority-direct");
-            return;
-        }
-
         Long confirmedBlock = proposal.getConfirmedBlock();
         long confirmedBlockNumber = confirmedBlock != null ? confirmedBlock.longValue() : -1L;
         routeVerifiedProposal(
@@ -819,11 +795,6 @@ public class ProposalQueueManagerOptimized {
             summarizeTxHash(proposal.getEthereumTxHash()),
             confirmedBlockNumber
         );
-    }
-
-    private boolean shouldDirectReleasePriority(QueuedProposal proposal) {
-        return priorityDirectReleaseEnabled
-            && proposal.getTier() == org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY;
     }
 
     private String summarizeTxHash(String txHash) {
@@ -993,7 +964,6 @@ public class ProposalQueueManagerOptimized {
         payload.put("schedulerModel", "adaptive-capacity");
         payload.put("releaseMode", queueStats.get("releaseMode"));
         payload.put("requiredConfirmations", queueStats.get("requiredConfirmations"));
-        payload.put("priorityDirectReleaseEnabled", queueStats.get("priorityDirectReleaseEnabled"));
         payload.put("currentEpoch", queueStats.get("currentEpoch"));
         payload.put("finalizedEpoch", queueStats.get("finalizedEpoch"));
         payload.put("epochsUntilFinality", queueStats.get("epochsUntilFinality"));
@@ -1049,7 +1019,7 @@ public class ProposalQueueManagerOptimized {
         epochCompatibility.putAll((java.util.Map<String, Object>) queueStats.get("compatibilityEpochOverlay"));
         epochCompatibility.put("deprecatedEndpoints", java.util.Arrays.asList("/v1/proposals/epochs", "/v1/explorer/epochs"));
         epochCompatibility.put("contractReviewFollowUp",
-            "Pricing tiers remain contract-defined. Review smart-contract semantics separately from the adaptive Oak scheduler.");
+            "Legacy tier overlays remain compatibility-only. Adaptive backlog release is authoritative.");
         payload.put("epochCompatibility", epochCompatibility);
 
         return payload;
@@ -1348,7 +1318,6 @@ public class ProposalQueueManagerOptimized {
         long nowMs = System.currentTimeMillis();
         int restoredPending = 0;
         int restoredVerified = 0;
-        int restoredPriorityReady = 0;
         int skippedTerminal = 0;
         int skippedMissingPayload = 0;
         for (QueuedProposal proposal : proposals) {
@@ -1370,9 +1339,6 @@ public class ProposalQueueManagerOptimized {
             if (proposal.getState() == ProposalState.VERIFIED) {
                 enqueueRestoredVerifiedProposal(proposal, nowMs);
                 restoredVerified++;
-                if (shouldDirectReleasePriority(proposal)) {
-                    restoredPriorityReady++;
-                }
                 continue;
             }
 
@@ -1387,10 +1353,9 @@ public class ProposalQueueManagerOptimized {
             persistProposalsNow();
         }
         if (restoredPending > 0 || restoredVerified > 0 || skippedTerminal > 0 || skippedMissingPayload > 0) {
-            log.info("🔁 Restored persisted proposals: pending={} verified={} priorityReady={} releaseMode={} skippedTerminal={} skippedMissingPayload={}",
+            log.info("🔁 Restored persisted proposals: pending={} verified={} releaseMode={} skippedTerminal={} skippedMissingPayload={}",
                 restoredPending,
                 restoredVerified,
-                restoredPriorityReady,
                 releaseMode.configValue(),
                 skippedTerminal,
                 skippedMissingPayload);
@@ -1510,7 +1475,7 @@ public class ProposalQueueManagerOptimized {
     }
     
     /**
-     * Queue a new proposal for verification and adaptive release (with payment tier).
+     * Queue a new proposal for verification and adaptive release using the default compatibility tier.
      * This overload captures the current submission epoch for compatibility overlays.
      * 
      * @param proposalId Unique proposal ID
@@ -1520,10 +1485,39 @@ public class ProposalQueueManagerOptimized {
      * @param contentType Content type
      * @param message Content message
      * @param signature Transaction signature
-     * @param tier Payment tier (STANDARD, EXPRESS, or PRIORITY)
      * @param intentToken Intent token for lazy binary upload (optional, ADR 020)
      * @return The queued proposal
      */
+    public QueuedProposal queueProposal(
+            String proposalId,
+            String ethereumTxHash,
+            String walletAddress,
+            String path,
+            String contentType,
+            String message,
+            String signature,
+            String intentToken,
+            String blobId,
+            String mimeType,
+            String ipfsCid) {
+        long currentEpoch = resolveCurrentEpoch();
+        return queueProposal(
+            proposalId,
+            walletAddress,
+            path,
+            contentType,
+            message,
+            signature,
+            ethereumTxHash,
+            currentEpoch,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            intentToken,
+            blobId,
+            mimeType,
+            ipfsCid
+        );
+    }
+
     public QueuedProposal queueProposal(
             String proposalId,
             String ethereumTxHash,
@@ -1568,7 +1562,7 @@ public class ProposalQueueManagerOptimized {
      * @param signature Transaction signature
      * @param ethereumTxHash Ethereum transaction hash (optional)
      * @param epoch Ethereum epoch when transaction was seen (for compatibility overlays)
-     * @param tier Payment tier (STANDARD, EXPRESS, or PRIORITY) for priority handling
+     * @param tier Compatibility payment tier retained for older persistence/reporting overlays
      * @param intentToken Intent token for lazy binary upload (optional, ADR 020)
      * @return The queued proposal
      */
@@ -1619,7 +1613,7 @@ public class ProposalQueueManagerOptimized {
         proposal.setContentType(contentType);
         proposal.setSignature(signature);
         proposal.setEpoch(epoch);
-        proposal.setTier(tier); // Set payment tier for priority handling
+        proposal.setTier(tier);
         proposal.setIntentToken(intentToken); // Set intent token for lazy binary upload (ADR 020)
         proposal.setBlobId(blobId);
         proposal.setMimeType(mimeType);
@@ -1636,8 +1630,8 @@ public class ProposalQueueManagerOptimized {
         // Queue after mapping is available to verifier.
         unverifiedQueue.offer(proposal);
         
-        log.debug("📥 Queued proposal {} for EVM verification in epoch {} (tier: {}, queue size: {})", 
-            proposalId, epoch, tier, unverifiedQueue.size());
+        log.debug("📥 Queued proposal {} for EVM verification in epoch {} (queue size: {})",
+            proposalId, epoch, unverifiedQueue.size());
         long persistStart = System.nanoTime();
         persistProposals();
         long persistNanos = System.nanoTime() - persistStart;
@@ -1657,9 +1651,24 @@ public class ProposalQueueManagerOptimized {
      * @param walletAddress Ethereum wallet address
      * @param path Content path to delete
      * @param signature Transaction signature
-     * @param tier Payment tier (STANDARD, EXPRESS, or PRIORITY)
      * @return The queued proposal
      */
+    public QueuedProposal queueDeleteProposal(
+            String proposalId,
+            String ethereumTxHash,
+            String walletAddress,
+            String path,
+            String signature) {
+        return queueDeleteProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            signature,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD
+        );
+    }
+
     public QueuedProposal queueDeleteProposal(
             String proposalId,
             String ethereumTxHash,
@@ -1700,8 +1709,8 @@ public class ProposalQueueManagerOptimized {
         // Queue after mapping is available to verifier.
         unverifiedQueue.offer(proposal);
         
-        log.info("🗑️  Queued DELETE proposal {} for EVM verification in epoch {} (tier: {}, path: {}, queue size: {})", 
-            proposalId, currentEpoch, tier, path, unverifiedQueue.size());
+        log.info("🗑️  Queued DELETE proposal {} for EVM verification in epoch {} (path: {}, queue size: {})",
+            proposalId, currentEpoch, path, unverifiedQueue.size());
         long persistStart = System.nanoTime();
         persistProposals();
         long persistNanos = System.nanoTime() - persistStart;
@@ -2337,14 +2346,6 @@ public class ProposalQueueManagerOptimized {
                         continue;
                     }
 
-                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier proofTier =
-                        proof.getPaymentTier();
-                    if (proofTier != null && proofTier != proposal.getTier()) {
-                        log.info("🔁 PAYMENT TIER RECONCILED: proposal={} requestedTier={} proofTier={}",
-                            proposal.getProposalId(), proposal.getTier(), proofTier);
-                        proposal.setTier(proofTier);
-                    }
-                    
                     log.debug("✅ CHECKPOINT 1 PASSED: Ethereum tx {} confirmed (block: {}, amount: {} wei)",
                         proof.getTransactionHash(), proof.getBlockNumber(), proof.getAmountWei());
                     
@@ -2466,71 +2467,8 @@ public class ProposalQueueManagerOptimized {
                     updateMax(verifierQueueWaitMsMax, queueWaitMs);
                     String txHashSummary = summarizeTxHash(proof.getTransactionHash());
                     
-                    // ═══════════════════════════════════════════════════════════
-                    // PRIORITY DIRECT RELEASE: Optional compatibility fast-path to Aeron
-                    // ═══════════════════════════════════════════════════════════
-                    if (shouldDirectReleasePriority(proposal)) {
-                        log.debug("🚀 PRIORITY DIRECT RELEASE: Fast-tracking proposal {} directly to Aeron (type: {})",
-                            proposal.getProposalId(), proposal.getType());
-                        
-                        try {
-                            boolean sentToAeron;
-                            if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
-                                log.debug("🗑️  PRIORITY DELETE: Sending directly to Aeron");
-                                sentToAeron = raftAppendCallback.tryAppendDeleteProposalWithId(
-                                    proposal.getProposalId(),
-                                    proposal.getWalletAddress(),
-                                    proposal.getPath(),
-                                    proposal.getSignature()
-                                );
-                            } else {
-                                String resolvedMessage = resolveProposalMessage(proposal);
-                                log.debug("📝 PRIORITY WRITE: Sending directly to Aeron (ipfsCid={})", proposal.getIpfsCid());
-                                sentToAeron = raftAppendCallback.tryAppendProposalWithId(
-                                    proposal.getProposalId(),
-                                    proposal.getWalletAddress(),
-                                    proposal.getPath(),
-                                    proposal.getContentType(),
-                                    resolvedMessage,
-                                    proposal.getSignature(),
-                                    proposal.getBlobId(),
-                                    proposal.getMimeType(),
-                                    proposal.getIpfsCid()
-                                );
-                            }
-
-                            if (sentToAeron) {
-                                transitionProposalToProcessed(proposal);
-                                long priorityPersistStartNs = System.nanoTime();
-                                persistProposals();
-                                long priorityPersistNanos = System.nanoTime() - priorityPersistStartNs;
-                                verifierPersistNanos.addAndGet(priorityPersistNanos);
-                                verifierLastPersistMs.set(priorityPersistNanos / 1_000_000L);
-
-                                logRateLimitedInfo(lastPriorityLogMs, prioritySuppressed,
-                                    "✅ Priority proposal {} sent to Aeron (tx: {}, block: {}, latency: ~30s)",
-                                    proposal.getProposalId(),
-                                    txHashSummary,
-                                    proof.getBlockNumber());
-                                priorityProposalsSent.incrementAndGet();
-                                workCount++;
-                            } else {
-                                log.warn("⚠️  Priority direct release was not accepted by Aeron ingress - routing {} through the scheduled release queue",
-                                    proposal.getProposalId());
-                                routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());
-                                workCount++;
-                            }
-                        } catch (Exception e) {
-                            log.error("❌ Failed to send priority proposal {} directly to Aeron - falling back to scheduled release",
-                                proposal.getProposalId(), e);
-                            routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());
-                            workCount++;
-                        }
-                    } else {
-                        // EXPRESS or STANDARD: route through the active release scheduler
-                        routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());
-                        workCount++;
-                    }
+                    routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());
+                    workCount++;
                     
                 } catch (Exception e) {
                     verifierErrorCount.incrementAndGet();

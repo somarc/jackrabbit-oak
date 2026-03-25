@@ -47,9 +47,7 @@ public final class ProposalQueueTuningIntrospection {
         values.put("backpressure_park_nanos", tuning.getBackpressureParkNanos());
         values.put("counter_rotation_interval_ms", tuning.getCounterRotationIntervalMs());
         values.put("release_mode", tuning.getReleaseMode().configValue());
-        values.put("priority_direct_release_enabled", tuning.isPriorityDirectReleaseEnabled());
         values.put("validator_hosted_binary_upload_enabled", tuning.isValidatorHostedBinaryUploadEnabled());
-        values.put("validator_hosted_binary_requires_priority_tier", tuning.isValidatorHostedBinaryRequiresPriorityTier());
         values.put("payload_inline_max_bytes", tuning.getPayloadInlineMaxBytes());
         values.put("payload_spill_soft_pending", tuning.getPayloadSpillSoftPending());
         values.put("payload_spill_max_bytes", tuning.getPayloadSpillMaxBytes());

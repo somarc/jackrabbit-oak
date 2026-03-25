@@ -16,7 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
-import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
+import org.apache.jackrabbit.oak.api.Blob;
+import org.apache.jackrabbit.oak.api.PropertyState;
+import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
@@ -26,12 +28,16 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
+import org.apache.jackrabbit.oak.spi.state.ChildNodeEntry;
+import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -41,6 +47,13 @@ import java.util.Map;
 public class DeleteProposalHandler {
 
     private static final Logger log = LoggerFactory.getLogger(DeleteProposalHandler.class);
+    private static final long DEFAULT_DELETE_SIZE_MB = 1L;
+    private static final long BYTES_PER_MB = 1024L * 1024L;
+    private static final long ESTIMATED_BYTES_PER_NODE = 1024L;
+    private static final long ESTIMATED_BYTES_PER_PROPERTY = 100L;
+    private static final long BINARY_BYTES_PER_PROPERTY_UNIT = 100L;
+    private static final int MAX_DELETE_ESTIMATION_NODES = 50_000;
+    private static final int MAX_DELETE_ESTIMATION_DEPTH = 64;
 
     private final ServerContext context;
 
@@ -207,20 +220,9 @@ public class DeleteProposalHandler {
             if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
                     "Missing ethereumTxHash parameter. Deletes require Ethereum payment (like writes). " +
-                    "Release is adaptive after verification; paymentTier remains a compatibility/economic selector."
+                    "Release is adaptive after verification and valid deletes enter the durable backlog."
                 );
                 return;
-            }
-
-            String paymentTier = request.getParameter("paymentTier");
-            ValidatorEarningsTracker.PaymentTier tier = ValidatorEarningsTracker.PaymentTier.STANDARD;
-            if (paymentTier != null && !paymentTier.trim().isEmpty()) {
-                tier = parsePaymentTier(paymentTier);
-                if (tier == null) {
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "Invalid paymentTier: '" + paymentTier + "'. Must be 'standard', 'express', or 'priority'.");
-                    return;
-                }
             }
 
             String clientProposalId = request.getParameter("proposalId");
@@ -254,14 +256,16 @@ public class DeleteProposalHandler {
             java.math.BigDecimal totalDebt = java.math.BigDecimal.ZERO;
             java.math.BigDecimal pendingDebt = java.math.BigDecimal.ZERO;
             boolean writesBlocked = false;
+            DeleteSizeEstimate deleteSizeEstimate = estimateDeleteSize(contentPath);
 
             if (context.gcAccountManager != null) {
                 try {
-                    // Estimate content size from Oak NodeStore
-                    long estimatedSizeMB = estimateContentSizeMB(contentPath);
-
                     // Add debt to account (pending until GC executes)
-                    java.math.BigDecimal debtCost = context.gcAccountManager.addDebt(normalizedWallet, contentPath, estimatedSizeMB);
+                    java.math.BigDecimal debtCost = context.gcAccountManager.addDebt(
+                        normalizedWallet,
+                        contentPath,
+                        deleteSizeEstimate.estimatedSizeMB
+                    );
 
                     // Get updated account state
                     org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account =
@@ -272,8 +276,20 @@ public class DeleteProposalHandler {
                     pendingDebt = account.getPendingDebt();
                     writesBlocked = account.writesBlocked;
 
-                    log.info("💰 GC debt added: wallet={}, path={}, debt=${}, total=${}, pending=${}, blocked={}",
-                             normalizedWallet, contentPath, gcDebtIncurred, totalDebt, pendingDebt, writesBlocked);
+                    log.info(
+                        "💰 GC debt added: wallet={}, path={}, debt=${}, total=${}, pending=${}, blocked={}, estimatedMb={}, nodes={}, descendants={}, properties={}, truncated={}",
+                        normalizedWallet,
+                        contentPath,
+                        gcDebtIncurred,
+                        totalDebt,
+                        pendingDebt,
+                        writesBlocked,
+                        deleteSizeEstimate.estimatedSizeMB,
+                        deleteSizeEstimate.nodeCount,
+                        deleteSizeEstimate.descendantCount(),
+                        deleteSizeEstimate.propertyCount,
+                        deleteSizeEstimate.truncated
+                    );
 
                 } catch (Exception e) {
                     log.warn("⚠️  Failed to track GC debt for delete: {}", e.getMessage());
@@ -283,16 +299,15 @@ public class DeleteProposalHandler {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // QUEUE DELETE PROPOSAL: Same flow as writes, just different type
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            log.debug("📥 Queuing DELETE proposal {} (tx: {}, tier: {}), waiting for Ethereum confirmation",
-                proposalId, ethereumTxHash, tier);
+            log.debug("📥 Queuing DELETE proposal {} (tx: {}), waiting for Ethereum confirmation",
+                proposalId, ethereumTxHash);
 
             context.proposalQueueManager.queueDeleteProposal(
                 proposalId,
                 ethereumTxHash,
                 normalizedWallet,
                 contentPath,
-                signature,
-                tier
+                signature
             );
 
             // Return 202 Accepted (queued for processing)
@@ -313,16 +328,20 @@ public class DeleteProposalHandler {
             payload.put("state", "PENDING");
             payload.put("message", "Delete proposal queued, waiting for Ethereum confirmation");
             payload.put("ethereumTxHash", ethereumTxHash);
-            payload.put("tier", String.valueOf(tier));
             payload.put("timeoutTimestamp", System.currentTimeMillis() + ProposalQueuePolicy.confirmationTimeoutMs());
             payload.put("wallet", wallet);
             payload.put("contentPath", contentPath);
+            payload.put("estimatedDeleteSizeMb", deleteSizeEstimate.estimatedSizeMB);
+            payload.put("estimatedNodeCount", deleteSizeEstimate.nodeCount);
+            payload.put("estimatedDescendantCount", deleteSizeEstimate.descendantCount());
+            payload.put("estimatedPropertyCount", deleteSizeEstimate.propertyCount);
+            payload.put("estimationTruncated", deleteSizeEstimate.truncated);
             payload.put("gcDebtIncurred", gcDebtIncurred.toString());
             payload.put("totalDebt", totalDebt.toString());
             payload.put("pendingDebt", pendingDebt.toString());
             payload.put("writesBlocked", writesBlocked);
             response.getWriter().write(JsonOutputUtil.toJson(payload));
-            log.info("✅ DELETE proposal {} queued successfully (tier: {}, path: {})", proposalId, tier, contentPath);
+            log.info("✅ DELETE proposal {} queued successfully (path: {})", proposalId, contentPath);
 
         } catch (Exception e) {
             log.error("❌ Delete proposal failed", e);
@@ -331,109 +350,101 @@ public class DeleteProposalHandler {
     }
 
     /**
-     * Estimate content size in megabytes for a given path.
+     * Estimate delete footprint for a given subtree.
      *
-     * <p>This method traverses the node tree at the given path and estimates
-     * the storage size based on node count and property sizes.</p>
+     * <p>The client already tells Oak which path is being deleted. Oak should derive
+     * subtree size locally from the NodeStore rather than trusting client-supplied
+     * descendant counts for GC-debt accounting.</p>
      *
      * @param contentPath Path to the content node
-     * @return Estimated size in megabytes (minimum 1 MB)
+     * @return Estimated subtree footprint, including truncation when runtime safety caps hit
      */
-    private long estimateContentSizeMB(String contentPath) {
+    private DeleteSizeEstimate estimateDeleteSize(String contentPath) {
         if (context.nodeStore == null) {
             log.debug("NodeStore not available, using default size estimate");
-            return 1L;
+            return DeleteSizeEstimate.defaultEstimate();
         }
 
         try {
-            org.apache.jackrabbit.oak.spi.state.NodeState root = context.nodeStore.getRoot();
+            NodeState root = context.nodeStore.getRoot();
 
             // Navigate to the content path
             String[] pathParts = contentPath.split("/");
-            org.apache.jackrabbit.oak.spi.state.NodeState current = root;
+            NodeState current = root;
 
             for (String part : pathParts) {
-                if (part.isEmpty()) continue;
+                if (part.isEmpty()) {
+                    continue;
+                }
                 current = current.getChildNode(part);
                 if (!current.exists()) {
                     log.debug("Path {} does not exist, using default size estimate", contentPath);
-                    return 1L;
+                    return DeleteSizeEstimate.defaultEstimate();
                 }
             }
 
-            // Estimate size: count nodes and properties recursively
-            long[] counts = countNodesAndProperties(current, 0, 1000); // Max 1000 nodes to avoid long traversals
-            long nodeCount = counts[0];
-            long propertyCount = counts[1];
+            Deque<TraversalFrame> stack = new ArrayDeque<>();
+            stack.push(new TraversalFrame(current, 0));
 
-            // Rough estimate: each node ≈ 1 KB, each property ≈ 100 bytes
-            long estimatedBytes = (nodeCount * 1024) + (propertyCount * 100);
-            long estimatedMB = Math.max(1, estimatedBytes / (1024 * 1024));
+            long nodeCount = 0;
+            long propertyCount = 0;
+            boolean truncated = false;
 
-            log.debug("Content size estimate for {}: {} nodes, {} properties, ~{} MB",
-                contentPath, nodeCount, propertyCount, estimatedMB);
+            while (!stack.isEmpty()) {
+                TraversalFrame frame = stack.pop();
+                nodeCount++;
 
-            return estimatedMB;
+                for (PropertyState prop : frame.node.getProperties()) {
+                    propertyCount++;
+                    if (prop.getType() == Type.BINARY) {
+                        try {
+                            Blob blob = prop.getValue(Type.BINARY);
+                            propertyCount += blob.length() / BINARY_BYTES_PER_PROPERTY_UNIT;
+                        } catch (Exception e) {
+                            log.debug("Unable to inspect binary property size for {}: {}", contentPath, e.getMessage());
+                        }
+                    }
+                }
+
+                if (frame.depth >= MAX_DELETE_ESTIMATION_DEPTH) {
+                    if (frame.node.getChildNodeCount(1) > 0) {
+                        truncated = true;
+                    }
+                    continue;
+                }
+
+                for (ChildNodeEntry childEntry : frame.node.getChildNodeEntries()) {
+                    if (nodeCount + stack.size() >= MAX_DELETE_ESTIMATION_NODES) {
+                        truncated = true;
+                        break;
+                    }
+                    stack.push(new TraversalFrame(childEntry.getNodeState(), frame.depth + 1));
+                }
+            }
+
+            long estimatedBytes =
+                (nodeCount * ESTIMATED_BYTES_PER_NODE) + (propertyCount * ESTIMATED_BYTES_PER_PROPERTY);
+            long estimatedMB = Math.max(
+                DEFAULT_DELETE_SIZE_MB,
+                (estimatedBytes + BYTES_PER_MB - 1) / BYTES_PER_MB
+            );
+            DeleteSizeEstimate estimate = new DeleteSizeEstimate(estimatedMB, nodeCount, propertyCount, truncated);
+
+            log.debug(
+                "Delete size estimate for {}: nodes={}, descendants={}, properties={}, ~{} MB, truncated={}",
+                contentPath,
+                estimate.nodeCount,
+                estimate.descendantCount(),
+                estimate.propertyCount,
+                estimate.estimatedSizeMB,
+                estimate.truncated
+            );
+
+            return estimate;
 
         } catch (Exception e) {
             log.warn("Failed to estimate content size for {}: {}", contentPath, e.getMessage());
-            return 1L;
-        }
-    }
-
-    /**
-     * Recursively count nodes and properties in a node tree.
-     *
-     * @param node Starting node
-     * @param currentDepth Current recursion depth
-     * @param maxNodes Maximum nodes to count (prevents runaway traversals)
-     * @return Array of [nodeCount, propertyCount]
-     */
-    private long[] countNodesAndProperties(org.apache.jackrabbit.oak.spi.state.NodeState node, int currentDepth, int maxNodes) {
-        long nodeCount = 1;
-        long propertyCount = 0;
-
-        // Count properties on this node
-        for (org.apache.jackrabbit.oak.api.PropertyState prop : node.getProperties()) {
-            propertyCount++;
-            // For binary properties, add extra weight based on size
-            if (prop.getType() == org.apache.jackrabbit.oak.api.Type.BINARY) {
-                try {
-                    org.apache.jackrabbit.oak.api.Blob blob = prop.getValue(org.apache.jackrabbit.oak.api.Type.BINARY);
-                    // Add 1 "property" per 100 bytes of binary
-                    propertyCount += blob.length() / 100;
-                } catch (Exception e) {
-                    // Ignore - just use default property count
-                }
-            }
-        }
-
-        // Recursively count children (with depth limit)
-        if (currentDepth < 10 && nodeCount < maxNodes) {
-            for (String childName : node.getChildNodeNames()) {
-                if (nodeCount >= maxNodes) break;
-
-                org.apache.jackrabbit.oak.spi.state.NodeState child = node.getChildNode(childName);
-                long[] childCounts = countNodesAndProperties(child, currentDepth + 1, maxNodes - (int) nodeCount);
-                nodeCount += childCounts[0];
-                propertyCount += childCounts[1];
-            }
-        }
-
-        return new long[] { nodeCount, propertyCount };
-    }
-
-    private ValidatorEarningsTracker.PaymentTier parsePaymentTier(String paymentTier) {
-        String normalized = paymentTier.trim().toLowerCase();
-        switch (normalized) {
-            case "standard":
-                return ValidatorEarningsTracker.PaymentTier.STANDARD;
-            case "express":
-                return ValidatorEarningsTracker.PaymentTier.EXPRESS;
-            case "priority":
-                return ValidatorEarningsTracker.PaymentTier.PRIORITY;
-            default:
-                return null;
+            return DeleteSizeEstimate.defaultEstimate();
         }
     }
 
@@ -447,6 +458,38 @@ public class DeleteProposalHandler {
 
     private static boolean isChainBackedProposalId(String proposalId) {
         return proposalId != null && proposalId.trim().matches("(?i)^0x[a-f0-9]{64}$");
+    }
+
+    private static final class TraversalFrame {
+        private final NodeState node;
+        private final int depth;
+
+        private TraversalFrame(NodeState node, int depth) {
+            this.node = node;
+            this.depth = depth;
+        }
+    }
+
+    private static final class DeleteSizeEstimate {
+        private final long estimatedSizeMB;
+        private final long nodeCount;
+        private final long propertyCount;
+        private final boolean truncated;
+
+        private DeleteSizeEstimate(long estimatedSizeMB, long nodeCount, long propertyCount, boolean truncated) {
+            this.estimatedSizeMB = estimatedSizeMB;
+            this.nodeCount = nodeCount;
+            this.propertyCount = propertyCount;
+            this.truncated = truncated;
+        }
+
+        private long descendantCount() {
+            return nodeCount > 0 ? nodeCount - 1 : 0;
+        }
+
+        private static DeleteSizeEstimate defaultEstimate() {
+            return new DeleteSizeEstimate(DEFAULT_DELETE_SIZE_MB, 0, 0, false);
+        }
     }
 
 }

@@ -35,6 +35,7 @@ import java.util.Arrays;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 public class EventDrivenEvmBridgeProposalSettledTest {
 
@@ -49,6 +50,15 @@ public class EventDrivenEvmBridgeProposalSettledTest {
             new TypeReference<Uint32>() {},
             new TypeReference<Address>() {},
             new TypeReference<Uint256>() {}
+        ));
+
+    private static final Event PROPOSAL_SETTLED_V5_EVENT = new Event("ProposalSettledV5",
+        Arrays.asList(
+            new TypeReference<Bytes32>(true) {},
+            new TypeReference<Address>(true) {},
+            new TypeReference<Uint8>() {},
+            new TypeReference<Uint256>() {},
+            new TypeReference<Uint32>() {}
         ));
 
     @Test
@@ -156,6 +166,54 @@ public class EventDrivenEvmBridgeProposalSettledTest {
         assertEquals(PaymentProof.PaymentToken.ETH, proof.getPaymentToken());
         assertEquals(ValidatorEarningsTracker.PaymentTier.PRIORITY, proof.getPaymentTier());
         assertEquals(1, proof.getCapabilityFlags());
+    }
+
+    @Test
+    public void testProposalSettledV5LogCreatesPaymentProofWithoutTier() throws Exception {
+        String contractAddress = "0x1234567890abcdef1234567890abcdef12345678";
+        String proposalId = "0x1212121212121212121212121212121212121212121212121212121212121212";
+        String payer = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        BigInteger amount = new BigInteger("1000000000000000");
+        long blockNumber = 123791L;
+        String txHash = "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress, false);
+
+        Log ethLog = new Log();
+        ethLog.setAddress(contractAddress);
+        ethLog.setBlockNumber(hex(blockNumber));
+        ethLog.setTransactionHash(txHash);
+        ethLog.setTopics(Arrays.asList(
+            EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT),
+            proposalId,
+            paddedAddressTopic(payer)
+        ));
+        ethLog.setData("0x"
+            + paddedUint(BigInteger.ZERO)
+            + paddedUint(amount)
+            + paddedUint(BigInteger.ONE));
+
+        Method parsePaymentLog = EventDrivenEvmBridge.class.getDeclaredMethod("parsePaymentLog", Log.class);
+        parsePaymentLog.setAccessible(true);
+        EventDrivenEvmBridge.WriteAuthorizedEvent event =
+            (EventDrivenEvmBridge.WriteAuthorizedEvent) parsePaymentLog.invoke(bridge, ethLog);
+        assertNotNull(event);
+
+        Method processWriteAuthorizedEvent = EventDrivenEvmBridge.class.getDeclaredMethod(
+            "processWriteAuthorizedEvent",
+            EventDrivenEvmBridge.WriteAuthorizedEvent.class
+        );
+        processWriteAuthorizedEvent.setAccessible(true);
+        processWriteAuthorizedEvent.invoke(bridge, event);
+
+        PaymentProof proof = bridge.verifyPayment(proposalId);
+        assertNotNull(proof);
+        assertEquals(PaymentProof.ProposalKind.WRITE, proof.getProposalKind());
+        assertEquals(PaymentProof.PaymentToken.ETH, proof.getPaymentToken());
+        assertEquals(1, proof.getCapabilityFlags());
+        assertEquals(amount.toString(), proof.getAmountWei());
+        assertEquals(blockNumber, proof.getBlockNumber());
+        assertNull(proof.getPaymentTier());
     }
 
     private static String hex(long value) {

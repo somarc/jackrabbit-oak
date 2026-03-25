@@ -18,7 +18,6 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
-import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
@@ -37,9 +36,11 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.Field;
+import java.math.BigDecimal;
 import java.nio.file.Paths;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -55,6 +56,8 @@ public class DeleteProposalHandlerTest {
     private static final String PRIORITY_TX_HASH = "0xabcdef123456789f";
     private static final String VALID_CHAIN_PROPOSAL_ID =
         "0x1111111111111111111111111111111111111111111111111111111111111111";
+    private static final int LARGE_DELETE_BRANCH_COUNT = 100;
+    private static final int LARGE_DELETE_LEAF_COUNT = 100;
 
     @After
     public void tearDown() {
@@ -272,8 +275,7 @@ public class DeleteProposalHandlerTest {
             eq(PRIORITY_TX_HASH),
             eq(VALID_WALLET),
             eq(contentPath),
-            eq(VALID_SIGNATURE),
-            eq(ValidatorEarningsTracker.PaymentTier.STANDARD)
+            eq(VALID_SIGNATURE)
         );
         assertTrue(body.toString().contains("\"proposalId\":\"" + proposalId + "\""));
         assertTrue(body.toString().contains("\"proposalIdSource\":\"client\""));
@@ -304,20 +306,62 @@ public class DeleteProposalHandlerTest {
             eq(PRIORITY_TX_HASH),
             eq(VALID_WALLET),
             eq(contentPath),
-            eq(VALID_SIGNATURE),
-            eq(ValidatorEarningsTracker.PaymentTier.STANDARD)
+            eq(VALID_SIGNATURE)
         );
         assertEquals("0.10", context.gcAccountManager.getAccount(VALID_WALLET).totalDebt.toString());
         String json = body.toString();
         assertTrue(json.contains("\"status\":\"accepted\""));
         assertTrue(json.contains("\"type\":\"DELETE\""));
-        assertTrue(json.contains("\"tier\":\"STANDARD\""));
+        assertFalse(json.contains("\"tier\""));
         assertTrue(json.contains("\"gcDebtIncurred\":\"0.10\""));
         assertTrue(json.contains("\"totalDebt\":\"0.10\""));
+        assertTrue(json.contains("\"estimatedDeleteSizeMb\":1"));
+        assertTrue(json.contains("\"estimatedNodeCount\":1"));
+        assertTrue(json.contains("\"estimatedDescendantCount\":0"));
+        assertTrue(json.contains("\"estimatedPropertyCount\":2"));
+        assertTrue(json.contains("\"estimationTruncated\":false"));
     }
 
     @Test
-    public void testHandleDeleteProposalUsesExplicitPriorityTierWhenProvided() throws Exception {
+    public void testHandleDeleteProposalEstimatesLargeDeleteSubtreeWithoutLegacyUnderCount() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedLargeDeleteSubtree(nodeStore, VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.gcAccountManager = new GCAccountManager();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        verify(context.proposalQueueManager).queueDeleteProposal(
+            anyString(),
+            eq(PRIORITY_TX_HASH),
+            eq(VALID_WALLET),
+            eq(contentPath),
+            eq(VALID_SIGNATURE)
+        );
+        assertEquals(0, context.gcAccountManager.getAccount(VALID_WALLET).totalDebt.compareTo(new BigDecimal("1.10")));
+
+        String json = body.toString();
+        assertTrue(json.contains("\"estimatedDeleteSizeMb\":11"));
+        assertTrue(json.contains("\"estimatedNodeCount\":10101"));
+        assertTrue(json.contains("\"estimatedDescendantCount\":10100"));
+        assertTrue(json.contains("\"estimatedPropertyCount\":10101"));
+        assertTrue(json.contains("\"estimationTruncated\":false"));
+        assertTrue(json.contains("\"gcDebtIncurred\":\"1.10\""));
+    }
+
+    @Test
+    public void testHandleDeleteProposalIgnoresLegacyPaymentTierWhenProvided() throws Exception {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         String contentPath = seedContent(nodeStore, VALID_WALLET);
         ServerContext context = readyContext(nodeStore);
@@ -342,50 +386,18 @@ public class DeleteProposalHandlerTest {
             eq(PRIORITY_TX_HASH),
             eq(VALID_WALLET),
             eq(contentPath),
-            eq(VALID_SIGNATURE),
-            eq(ValidatorEarningsTracker.PaymentTier.PRIORITY)
+            eq(VALID_SIGNATURE)
         );
-        assertTrue(body.toString().contains("\"tier\":\"PRIORITY\""));
+        assertFalse(body.toString().contains("\"tier\""));
     }
 
     @Test
-    public void testHandleDeleteProposalPrefersExplicitPaymentTierOverTxHashHeuristic() throws Exception {
+    public void testHandleDeleteProposalIgnoresInvalidLegacyPaymentTier() throws Exception {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         String contentPath = seedContent(nodeStore, VALID_WALLET);
         ServerContext context = readyContext(nodeStore);
         registerClient(context, VALID_WALLET, "client-1");
         context.gcAccountManager = new GCAccountManager();
-        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
-        DeleteProposalHandler handler = new DeleteProposalHandler(context);
-        HttpServletRequest request = request();
-        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
-        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
-        when(request.getParameter("contentPath")).thenReturn(contentPath);
-        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
-        when(request.getParameter("paymentTier")).thenReturn("standard");
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-
-        handler.handleDeleteProposal(request, response);
-
-        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
-        verify(context.proposalQueueManager).queueDeleteProposal(
-            anyString(),
-            eq(PRIORITY_TX_HASH),
-            eq(VALID_WALLET),
-            eq(contentPath),
-            eq(VALID_SIGNATURE),
-            eq(ValidatorEarningsTracker.PaymentTier.STANDARD)
-        );
-        assertTrue(body.toString().contains("\"tier\":\"STANDARD\""));
-    }
-
-    @Test
-    public void testHandleDeleteProposalRejectsInvalidPaymentTier() throws Exception {
-        MemoryNodeStore nodeStore = new MemoryNodeStore();
-        String contentPath = seedContent(nodeStore, VALID_WALLET);
-        ServerContext context = readyContext(nodeStore);
-        registerClient(context, VALID_WALLET, "client-1");
         context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
         DeleteProposalHandler handler = new DeleteProposalHandler(context);
         HttpServletRequest request = request();
@@ -399,8 +411,15 @@ public class DeleteProposalHandlerTest {
 
         handler.handleDeleteProposal(request, response);
 
-        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        assertTrue(body.toString().contains("Invalid paymentTier"));
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        verify(context.proposalQueueManager).queueDeleteProposal(
+            anyString(),
+            eq(PRIORITY_TX_HASH),
+            eq(VALID_WALLET),
+            eq(contentPath),
+            eq(VALID_SIGNATURE)
+        );
+        assertFalse(body.toString().contains("\"tier\""));
     }
 
     private static ServerContext readyContext(MemoryNodeStore nodeStore) {
@@ -432,6 +451,28 @@ public class DeleteProposalHandlerTest {
         }
         current.setProperty("contentType", "fragment");
         current.setProperty("message", "hello");
+        nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        return path;
+    }
+
+    private static String seedLargeDeleteSubtree(MemoryNodeStore nodeStore, String wallet) throws Exception {
+        String path = WalletPathUtil.getShardRoot(wallet) + "/content/wallet-root";
+        NodeBuilder root = nodeStore.getRoot().builder();
+        NodeBuilder subtreeRoot = root;
+        for (String part : path.substring(1).split("/")) {
+            subtreeRoot = subtreeRoot.child(part);
+        }
+        subtreeRoot.setProperty("contentType", "wallet");
+
+        for (int branch = 0; branch < LARGE_DELETE_BRANCH_COUNT; branch++) {
+            NodeBuilder branchBuilder = subtreeRoot.child("branch-" + branch);
+            branchBuilder.setProperty("branchIndex", branch);
+            for (int leaf = 0; leaf < LARGE_DELETE_LEAF_COUNT; leaf++) {
+                NodeBuilder leafBuilder = branchBuilder.child("leaf-" + leaf);
+                leafBuilder.setProperty("leafIndex", leaf);
+            }
+        }
+
         nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
         return path;
     }
