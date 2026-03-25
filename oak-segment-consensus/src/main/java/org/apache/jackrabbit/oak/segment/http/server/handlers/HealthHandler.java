@@ -137,6 +137,38 @@ public class HealthHandler {
 
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
+
+    /**
+     * Handle lightweight local liveness endpoint.
+     *
+     * <p>This endpoint intentionally avoids quorum and peer-probe checks so
+     * validators can probe each other's HTTP responsiveness without causing
+     * recursive health fan-out.</p>
+     */
+    public void handleLocalHealth(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+
+        boolean localReady = fileStore != null && nodeStore != null && storeDirectory != null;
+        response.setStatus(localReady ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("success", localReady);
+        payload.put("status", localReady ? "UP" : "DOWN");
+        payload.put("scope", "local");
+        payload.put("timestamp", System.currentTimeMillis());
+        payload.put("store", String.valueOf(storeDirectory));
+
+        if (context != null && context.blobStoreType != null) {
+            payload.put("blobStoreType", context.blobStoreType);
+            payload.put("blobStoreActive", context.blobStore != null);
+        }
+
+        if (context != null && context.aeronConsensusEngine != null) {
+            payload.put("currentRole", context.aeronConsensusEngine.getCurrentRole().name());
+        }
+
+        response.getWriter().write(JsonOutputUtil.toJson(payload));
+    }
     
     /**
      * Handle comprehensive health check - validates all system components.

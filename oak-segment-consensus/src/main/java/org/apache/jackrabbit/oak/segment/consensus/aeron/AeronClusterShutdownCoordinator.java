@@ -77,9 +77,15 @@ final class AeronClusterShutdownCoordinator {
         }
 
         boolean barrierSignaled = false;
+        boolean barrierClosed = false;
         if (barrier != null) {
-            barrier.signal();
-            barrierSignaled = true;
+            try {
+                barrier.signal();
+                barrierSignaled = true;
+            } finally {
+                barrier.close();
+                barrierClosed = true;
+            }
         }
 
         boolean executorShutdown = false;
@@ -90,22 +96,25 @@ final class AeronClusterShutdownCoordinator {
 
         log.info("✅ Aeron Cluster shut down");
 
-        return new ShutdownResult(healthMonitorClosed, resourcesClosed, barrierSignaled, executorShutdown);
+        return new ShutdownResult(healthMonitorClosed, resourcesClosed, barrierSignaled, barrierClosed, executorShutdown);
     }
 
     static final class ShutdownResult {
         final boolean healthMonitorClosed;
         final boolean resourcesClosed;
         final boolean barrierSignaled;
+        final boolean barrierClosed;
         final boolean executorShutdown;
 
         ShutdownResult(boolean healthMonitorClosed,
                        boolean resourcesClosed,
                        boolean barrierSignaled,
+                       boolean barrierClosed,
                        boolean executorShutdown) {
             this.healthMonitorClosed = healthMonitorClosed;
             this.resourcesClosed = resourcesClosed;
             this.barrierSignaled = barrierSignaled;
+            this.barrierClosed = barrierClosed;
             this.executorShutdown = executorShutdown;
         }
     }

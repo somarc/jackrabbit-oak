@@ -111,6 +111,38 @@ public class HealthHandlerTest {
     }
 
     @Test
+    public void testHandleLocalHealthIgnoresClusterQuorum() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+
+        ServerContext context = new ServerContext(mock(FileStore.class), mock(NodeStore.class),
+            Paths.get("/tmp/store"), "http://localhost:8090");
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.getCurrentRole()).thenReturn(ValidatorRole.LEADER);
+        when(engine.isClusterHealthy()).thenReturn(false);
+        context.aeronConsensusEngine = engine;
+
+        HealthHandler handler = new HealthHandler(
+            context.fileStore,
+            context.nodeStore,
+            context.storeDirectory,
+            engine,
+            Collections.emptyMap(),
+            Collections.emptyMap(),
+            context
+        );
+
+        handler.handleLocalHealth(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"scope\":\"local\""));
+        assertTrue(json.contains("\"status\":\"UP\""));
+        assertTrue(json.contains("\"currentRole\":\"LEADER\""));
+    }
+
+    @Test
     public void testHandleHealthIncludesBlobStoreAndCommitProgress() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = mock(HttpServletResponse.class);

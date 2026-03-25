@@ -32,17 +32,23 @@ public class AeronEgressHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AeronEgressHandler.class);
 
-    public boolean offerWithRetry(AeronCluster client,
-                                  IdleStrategy idleStrategy,
-                                  MutableDirectBuffer messageBuffer,
-                                  int totalLength,
-                                  String label,
-                                  int maxRetries,
-                                  Runnable onSuccess,
-                                  boolean logSuccess) {
+    enum OfferResult {
+        SENT,
+        NOT_CONNECTED,
+        FAILED
+    }
+
+    public OfferResult offerWithRetryResult(AeronCluster client,
+                                            IdleStrategy idleStrategy,
+                                            MutableDirectBuffer messageBuffer,
+                                            int totalLength,
+                                            String label,
+                                            int maxRetries,
+                                            Runnable onSuccess,
+                                            boolean logSuccess) {
         if (client == null) {
             log.error("❌ AeronCluster client not available - cannot send {}", label);
-            return false;
+            return OfferResult.FAILED;
         }
 
         idleStrategy.reset();
@@ -54,7 +60,7 @@ public class AeronEgressHandler {
                 retries++;
                 if (retries > maxRetries) {
                     log.error("❌ {} back-pressured after {} retries", label, retries);
-                    return false;
+                    return OfferResult.FAILED;
                 }
             } else if (result == Publication.NOT_CONNECTED) {
                 log.warn("⚠️  {} not connected - waiting...", label);
@@ -62,11 +68,11 @@ public class AeronEgressHandler {
                 retries++;
                 if (retries > maxRetries) {
                     log.error("❌ {} not connected after {} retries", label, retries);
-                    return false;
+                    return OfferResult.NOT_CONNECTED;
                 }
             } else {
                 log.error("❌ Failed to send {} through ingress: {}", label, result);
-                return false;
+                return OfferResult.FAILED;
             }
         }
 
@@ -78,6 +84,26 @@ public class AeronEgressHandler {
             log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", label);
         }
 
-        return true;
+        return OfferResult.SENT;
+    }
+
+    public boolean offerWithRetry(AeronCluster client,
+                                  IdleStrategy idleStrategy,
+                                  MutableDirectBuffer messageBuffer,
+                                  int totalLength,
+                                  String label,
+                                  int maxRetries,
+                                  Runnable onSuccess,
+                                  boolean logSuccess) {
+        return offerWithRetryResult(
+            client,
+            idleStrategy,
+            messageBuffer,
+            totalLength,
+            label,
+            maxRetries,
+            onSuccess,
+            logSuccess
+        ) == OfferResult.SENT;
     }
 }

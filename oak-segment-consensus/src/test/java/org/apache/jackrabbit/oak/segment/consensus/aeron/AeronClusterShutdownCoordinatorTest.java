@@ -48,10 +48,12 @@ public class AeronClusterShutdownCoordinatorTest {
         assertTrue(result.healthMonitorClosed);
         assertTrue(result.resourcesClosed);
         assertTrue(result.barrierSignaled);
+        assertTrue(result.barrierClosed);
         assertTrue(result.executorShutdown);
         verify(healthMonitor).close();
         verify(resourceCloser).close(container, clusteredMediaDriver);
         verify(barrier).signal();
+        verify(barrier).close();
         verify(shutdownExecutor).shutdown();
     }
 
@@ -72,9 +74,11 @@ public class AeronClusterShutdownCoordinatorTest {
         assertFalse(result.healthMonitorClosed);
         assertTrue(result.resourcesClosed);
         assertTrue(result.barrierSignaled);
+        assertTrue(result.barrierClosed);
         assertTrue(result.executorShutdown);
         verify(resourceCloser).close(null, null);
         verify(barrier).signal();
+        verify(barrier).close();
         verify(shutdownExecutor).shutdown();
     }
 
@@ -93,9 +97,11 @@ public class AeronClusterShutdownCoordinatorTest {
         assertFalse(result.healthMonitorClosed);
         assertFalse(result.resourcesClosed);
         assertTrue(result.barrierSignaled);
+        assertTrue(result.barrierClosed);
         assertTrue(result.executorShutdown);
         verify(resourceCloser).close(null, null);
         verify(barrier).signal();
+        verify(barrier).close();
         verify(shutdownExecutor).shutdown();
     }
 }

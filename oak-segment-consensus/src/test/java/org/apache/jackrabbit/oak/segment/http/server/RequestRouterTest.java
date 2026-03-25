@@ -1655,6 +1655,22 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testLocalHealthRouteReturnsLocalPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/health/local");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"scope\":\"local\""));
+        });
+    }
+
+    @Test
     public void testBlockchainConfigRouteReturnsConfigPayload() throws Exception {
         String previousMode = System.getProperty("oak.blockchain.mode");
         try {

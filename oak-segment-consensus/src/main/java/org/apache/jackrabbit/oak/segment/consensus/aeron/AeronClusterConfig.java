@@ -150,9 +150,9 @@ public @interface AeronClusterConfig {
 
     @AttributeDefinition(
         name = "Peer Probe Mode",
-        description = "Peer probe mode for health checks: none or http. Optional."
+        description = "Peer probe mode for health checks: http or none. Defaults to http."
     )
-    String peerProbeMode() default "";
+    String peerProbeMode() default "http";
 
     @AttributeDefinition(
         name = "Delete Aeron Dirs On Startup",

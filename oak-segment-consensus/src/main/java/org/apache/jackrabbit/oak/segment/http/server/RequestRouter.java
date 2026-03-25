@@ -212,6 +212,12 @@ public class RequestRouter implements AutoCloseable {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/health/local".equals(path) && "GET".equals(method)) {
+                healthHandler.handleLocalHealth(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             if ("/health/deep".equals(path) && "GET".equals(method)) {
                 healthHandler.handleDeepHealth(response);

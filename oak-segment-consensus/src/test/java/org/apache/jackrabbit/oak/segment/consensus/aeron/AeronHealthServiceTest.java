@@ -66,31 +66,31 @@ public class AeronHealthServiceTest {
     }
 
     @Test
-    public void clusterHealthRejectsMissingQuorumAndClosedClient() {
+    public void clusterHealthRejectsMissingQuorum() {
         AeronHealthService service = new AeronHealthService();
         Cluster cluster = mock(Cluster.class);
-        io.aeron.cluster.client.AeronCluster client = mock(io.aeron.cluster.client.AeronCluster.class);
         when(cluster.role()).thenReturn(LEADER);
-        when(client.isClosed()).thenReturn(true);
 
         assertFalse(service.isClusterHealthy(cluster, () -> false, null));
         assertTrue("no_quorum".equals(service.getUnhealthyReason(cluster, () -> false, null)));
-
-        assertFalse(service.isClusterHealthy(cluster, () -> true, () -> client));
-        assertTrue("session_closed_timeout".equals(service.getUnhealthyReason(cluster, () -> true, () -> client)));
     }
 
     @Test
-    public void clusterHealthAcceptsHealthyLeaderWhenClientIsOpenOrMissing() {
+    public void clusterHealthAcceptsHealthyLeaderWhenClientIsOpenClosedOrMissing() {
         AeronHealthService service = new AeronHealthService();
         Cluster cluster = mock(Cluster.class);
-        io.aeron.cluster.client.AeronCluster client = mock(io.aeron.cluster.client.AeronCluster.class);
-        when(cluster.role()).thenReturn(LEADER);
-        when(client.isClosed()).thenReturn(false);
+        io.aeron.cluster.client.AeronCluster openClient = mock(io.aeron.cluster.client.AeronCluster.class);
+        io.aeron.cluster.client.AeronCluster closedClient = mock(io.aeron.cluster.client.AeronCluster.class);
 
-        assertTrue(service.isClusterHealthy(cluster, () -> true, () -> client));
+        when(cluster.role()).thenReturn(LEADER);
+        when(openClient.isClosed()).thenReturn(false);
+        when(closedClient.isClosed()).thenReturn(true);
+
+        assertTrue(service.isClusterHealthy(cluster, () -> true, () -> openClient));
+        assertTrue(service.isClusterHealthy(cluster, () -> true, () -> closedClient));
         assertTrue(service.isClusterHealthy(cluster, null, null));
-        assertNull(service.getUnhealthyReason(cluster, () -> true, () -> client));
+        assertNull(service.getUnhealthyReason(cluster, () -> true, () -> openClient));
+        assertNull(service.getUnhealthyReason(cluster, () -> true, () -> closedClient));
         assertNull(service.getUnhealthyReason(cluster, null, null));
     }
 

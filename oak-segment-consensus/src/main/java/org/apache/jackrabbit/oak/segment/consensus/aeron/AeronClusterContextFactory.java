@@ -125,5 +125,14 @@ final class AeronClusterContextFactory {
             this.consensusModuleContext = consensusModuleContext;
             this.clusteredServiceContext = clusteredServiceContext;
         }
+
+        LaunchContexts freshCopy() {
+            return new LaunchContexts(
+                mediaDriverContext.clone(),
+                archiveContext.clone(),
+                consensusModuleContext.clone(),
+                clusteredServiceContext.clone()
+            );
+        }
     }
 }

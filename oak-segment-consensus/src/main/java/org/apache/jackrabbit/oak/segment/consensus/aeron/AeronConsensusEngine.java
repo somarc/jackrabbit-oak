@@ -222,6 +222,9 @@ public class AeronConsensusEngine implements ClusteredService {
     private volatile long lastSummaryLogTime = System.currentTimeMillis();
     private volatile long lastSummaryWriteCount = 0;
     private static final long SUMMARY_LOG_INTERVAL_MS = 10000; // Log summary every 10 seconds
+    private static final long INGRESS_CLIENT_REBIND_DELAY_MS = 250L;
+    private static final long DURABILITY_RETRY_DELAY_MS = 250L;
+    private static final int MAX_DURABILITY_RETRY_ATTEMPTS = 4;
     
     // Raft performance metrics (track consensus latency, throughput, utilization)
     private final AeronPerformanceMetrics performanceMetrics = new AeronPerformanceMetrics();
@@ -889,6 +892,54 @@ public class AeronConsensusEngine implements ClusteredService {
         );
     }
 
+    private synchronized void invalidateInternalClusterClient(String reason, boolean closeExisting) {
+        io.aeron.cluster.client.AeronCluster existingClient = internalClusterClient;
+        internalClusterClient = null;
+
+        if (existingClient == null) {
+            return;
+        }
+
+        if (!closeExisting) {
+            log.info("🔄 Invalidated internal cluster client ({})", reason);
+            return;
+        }
+
+        try {
+            existingClient.close();
+            log.info("🔄 Closed internal cluster client ({})", reason);
+        } catch (Exception e) {
+            log.debug("Error closing internal cluster client during {}: {}", reason, e.getMessage());
+        }
+    }
+
+    private void scheduleIngressClientRebind(String reason) {
+        backgroundCoordinator.schedule("aeron-ingress-rebind", INGRESS_CLIENT_REBIND_DELAY_MS, () -> {
+            try {
+                log.info("🔄 Rebinding internal cluster client ({})", reason);
+                ensureInternalClusterClient();
+            } catch (RuntimeException e) {
+                log.warn("⚠️  Failed to rebind internal cluster client ({}): {}", reason, e.getMessage());
+            }
+        });
+    }
+
+    private void handleIngressClientRoleChange(Cluster.Role previousRole, Cluster.Role newRole) {
+        boolean becameLeader = newRole == Cluster.Role.LEADER && previousRole != Cluster.Role.LEADER;
+        boolean lostLeadership = previousRole == Cluster.Role.LEADER && newRole != Cluster.Role.LEADER;
+
+        if (!becameLeader && !lostLeadership) {
+            return;
+        }
+
+        String reason = "role change " + previousRole + " -> " + newRole;
+        invalidateInternalClusterClient(reason, true);
+
+        if (becameLeader) {
+            scheduleIngressClientRebind(reason);
+        }
+    }
+
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // ADR 026: DURABILITY ACK MESSAGE FLOW
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -994,14 +1045,38 @@ public class AeronConsensusEngine implements ClusteredService {
     }
 
     private boolean sendDurabilityMessage(AeronEncodedMessage encoded, String label) {
+        return sendDurabilityMessage(encoded, label, 0);
+    }
+
+    private boolean sendDurabilityMessage(AeronEncodedMessage encoded, String label, int attempt) {
         if (!ensureIngressClient("durability message (" + label + ")")) {
+            scheduleDurabilityRetry(encoded, label, attempt, "ingress client unavailable");
             return false;
         }
-        boolean sent = sendEncodedMessage(encoded, "durability " + label, null);
+        boolean sent = sendEncodedMessage(encoded, "durability " + label, null, false);
         if (sent) {
             log.debug("✅ Durability message sent ({})", label);
+            return true;
         }
-        return sent;
+        scheduleDurabilityRetry(encoded, label, attempt, "send failed");
+        return false;
+    }
+
+    private void scheduleDurabilityRetry(AeronEncodedMessage encoded, String label, int attempt, String reason) {
+        if (attempt >= MAX_DURABILITY_RETRY_ATTEMPTS) {
+            log.error("❌ Durability message {} exhausted retries after {} attempts ({})",
+                label, attempt + 1, reason);
+            return;
+        }
+
+        int nextAttempt = attempt + 1;
+        long delayMs = DURABILITY_RETRY_DELAY_MS * nextAttempt;
+        log.warn("⚠️  Durability message {} failed (attempt {}/{}: {}) - retrying in {}ms",
+            label, nextAttempt, MAX_DURABILITY_RETRY_ATTEMPTS + 1, reason, delayMs);
+        backgroundCoordinator.schedule("aeron-durability-retry-" + label + "-" + nextAttempt, delayMs, () -> {
+            invalidateInternalClusterClient("durability retry " + label + " attempt " + nextAttempt, true);
+            sendDurabilityMessage(encoded, label, nextAttempt);
+        });
     }
 
     private boolean sendTransactionMessage(AeronEncodedMessage encoded, String label) {
@@ -1540,6 +1615,13 @@ public class AeronConsensusEngine implements ClusteredService {
     private boolean sendEncodedMessage(AeronEncodedMessage encoded,
                                        String messageType,
                                        Runnable onSuccess) {
+        return sendEncodedMessage(encoded, messageType, onSuccess, true);
+    }
+
+    private boolean sendEncodedMessage(AeronEncodedMessage encoded,
+                                       String messageType,
+                                       Runnable onSuccess,
+                                       boolean reconnectImmediatelyOnSendFailure) {
         try {
             if (internalClusterClient.isClosed()) {
                 log.error("❌ Cannot send {} - internal cluster client session is CLOSED", messageType);
@@ -1554,7 +1636,7 @@ public class AeronConsensusEngine implements ClusteredService {
             }
 
             Runnable successCallback = onSuccess != null ? onSuccess : () -> { };
-            return egressHandler.offerWithRetry(
+            AeronEgressHandler.OfferResult result = egressHandler.offerWithRetryResult(
                 internalClusterClient,
                 idleStrategy,
                 encoded.buffer,
@@ -1564,6 +1646,37 @@ public class AeronConsensusEngine implements ClusteredService {
                 successCallback,
                 false
             );
+            if (result == AeronEgressHandler.OfferResult.SENT) {
+                return true;
+            }
+
+            if (!reconnectImmediatelyOnSendFailure) {
+                if (result == AeronEgressHandler.OfferResult.NOT_CONNECTED) {
+                    log.warn("⚠️  {} not connected after retries - deferring to scheduled retry", messageType);
+                } else {
+                    log.warn("⚠️  {} send failed - deferring to scheduled retry", messageType);
+                }
+                return false;
+            }
+
+            log.warn("⚠️  {} send failed - resetting internal cluster client and retrying once", messageType);
+            invalidateInternalClusterClient("send failure for " + messageType, true);
+            ensureInternalClusterClient();
+            if (internalClusterClient == null || internalClusterClient.isClosed()) {
+                log.error("❌ Retry rebind failed - cannot send {}", messageType);
+                return false;
+            }
+
+            return egressHandler.offerWithRetryResult(
+                internalClusterClient,
+                idleStrategy,
+                encoded.buffer,
+                encoded.totalLength,
+                messageType,
+                100,
+                successCallback,
+                false
+            ) == AeronEgressHandler.OfferResult.SENT;
         } catch (Exception e) {
             log.error("❌ Exception sending {} through AeronCluster client", messageType, e);
             return false;
@@ -1656,7 +1769,8 @@ public class AeronConsensusEngine implements ClusteredService {
                 leaderTracker.notifyLostLeadership();
             }
         }
-        
+
+        handleIngressClientRoleChange(previousRole, newRole);
         updateRoleFromCluster(newRole);
     }
     
@@ -2501,8 +2615,9 @@ public class AeronConsensusEngine implements ClusteredService {
      * Get reachable validator count (for metrics).
      * 
      * ✈️ AERON CLUSTER SOURCE OF TRUTH:
-     * Uses lightweight HTTP probes with caching so health endpoints reflect
-     * quorum accurately even when Aeron roles look stable.
+     * Uses lightweight HTTP probes with caching by default so health endpoints
+     * reflect quorum accurately even when Aeron roles look stable. Probe mode
+     * {@code NONE} remains available as an explicit opt-out.
      */
     public int getReachableValidatorCount() {
         if (peerProbeMode == PeerProbeMode.NONE) {
@@ -2637,27 +2752,28 @@ public class AeronConsensusEngine implements ClusteredService {
             raw = System.getenv("OAK_HEALTH_PEER_PROBE_MODE");
         }
         if (raw == null || raw.isEmpty()) {
-            return PeerProbeMode.NONE;
+            return PeerProbeMode.HTTP;
         }
         String normalized = raw.trim().toUpperCase();
         if ("HTTP".equals(normalized)) {
             return PeerProbeMode.HTTP;
         }
         if (!"NONE".equals(normalized)) {
-            log.warn("Unknown health peer probe mode '{}', defaulting to NONE", raw);
+            log.warn("Unknown health peer probe mode '{}', defaulting to HTTP", raw);
+            return PeerProbeMode.HTTP;
         }
         return PeerProbeMode.NONE;
     }
     
     private boolean isPeerReachable(String peerUrl) {
         try {
-            java.net.URL url = new java.net.URL(peerUrl + "/health");
+            java.net.URL url = new java.net.URL(peerUrl + "/health/local");
             java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(reachabilityConnectTimeoutMs);
             conn.setReadTimeout(reachabilityReadTimeoutMs);
             int responseCode = conn.getResponseCode();
-            return responseCode > 0;
+            return responseCode >= 200 && responseCode < 300;
         } catch (Exception e) {
             log.debug("Peer not reachable: {} - {}", peerUrl, e.getMessage());
             return false;

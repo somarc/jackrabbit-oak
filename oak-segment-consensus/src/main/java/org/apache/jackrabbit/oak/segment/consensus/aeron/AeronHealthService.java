@@ -57,8 +57,7 @@ public class AeronHealthService {
         if (quorumSupplier != null && !quorumSupplier.get()) {
             return false;
         }
-        io.aeron.cluster.client.AeronCluster client = clientSupplier != null ? clientSupplier.get() : null;
-        return client == null || !client.isClosed();
+        return true;
     }
 
     public String getUnhealthyReason(Cluster cluster,
@@ -72,10 +71,6 @@ public class AeronHealthService {
         }
         if (quorumSupplier != null && !quorumSupplier.get()) {
             return "no_quorum";
-        }
-        io.aeron.cluster.client.AeronCluster client = clientSupplier != null ? clientSupplier.get() : null;
-        if (client != null && client.isClosed()) {
-            return "session_closed_timeout";
         }
         return null;
     }

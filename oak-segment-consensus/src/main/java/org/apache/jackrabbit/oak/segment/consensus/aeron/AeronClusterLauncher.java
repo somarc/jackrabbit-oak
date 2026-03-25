@@ -22,14 +22,20 @@ import io.aeron.cluster.ClusteredMediaDriver;
 import io.aeron.cluster.ConsensusModule;
 import io.aeron.cluster.service.ClusteredService;
 import io.aeron.cluster.service.ClusteredServiceContainer;
+import io.aeron.driver.exceptions.ActiveDriverException;
+import io.aeron.exceptions.DriverTimeoutException;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
 import org.agrona.ErrorHandler;
+import org.agrona.IoUtil;
 import org.agrona.concurrent.ShutdownSignalBarrier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
@@ -73,6 +79,8 @@ public class AeronClusterLauncher {
     private final ClusteredService clusteredService;
     private final AeronClusterAddressResolver addressResolver;
     private final AeronClusterErrorPolicy errorPolicy;
+    private final LaunchInvoker launchInvoker;
+    private final ContainerLaunchInvoker containerLaunchInvoker;
     
     private ClusteredMediaDriver clusteredMediaDriver;
     private ClusteredServiceContainer container;
@@ -92,7 +100,9 @@ public class AeronClusterLauncher {
             baseDir,
             clusteredService,
             AeronClusterAddressResolver.system(nodeId, hostnames),
-            new AeronClusterErrorPolicy()
+            new AeronClusterErrorPolicy(),
+            LaunchInvoker.DEFAULT,
+            ContainerLaunchInvoker.DEFAULT
         );
     }
 
@@ -102,12 +112,53 @@ public class AeronClusterLauncher {
                          ClusteredService clusteredService,
                          AeronClusterAddressResolver addressResolver,
                          AeronClusterErrorPolicy errorPolicy) {
+        this(
+            nodeId,
+            hostnames,
+            baseDir,
+            clusteredService,
+            addressResolver,
+            errorPolicy,
+            LaunchInvoker.DEFAULT,
+            ContainerLaunchInvoker.DEFAULT
+        );
+    }
+
+    AeronClusterLauncher(int nodeId,
+                         List<String> hostnames,
+                         File baseDir,
+                         ClusteredService clusteredService,
+                         AeronClusterAddressResolver addressResolver,
+                         AeronClusterErrorPolicy errorPolicy,
+                         LaunchInvoker launchInvoker) {
+        this(
+            nodeId,
+            hostnames,
+            baseDir,
+            clusteredService,
+            addressResolver,
+            errorPolicy,
+            launchInvoker,
+            ContainerLaunchInvoker.DEFAULT
+        );
+    }
+
+    AeronClusterLauncher(int nodeId,
+                         List<String> hostnames,
+                         File baseDir,
+                         ClusteredService clusteredService,
+                         AeronClusterAddressResolver addressResolver,
+                         AeronClusterErrorPolicy errorPolicy,
+                         LaunchInvoker launchInvoker,
+                         ContainerLaunchInvoker containerLaunchInvoker) {
         this.nodeId = nodeId;
         this.hostnames = hostnames;
         this.baseDir = baseDir;
         this.clusteredService = clusteredService;
         this.addressResolver = addressResolver;
         this.errorPolicy = errorPolicy;
+        this.launchInvoker = launchInvoker;
+        this.containerLaunchInvoker = containerLaunchInvoker;
     }
     
     /**
@@ -255,10 +306,9 @@ public class AeronClusterLauncher {
         );
         
         // Launch cluster
-        clusteredMediaDriver = ClusteredMediaDriver.launch(
-                contexts.mediaDriverContext, contexts.archiveContext, contexts.consensusModuleContext);
+        clusteredMediaDriver = launchMediaDriver(contexts, aeronDirName);
         
-        container = ClusteredServiceContainer.launch(contexts.clusteredServiceContext);
+        container = launchClusteredServiceContainer(contexts);
         
         AeronClusterRuntimeBridge.RuntimeBridgeResult runtimeBridgeResult =
             new AeronClusterRuntimeBridge(clusteredService).activate(container, aeronDirName, failureCoordinator);
@@ -351,6 +401,40 @@ public class AeronClusterLauncher {
     private ErrorHandler errorHandler(String context) {
         return errorPolicy.createHandler(context, log);
     }
+
+    ClusteredMediaDriver launchMediaDriver(AeronClusterContextFactory.LaunchContexts contexts, String aeronDirName) {
+        for (int attempt = 1; attempt <= 4; attempt++) {
+            try {
+                return launchInvoker.launch(contexts.freshCopy());
+            } catch (DriverTimeoutException ex) {
+                if (attempt == 4 || !deleteCncFileIfUninitialised(ex, aeronDirName)) {
+                    throw ex;
+                }
+            } catch (ActiveDriverException ex) {
+                if (attempt == 4 || !deleteDriverDirectoryIfActiveDriverDetected(ex, aeronDirName)) {
+                    throw ex;
+                }
+            } catch (IllegalStateException ex) {
+                if (attempt == 4 || !deleteMarkFileIfActiveMarkDetected(ex)) {
+                    throw ex;
+                }
+            }
+        }
+        throw new IllegalStateException("Aeron ClusteredMediaDriver launch did not complete");
+    }
+
+    ClusteredServiceContainer launchClusteredServiceContainer(AeronClusterContextFactory.LaunchContexts contexts) {
+        for (int attempt = 1; attempt <= 4; attempt++) {
+            try {
+                return containerLaunchInvoker.launch(contexts.freshCopy().clusteredServiceContext);
+            } catch (IllegalStateException ex) {
+                if (attempt == 4 || !deleteMarkFileIfActiveMarkDetected(ex)) {
+                    throw ex;
+                }
+            }
+        }
+        throw new IllegalStateException("Aeron ClusteredServiceContainer launch did not complete");
+    }
     
     /**
      * Get crash handler for external access (e.g., health checks).
@@ -437,6 +521,81 @@ public class AeronClusterLauncher {
             .shutdown(healthMonitor, container, clusteredMediaDriver, barrier, shutdownExecutor);
     }
 
+    static boolean deleteCncFileIfUninitialised(DriverTimeoutException ex, String aeronDirName) {
+        String message = ex.getMessage();
+        if (message == null || !message.contains("CnC file is created but not initialised")) {
+            return false;
+        }
+        Path cncFile = Path.of(aeronDirName, "cnc.dat");
+        log.warn(
+            "Detected uninitialised Aeron CnC file at {}. Deleting and retrying MediaDriver launch...",
+            cncFile
+        );
+        try {
+            Files.deleteIfExists(cncFile);
+        } catch (IOException ioEx) {
+            log.warn(
+                "Failed to delete Aeron CnC file at {}. Retrying MediaDriver launch anyway...",
+                cncFile,
+                ioEx
+            );
+        }
+        return true;
+    }
+
+    static boolean deleteDriverDirectoryIfActiveDriverDetected(ActiveDriverException ex, String aeronDirName) {
+        String message = ex.getMessage();
+        if (message == null || !message.contains("ERROR - active driver detected")) {
+            return false;
+        }
+        File aeronDir = new File(aeronDirName);
+        log.warn(
+            "Detected stale Aeron MediaDriver directory at {}. Deleting and retrying MediaDriver launch...",
+            aeronDir.getAbsolutePath()
+        );
+        try {
+            if (aeronDir.exists()) {
+                IoUtil.delete(aeronDir, true);
+            }
+        } catch (Exception cleanupError) {
+            log.warn(
+                "Failed to delete Aeron MediaDriver directory at {}. Retrying MediaDriver launch anyway...",
+                aeronDir.getAbsolutePath(),
+                cleanupError
+            );
+        }
+        return true;
+    }
+
+    static boolean deleteMarkFileIfActiveMarkDetected(IllegalStateException ex) {
+        String message = ex.getMessage();
+        String prefix = "active mark file detected:";
+        if (message == null || !message.contains(prefix)) {
+            return false;
+        }
+
+        String pathText = message.substring(message.indexOf(prefix) + prefix.length()).trim();
+        if (pathText.isEmpty()) {
+            return false;
+        }
+
+        Path markFile = Path.of(pathText);
+        log.warn(
+            "Detected stale Aeron mark file at {}. Deleting and retrying MediaDriver launch...",
+            markFile
+        );
+        try {
+            Files.deleteIfExists(markFile);
+        } catch (IOException ioEx) {
+            log.warn(
+                "Failed to delete Aeron mark file at {}. Retrying MediaDriver launch anyway...",
+                markFile,
+                ioEx
+            );
+        }
+        return true;
+    }
+
     static final class SessionTimeoutConfig {
         final int timeoutMinutes;
         final long timeoutNs;
@@ -449,5 +608,21 @@ public class AeronClusterLauncher {
             this.source = source;
             this.environment = environment;
         }
+    }
+
+    interface LaunchInvoker {
+        LaunchInvoker DEFAULT = contexts -> ClusteredMediaDriver.launch(
+            contexts.mediaDriverContext,
+            contexts.archiveContext,
+            contexts.consensusModuleContext
+        );
+
+        ClusteredMediaDriver launch(AeronClusterContextFactory.LaunchContexts contexts);
+    }
+
+    interface ContainerLaunchInvoker {
+        ContainerLaunchInvoker DEFAULT = ClusteredServiceContainer::launch;
+
+        ClusteredServiceContainer launch(ClusteredServiceContainer.Context context);
     }
 }

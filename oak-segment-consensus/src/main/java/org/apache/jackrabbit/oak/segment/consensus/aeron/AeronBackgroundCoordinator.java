@@ -157,6 +157,13 @@ class AeronBackgroundCoordinator implements AutoCloseable {
         });
     }
 
+    void schedule(String name, long delayMs, Runnable task) {
+        if (task == null) {
+            return;
+        }
+        scheduler.schedule(name, delayMs, task);
+    }
+
     @Override
     public void close() {
         scheduler.close();
