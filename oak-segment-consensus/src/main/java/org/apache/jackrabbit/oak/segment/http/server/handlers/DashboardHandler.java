@@ -176,7 +176,7 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "GET", "/v1/proposals/pending/count", "Pending proposal count", "Consensus", "/ops/v1/proposals");
         addSourceIndexEntry(endpoints, "GET", "/v1/proposals/queue/stats", "Queue and finality counters", "Consensus", "ops.v1", "/ops/v1/proposals/queue/stats");
         addSourceIndexEntry(endpoints, "GET", "/v1/proposals/release-flow", "Adaptive proposal release flow", "Consensus", "release-flow.v1", "/ops/v1/proposals/release-flow");
-        addInternalIndexEntry(endpoints, "GET", "/v1/proposals/epochs", "Proposal epoch flow compatibility overlay", "Consensus", "/ops/v1/proposals/epochs");
+        addSourceIndexEntry(endpoints, "GET", "/v1/proposals/epochs", "Proposal epoch flow compatibility overlay", "Consensus", "proposal.epoch-overlay.v1", "/ops/v1/proposals/epochs");
         addInternalIndexEntry(endpoints, "GET", "/v1/proposals/{id}/status", "Proposal status by id", "Consensus", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/head", "Head status", "Consensus", null);
 
@@ -222,7 +222,7 @@ public class DashboardHandler {
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/events/stream", "Event stream (SSE)", "Events", "/ops/v1/events/*");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/ops/events/stream", "Ops event stream (SSE)", "Events", "/ops/v1/events/*");
 
-        addInternalIndexEntry(endpoints, "GET", "/v1/gc/estimate", "GC estimate", "GC", "/ops/v1/gc/estimate");
+        addSourceIndexEntry(endpoints, "GET", "/v1/gc/estimate", "GC estimate", "GC", "gc.estimate.v1", "/ops/v1/gc/estimate");
         addSourceIndexEntry(endpoints, "GET", "/v1/gc/status", "GC status", "GC", "gc.status.v1", "/ops/v1/gc/status");
         addInternalIndexEntry(endpoints, "POST", "/v1/propose-gc", "Propose GC operation", "GC", null);
         addInternalIndexEntry(endpoints, "POST", "/v1/gc/trigger", "Trigger GC check", "GC", null);
