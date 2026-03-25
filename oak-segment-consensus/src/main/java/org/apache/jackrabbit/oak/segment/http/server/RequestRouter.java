@@ -60,7 +60,6 @@ public class RequestRouter implements AutoCloseable {
     private final OsgiConfigApiHandler osgiConfigApiHandler;
     private final EventBroadcaster eventBroadcaster;
     private final org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager;
-    private volatile Object chatHandler; // Optional - from oak-segment-agentic module (lazy initialized)
     private final AuthTokenValidator authValidator;
     private final RateLimiter rateLimiter;
     private final boolean browserUiEnabled;
@@ -124,65 +123,6 @@ public class RequestRouter implements AutoCloseable {
         this.eventStreamHandler = new EventStreamHandler(context, eventBroadcaster);
         this.osgiConfigApiHandler = new OsgiConfigApiHandler();
         context.setEventBroadcaster(eventBroadcaster); // Make available to other components
-        
-        // Chat handler will be initialized lazily on first use (after selfUrl is set)
-        this.chatHandler = null;
-    }
-    
-    /**
-     * Initialize chat handler if oak-segment-agentic module is available.
-     * Returns null if module is not available (graceful degradation).
-     */
-    private Object initializeChatHandler(ServerContext context) {
-        try {
-            // Use reflection to avoid hard dependency on oak-segment-agentic
-            Class<?> llmServiceImplClass = Class.forName("org.apache.jackrabbit.oak.segment.agentic.llm.OllamaLLMService");
-            Class<?> ragServiceClass = Class.forName("org.apache.jackrabbit.oak.segment.agentic.rag.RAGService");
-            Class<?> chatHandlerClass = Class.forName("org.apache.jackrabbit.oak.segment.agentic.chat.ChatHandler");
-            
-            // Get the LLMService interface (parent of OllamaLLMService)
-            Class<?> llmServiceInterface = Class.forName("org.apache.jackrabbit.oak.segment.agentic.llm.LLMService");
-            
-            // Create LLM service instance
-            Object llmService = llmServiceImplClass.getDeclaredConstructor().newInstance();
-            
-            // Create RAG service instance
-            Object ragService = ragServiceClass.getDeclaredConstructor().newInstance();
-            
-            // Create chat handler - use interface type for constructor lookup
-            // Try to get selfUrl from context, or infer from system properties
-            String baseUrl = context.selfUrl;
-            if (baseUrl == null || baseUrl.isEmpty()) {
-                // Try to get from system property (set by validator startup script)
-                baseUrl = System.getProperty("consensus.self.url");
-                if (baseUrl == null || baseUrl.isEmpty()) {
-                    // Last resort: default to localhost:8090
-                    baseUrl = "http://localhost:8090";
-                }
-            }
-            
-            // Set wallet address system property for agent identification (if available)
-            // Validators use wallet address (0x...) as their agent ID for provable identity
-            if (context.myValidatorId != null && !context.myValidatorId.isEmpty()) {
-                System.setProperty("wallet.address", context.myValidatorId);
-            }
-            
-            Object chatHandler = chatHandlerClass.getConstructor(
-                llmServiceInterface,
-                ragServiceClass,
-                String.class
-            ).newInstance(llmService, ragService, baseUrl);
-            
-            String walletInfo = context.myValidatorId != null ? " (wallet: " + context.myValidatorId + ")" : "";
-            log.info("✅ LLM Chat handler initialized (oak-segment-agentic module available) with baseUrl: {}{}", baseUrl, walletInfo);
-            return chatHandler;
-        } catch (ClassNotFoundException e) {
-            log.debug("oak-segment-agentic module not available - chat endpoint disabled");
-            return null;
-        } catch (Exception e) {
-            log.warn("Failed to initialize chat handler", e);
-            return null;
-        }
     }
 
     /**
@@ -327,12 +267,6 @@ public class RequestRouter implements AutoCloseable {
 
             if ("/v1/config/osgi/delta".equals(path) && "GET".equals(method)) {
                 osgiConfigApiHandler.handleDelta(response);
-                baseRequest.setHandled(true);
-                return;
-            }
-            
-            if ("/chat".equals(path) && "GET".equals(method)) {
-                dashboardHandler.handleChatUI(response);
                 baseRequest.setHandled(true);
                 return;
             }
@@ -866,42 +800,6 @@ public class RequestRouter implements AutoCloseable {
                 return;
             }
             
-            // LLM Chat endpoint (optional - requires oak-segment-agentic module)
-            if ("/v1/chat".equals(path) && "POST".equals(method)) {
-                // Lazy initialization - chat handler is created on first use (after selfUrl is set)
-                if (chatHandler == null) {
-                    synchronized (this) {
-                        if (chatHandler == null) {
-                            chatHandler = initializeChatHandler(context);
-                        }
-                    }
-                }
-                
-                if (chatHandler != null) {
-                    try {
-                        // Use reflection to call handleChat method
-                        java.lang.reflect.Method handleMethod = chatHandler.getClass()
-                            .getMethod("handleChat", HttpServletRequest.class, HttpServletResponse.class);
-                        handleMethod.invoke(chatHandler, request, response);
-                        baseRequest.setHandled(true);
-                        return;
-                    } catch (Exception e) {
-                        log.error("Error invoking chat handler", e);
-                        ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
-                            "Chat handler error: " + e.getMessage());
-                        baseRequest.setHandled(true);
-                        return;
-                    }
-                } else {
-                    response.setStatus(HttpServletResponse.SC_NOT_FOUND);
-                    response.setContentType("application/json");
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                        "Chat endpoint not available. Install oak-segment-agentic module.");
-                    baseRequest.setHandled(true);
-                    return;
-                }
-            }
-            
             // Not found - log with context
             String remoteAddr = request.getRemoteAddr();
             String userAgent = request.getHeader("User-Agent");
@@ -953,8 +851,7 @@ public class RequestRouter implements AutoCloseable {
             return false;
         }
         return "/explorer".equals(path)
-            || "/api-browser".equals(path)
-            || "/chat".equals(path);
+            || "/api-browser".equals(path);
     }
 
     private boolean isRateLimitExempt(String path, String method) {
@@ -1027,17 +924,9 @@ public class RequestRouter implements AutoCloseable {
         } catch (RuntimeException e) {
             log.warn("Failed to shutdown rate limiter", e);
         }
-        if (chatHandler instanceof AutoCloseable) {
-            try {
-                ((AutoCloseable) chatHandler).close();
-            } catch (Exception e) {
-                log.warn("Failed to close chat handler", e);
-            }
-        }
         context.eventBroadcaster = null;
         context.uploadSessionManager = null;
         context.cidMappingService = null;
-        chatHandler = null;
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -25,7 +25,6 @@ import org.apache.jackrabbit.oak.segment.http.server.AuthTokenValidator;
 import org.apache.jackrabbit.oak.segment.http.server.RateLimiter;
 import org.apache.jackrabbit.oak.segment.http.server.RateLimiterTuningIntrospection;
 import org.apache.jackrabbit.oak.segment.http.server.TlsConfiguration;
-import org.apache.jackrabbit.oak.segment.http.server.ValidatorAuthHandler;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 
 import javax.servlet.http.HttpServletResponse;
@@ -188,8 +187,6 @@ public class OsgiConfigApiHandler {
         components.put("proposalQueueTuning", ProposalQueueTuningIntrospection.effectiveValues());
         components.put("rateLimiterTuning", RateLimiterTuningIntrospection.effectiveValues());
         components.put("tlsTuning", buildTlsTuning());
-        components.put("validatorAuthTuning", buildValidatorAuthTuning());
-        components.put("validatorRegistrationTuning", buildValidatorRegistrationTuning());
         components.put("tokenAuthTuning", buildTokenAuthTuning());
         components.put("fileStoreFlushTuning", buildFileStoreFlushTuning());
         components.put("gcEconomicsTuning", buildGcEconomicsTuning());
@@ -205,8 +202,6 @@ public class OsgiConfigApiHandler {
         sources.put("proposalQueueTuning", ProposalQueueTuningIntrospection.source());
         sources.put("rateLimiterTuning", RateLimiterTuningIntrospection.source());
         sources.put("tlsTuning", RuntimePropertySourceRegistry.getSource("tlsTuning", "system-properties"));
-        sources.put("validatorAuthTuning", RuntimePropertySourceRegistry.getSource("validatorAuthTuning", "system-properties"));
-        sources.put("validatorRegistrationTuning", RuntimePropertySourceRegistry.getSource("validatorRegistrationTuning", "system-properties"));
         sources.put("tokenAuthTuning", RuntimePropertySourceRegistry.getSource("tokenAuthTuning", "system-properties-or-env"));
         sources.put("fileStoreFlushTuning", RuntimePropertySourceRegistry.getSource("fileStoreFlushTuning", "system-properties"));
         sources.put("gcEconomicsTuning", RuntimePropertySourceRegistry.getSource("gcEconomicsTuning", "system-properties"));
@@ -672,64 +667,6 @@ public class OsgiConfigApiHandler {
             TlsConfiguration.PROP_CIPHERS));
 
         schema.add(schemaEntry(
-            "validatorAuthTuning.enabled",
-            "boolean",
-            true,
-            "startup-only",
-            "guarded",
-            "Enable dashboard WebAuthn session auth",
-            ValidatorAuthHandler.PROP_AUTH_ENABLED));
-        schema.add(schemaEntry(
-            "validatorAuthTuning.session_ttl_hours",
-            "int",
-            24,
-            "startup-only",
-            "guarded",
-            "Dashboard auth session TTL (hours)",
-            ValidatorAuthHandler.PROP_SESSION_TTL));
-        schema.add(schemaEntry(
-            "validatorAuthTuning.allowed_wallets_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Whether dashboard auth operator allow-list is configured",
-            ValidatorAuthHandler.PROP_ALLOWED_OPERATOR_IDS + "|" + ValidatorAuthHandler.PROP_ALLOWED_WALLETS));
-
-        schema.add(schemaEntry(
-            "validatorRegistrationTuning.enabled",
-            "boolean",
-            true,
-            "startup-only",
-            "guarded",
-            "Enable validator self-registration surface",
-            ValidatorRegistrationHandler.PROP_REGISTRATION_ENABLED));
-        schema.add(schemaEntry(
-            "validatorRegistrationTuning.approval_required",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Require approval for new registrations",
-            ValidatorRegistrationHandler.PROP_REGISTRATION_APPROVAL_REQUIRED));
-        schema.add(schemaEntry(
-            "validatorRegistrationTuning.rp_id",
-            "string",
-            "oak-chain.io",
-            "startup-only",
-            "guarded",
-            "WebAuthn relying-party id",
-            ValidatorRegistrationHandler.PROP_RP_ID));
-        schema.add(schemaEntry(
-            "validatorRegistrationTuning.rp_name",
-            "string",
-            "Oak Chain Validator",
-            "startup-only",
-            "safe",
-            "WebAuthn relying-party display name",
-            ValidatorRegistrationHandler.PROP_RP_NAME));
-
-        schema.add(schemaEntry(
             "tokenAuthTuning.auth_token_configured",
             "boolean",
             false,
@@ -961,28 +898,6 @@ public class OsgiConfigApiHandler {
         values.put("client_auth", readString(TlsConfiguration.PROP_CLIENT_AUTH, "none"));
         values.put("protocols", readString(TlsConfiguration.PROP_PROTOCOLS, "TLSv1.2,TLSv1.3"));
         values.put("ciphers_configured", RuntimeConfigValueResolver.hasConfiguredValue(TlsConfiguration.PROP_CIPHERS));
-        return values;
-    }
-
-    private Map<String, Object> buildValidatorAuthTuning() {
-        Map<String, Object> values = new LinkedHashMap<>();
-        values.put("enabled", readBoolean(ValidatorAuthHandler.PROP_AUTH_ENABLED, true));
-        values.put("session_ttl_hours", readInt(ValidatorAuthHandler.PROP_SESSION_TTL, 24));
-        String allowedWallets = RuntimeConfigValueResolver.readString(ValidatorAuthHandler.PROP_ALLOWED_OPERATOR_IDS, null);
-        if (!hasText(allowedWallets)) {
-            allowedWallets = RuntimeConfigValueResolver.readString(ValidatorAuthHandler.PROP_ALLOWED_WALLETS, null);
-        }
-        values.put("allowed_wallets_configured", hasText(allowedWallets));
-        values.put("allowed_wallets_count", countCsv(allowedWallets));
-        return values;
-    }
-
-    private Map<String, Object> buildValidatorRegistrationTuning() {
-        Map<String, Object> values = new LinkedHashMap<>();
-        values.put("enabled", readBoolean(ValidatorRegistrationHandler.PROP_REGISTRATION_ENABLED, true));
-        values.put("approval_required", readBoolean(ValidatorRegistrationHandler.PROP_REGISTRATION_APPROVAL_REQUIRED, false));
-        values.put("rp_id", readString(ValidatorRegistrationHandler.PROP_RP_ID, "oak-chain.io"));
-        values.put("rp_name", readString(ValidatorRegistrationHandler.PROP_RP_NAME, "Oak Chain Validator"));
         return values;
     }
 

@@ -6,6 +6,10 @@
 
 **Current Phase**: Standalone validator build is the source of truth. Fragment-host coupling has been removed; boundary cleanup, test hardening, and chain-backed deployment paths remain active work.
 
+Experimental POC spillover such as `oak-segment-agentic` and `oak-auth-web3`
+is not part of the validator v1 delivery surface and is intentionally excluded
+from this module.
+
 ## Documentation
 
 Canonical module docs live in the **Blockchain-AEM** docs project:
@@ -26,7 +30,6 @@ API, testing, troubleshooting, and integration docs now live in that doc tree.
 - ✅ **Distributed validator network** (all nodes commit writes identically via Aeron Raft - transient differences during genesis/bootstrap)
 - ✅ **Dynamic backpressure** (flow control for write throughput)
 - ✅ **Embedded HTTP server** (dashboard, APIs, segment serving)
-- ✅ **LLM Chat Interface** (optional AI assistant via `oak-segment-agentic`)
 
 This module is part of the **Blockchain AEM** project and is maintained as a forked standalone validator architecture on top of Oak Segment Tar.
 
@@ -52,7 +55,6 @@ This module is part of the **Blockchain AEM** project and is maintained as a for
 
 ### HTTP Server & APIs
 - **Dashboard UI**: Web-based local control-plane page at `/` (cluster state, metrics, explorer)
-- **Chat Interface**: LLM-powered chat at `/chat` (requires `oak-segment-agentic`)
 - **REST APIs**: Validator-native HTTP endpoints for cluster state, consensus status, health, and operator automation
 - **OSGi Config Surface**: Read-only introspection endpoints at `/v1/config/osgi*`
 - **Segment Serving**: HTTP endpoints for segment transfer (`/segments/{id}`, `/journal.log`)
@@ -138,8 +140,7 @@ Write Flow (Deterministic):
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │  SegmentHttpServer (HTTP API + Dashboard)          │   │
 │  │  - Dashboard UI (/)                                 │   │
-│  │  - Chat Interface (/chat)                           │   │
-│  │  - REST APIs (/v1/*)                               │   │
+│  │  - REST APIs (/v1/*)                                │   │
 │  │  - Segment Serving (/segments/*, /journal.log)     │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                              │
@@ -172,7 +173,7 @@ Write Flow (Deterministic):
 - **`AeronConsensusEngine`**: Raft-based consensus implementation using Aeron Cluster
 - **`SegmentHttpServer`**: Embedded Jetty server with dashboard and APIs
 - **`RequestRouter`**: Routes HTTP requests to appropriate handlers
-- **`DashboardHandler`**: Renders dashboard UI and chat interface
+- **`DashboardHandler`**: Renders dashboard UI and local operator pages
 - **`EpochListener`**: Polls Ethereum Beacon Chain for epoch data
 - **`EthereumWallet`**: Wallet signature verification and path enforcement
 
@@ -233,7 +234,6 @@ For upstream browser UX, prefer a gateway/BFF contract above the validator inste
 
 ### Dashboard & UI
 - `GET /` - Local control-plane landing page
-- `GET /chat` - LLM Chat interface (requires `oak-segment-agentic`)
 - `GET /explorer` - Content explorer UI
 - `GET /api-browser` - Interactive API browser
 - `GET /v1/index` - Live validator-native API discovery index
@@ -292,11 +292,6 @@ For upstream browser UX, prefer a gateway/BFF contract above the validator inste
 - Used by validators via `LazyHttpNodeStore` to mount other clusters as read-only stores
 - The internal client lives under `org.apache.jackrabbit.oak.segment.consensus.mount.http`
 - **Note**: AEM customers should use `oak-chain-connector` for client-side mounting
-
-### With `oak-segment-agentic`
-- Optional LLM chat module
-- Integrated via reflection (no hard dependencies)
-- Provides `/chat` endpoint and AI assistant capabilities
 
 ### With Sling Authors
 - Sling authors mount validator-managed stores as read-only composite mounts
@@ -368,7 +363,6 @@ Apache License 2.0 - See [LICENSE](../../LICENSE) for details
 
 ## Related Modules
 
-- **`oak-segment-agentic`**: Optional LLM chat interface
 - **`oak-segment-tar`**: Core segment store implementation
 
 ---

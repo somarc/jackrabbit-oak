@@ -219,13 +219,6 @@
             <version>${project.version}</version>
         </dependency>
         
-        <!-- Agentic LLM chat module (optional - for chat endpoint) -->
-        <dependency>
-            <groupId>org.apache.jackrabbit</groupId>
-            <artifactId>oak-segment-agentic</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        
         <!-- Oak Segment Standby (for Cold Standby bootstrap) -->
         <!-- Note: This is included in oak-segment-tar, but we need Netty explicitly -->
         <dependency>

@@ -286,25 +286,6 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("MAINNET"));
     }
 
-    @Test
-    public void testHandleChatUiDefaultsToMockModeBadge() throws Exception {
-        BlockchainConfig.reset();
-
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = mock(HttpServletResponse.class);
-        when(response.getWriter()).thenReturn(new PrintWriter(body));
-
-        DashboardHandler handler = new DashboardHandler(newContext());
-        handler.handleChatUI(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        verify(response).setContentType("text/html; charset=UTF-8");
-        String html = body.toString();
-        assertTrue(html.contains("LLM Chat | Blockchain AEM Validator"));
-        assertTrue(html.contains("mode-mock"));
-        assertTrue(html.contains("MOCK MODE"));
-    }
-
     private static ServerContext newContext() {
         return new ServerContext(
             mock(FileStore.class),

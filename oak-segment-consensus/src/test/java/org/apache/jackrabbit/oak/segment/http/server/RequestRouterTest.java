@@ -291,22 +291,6 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testChatRouteRendersChatUiWhenBrowserEnabled() throws Exception {
-        withRoutingProperties(true, () -> {
-            RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
-            HttpServletRequest request = request("GET", "/chat");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(baseRequest, request, response);
-
-            verify(baseRequest).setHandled(true);
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("LLM Chat | Blockchain AEM Validator"));
-        });
-    }
-
-    @Test
     public void testApiIndexRouteReturnsIndexPayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());

@@ -245,10 +245,7 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "POST", "/api/mock/set-epoch-offset?offset=0", "Set mock epoch offset", "Mock", null);
         addInternalIndexEntry(endpoints, "GET", "/api/mock/epoch-status", "Mock epoch status", "Mock", null);
 
-        addInternalIndexEntry(endpoints, "POST", "/v1/chat", "Agentic chat endpoint", "LLM", null);
-
         addLocalUiIndexEntry(endpoints, "GET", "/api-browser", "Interactive API browser", "UI");
-        addLocalUiIndexEntry(endpoints, "GET", "/chat", "Chat UI", "UI");
         addLocalUiIndexEntry(endpoints, "GET", "/dashboard", "Control-plane landing page", "UI");
         addLocalUiIndexEntry(endpoints, "GET", "/", "Control-plane landing page", "UI");
 
@@ -483,45 +480,6 @@ public class DashboardHandler {
         
         // Load template
         String template = loadTemplate("/api-browser-template.html");
-        
-        // Get blockchain mode
-        BlockchainConfig config = BlockchainConfig.getInstance();
-        String modeClass, modeLabel;
-        switch (config.getMode()) {
-            case MOCK:
-                modeClass = "mode-mock";
-                modeLabel = "MOCK MODE";
-                break;
-            case SEPOLIA:
-                modeClass = "mode-sepolia";
-                modeLabel = "SEPOLIA";
-                break;
-            case MAINNET:
-                modeClass = "mode-mainnet";
-                modeLabel = "MAINNET";
-                break;
-            default:
-                modeClass = "mode-mock";
-                modeLabel = "UNKNOWN";
-        }
-        
-        String html = template
-            .replace("{{MODE_CLASS}}", modeClass)
-            .replace("{{MODE_LABEL}}", modeLabel);
-        
-        response.getWriter().write(html);
-    }
-    
-    /**
-     * Handle LLM Chat UI interface.
-     * Now uses external template for consistent Blockchain AEM styling.
-     */
-    public void handleChatUI(HttpServletResponse response) throws IOException {
-        response.setStatus(HttpServletResponse.SC_OK);
-        response.setContentType("text/html; charset=UTF-8");
-        
-        // Load template
-        String template = loadTemplate("/chat-template.html");
         
         // Get blockchain mode
         BlockchainConfig config = BlockchainConfig.getInstance();
