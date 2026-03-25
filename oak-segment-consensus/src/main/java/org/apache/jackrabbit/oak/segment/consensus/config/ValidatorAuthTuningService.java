@@ -63,6 +63,7 @@ public final class ValidatorAuthTuningService {
         Map<String, String> overrides = new LinkedHashMap<>();
         putIfBoolean(overrides, ValidatorAuthHandler.PROP_AUTH_ENABLED, config.enabled());
         putIfNonNegative(overrides, ValidatorAuthHandler.PROP_SESSION_TTL, config.session_ttl_hours());
+        putIfText(overrides, ValidatorAuthHandler.PROP_ALLOWED_OPERATOR_IDS, config.allowed_operator_ids());
         putIfText(overrides, ValidatorAuthHandler.PROP_ALLOWED_WALLETS, config.allowed_wallets());
 
         RuntimePropertyOverrideRegistry.setOverrides(NAMESPACE, overrides);

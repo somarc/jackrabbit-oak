@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.segment.http.server.util.PasskeyOperatorId;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -125,7 +126,7 @@ public class ValidatorAuthHandlerTest {
 
         assertFalse(allowed);
         verify(response).setStatus(HttpServletResponse.SC_FORBIDDEN);
-        assertTrue(body.toString().contains("Wallet not authorized"));
+        assertTrue(body.toString().contains("Operator not authorized"));
     }
 
     @Test
@@ -177,7 +178,8 @@ public class ValidatorAuthHandlerTest {
         );
         challenges(handler).put(challenge.challengeId, challenge);
 
-        assertNull(handler.verifyAndCreateSession(challenge.challengeId, new byte[] {9}, new byte[] {8, 7}, "0xabc"));
+        String operatorId = PasskeyOperatorId.derive(new byte[] {8, 7});
+        assertNull(handler.verifyAndCreateSession(challenge.challengeId, new byte[] {9}, new byte[] {8, 7}, operatorId));
         assertFalse(challenges(handler).containsKey(challenge.challengeId));
     }
 
@@ -270,6 +272,18 @@ public class ValidatorAuthHandlerTest {
         handler.handleLoginPage(request, response);
 
         assertTrue(body.toString().contains("const returnUrl = 'custom-return';"));
+    }
+
+    @Test
+    public void testSessionAliasesOperatorIdToLegacyWalletField() {
+        ValidatorAuthHandler.Session session = new ValidatorAuthHandler.Session(
+            "session-operator",
+            "0xAbCd",
+            TimeUnit.HOURS.toMillis(1)
+        );
+
+        assertEquals("0xabcd", session.operatorId);
+        assertEquals(session.operatorId, session.walletAddress);
     }
 
     private static HttpServletRequest request(String uri, String query, Cookie[] cookies) {

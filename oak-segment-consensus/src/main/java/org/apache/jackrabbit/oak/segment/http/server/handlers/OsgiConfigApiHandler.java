@@ -693,8 +693,8 @@ public class OsgiConfigApiHandler {
             false,
             "startup-only",
             "expert-only",
-            "Whether dashboard auth allow-list is configured",
-            ValidatorAuthHandler.PROP_ALLOWED_WALLETS));
+            "Whether dashboard auth operator allow-list is configured",
+            ValidatorAuthHandler.PROP_ALLOWED_OPERATOR_IDS + "|" + ValidatorAuthHandler.PROP_ALLOWED_WALLETS));
 
         schema.add(schemaEntry(
             "validatorRegistrationTuning.enabled",
@@ -968,7 +968,10 @@ public class OsgiConfigApiHandler {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("enabled", readBoolean(ValidatorAuthHandler.PROP_AUTH_ENABLED, true));
         values.put("session_ttl_hours", readInt(ValidatorAuthHandler.PROP_SESSION_TTL, 24));
-        String allowedWallets = RuntimeConfigValueResolver.readString(ValidatorAuthHandler.PROP_ALLOWED_WALLETS, null);
+        String allowedWallets = RuntimeConfigValueResolver.readString(ValidatorAuthHandler.PROP_ALLOWED_OPERATOR_IDS, null);
+        if (!hasText(allowedWallets)) {
+            allowedWallets = RuntimeConfigValueResolver.readString(ValidatorAuthHandler.PROP_ALLOWED_WALLETS, null);
+        }
         values.put("allowed_wallets_configured", hasText(allowedWallets));
         values.put("allowed_wallets_count", countCsv(allowedWallets));
         return values;

@@ -24,9 +24,9 @@ import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.PasskeyOperatorId;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Map;
@@ -51,19 +51,22 @@ import java.util.concurrent.TimeUnit;
  * </pre>
  * 
  * <h2>Validator Identity</h2>
- * <p>The Ethereum address derived from the passkey's public key becomes
- * the validator's identity. This address can be used for:</p>
+ * <p>This handler derives a deterministic operator ID from the passkey's
+ * public key so dashboard auth can gate operators consistently across restarts.
+ * It is not an Ethereum wallet binding and should not be used as on-chain or
+ * payout identity without an explicit wallet-binding contract.</p>
  * <ul>
  *   <li>Dashboard access control</li>
- *   <li>Validator registration on-chain</li>
- *   <li>Payment distribution</li>
+ *   <li>Passkey operator registration review</li>
+ *   <li>POC-local operator allow-listing</li>
  * </ul>
  * 
  * <h2>Configuration</h2>
  * <ul>
  *   <li>{@code dashboard.auth.enabled} - Enable authentication (default: true in production)</li>
  *   <li>{@code dashboard.auth.session.ttl} - Session TTL in hours (default: 24)</li>
- *   <li>{@code dashboard.auth.allowed.wallets} - Comma-separated list of allowed wallet addresses</li>
+ *   <li>{@code dashboard.auth.allowed.operators} - Comma-separated list of allowed operator IDs</li>
+ *   <li>{@code dashboard.auth.allowed.wallets} - Legacy alias retained for older configs</li>
  * </ul>
  * 
  * @since 1.89
@@ -75,6 +78,8 @@ public class ValidatorAuthHandler {
     // Configuration keys
     public static final String PROP_AUTH_ENABLED = "dashboard.auth.enabled";
     public static final String PROP_SESSION_TTL = "dashboard.auth.session.ttl";
+    public static final String PROP_ALLOWED_OPERATOR_IDS = "dashboard.auth.allowed.operators";
+    @Deprecated
     public static final String PROP_ALLOWED_WALLETS = "dashboard.auth.allowed.wallets";
     
     // Cookie/session names
@@ -89,8 +94,8 @@ public class ValidatorAuthHandler {
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final Map<String, Challenge> challenges = new ConcurrentHashMap<>();
     
-    // Allowed wallet addresses (null = allow all authenticated users)
-    private final String[] allowedWallets;
+    // Allowed passkey operator IDs (null = allow all authenticated users)
+    private final String[] allowedOperatorIds;
     
     private final boolean enabled;
     private final int sessionTtlHours;
@@ -101,13 +106,16 @@ public class ValidatorAuthHandler {
      */
     public static class Session {
         public final String sessionId;
+        public final String operatorId;
+        @Deprecated
         public final String walletAddress;
         public final long createdAt;
         public final long expiresAt;
         
-        Session(String sessionId, String walletAddress, long ttlMillis) {
+        Session(String sessionId, String operatorId, long ttlMillis) {
             this.sessionId = sessionId;
-            this.walletAddress = walletAddress;
+            this.operatorId = normalizeIdentity(operatorId);
+            this.walletAddress = this.operatorId;
             this.createdAt = System.currentTimeMillis();
             this.expiresAt = createdAt + ttlMillis;
         }
@@ -145,22 +153,22 @@ public class ValidatorAuthHandler {
         this(
             RuntimeConfigValueResolver.readBoolean(PROP_AUTH_ENABLED, true),
             RuntimeConfigValueResolver.readInt(PROP_SESSION_TTL, DEFAULT_SESSION_TTL_HOURS),
-            normalizeAllowedWallets(RuntimeConfigValueResolver.readString(PROP_ALLOWED_WALLETS, null)),
+            resolveAllowedOperatorIds(),
             new SecureRandom()
         );
         
-        log.info("Validator auth handler initialized: enabled={}, sessionTtl={}h, allowedWallets={}",
-            enabled, sessionTtlHours, allowedWallets != null ? allowedWallets.length : "all");
+        log.info("Validator auth handler initialized: enabled={}, sessionTtl={}h, allowedOperatorIds={}",
+            enabled, sessionTtlHours, allowedOperatorIds != null ? allowedOperatorIds.length : "all");
     }
 
-    ValidatorAuthHandler(boolean enabled, int sessionTtlHours, String[] allowedWallets) {
-        this(enabled, sessionTtlHours, allowedWallets, new SecureRandom());
+    ValidatorAuthHandler(boolean enabled, int sessionTtlHours, String[] allowedOperatorIds) {
+        this(enabled, sessionTtlHours, allowedOperatorIds, new SecureRandom());
     }
 
-    ValidatorAuthHandler(boolean enabled, int sessionTtlHours, String[] allowedWallets, SecureRandom random) {
+    ValidatorAuthHandler(boolean enabled, int sessionTtlHours, String[] allowedOperatorIds, SecureRandom random) {
         this.enabled = enabled;
         this.sessionTtlHours = sessionTtlHours;
-        this.allowedWallets = normalizeAllowedWallets(allowedWallets);
+        this.allowedOperatorIds = normalizeAllowedWallets(allowedOperatorIds);
         this.random = random;
     }
     
@@ -234,12 +242,11 @@ public class ValidatorAuthHandler {
         
         Session session = getSession(request);
         if (session != null) {
-            // Check if wallet is allowed
-            if (isWalletAllowed(session.walletAddress)) {
+            if (isOperatorAllowed(session.operatorId)) {
                 return true;
             } else {
-                log.warn("Access denied for wallet: {}", session.walletAddress);
-                sendForbidden(response, "Wallet not authorized");
+                log.warn("Access denied for operator: {}", session.operatorId);
+                sendForbidden(response, "Operator not authorized");
                 return false;
             }
         }
@@ -280,11 +287,11 @@ public class ValidatorAuthHandler {
      * @param challengeId The challenge ID
      * @param signature The P-256 signature
      * @param publicKey The public key bytes
-     * @param walletAddress The derived wallet address
+     * @param operatorId The passkey-derived operator ID
      * @return Session if verification succeeds, null otherwise
      */
     public Session verifyAndCreateSession(String challengeId, byte[] signature, 
-                                          byte[] publicKey, String walletAddress) {
+                                          byte[] publicKey, String operatorId) {
         Challenge challenge = challenges.remove(challengeId);
         
         if (challenge == null) {
@@ -311,7 +318,7 @@ public class ValidatorAuthHandler {
                 challenge.challengeBytes, signature, publicKey);
             
             if (!valid) {
-                log.warn("Invalid signature for wallet: {}", walletAddress);
+                log.warn("Invalid signature for operator: {}", operatorId);
                 return null;
             }
         } catch (Exception e) {
@@ -319,26 +326,23 @@ public class ValidatorAuthHandler {
             return null;
         }
         
-        // Verify wallet address matches public key
-        String derivedAddress = deriveWalletAddress(publicKey);
-        if (!derivedAddress.equalsIgnoreCase(walletAddress)) {
-            log.warn("Wallet address mismatch: expected={}, got={}", derivedAddress, walletAddress);
+        String derivedOperatorId = PasskeyOperatorId.derive(publicKey);
+        if (!derivedOperatorId.equalsIgnoreCase(operatorId)) {
+            log.warn("Passkey operator ID mismatch: expected={}, got={}", derivedOperatorId, operatorId);
             return null;
         }
         
-        // Check if wallet is allowed
-        if (!isWalletAllowed(walletAddress)) {
-            log.warn("Wallet not in allowed list: {}", walletAddress);
+        if (!isOperatorAllowed(operatorId)) {
+            log.warn("Operator not in allow-list: {}", operatorId);
             return null;
         }
         
-        // Create session
         String sessionId = generateId();
         long ttl = TimeUnit.HOURS.toMillis(sessionTtlHours);
-        Session session = new Session(sessionId, walletAddress, ttl);
+        Session session = new Session(sessionId, operatorId, ttl);
         sessions.put(sessionId, session);
         
-        log.info("✅ Session created for wallet: {}", walletAddress);
+        log.info("✅ Session created for operator: {}", operatorId);
         return session;
     }
     
@@ -369,44 +373,18 @@ public class ValidatorAuthHandler {
         response.addCookie(cookie);
     }
     
-    /**
-     * Check if wallet is in allowed list.
-     */
-    private boolean isWalletAllowed(String walletAddress) {
-        if (allowedWallets == null) {
-            return true;  // No restrictions
+    private boolean isOperatorAllowed(String operatorId) {
+        if (allowedOperatorIds == null) {
+            return true;
         }
         
-        String normalized = walletAddress.toLowerCase();
-        for (String allowed : allowedWallets) {
+        String normalized = normalizeIdentity(operatorId);
+        for (String allowed : allowedOperatorIds) {
             if (allowed.trim().equals(normalized)) {
                 return true;
             }
         }
         return false;
-    }
-    
-    /**
-     * Derive Ethereum address from P-256 public key.
-     * 
-     * <p>Note: This is a simplified derivation. For production,
-     * use proper Ethereum address derivation from secp256k1 or
-     * a mapping from P-256 to Ethereum address.</p>
-     */
-    private String deriveWalletAddress(byte[] publicKey) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(publicKey);
-            
-            // Take last 20 bytes as address
-            StringBuilder sb = new StringBuilder("0x");
-            for (int i = hash.length - 20; i < hash.length; i++) {
-                sb.append(String.format("%02x", hash[i]));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to derive wallet address", e);
-        }
     }
     
     /**
@@ -442,6 +420,18 @@ public class ValidatorAuthHandler {
             normalized[i] = allowedWallets[i] == null ? "" : allowedWallets[i].trim().toLowerCase();
         }
         return normalized;
+    }
+
+    private static String[] resolveAllowedOperatorIds() {
+        String configured = RuntimeConfigValueResolver.readString(PROP_ALLOWED_OPERATOR_IDS, null);
+        if (RuntimeConfigValueResolver.hasText(configured)) {
+            return normalizeAllowedWallets(configured);
+        }
+        return normalizeAllowedWallets(RuntimeConfigValueResolver.readString(PROP_ALLOWED_WALLETS, null));
+    }
+
+    private static String normalizeIdentity(String identity) {
+        return identity == null ? "" : identity.trim().toLowerCase();
     }
     
     /**

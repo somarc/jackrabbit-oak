@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.PasskeyOperatorId;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.After;
 import org.junit.Test;
@@ -30,7 +31,6 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.lang.reflect.Field;
 import java.nio.file.Paths;
-import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.Map;
 
@@ -133,13 +133,14 @@ public class ValidatorRegistrationHandlerTest {
 
         handler.handleRegistrationComplete(request, response.response);
 
-        String walletAddress = deriveWalletAddress(publicKey);
+        String operatorId = deriveOperatorId(publicKey);
         assertEquals("application/json", response.contentType);
         assertTrue(response.body.toString().contains("\"status\":\"approved\""));
-        assertTrue(response.body.toString().contains(walletAddress));
-        assertTrue(credentials(handler).containsKey(walletAddress));
-        assertTrue(handler.isValidatorRegistered(walletAddress));
-        assertEquals("Validator Auto", handler.getCredential(walletAddress).displayName);
+        assertTrue(response.body.toString().contains("\"operatorId\":\"" + operatorId + "\""));
+        assertTrue(response.body.toString().contains("\"walletAddress\":\"" + operatorId + "\""));
+        assertTrue(credentials(handler).containsKey(operatorId));
+        assertTrue(handler.isValidatorRegistered(operatorId));
+        assertEquals("Validator Auto", handler.getCredential(operatorId).displayName);
     }
 
     @Test
@@ -156,8 +157,8 @@ public class ValidatorRegistrationHandlerTest {
 
         handler.handleRegistrationComplete(request, response.response);
 
-        String walletAddress = deriveWalletAddress(publicKey);
-        assertEquals("Validator " + walletAddress.substring(0, 8), handler.getCredential(walletAddress).displayName);
+        String operatorId = deriveOperatorId(publicKey);
+        assertEquals("Validator " + operatorId.substring(0, 8), handler.getCredential(operatorId).displayName);
     }
 
     @Test
@@ -176,10 +177,10 @@ public class ValidatorRegistrationHandlerTest {
 
         handler.handleRegistrationComplete(request, response.response);
 
-        String walletAddress = deriveWalletAddress(publicKey);
+        String operatorId = deriveOperatorId(publicKey);
         assertTrue(response.body.toString().contains("\"status\":\"pending\""));
-        assertTrue(pendingApprovals(handler).containsKey(walletAddress));
-        assertFalse(credentials(handler).containsKey(walletAddress));
+        assertTrue(pendingApprovals(handler).containsKey(operatorId));
+        assertFalse(credentials(handler).containsKey(operatorId));
     }
 
     @Test
@@ -198,7 +199,7 @@ public class ValidatorRegistrationHandlerTest {
             duplicateResponse.response);
 
         assertEquals(HttpServletResponse.SC_CONFLICT, duplicateResponse.status);
-        assertTrue(duplicateResponse.body.toString().contains("Wallet already registered"));
+        assertTrue(duplicateResponse.body.toString().contains("Operator already registered"));
     }
 
     @Test
@@ -250,11 +251,13 @@ public class ValidatorRegistrationHandlerTest {
         handler.handleListPending(mock(HttpServletRequest.class), pendingResponse.response);
         assertTrue(pendingResponse.body.toString().contains("Pending Validator"));
         assertTrue(pendingResponse.body.toString().contains("10.0.0.3"));
+        assertTrue(pendingResponse.body.toString().contains("\"operatorId\":\"0x111\""));
 
         ResponseCapture validatorsResponse = newResponse();
         handler.handleListValidators(mock(HttpServletRequest.class), validatorsResponse.response);
         assertTrue(validatorsResponse.body.toString().contains("Approved Validator"));
         assertTrue(validatorsResponse.body.toString().contains("\"approved\":true"));
+        assertTrue(validatorsResponse.body.toString().contains("\"boundWalletAddress\":null"));
     }
 
     private static ValidatorRegistrationHandler newHandler() {
@@ -334,14 +337,8 @@ public class ValidatorRegistrationHandlerTest {
         return json.toString();
     }
 
-    private static String deriveWalletAddress(byte[] publicKey) throws Exception {
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        byte[] hash = digest.digest(publicKey);
-        StringBuilder sb = new StringBuilder("0x");
-        for (int i = hash.length - 20; i < hash.length; i++) {
-            sb.append(String.format("%02x", hash[i]));
-        }
-        return sb.toString();
+    private static String deriveOperatorId(byte[] publicKey) {
+        return PasskeyOperatorId.derive(publicKey);
     }
 
     private static final class ResponseCapture {

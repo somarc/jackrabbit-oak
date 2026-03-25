@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueReso
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.PasskeyOperatorId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,7 +29,6 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -42,19 +42,20 @@ import java.util.concurrent.TimeUnit;
  * Self-service validator registration handler using WebAuthn/Passkeys.
  * 
  * <p>This handler enables new validators to register themselves by creating
- * a passkey. The passkey's public key is used to derive an Ethereum address
- * that becomes the validator's identity.</p>
+ * a passkey. The passkey's public key is used to derive a deterministic
+ * operator ID for dashboard/operator auth. This is not an Ethereum wallet
+ * binding and should not be reused as on-chain identity.</p>
  * 
  * <h2>Registration Flow</h2>
  * <pre>
  * 1. User navigates to /auth/register
  * 2. Server generates registration challenge
  * 3. User creates passkey (Face ID, Touch ID, etc.)
- * 4. Server receives public key and derives Ethereum address
- * 5. Validator identity is stored and can be used for:
+ * 4. Server receives public key and derives a passkey operator ID
+ * 5. Operator identity is stored and can be used for:
  *    - Dashboard authentication
- *    - On-chain validator registration
- *    - Payment distribution
+ *    - Registration review and approval
+ *    - POC-local operator allow-listing
  * </pre>
  * 
  * <h2>Security Considerations</h2>
@@ -62,7 +63,7 @@ import java.util.concurrent.TimeUnit;
  *   <li>Registration can be open or require approval</li>
  *   <li>Rate limiting prevents abuse</li>
  *   <li>Passkey provides strong authentication</li>
- *   <li>Derived address is deterministic from public key</li>
+ *   <li>Derived operator ID is deterministic from public key</li>
  * </ul>
  * 
  * @since 1.89
@@ -122,16 +123,21 @@ public class ValidatorRegistrationHandler {
     public static class ValidatorCredential {
         public final String credentialId;
         public final byte[] publicKey;
+        public final String operatorId;
+        @Deprecated
         public final String walletAddress;
+        public final String boundWalletAddress;
         public final String displayName;
         public final long registeredAt;
         public final boolean approved;
         
-        ValidatorCredential(String credentialId, byte[] publicKey, String walletAddress, 
+        ValidatorCredential(String credentialId, byte[] publicKey, String operatorId,
                           String displayName, boolean approved) {
             this.credentialId = credentialId;
             this.publicKey = publicKey;
-            this.walletAddress = walletAddress;
+            this.operatorId = normalizeIdentity(operatorId);
+            this.walletAddress = this.operatorId;
+            this.boundWalletAddress = null;
             this.displayName = displayName;
             this.registeredAt = System.currentTimeMillis();
             this.approved = approved;
@@ -238,43 +244,44 @@ public class ValidatorRegistrationHandler {
             return;
         }
         
-        // Derive Ethereum address from public key
-        String walletAddress = deriveWalletAddress(publicKey);
+        String operatorId = PasskeyOperatorId.derive(publicKey);
         
         // Check if already registered
-        if (credentials.containsKey(walletAddress)) {
-            sendJsonError(response, HttpServletResponse.SC_CONFLICT, "Wallet already registered");
+        if (credentials.containsKey(operatorId)) {
+            sendJsonError(response, HttpServletResponse.SC_CONFLICT, "Operator already registered");
             return;
         }
         
         // Create credential
         ValidatorCredential credential = new ValidatorCredential(
-            credentialId, publicKey, walletAddress, 
-            displayName != null ? displayName : "Validator " + walletAddress.substring(0, 8),
+            credentialId, publicKey, operatorId,
+            displayName != null ? displayName : "Validator " + operatorId.substring(0, 8),
             !approvalRequired);
         
         if (approvalRequired) {
             // Add to pending approvals
-            pendingApprovals.put(walletAddress, new PendingRegistration(credential, request.getRemoteAddr()));
-            log.info("📝 Validator registration pending approval: {}", walletAddress);
+            pendingApprovals.put(operatorId, new PendingRegistration(credential, request.getRemoteAddr()));
+            log.info("📝 Validator registration pending approval: {}", operatorId);
             
             response.setContentType("application/json");
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("success", true);
             payload.put("status", "pending");
-            payload.put("walletAddress", walletAddress);
+            payload.put("operatorId", operatorId);
+            payload.put("walletAddress", operatorId);
             payload.put("message", "Registration pending approval");
             response.getWriter().write(JsonOutputUtil.toJson(payload));
         } else {
             // Auto-approve
-            credentials.put(walletAddress, credential);
-            log.info("✅ Validator registered: {} ({})", walletAddress, credential.displayName);
+            credentials.put(operatorId, credential);
+            log.info("✅ Validator registered: {} ({})", operatorId, credential.displayName);
             
             response.setContentType("application/json");
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("success", true);
             payload.put("status", "approved");
-            payload.put("walletAddress", walletAddress);
+            payload.put("operatorId", operatorId);
+            payload.put("walletAddress", operatorId);
             payload.put("message", "Registration complete");
             response.getWriter().write(JsonOutputUtil.toJson(payload));
         }
@@ -284,15 +291,15 @@ public class ValidatorRegistrationHandler {
      * Handle approval of pending registration (admin only).
      */
     public void handleApproveRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        String walletAddress = request.getParameter("wallet");
-        if (walletAddress == null) {
-            sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing wallet parameter");
+        String operatorId = extractIdentityParameter(request);
+        if (operatorId == null) {
+            sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing operator parameter");
             return;
         }
         
-        PendingRegistration pending = pendingApprovals.remove(walletAddress);
+        PendingRegistration pending = pendingApprovals.remove(operatorId);
         if (pending == null) {
-            sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "No pending registration for wallet");
+            sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "No pending registration for operator");
             return;
         }
         
@@ -300,17 +307,18 @@ public class ValidatorRegistrationHandler {
         ValidatorCredential approved = new ValidatorCredential(
             pending.credential.credentialId,
             pending.credential.publicKey,
-            pending.credential.walletAddress,
+            pending.credential.operatorId,
             pending.credential.displayName,
             true);
         
-        credentials.put(walletAddress, approved);
-        log.info("✅ Validator registration approved: {}", walletAddress);
+        credentials.put(operatorId, approved);
+        log.info("✅ Validator registration approved: {}", operatorId);
         
         response.setContentType("application/json");
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("success", true);
-        payload.put("walletAddress", walletAddress);
+        payload.put("operatorId", operatorId);
+        payload.put("walletAddress", operatorId);
         payload.put("message", "Registration approved");
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
@@ -319,24 +327,25 @@ public class ValidatorRegistrationHandler {
      * Handle rejection of pending registration (admin only).
      */
     public void handleRejectRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        String walletAddress = request.getParameter("wallet");
-        if (walletAddress == null) {
-            sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing wallet parameter");
+        String operatorId = extractIdentityParameter(request);
+        if (operatorId == null) {
+            sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing operator parameter");
             return;
         }
         
-        PendingRegistration pending = pendingApprovals.remove(walletAddress);
+        PendingRegistration pending = pendingApprovals.remove(operatorId);
         if (pending == null) {
-            sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "No pending registration for wallet");
+            sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "No pending registration for operator");
             return;
         }
         
-        log.info("❌ Validator registration rejected: {}", walletAddress);
+        log.info("❌ Validator registration rejected: {}", operatorId);
         
         response.setContentType("application/json");
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("success", true);
-        payload.put("walletAddress", walletAddress);
+        payload.put("operatorId", operatorId);
+        payload.put("walletAddress", operatorId);
         payload.put("message", "Registration rejected");
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
@@ -348,6 +357,7 @@ public class ValidatorRegistrationHandler {
         List<Map<String, Object>> pendingList = new ArrayList<>();
         for (PendingRegistration pending : pendingApprovals.values()) {
             Map<String, Object> item = new LinkedHashMap<>();
+            item.put("operatorId", pending.credential.operatorId);
             item.put("walletAddress", pending.credential.walletAddress);
             item.put("displayName", pending.credential.displayName);
             item.put("requestedAt", pending.requestedAt);
@@ -366,7 +376,9 @@ public class ValidatorRegistrationHandler {
         List<Map<String, Object>> validators = new ArrayList<>();
         for (ValidatorCredential cred : credentials.values()) {
             Map<String, Object> item = new LinkedHashMap<>();
+            item.put("operatorId", cred.operatorId);
             item.put("walletAddress", cred.walletAddress);
+            item.put("boundWalletAddress", cred.boundWalletAddress);
             item.put("displayName", cred.displayName);
             item.put("registeredAt", cred.registeredAt);
             item.put("approved", cred.approved);
@@ -378,39 +390,23 @@ public class ValidatorRegistrationHandler {
     }
     
     /**
-     * Check if a wallet is registered and approved.
+     * Check if an operator ID is registered and approved.
      */
-    public boolean isValidatorRegistered(String walletAddress) {
-        ValidatorCredential cred = credentials.get(walletAddress.toLowerCase());
+    public boolean isValidatorRegistered(String operatorId) {
+        ValidatorCredential cred = credentials.get(normalizeIdentity(operatorId));
         return cred != null && cred.approved;
     }
     
     /**
-     * Get credential for wallet.
+     * Get credential for operator ID.
      */
-    public ValidatorCredential getCredential(String walletAddress) {
-        return credentials.get(walletAddress.toLowerCase());
+    public ValidatorCredential getCredential(String operatorId) {
+        return credentials.get(normalizeIdentity(operatorId));
     }
     
     // ═══════════════════════════════════════════════════════════════════════════
     // PRIVATE HELPERS
     // ═══════════════════════════════════════════════════════════════════════════
-    
-    private String deriveWalletAddress(byte[] publicKey) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(publicKey);
-            
-            // Take last 20 bytes as address
-            StringBuilder sb = new StringBuilder("0x");
-            for (int i = hash.length - 20; i < hash.length; i++) {
-                sb.append(String.format("%02x", hash[i]));
-            }
-            return sb.toString().toLowerCase();
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to derive wallet address", e);
-        }
-    }
     
     private String generateId() {
         byte[] bytes = new byte[24];
@@ -430,6 +426,18 @@ public class ValidatorRegistrationHandler {
         int end = json.indexOf("\"", start);
         if (end < 0) return null;
         return json.substring(start, end);
+    }
+
+    private String extractIdentityParameter(HttpServletRequest request) {
+        String operatorId = request.getParameter("operator");
+        if (operatorId == null || operatorId.isEmpty()) {
+            operatorId = request.getParameter("wallet");
+        }
+        return normalizeIdentity(operatorId);
+    }
+
+    private static String normalizeIdentity(String identity) {
+        return identity == null ? null : identity.trim().toLowerCase();
     }
     
     private String generateRegistrationPage(RegistrationChallenge challenge) {
@@ -513,7 +521,7 @@ public class ValidatorRegistrationHandler {
             "            font-size: 14px;\n" +
             "            line-height: 1.6;\n" +
             "        }\n" +
-            "        .wallet-preview {\n" +
+            "        .identity-preview {\n" +
             "            font-family: monospace;\n" +
             "            background: rgba(0, 0, 0, 0.3);\n" +
             "            padding: 12px;\n" +
@@ -533,8 +541,8 @@ public class ValidatorRegistrationHandler {
             "        <div class=\"info-box\">\n" +
             "            <strong>What happens:</strong><br>\n" +
             "            1. You'll create a passkey using Face ID, Touch ID, or security key<br>\n" +
-            "            2. An Ethereum address will be derived from your passkey<br>\n" +
-            "            3. This address becomes your validator identity\n" +
+            "            2. A deterministic operator ID will be derived from your passkey<br>\n" +
+            "            3. This operator ID is for dashboard/operator auth only, not on-chain wallet binding\n" +
             "        </div>\n" +
             "        \n" +
             "        <div class=\"form-group\">\n" +
@@ -546,7 +554,7 @@ public class ValidatorRegistrationHandler {
             "            Create Passkey &amp; Register\n" +
             "        </button>\n" +
             "        \n" +
-            "        <div id=\"walletPreview\" class=\"wallet-preview\"></div>\n" +
+            "        <div id=\"identityPreview\" class=\"identity-preview\"></div>\n" +
             "        <div id=\"status\" class=\"status\" style=\"display: none;\"></div>\n" +
             "    </div>\n" +
             "    \n" +
@@ -560,7 +568,7 @@ public class ValidatorRegistrationHandler {
             "        async function register() {\n" +
             "            const button = document.getElementById('registerButton');\n" +
             "            const status = document.getElementById('status');\n" +
-            "            const walletPreview = document.getElementById('walletPreview');\n" +
+            "            const identityPreview = document.getElementById('identityPreview');\n" +
             "            const displayName = document.getElementById('displayName').value || 'Validator';\n" +
             "            \n" +
             "            button.disabled = true;\n" +
@@ -614,8 +622,9 @@ public class ValidatorRegistrationHandler {
             "                const result = await registerResponse.json();\n" +
             "                \n" +
             "                if (result.success) {\n" +
-            "                    walletPreview.textContent = 'Your Validator Address: ' + result.walletAddress;\n" +
-            "                    walletPreview.style.display = 'block';\n" +
+            "                    const operatorId = result.operatorId || result.walletAddress;\n" +
+            "                    identityPreview.textContent = 'Your Validator Operator ID: ' + operatorId;\n" +
+            "                    identityPreview.style.display = 'block';\n" +
             "                    \n" +
             "                    if (result.status === 'pending') {\n" +
             "                        status.className = 'status pending';\n" +

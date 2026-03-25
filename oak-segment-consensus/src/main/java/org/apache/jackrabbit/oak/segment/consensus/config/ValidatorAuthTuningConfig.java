@@ -38,8 +38,14 @@ public @interface ValidatorAuthTuningConfig {
     int session_ttl_hours() default -1;
 
     @AttributeDefinition(
-        name = "Allowed Wallets",
-        description = "Comma-separated wallet allow-list override. Empty preserves existing behavior."
+        name = "Allowed Wallets / Operator IDs (Legacy)",
+        description = "Legacy comma-separated allow-list override. Values currently gate passkey-derived operator IDs until explicit wallet binding exists."
     )
     String allowed_wallets() default "";
+
+    @AttributeDefinition(
+        name = "Allowed Operator IDs",
+        description = "Comma-separated passkey operator allow-list override. Empty preserves existing behavior."
+    )
+    String allowed_operator_ids() default "";
 }
