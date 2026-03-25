@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.sharding;
 
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -170,8 +171,7 @@ public class ShardRouter {
     private String discoverLeaderFromPeers(List<String> peerUrls) {
         for (String peerUrl : peerUrls) {
             try {
-                // Query cluster state endpoint (already exists in GlobalStoreServer)
-                URL url = new URL(peerUrl + "/v1/aeron/cluster-state");
+                URL url = new URL(peerUrl + "/v1/consensus/leader");
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("GET");
                 conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
@@ -179,41 +179,22 @@ public class ShardRouter {
                 
                 int responseCode = conn.getResponseCode();
                 if (responseCode == 200) {
-                    // Read response
-                    BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(conn.getInputStream())
-                    );
-                    String response = reader.lines().collect(Collectors.joining());
-                    reader.close();
-                    
-                    // Parse JSON to find leader
-                    // Priority 1: Check top-level "isLeader":true (this node is the leader)
-                    if (response.contains("\"isLeader\":true")) {
-                        log.debug("✅ Found leader (top-level isLeader:true): {}", peerUrl);
+                    String response = readResponseBody(conn);
+                    String currentLeader = JsonParser.extractField(response, "currentLeader");
+                    if (currentLeader != null && !currentLeader.isEmpty() && !"null".equals(currentLeader)) {
+                        log.debug("✅ Found leader via consensus leader endpoint: {}", currentLeader);
+                        return currentLeader;
+                    }
+
+                    String isLeader = JsonParser.extractField(response, "isLeader");
+                    if ("true".equalsIgnoreCase(isLeader)) {
+                        log.debug("✅ Peer {} reports itself as leader", peerUrl);
                         return peerUrl;
                     }
-                    
-                    // Priority 2: Check top-level "role":"LEADER"
-                    if (response.contains("\"role\":\"LEADER\"")) {
-                        log.debug("✅ Found leader (top-level role:LEADER): {}", peerUrl);
-                        return peerUrl;
-                    }
-                    
-                    // Priority 3: Parse members array to find leader
-                    // Look for member with "role":"LEADER"
-                    int leaderRoleIndex = response.indexOf("\"role\":\"LEADER\"");
-                    if (leaderRoleIndex != -1) {
-                        // Find the URL field in the same member object (search backwards from role)
-                        int urlStart = response.lastIndexOf("\"url\":\"", leaderRoleIndex);
-                        if (urlStart != -1) {
-                            urlStart += 6; // Skip past "url":"
-                            int urlEnd = response.indexOf("\"", urlStart);
-                            if (urlEnd != -1) {
-                                String leaderUrl = response.substring(urlStart, urlEnd);
-                                log.debug("✅ Found leader in members array: {}", leaderUrl);
-                                return leaderUrl;
-                            }
-                        }
+                } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND) {
+                    String legacyLeaderUrl = discoverLeaderFromLegacyClusterState(peerUrl);
+                    if (legacyLeaderUrl != null) {
+                        return legacyLeaderUrl;
                     }
                 } else {
                     log.debug("   Non-200 response from {}: {}", peerUrl, responseCode);
@@ -227,6 +208,53 @@ public class ShardRouter {
         
         log.warn("⚠️  Could not discover leader from any peer");
         return null;
+    }
+
+    private String discoverLeaderFromLegacyClusterState(String peerUrl) {
+        try {
+            URL url = new URL(peerUrl + "/v1/aeron/cluster-state");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(READ_TIMEOUT_MS);
+
+            if (conn.getResponseCode() != 200) {
+                return null;
+            }
+
+            String response = readResponseBody(conn);
+            String currentLeader = JsonParser.extractField(response, "currentLeader");
+            if (currentLeader != null && !currentLeader.isEmpty() && !"null".equals(currentLeader)) {
+                return currentLeader;
+            }
+            if (response.contains("\"isLeader\":true") || response.contains("\"role\":\"LEADER\"")) {
+                return peerUrl;
+            }
+
+            int leaderRoleIndex = response.indexOf("\"role\":\"LEADER\"");
+            if (leaderRoleIndex != -1) {
+                int urlStart = response.lastIndexOf("\"url\":\"", leaderRoleIndex);
+                if (urlStart != -1) {
+                    urlStart += 7;
+                    int urlEnd = response.indexOf("\"", urlStart);
+                    if (urlEnd != -1) {
+                        return response.substring(urlStart, urlEnd);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed legacy cluster-state discovery for {}: {}", peerUrl, e.getMessage());
+        }
+        return null;
+    }
+
+    private String readResponseBody(HttpURLConnection conn) throws Exception {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+        try {
+            return reader.lines().collect(Collectors.joining());
+        } finally {
+            reader.close();
+        }
     }
     
     /**
@@ -289,4 +317,3 @@ public class ShardRouter {
         }
     }
 }
-

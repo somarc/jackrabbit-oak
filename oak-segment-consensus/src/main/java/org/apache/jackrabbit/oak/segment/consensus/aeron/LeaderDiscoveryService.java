@@ -340,8 +340,7 @@ public class LeaderDiscoveryService {
      */
     private String pollPeerForLeader(String peerUrl) {
         try {
-            // Query the Aeron cluster state endpoint
-            java.net.URL apiUrl = new java.net.URL(peerUrl + "/v1/aeron/cluster-state");
+            java.net.URL apiUrl = new java.net.URL(peerUrl + "/v1/consensus/leader");
             java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
@@ -354,33 +353,20 @@ public class LeaderDiscoveryService {
             
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {
-                java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(conn.getInputStream())
-                );
-                StringBuilder response = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
+                String json = readResponseBody(conn);
+                String currentLeader = extractJsonField(json, "currentLeader");
+                if (currentLeader != null && !currentLeader.isEmpty() && !"null".equals(currentLeader)) {
+                    log.debug("Peer {} reports leader as: {}", peerUrl, currentLeader);
+                    return currentLeader;
                 }
-                reader.close();
-                
-                String json = response.toString();
-                
-                // Parse role from response
-                String role = extractJsonField(json, "role");
-                
-                // If this peer is the leader, return its URL
-                if ("LEADER".equalsIgnoreCase(role)) {
+
+                String isLeader = extractJsonField(json, "isLeader");
+                if ("true".equalsIgnoreCase(isLeader)) {
                     log.debug("Peer {} reports as LEADER", peerUrl);
                     return peerUrl;
                 }
-                
-                // Check if peer knows who the leader is
-                String leaderUrl = extractJsonField(json, "leaderUrl");
-                if (leaderUrl != null && !leaderUrl.isEmpty() && !"null".equals(leaderUrl)) {
-                    log.debug("Peer {} reports leader as: {}", peerUrl, leaderUrl);
-                    return leaderUrl;
-                }
+            } else if (responseCode == java.net.HttpURLConnection.HTTP_NOT_FOUND) {
+                return pollPeerForLeaderLegacy(peerUrl);
             }
             
         } catch (java.net.SocketTimeoutException e) {
@@ -392,6 +378,58 @@ public class LeaderDiscoveryService {
         }
         
         return null;
+    }
+
+    private String pollPeerForLeaderLegacy(String peerUrl) {
+        try {
+            java.net.URL apiUrl = new java.net.URL(peerUrl + "/v1/aeron/cluster-state");
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(HTTP_READ_TIMEOUT_MS);
+
+            if (peerUrl.contains("ngrok")) {
+                conn.setRequestProperty("ngrok-skip-browser-warning", "true");
+            }
+
+            if (conn.getResponseCode() != 200) {
+                return null;
+            }
+
+            String json = readResponseBody(conn);
+            String currentLeader = extractJsonField(json, "currentLeader");
+            if (currentLeader != null && !currentLeader.isEmpty() && !"null".equals(currentLeader)) {
+                return currentLeader;
+            }
+            String role = extractJsonField(json, "role");
+            if ("LEADER".equalsIgnoreCase(role)) {
+                return peerUrl;
+            }
+
+            String leaderUrl = extractJsonField(json, "leaderUrl");
+            if (leaderUrl != null && !leaderUrl.isEmpty() && !"null".equals(leaderUrl)) {
+                return leaderUrl;
+            }
+        } catch (Exception e) {
+            log.debug("Legacy leader polling failed for {}: {}", peerUrl, e.getMessage());
+        }
+        return null;
+    }
+
+    private String readResponseBody(java.net.HttpURLConnection conn) throws java.io.IOException {
+        java.io.BufferedReader reader = new java.io.BufferedReader(
+            new java.io.InputStreamReader(conn.getInputStream())
+        );
+        try {
+            StringBuilder response = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                response.append(line);
+            }
+            return response.toString();
+        } finally {
+            reader.close();
+        }
     }
     
     /**

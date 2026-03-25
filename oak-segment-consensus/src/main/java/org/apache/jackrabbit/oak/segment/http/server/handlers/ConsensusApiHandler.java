@@ -276,6 +276,13 @@ public class ConsensusApiHandler implements AutoCloseable {
     public void handleGetConsensusStatus(HttpServletResponse response) throws IOException {
         consensusStatusHandler.handleGetConsensusStatus(response);
     }
+
+    /**
+     * Handle GET /v1/consensus/leader - Return canonical leader-resolution data.
+     */
+    public void handleGetConsensusLeader(HttpServletResponse response) throws IOException {
+        consensusStatusHandler.handleGetConsensusLeader(response);
+    }
     
     /**
      * Get proposal status.

@@ -614,6 +614,12 @@ public class RequestRouter implements AutoCloseable {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/consensus/leader".equals(path) && "GET".equals(method)) {
+                consensusApiHandler.handleGetConsensusLeader(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             // Query APIs
             if ("/v1/wallets/stats".equals(path) && "GET".equals(method)) {

@@ -42,21 +42,35 @@ public class ConsensusStatusHandler {
         response.setContentType("application/json");
         response.setStatus(HttpServletResponse.SC_OK);
 
+        Map<String, Object> status = buildConsensusStatus();
+        status.values().removeIf(v -> v == null);
+        response.getWriter().write(JsonOutputUtil.toJson(status));
+    }
+
+    /**
+     * Handle GET /v1/consensus/leader - Return canonical leader-resolution data.
+     */
+    public void handleGetConsensusLeader(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        response.setStatus(HttpServletResponse.SC_OK);
+
+        Map<String, Object> leader = buildConsensusLeaderStatus();
+        leader.values().removeIf(v -> v == null);
+        response.getWriter().write(JsonOutputUtil.toJson(leader));
+    }
+
+    private Map<String, Object> buildConsensusStatus() {
         Map<String, Object> status = new LinkedHashMap<>();
 
-        // Check for Aeron Cluster consensus first (newest, preferred)
         if (context.aeronConsensusEngine != null) {
-            // ✈️ AERON NATIVE: Use Aeron's native cluster state APIs
             status.put("consensusType", "aeron-cluster");
             status.put("currentRole", context.aeronConsensusEngine.getCurrentRole().name());
             status.put("isLeader", context.aeronConsensusEngine.isLeader());
 
-            // ✈️ AERON NATIVE: Get leader from native cluster state (no HTTP API calls)
             String currentLeader = context.aeronConsensusEngine.getCurrentLeader();
             if (currentLeader != null) {
                 status.put("currentLeader", currentLeader);
             }
-            // If currentLeader is null, omit the field (may be during election)
 
             status.put("currentEpoch", context.aeronConsensusEngine.getCurrentEpoch());
             status.put("currentTerm", context.aeronConsensusEngine.getCurrentTerm());
@@ -64,13 +78,32 @@ public class ConsensusStatusHandler {
             status.put("allFollowers", context.aeronConsensusEngine.getAllFollowers());
             status.put("ethereumEpoch", context.aeronConsensusEngine.getCurrentEthereumEpoch());
         } else {
-            // No consensus engine
             status.put("consensusType", "none");
             status.put("currentRole", "STANDALONE");
         }
 
-        // CRITICAL: Omit null values - null means discovery failed, not that there's no leader.
-        status.values().removeIf(v -> v == null);
-        response.getWriter().write(JsonOutputUtil.toJson(status));
+        return status;
+    }
+
+    private Map<String, Object> buildConsensusLeaderStatus() {
+        Map<String, Object> leader = new LinkedHashMap<>();
+        leader.put("contractVersion", "consensus.leader.v1");
+
+        if (context.aeronConsensusEngine != null) {
+            String currentLeader = context.aeronConsensusEngine.getCurrentLeader();
+            leader.put("consensusType", "aeron-cluster");
+            leader.put("currentRole", context.aeronConsensusEngine.getCurrentRole().name());
+            leader.put("isLeader", context.aeronConsensusEngine.isLeader());
+            leader.put("currentTerm", context.aeronConsensusEngine.getCurrentTerm());
+            leader.put("currentLeader", currentLeader);
+            leader.put("leaderKnown", currentLeader != null && !currentLeader.isEmpty());
+        } else {
+            leader.put("consensusType", "none");
+            leader.put("currentRole", "STANDALONE");
+            leader.put("isLeader", false);
+            leader.put("leaderKnown", false);
+        }
+
+        return leader;
     }
 }

@@ -73,6 +73,26 @@ public class ConsensusStatusHandlerTest {
         assertFalse(json.contains("\"currentLeader\""));
     }
 
+    @Test
+    public void testHandleGetConsensusLeaderReturnsCanonicalLeaderPayload() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.getCurrentRole()).thenReturn(org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole.FOLLOWER);
+        when(engine.isLeader()).thenReturn(false);
+        when(engine.getCurrentLeader()).thenReturn("http://validator-1:8090");
+        when(engine.getCurrentTerm()).thenReturn(9);
+
+        new ConsensusStatusHandler(newContext(engine)).handleGetConsensusLeader(response);
+
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"consensus.leader.v1\""));
+        assertTrue(json.contains("\"consensusType\":\"aeron-cluster\""));
+        assertTrue(json.contains("\"currentLeader\":\"http://validator-1:8090\""));
+        assertTrue(json.contains("\"leaderKnown\":true"));
+        assertTrue(json.contains("\"currentTerm\":9"));
+    }
+
     private static ServerContext newContext(AeronConsensusEngine engine) {
         ServerContext context = new ServerContext(
             mock(FileStore.class),

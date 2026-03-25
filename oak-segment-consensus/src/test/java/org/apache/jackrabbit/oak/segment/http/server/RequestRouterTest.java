@@ -218,6 +218,30 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testConsensusLeaderRouteReturnsCanonicalLeaderPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.aeronConsensusEngine = mock(AeronConsensusEngine.class);
+            when(context.aeronConsensusEngine.getCurrentRole()).thenReturn(ValidatorRole.LEADER);
+            when(context.aeronConsensusEngine.isLeader()).thenReturn(true);
+            when(context.aeronConsensusEngine.getCurrentLeader()).thenReturn("http://localhost:8090");
+            when(context.aeronConsensusEngine.getCurrentTerm()).thenReturn(4);
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/consensus/leader");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"consensus.leader.v1\""));
+            assertTrue(body.toString().contains("\"currentLeader\":\"http://localhost:8090\""));
+        });
+    }
+
+    @Test
     public void testDashboardRouteRendersLandingPage() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
