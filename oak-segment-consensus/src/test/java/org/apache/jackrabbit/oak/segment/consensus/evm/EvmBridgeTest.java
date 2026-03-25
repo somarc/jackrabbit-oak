@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.evm;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof;
 import org.junit.After;
@@ -35,6 +36,8 @@ public class EvmBridgeTest {
     
     @Before
     public void setUp() {
+        System.clearProperty("oak.blockchain.mode");
+        BlockchainConfig.reset();
         bridge = new SimpleEvmBridge("sepolia", "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
     }
@@ -42,6 +45,8 @@ public class EvmBridgeTest {
     @After
     public void tearDown() {
         bridge.stop();
+        System.clearProperty("oak.blockchain.mode");
+        BlockchainConfig.reset();
     }
     
     @Test
@@ -239,5 +244,24 @@ public class EvmBridgeTest {
         
         newBridge.stop();
         assertFalse("Bridge should not be running after stop", newBridge.isRunning());
+    }
+
+    @Test
+    public void testMockModeAutoSimulatesBytes32ProposalIds() {
+        bridge.stop();
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        bridge = new SimpleEvmBridge("mock", "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
+        bridge.start();
+
+        String proposalId = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        String walletAddress = "0x1234567890123456789012345678901234567890";
+        bridge.registerProposalWallet(proposalId, walletAddress);
+
+        PaymentProof proof = bridge.verifyPayment(proposalId);
+        assertNotNull("Mock mode should auto-simulate bytes32 proposal ids", proof);
+        assertEquals("Proposal id should be preserved", proposalId, proof.getProposalId());
+        assertEquals("Bytes32 proposal ids should also work as mock tx hashes", proposalId, proof.getTransactionHash());
+        assertEquals("Registered wallet should flow into the mock proof", walletAddress, proof.getFromAddress());
     }
 }

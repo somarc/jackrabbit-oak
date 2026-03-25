@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.security;
 
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,17 +63,19 @@ public class EthereumSignatureVerifier {
     
     // Flag to track if Bouncy Castle is available
     private static boolean bouncyCastleAvailable = false;
+    private static String availabilityReason = "Bouncy Castle provider not initialized";
     
     static {
         try {
-            // Try to load Bouncy Castle provider
-            Class<?> bcProviderClass = Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider");
-            java.security.Provider bcProvider = (java.security.Provider) bcProviderClass.getDeclaredConstructor().newInstance();
-            Security.addProvider(bcProvider);
+            if (Security.getProvider(BC_PROVIDER) == null) {
+                Security.addProvider(new BouncyCastleProvider());
+            }
             bouncyCastleAvailable = true;
+            availabilityReason = null;
             log.info("✅ Bouncy Castle provider loaded for secp256k1 signature verification");
-        } catch (Exception e) {
-            log.warn("⚠️ Bouncy Castle not available - using fallback verification (less secure)");
+        } catch (Throwable t) {
+            availabilityReason = "Bouncy Castle provider unavailable: " + t.getMessage();
+            log.error("❌ {}", availabilityReason, t);
             bouncyCastleAvailable = false;
         }
     }
@@ -88,6 +91,11 @@ public class EthereumSignatureVerifier {
     public static boolean verifySignature(String message, String signatureHex, String expectedAddress) {
         if (message == null || signatureHex == null || expectedAddress == null) {
             log.warn("❌ Signature verification failed: null parameter");
+            return false;
+        }
+
+        if (!bouncyCastleAvailable) {
+            log.error("❌ Full Ethereum signature verification unavailable: {}", getAvailabilityReason());
             return false;
         }
         
@@ -172,10 +180,7 @@ public class EthereumSignatureVerifier {
      * @return The recovered public key (64 bytes, uncompressed without 0x04 prefix)
      */
     private static byte[] recoverPublicKey(byte[] messageHash, byte[] r, byte[] s, int recoveryId) {
-        if (!bouncyCastleAvailable) {
-            log.warn("⚠️ Bouncy Castle not available - cannot recover public key");
-            return null;
-        }
+        requireFullVerificationAvailable();
         
         try {
             BigInteger rBigInt = new BigInteger(1, r);
@@ -285,19 +290,13 @@ public class EthereumSignatureVerifier {
      * Compute Keccak-256 hash.
      */
     private static byte[] keccak256(byte[] input) throws Exception {
-        if (bouncyCastleAvailable) {
-            org.bouncycastle.crypto.digests.KeccakDigest digest = 
-                new org.bouncycastle.crypto.digests.KeccakDigest(256);
-            digest.update(input, 0, input.length);
-            byte[] hash = new byte[32];
-            digest.doFinal(hash, 0);
-            return hash;
-        } else {
-            // Fallback to SHA-256 (NOT Ethereum compatible, but allows basic testing)
-            log.warn("⚠️ Using SHA-256 fallback (not Ethereum compatible)");
-            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-            return sha256.digest(input);
-        }
+        requireFullVerificationAvailable();
+        org.bouncycastle.crypto.digests.KeccakDigest digest =
+            new org.bouncycastle.crypto.digests.KeccakDigest(256);
+        digest.update(input, 0, input.length);
+        byte[] hash = new byte[32];
+        digest.doFinal(hash, 0);
+        return hash;
     }
     
     /**
@@ -307,6 +306,22 @@ public class EthereumSignatureVerifier {
      */
     public static boolean isFullVerificationAvailable() {
         return bouncyCastleAvailable;
+    }
+
+    /**
+     * Fail closed when Ethereum verification dependencies are unavailable.
+     */
+    public static void requireFullVerificationAvailable() {
+        if (!bouncyCastleAvailable) {
+            throw new IllegalStateException(getAvailabilityReason());
+        }
+    }
+
+    /**
+     * Describe why full verification is unavailable.
+     */
+    public static String getAvailabilityReason() {
+        return availabilityReason != null ? availabilityReason : "Bouncy Castle provider is available";
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

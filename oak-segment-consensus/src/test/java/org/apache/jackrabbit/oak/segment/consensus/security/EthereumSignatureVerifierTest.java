@@ -44,9 +44,8 @@ public class EthereumSignatureVerifierTest {
     
     @Test
     public void testIsFullVerificationAvailable() {
-        // This test just verifies the method doesn't throw
-        EthereumSignatureVerifier.isFullVerificationAvailable();
-        // We don't assert true because BC might not be on classpath in all environments
+        assertTrue("Bouncy Castle must be available for Oak Chain signature verification",
+            EthereumSignatureVerifier.isFullVerificationAvailable());
     }
     
     @Test

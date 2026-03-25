@@ -70,9 +70,6 @@ public class DeleteProposalHandler {
         }
 
         try {
-            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig =
-                org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
-
             // Read parameters
             // CRITICAL: walletAddress is REQUIRED and must be a valid 0x Ethereum address
             String wallet = request.getParameter("walletAddress");
@@ -89,6 +86,20 @@ public class DeleteProposalHandler {
             }
             if (contentPath == null || contentPath.isEmpty()) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing contentPath parameter");
+                return;
+            }
+
+            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig =
+                org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+            if (!blockchainConfig.isMockMode()
+                && !org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
+                    .isFullVerificationAvailable()) {
+                context.apiRejectedRequests.incrementAndGet();
+                log.error("❌ Full Ethereum signature verification unavailable: {}",
+                    org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
+                        .getAvailabilityReason());
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    "Full Ethereum signature verification unavailable. Validator is missing required Bouncy Castle support.");
                 return;
             }
 
@@ -218,23 +229,21 @@ public class DeleteProposalHandler {
                 proposalId = clientProposalId.trim();
                 if (!isValidClientProposalId(proposalId)) {
                     ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "Invalid proposalId format. Expected 0x-prefixed 32-byte hex or UUID.");
+                        "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
                     return;
                 }
                 if (proposalId.startsWith("0X")) {
                     proposalId = "0x" + proposalId.substring(2);
                 }
-            } else if (!blockchainConfig.isMockMode()) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Chain-backed deletes require a client-supplied proposalId from the settlement contract flow (expected 0x-prefixed 32-byte hex).");
-                return;
             } else {
-                proposalId = java.util.UUID.randomUUID().toString();
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "Missing proposalId parameter. Clients must supply a 0x-prefixed 32-byte hex proposalId from the settlement contract flow.");
+                return;
             }
 
-            if (!blockchainConfig.isMockMode() && !isChainBackedProposalId(proposalId)) {
+            if (!isChainBackedProposalId(proposalId)) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Chain-backed deletes require proposalId to be a 0x-prefixed 32-byte hex value. UUID proposalIds are mock-only.");
+                    "proposalId must be a 0x-prefixed 32-byte hex value.");
                 return;
             }
 
@@ -433,10 +442,7 @@ public class DeleteProposalHandler {
             return false;
         }
         String value = proposalId.trim();
-        if (value.matches("(?i)^0x[a-f0-9]{64}$")) {
-            return true;
-        }
-        return value.matches("(?i)^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
+        return value.matches("(?i)^0x[a-f0-9]{64}$");
     }
 
     private static boolean isChainBackedProposalId(String proposalId) {

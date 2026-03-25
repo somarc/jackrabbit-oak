@@ -42,6 +42,7 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -160,6 +161,10 @@ public class ConsensusServicesInitializerTest {
 
         proposalFactory.raftAppendCallback.appendProposal("0xwallet", "/a", "text/plain", "body", "sig");
         proposalFactory.raftAppendCallback.appendDeleteProposal("0xwallet", "/a", "sig");
+        assertFalse(proposalFactory.raftAppendCallback.tryAppendProposalWithId(
+            "proposal-1", "0xwallet", "/a", "text/plain", "body", "sig"));
+        assertFalse(proposalFactory.raftAppendCallback.tryAppendDeleteProposalWithId(
+            "proposal-2", "0xwallet", "/a", "sig"));
         assertEquals(0, proposalFactory.raftAppendCallback.appendProposalBatch(Collections.<QueuedProposal>emptyList()));
     }
 
@@ -317,12 +322,13 @@ public class ConsensusServicesInitializerTest {
 
         RaftAppendCallback callback = proposalFactory.raftAppendCallback;
         callback.appendProposal("0xwallet", "/content", "text/plain", "body", "sig");
-        callback.appendProposalWithId("proposal-1", "0xwallet", "/content", "text/plain", "body", "sig");
         callback.appendProposal("0xwallet", "/content", "text/plain", "body", "sig", "blob-1", "image/png");
-        callback.appendProposalWithId(
-            "proposal-2", "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1");
         callback.appendDeleteProposal("0xwallet", "/content", "sig");
-        callback.appendDeleteProposalWithId("proposal-3", "0xwallet", "/content", "sig");
+        assertTrue(callback.tryAppendProposalWithId(
+            "proposal-1", "0xwallet", "/content", "text/plain", "body", "sig"));
+        assertTrue(callback.tryAppendProposalWithId(
+            "proposal-2", "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1"));
+        assertTrue(callback.tryAppendDeleteProposalWithId("proposal-3", "0xwallet", "/content", "sig"));
         assertEquals(2, callback.appendProposalBatch(proposalFactory.batchProposals));
 
         verify(testContext.aeronEngine).sendWriteThroughIngress("0xwallet", "/content", "text/plain", "body", "sig");

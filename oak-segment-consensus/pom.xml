@@ -52,7 +52,7 @@
                 ch.qos.logback.core.joran.spi;resolution:=optional,
                 ch.qos.logback.core.util;resolution:=optional,
                 org.slf4j.bridge;resolution:=optional,
-                org.bouncycastle.*;resolution:=optional,
+                org.bouncycastle.*,
                 *
               </Import-Package>
             </instructions>

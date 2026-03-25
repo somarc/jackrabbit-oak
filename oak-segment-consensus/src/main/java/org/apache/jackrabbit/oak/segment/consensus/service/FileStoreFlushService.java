@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.service;
 
+import java.io.IOException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -74,35 +75,38 @@ public final class FileStoreFlushService implements AutoCloseable {
         }
     }
 
-    public void onChangeApplied() {
+    public boolean onChangeApplied() {
         if (!isAsyncEnabled()) {
-            flushNow();
-            return;
+            return flushNow();
         }
         pendingChanges.incrementAndGet();
         dirty = true;
         if (flushBatch > 0 && pendingChanges.get() >= flushBatch) {
-            flushIfDirty();
+            return flushIfDirty();
         }
+        return false;
     }
 
     private boolean isAsyncEnabled() {
         return flushIntervalMs > 0 || flushBatch > 1;
     }
 
-    private void flushIfDirty() {
+    private boolean flushIfDirty() {
         if (!dirty) {
-            return;
+            return false;
         }
         if (!flushInProgress.compareAndSet(false, true)) {
-            return;
+            return false;
         }
         try {
             if (!dirty) {
-                return;
+                return false;
             }
             long pendingBefore = pendingChanges.get();
-            flushNow();
+            boolean flushed = flushNow();
+            if (!flushed) {
+                return false;
+            }
             long remaining = pendingChanges.addAndGet(-pendingBefore);
             if (remaining <= 0) {
                 pendingChanges.set(0);
@@ -110,17 +114,20 @@ public final class FileStoreFlushService implements AutoCloseable {
             } else {
                 dirty = true;
             }
+            return true;
         } finally {
             flushInProgress.set(false);
         }
     }
 
-    private void flushNow() {
+    private boolean flushNow() {
         synchronized (flushLock) {
             try {
                 fileStore.flush();
-            } catch (java.io.IOException e) {
+                return true;
+            } catch (IOException e) {
                 log.warn("FileStore flush failed: {}", e.getMessage());
+                return false;
             }
         }
     }

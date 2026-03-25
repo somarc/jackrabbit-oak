@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
@@ -47,6 +48,7 @@ public class WriteApplicationServiceTest {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        when(flushService.onChangeApplied()).thenReturn(true);
         WriteApplicationService service = new WriteApplicationService(fileStore, nodeStore, null, flushService);
 
         AtomicReference<String> updatedHead = new AtomicReference<>();
@@ -121,6 +123,7 @@ public class WriteApplicationServiceTest {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        when(flushService.onChangeApplied()).thenReturn(true);
         WriteApplicationService service = new WriteApplicationService(fileStore, nodeStore, null, flushService);
 
         service.applyWrite(
@@ -210,6 +213,46 @@ public class WriteApplicationServiceTest {
         assertEquals("new-head", newHead);
         assertEquals(PATH + "|" + WALLET + "|Acme|null|image/jpeg", binaryEvent.get());
         assertEquals("deadbeef#123", stringProperty(contentNode(authoritativeStore, PATH), "jcr:data"));
+        verify(flushService).onChangeApplied();
+    }
+
+    @Test
+    public void testApplyWriteSkipsDurabilityCallbackWhenFlushIsDeferred() {
+        FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        when(flushService.onChangeApplied()).thenReturn(false);
+        WriteApplicationService service = new WriteApplicationService(fileStore, nodeStore, null, flushService);
+
+        AtomicReference<String> durableProposal = new AtomicReference<>();
+        AtomicReference<String> durableHead = new AtomicReference<>();
+        service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
+            @Override
+            public void onDurable(String proposalId, String head) {
+                durableProposal.set(proposalId);
+                durableHead.set(head);
+            }
+
+            @Override
+            public void onFailure(String proposalId, String error) {
+            }
+        });
+
+        String newHead = service.applyWrite(
+            WALLET,
+            PATH,
+            "page",
+            "body",
+            "0xsig",
+            null,
+            null,
+            null,
+            null,
+            "proposal-deferred");
+
+        assertEquals("new-head", newHead);
+        assertNull(durableProposal.get());
+        assertNull(durableHead.get());
         verify(flushService).onChangeApplied();
     }
 

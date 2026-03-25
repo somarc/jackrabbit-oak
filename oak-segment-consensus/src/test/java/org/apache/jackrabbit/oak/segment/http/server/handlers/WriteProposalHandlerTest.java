@@ -22,6 +22,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
+import org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -30,6 +31,7 @@ import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Test;
 import org.web3j.crypto.Credentials;
 import org.web3j.crypto.Sign;
@@ -40,6 +42,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.ByteArrayInputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -238,6 +241,56 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
+    public void testHandleProposeWriteRejectsCryptographicallyInvalidSignatureInChainBackedMode() throws Exception {
+        Assume.assumeTrue("Requires full Ethereum signature verification", EthereumSignatureVerifier.isFullVerificationAvailable());
+
+        withChainBackedMode();
+        SignedRequest signedRequest = signedRequest("signed message");
+        ServerContext context = readyContext();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        registerClient(context, signedRequest.walletAddress, "client-1");
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(signedRequest.walletAddress);
+        when(request.getParameter("signature")).thenReturn(signedRequest.signature);
+        when(request.getParameter("message")).thenReturn("tampered message");
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        assertTrue(body.toString().contains("Signature verification failed"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsWhenFullVerificationUnavailable() throws Exception {
+        withChainBackedMode();
+        SignedRequest signedRequest = signedRequest("signed message");
+        ServerContext context = readyContext();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        registerClient(context, signedRequest.walletAddress, "client-1");
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(signedRequest.walletAddress);
+        when(request.getParameter("signature")).thenReturn(signedRequest.signature);
+        when(request.getParameter("message")).thenReturn(signedRequest.message);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        withForcedSignatureVerifierUnavailable("simulated verifier outage", () -> {
+            handler.handleProposeWrite(request, response);
+        });
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("Full Ethereum signature verification unavailable"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
     public void testHandleProposeWriteRejectsMissingEthereumTxHash() throws Exception {
         ServerContext context = readyContext();
         WriteProposalHandler handler = new WriteProposalHandler(context);
@@ -323,7 +376,29 @@ public class WriteProposalHandlerTest {
         handler.handleProposeWrite(request, response);
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        assertTrue(body.toString().contains("Invalid proposalId format. Expected 0x-prefixed 32-byte hex or UUID."));
+        assertTrue(body.toString().contains("Invalid proposalId format. Expected 0x-prefixed 32-byte hex."));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsMissingProposalIdInMockMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+
+        ServerContext context = readyContext();
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("proposalId")).thenReturn(null);
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Missing proposalId parameter"));
         assertEquals(1L, context.apiRejectedRequests.get());
     }
 
@@ -336,6 +411,7 @@ public class WriteProposalHandlerTest {
         registerClient(context, signedRequest.walletAddress, "client-1");
         WriteProposalHandler handler = new WriteProposalHandler(context);
         HttpServletRequest request = request();
+        when(request.getParameter("proposalId")).thenReturn(null);
         when(request.getParameter("walletAddress")).thenReturn(signedRequest.walletAddress);
         when(request.getParameter("signature")).thenReturn(signedRequest.signature);
         when(request.getParameter("message")).thenReturn(signedRequest.message);
@@ -346,7 +422,7 @@ public class WriteProposalHandlerTest {
         handler.handleProposeWrite(request, response);
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        assertTrue(body.toString().contains("Chain-backed modes require a client-supplied proposalId"));
+        assertTrue(body.toString().contains("Missing proposalId parameter"));
         assertEquals(1L, context.apiRejectedRequests.get());
     }
 
@@ -370,52 +446,50 @@ public class WriteProposalHandlerTest {
         handler.handleProposeWrite(request, response);
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        assertTrue(body.toString().contains("UUID proposalIds are mock-only"));
+        assertTrue(body.toString().contains("Invalid proposalId format. Expected 0x-prefixed 32-byte hex."));
         assertEquals(1L, context.apiRejectedRequests.get());
     }
 
     @Test
-    public void testHandleProposeWriteRejectsImmediateFallbackInSepoliaMode() throws Exception {
-        withChainBackedMode();
-        SignedRequest signedRequest = signedRequest("chain-backed immediate fallback");
+    public void testHandleProposeWriteRejectsQueueUnavailableInMockMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+
         ServerContext context = readyContext();
-        registerClient(context, signedRequest.walletAddress, "client-1");
         WriteProposalHandler handler = new WriteProposalHandler(context);
         HttpServletRequest request = request();
-        when(request.getParameter("walletAddress")).thenReturn(signedRequest.walletAddress);
-        when(request.getParameter("signature")).thenReturn(signedRequest.signature);
-        when(request.getParameter("message")).thenReturn(signedRequest.message);
-        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
         when(request.getParameter("proposalId")).thenReturn(VALID_CHAIN_PROPOSAL_ID);
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("message")).thenReturn("hello");
+        when(request.getParameter("contentType")).thenReturn("page");
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
 
         handler.handleProposeWrite(request, response);
 
         verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-        assertTrue(body.toString().contains("Chain-backed modes require queued verification"));
+        assertTrue(body.toString().contains("Proposal queue unavailable. Clients must use queued verification."));
         assertEquals(1L, context.apiRejectedRequests.get());
     }
 
     @Test
     public void testHandleProposeWriteImmediateIngressFailureReturnsServerError() throws Exception {
         ServerContext context = readyContext();
-        when(context.aeronConsensusEngine.sendWriteThroughIngress(
-            anyString(), anyString(), anyString(), anyString(), anyString(),
-            nullable(String.class), nullable(String.class), nullable(String.class), anyString()
-        )).thenReturn(false);
         WriteProposalHandler handler = new WriteProposalHandler(context);
         HttpServletRequest request = request();
         when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
         when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("proposalId")).thenReturn(VALID_CHAIN_PROPOSAL_ID);
         when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
 
         handler.handleProposeWrite(request, response);
 
-        verify(response).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-        assertTrue(body.toString().contains("Failed to send write through Aeron ingress channel"));
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("Proposal queue unavailable. Clients must use queued verification."));
     }
 
     @Test
@@ -666,38 +740,6 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
-    public void testHandleProposeWriteFallsBackToClientIdHeaderForImmediateIngress() throws Exception {
-        ServerContext context = new ServerContext(
-            null,
-            mock(NodeStore.class),
-            Paths.get("/tmp/store"),
-            "http://localhost:8090"
-        );
-        context.aeronConsensusEngine = baseEngine();
-        context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author", null));
-        when(context.aeronConsensusEngine.sendWriteThroughIngress(
-            anyString(), anyString(), anyString(), anyString(), anyString(),
-            nullable(String.class), nullable(String.class), nullable(String.class), anyString()
-        )).thenReturn(true);
-        WriteProposalHandler handler = new WriteProposalHandler(context);
-        HttpServletRequest request = request();
-        when(request.getHeader("X-Client-Id")).thenReturn("client-1");
-        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
-        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
-        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
-        when(request.getParameter("message")).thenReturn("hello");
-        when(request.getParameter("contentType")).thenReturn("page");
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-
-        handler.handleProposeWrite(request, response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        assertTrue(body.toString().contains("\"mode\":\"immediate\""));
-        assertTrue(body.toString().contains("\"newHead\":\"unknown\""));
-    }
-
-    @Test
     public void testHandleProposeWriteAcceptsValidatorHostedBinaryWithoutPriorityByDefault() throws Exception {
         System.setProperty("oak.blockchain.mode", "mock");
         BlockchainConfig.reset();
@@ -918,11 +960,13 @@ public class WriteProposalHandlerTest {
     private static HttpServletRequest request() {
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(request.getContentType()).thenReturn(null);
+        when(request.getParameter("proposalId")).thenReturn(VALID_CHAIN_PROPOSAL_ID);
         return request;
     }
 
     private static Collection<Part> multipartParts() throws Exception {
         return Arrays.asList(
+            fieldPart("proposalId", VALID_CHAIN_PROPOSAL_ID),
             fieldPart("walletAddress", VALID_WALLET),
             fieldPart("signature", VALID_SIGNATURE),
             fieldPart("ethereumTxHash", VALID_TX_HASH),
@@ -954,6 +998,49 @@ public class WriteProposalHandlerTest {
         HttpServletResponse response = mock(HttpServletResponse.class);
         when(response.getWriter()).thenReturn(new PrintWriter(body));
         return response;
+    }
+
+    private static void withForcedSignatureVerifierUnavailable(String reason, ThrowingRunnable runnable)
+            throws Exception {
+        boolean originalAvailable = readVerifierAvailability();
+        String originalReason = readVerifierReason();
+        setVerifierAvailability(false);
+        setVerifierReason(reason);
+        try {
+            runnable.run();
+        } finally {
+            setVerifierAvailability(originalAvailable);
+            setVerifierReason(originalReason);
+        }
+    }
+
+    private static boolean readVerifierAvailability() throws Exception {
+        Field field = EthereumSignatureVerifier.class.getDeclaredField("bouncyCastleAvailable");
+        field.setAccessible(true);
+        return field.getBoolean(null);
+    }
+
+    private static void setVerifierAvailability(boolean available) throws Exception {
+        Field field = EthereumSignatureVerifier.class.getDeclaredField("bouncyCastleAvailable");
+        field.setAccessible(true);
+        field.setBoolean(null, available);
+    }
+
+    private static String readVerifierReason() throws Exception {
+        Field field = EthereumSignatureVerifier.class.getDeclaredField("availabilityReason");
+        field.setAccessible(true);
+        return (String) field.get(null);
+    }
+
+    private static void setVerifierReason(String reason) throws Exception {
+        Field field = EthereumSignatureVerifier.class.getDeclaredField("availabilityReason");
+        field.setAccessible(true);
+        field.set(null, reason);
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 
     private static final class SignedRequest {

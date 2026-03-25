@@ -31,6 +31,8 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.Assert.*;
@@ -82,26 +84,26 @@ public class ProposalQueueIntegrationTest {
 
     private void createQueueManager() {
         raftAppendLatch = new CountDownLatch(1);
-        RaftAppendCallback callback = new RaftAppendCallback() {
+        createQueueManager(new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType, 
+            public void appendProposal(String walletAddress, String path, String contentType,
                                        String message, String signature) {
                 appendedProposalId = "captured";
                 raftAppendLatch.countDown();
             }
-            
+
             @Override
             public void appendProposal(String walletAddress, String path, String contentType,
                                        String message, String signature, String blobId, String mimeType) {
                 appendProposal(walletAddress, path, contentType, message, signature);
             }
-            
+
             @Override
             public void appendDeleteProposal(String walletAddress, String path, String signature) {
                 appendedProposalId = "delete-captured";
                 raftAppendLatch.countDown();
             }
-            
+
             @Override
             public int appendProposalBatch(java.util.List<QueuedProposal> batch) {
                 for (QueuedProposal p : batch) {
@@ -112,12 +114,11 @@ public class ProposalQueueIntegrationTest {
                 }
                 return batch.size();
             }
-        };
-        
-        // Create backpressure manager for test
-        BackpressureManager backpressureManager = new BackpressureManager();
+        });
+    }
 
-        // Use optimized queue manager (production implementation)
+    private void createQueueManager(RaftAppendCallback callback) {
+        BackpressureManager backpressureManager = new BackpressureManager();
         queueManager = new ProposalQueueManagerOptimized(bridge, callback, backpressureManager, beaconClient);
         queueManager.start();
     }
@@ -144,6 +145,30 @@ public class ProposalQueueIntegrationTest {
         beaconClient.startBackgroundPolling();
 
         createQueueManager();
+    }
+
+    private void recreateQueueManager(RaftAppendCallback callback) {
+        if (queueManager != null) {
+            queueManager.stop();
+        }
+        if (bridge != null) {
+            bridge.stop();
+        }
+        if (beaconClient != null) {
+            beaconClient.stopBackgroundPolling();
+        }
+
+        bridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        bridge.start();
+
+        beaconClient = new BeaconChainClient("ignored-in-mock-mode");
+        beaconClient.startBackgroundPolling();
+
+        createQueueManager(callback);
     }
     
     @After
@@ -345,6 +370,167 @@ public class ProposalQueueIntegrationTest {
         assertEquals("Priority direct-send counter should remain zero when proof resolves to standard",
             0L, longStat(stats, "priorityProposalsSent"));
         assertTrue("Proposal should drain through the normal scheduled/batched path",
+            longStat(stats, "batchedProposalsSent") >= 1L);
+    }
+
+    @Test
+    public void testSingleProposalRemainsVerifiedUntilIngressAcceptsIt() throws Exception {
+        System.setProperty("oak.proposal.priority.direct.release.enabled", "false");
+        System.setProperty("oak.proposal.release.mode", "adaptive-active");
+
+        CountDownLatch rejectedOnce = new CountDownLatch(1);
+        CountDownLatch accepted = new CountDownLatch(1);
+        AtomicBoolean allowIngress = new AtomicBoolean(false);
+
+        recreateQueueManager(new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                throw new AssertionError("Single-proposal test should use proposalId-aware ingress");
+            }
+
+            @Override
+            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String blobId, String mimeType, String ipfsCid) {
+                if (!allowIngress.get()) {
+                    rejectedOnce.countDown();
+                    return false;
+                }
+                appendedProposalId = proposalId;
+                accepted.countDown();
+                return true;
+            }
+        });
+
+        String proposalId = "0x4444444444444444444444444444444444444444444444444444444444444444";
+        String ethereumTxHash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/verified-until-accepted";
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "hold until ingress accepts",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            null
+        );
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(1_000_000),
+            bridge.getCurrentBlockNumber(),
+            ethereumTxHash
+        );
+
+        assertTrue("Single proposal should hit an ingress rejection before acceptance",
+            rejectedOnce.await(10, TimeUnit.SECONDS));
+        assertTrue("Proposal should remain verified while ingress rejects it",
+            waitForCondition(() -> {
+                QueuedProposal proposal = queueManager.getProposal(proposalId);
+                return proposal != null && proposal.getState() == ProposalState.VERIFIED;
+            }, 5_000, 25));
+
+        allowIngress.set(true);
+
+        assertTrue("Single proposal should be retried after ingress starts accepting",
+            accepted.await(10, TimeUnit.SECONDS));
+        assertTrue("Proposal should only become processed after ingress acceptance",
+            waitForCondition(() -> {
+                QueuedProposal proposal = queueManager.getProposal(proposalId);
+                return proposal != null && proposal.getState() == ProposalState.PROCESSED;
+            }, 5_000, 25));
+        assertEquals(proposalId, appendedProposalId);
+    }
+
+    @Test
+    public void testPriorityDirectReleaseFallsBackToScheduledQueueWhenIngressRejectsIt() throws Exception {
+        System.setProperty("oak.proposal.priority.direct.release.enabled", "true");
+        System.setProperty("oak.proposal.release.mode", "adaptive-active");
+
+        CountDownLatch rejectedOnce = new CountDownLatch(1);
+        CountDownLatch accepted = new CountDownLatch(1);
+        AtomicBoolean allowIngress = new AtomicBoolean(false);
+        AtomicInteger attempts = new AtomicInteger();
+
+        recreateQueueManager(new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                throw new AssertionError("Priority fallback test should use proposalId-aware ingress");
+            }
+
+            @Override
+            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String blobId, String mimeType, String ipfsCid) {
+                attempts.incrementAndGet();
+                if (!allowIngress.get()) {
+                    rejectedOnce.countDown();
+                    return false;
+                }
+                appendedProposalId = proposalId;
+                accepted.countDown();
+                return true;
+            }
+        });
+
+        String proposalId = "0x5555555555555555555555555555555555555555555555555555555555555555";
+        String ethereumTxHash = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/priority-fallback";
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "priority fallback",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
+            null
+        );
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(1_000_000),
+            bridge.getCurrentBlockNumber(),
+            ethereumTxHash
+        );
+
+        assertTrue("Priority proposal should see a rejected direct-release attempt first",
+            rejectedOnce.await(10, TimeUnit.SECONDS));
+        assertTrue("Priority proposal should remain verified after direct-release rejection",
+            waitForCondition(() -> {
+                QueuedProposal proposal = queueManager.getProposal(proposalId);
+                return proposal != null && proposal.getState() == ProposalState.VERIFIED;
+            }, 5_000, 25));
+
+        allowIngress.set(true);
+
+        assertTrue("Priority proposal should later drain through the scheduled queue",
+            accepted.await(10, TimeUnit.SECONDS));
+        assertTrue("Fallback path should require at least two attempts",
+            attempts.get() >= 2);
+        assertTrue("Priority proposal should become processed only after fallback acceptance",
+            waitForCondition(() -> {
+                QueuedProposal proposal = queueManager.getProposal(proposalId);
+                return proposal != null && proposal.getState() == ProposalState.PROCESSED;
+            }, 5_000, 25));
+
+        Map<String, Object> stats = queueManager.getQueueStats();
+        assertEquals("Direct priority sends should not be counted when the fast path was rejected",
+            0L, longStat(stats, "priorityProposalsSent"));
+        assertTrue("Priority fallback should use the scheduled/batched sender path",
             longStat(stats, "batchedProposalsSent") >= 1L);
     }
     

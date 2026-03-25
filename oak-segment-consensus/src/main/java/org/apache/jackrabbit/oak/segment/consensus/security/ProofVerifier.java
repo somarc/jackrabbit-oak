@@ -347,16 +347,10 @@ public class ProofVerifier {
         
         // Check if full verification is available (Bouncy Castle loaded)
         if (!EthereumSignatureVerifier.isFullVerificationAvailable()) {
-            log.warn("⚠️  Bouncy Castle not available - using format validation only");
-            // Fallback: just validate signature format (65 bytes = 130 hex chars + 0x prefix)
-            String normalizedSig = signature.toLowerCase().startsWith("0x") 
-                ? signature.substring(2) : signature;
-            if (normalizedSig.length() != 130) {
-                return VerificationResult.invalid("INVALID_SIGNATURE_FORMAT", 
-                    "Signature must be 65 bytes (130 hex chars)");
-            }
-            log.info("✅ Signature format valid (full verification unavailable)");
-            return VerificationResult.valid("Signature format valid (BC unavailable)");
+            String reason = EthereumSignatureVerifier.getAvailabilityReason();
+            log.error("❌ Full Ethereum signature verification unavailable: {}", reason);
+            return VerificationResult.invalid("SIGNATURE_VERIFICATION_UNAVAILABLE",
+                "Full Ethereum signature verification unavailable: " + reason);
         }
         
         // Full cryptographic verification
@@ -458,4 +452,3 @@ public class ProofVerifier {
         }
     }
 }
-

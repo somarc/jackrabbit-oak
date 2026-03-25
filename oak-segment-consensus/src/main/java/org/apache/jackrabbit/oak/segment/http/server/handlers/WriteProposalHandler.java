@@ -432,7 +432,6 @@ public class WriteProposalHandler {
             org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig =
                 org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
 
-            // In mock mode, generate mock signature if not provided
             // ============================================================
             // SIGNATURE VALIDATION (strict even in MOCK mode for testing)
             // ============================================================
@@ -487,8 +486,12 @@ public class WriteProposalHandler {
             } else {
                 // Real signature verification using Ethereum personal_sign recovery
                 if (!org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.isFullVerificationAvailable()) {
-                    log.warn("⚠️ Bouncy Castle not available - signature verification degraded");
-                    // In production without BC, we should reject. For now, warn and continue.
+                    context.apiRejectedRequests.incrementAndGet();
+                    log.error("❌ Full Ethereum signature verification unavailable: {}",
+                        org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.getAvailabilityReason());
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                        "Full Ethereum signature verification unavailable. Validator is missing required Bouncy Castle support.");
+                    return;
                 }
 
                 // The message that was signed (must match what client signed)
@@ -633,88 +636,39 @@ public class WriteProposalHandler {
             String contentId = contentType + "-" + System.currentTimeMillis();
             String fullPath = contentRoot + "/" + contentId;
 
-            // V5 alignment: allow client to supply on-chain proposalId (e.g. bytes32 from authorizeWrite()).
+            // V5 alignment: require the client to supply the on-chain proposalId
+            // (bytes32 from authorizeWrite()) in all modes.
             String proposalId;
             if (clientProposalId != null && !clientProposalId.trim().isEmpty()) {
                 proposalId = clientProposalId.trim();
                 if (!isValidClientProposalId(proposalId)) {
                     context.apiRejectedRequests.incrementAndGet();
                     ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "Invalid proposalId format. Expected 0x-prefixed 32-byte hex or UUID.");
+                        "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
                     return;
                 }
                 if (proposalId.startsWith("0X")) {
                     proposalId = "0x" + proposalId.substring(2);
                 }
             } else {
-                if (!blockchainConfig.isMockMode()) {
-                    context.apiRejectedRequests.incrementAndGet();
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "Chain-backed modes require a client-supplied proposalId from the authorize/payment contract flow (expected 0x-prefixed 32-byte hex).");
-                    return;
-                }
-                proposalId = java.util.UUID.randomUUID().toString();
-            }
-
-            if (!blockchainConfig.isMockMode() && !isChainBackedProposalId(proposalId)) {
                 context.apiRejectedRequests.incrementAndGet();
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Chain-backed modes require proposalId to be a 0x-prefixed 32-byte hex value. UUID proposalIds are mock-only.");
+                    "Missing proposalId parameter. Clients must supply a 0x-prefixed 32-byte hex proposalId from the authorize/payment contract flow.");
+                return;
+            }
+
+            if (!isChainBackedProposalId(proposalId)) {
+                context.apiRejectedRequests.incrementAndGet();
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                    "proposalId must be a 0x-prefixed 32-byte hex value.");
                 return;
             }
 
             // Check if proposal queue manager is available
             if (context.proposalQueueManager == null) {
-                if (!blockchainConfig.isMockMode()) {
-                    context.apiRejectedRequests.incrementAndGet();
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                        "Proposal queue unavailable. Chain-backed modes require queued verification and cannot fall back to immediate append.");
-                    return;
-                }
-                log.warn("⚠️  ProposalQueueManager not available - falling back to immediate append");
-                // Fallback: immediate append (for backward compatibility)
-                if (context.aeronConsensusEngine == null) {
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                        "AeronConsensusEngine not initialized"
-                    );
-                    return;
-                }
-
-                boolean success = context.aeronConsensusEngine.sendWriteThroughIngress(
-                    normalizedWallet,
-                    fullPath,
-                    contentType != null ? contentType : "page",
-                    message != null ? message : "",
-                    signature,
-                    blobId,      // Include binary reference for Aeron replication
-                    mimeType,    // Include mimeType for binary handling
-                    ipfsCid,
-                    proposalId
-                );
-
-                if (!success) {
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
-                        "Failed to send write through Aeron ingress channel"
-                    );
-                    return;
-                }
-
-                response.setContentType("application/json");
-                response.setStatus(HttpServletResponse.SC_OK);
-                String currentHead = context.fileStore != null
-                    ? context.fileStore.getHead().getRecordId().toString()
-                    : "unknown";
-                Map<String, Object> resultPayload = new LinkedHashMap<>();
-                resultPayload.put("success", true);
-                resultPayload.put("proposalId", proposalId);
-                resultPayload.put("wallet", wallet);
-                resultPayload.put("contentId", contentId);
-                resultPayload.put("storagePath", fullPath);
-                resultPayload.put("newHead", currentHead);
-                resultPayload.put("message", message);
-                resultPayload.put("contentType", contentType);
-                resultPayload.put("mode", "immediate");
-                response.getWriter().write(JsonOutputUtil.toJson(resultPayload));
+                context.apiRejectedRequests.incrementAndGet();
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    "Proposal queue unavailable. Clients must use queued verification.");
                 return;
             }
 
@@ -737,55 +691,6 @@ public class WriteProposalHandler {
             // Parse payment tier from request (defaults to STANDARD)
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier =
                 org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD;
-
-            // POC: Auto-simulate payment for testing (BEFORE queuing to avoid race condition)
-            if (context.evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
-                org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge simpleEvmBridge =
-                    (org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) context.evmBridge;
-
-                java.math.BigInteger paymentAmount;
-                if ("express".equalsIgnoreCase(paymentTier)) {
-                    tier = org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS;
-                    paymentAmount = tier.baseRate; // 0.000002 ETH
-                } else if ("priority".equalsIgnoreCase(paymentTier)) {
-                    tier = org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY;
-                    paymentAmount = tier.baseRate; // 0.00001 ETH
-                } else {
-                    // Standard tier (default)
-                    paymentAmount = tier.baseRate; // 0.000001 ETH
-                }
-
-                // Create mock payment proof with correct wallet address
-                org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof mockPayment =
-                    new org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof(
-                        ethereumTxHash,
-                        simpleEvmBridge.getCurrentBlockNumber(),
-                        normalizedWallet,  // fromAddress = wallet address (CRITICAL!)
-                        simpleEvmBridge.getContractAddress(),
-                        proposalId,
-                        paymentAmount.toString(), // Wei amount based on tier
-                        tier,
-                        org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.WRITE,
-                        org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.PaymentToken.ETH,
-                        usesValidatorHostedBinary ? CAPABILITY_VALIDATOR_HOSTED_BINARY : 0,
-                        ProposalQueuePolicy.requiredConfirmations()
-                    );
-                simpleEvmBridge.simulatePayment(mockPayment);
-
-                // Record validator earnings (distributed across all validators)
-                if (context.validatorEarningsTracker != null) {
-                    // Get current epoch from BeaconChainClient (if available)
-                    long currentEpoch = -1;
-                    if (context.proposalQueueManager != null) {
-                        currentEpoch = context.proposalQueueManager.getCurrentEpoch();
-                    }
-
-                    context.validatorEarningsTracker.recordPayment(paymentAmount, tier, currentEpoch);
-                    log.debug("💰 Payment recorded: {} wei (tier: {}) distributed across validators", paymentAmount, tier);
-                }
-
-                log.debug("🧪 POC: Auto-simulated payment for proposal {} from wallet {} (tier: {})", proposalId, normalizedWallet, tier);
-            }
 
             // Queue proposal (waiting for Ethereum confirmation)
             log.debug("📥 Queuing proposal {} (tx: {}, tier: {}, intentToken: {}, blobId: {}), waiting for Ethereum confirmation",
@@ -862,10 +767,7 @@ public class WriteProposalHandler {
             return false;
         }
         String value = proposalId.trim();
-        if (value.matches("(?i)^0x[a-f0-9]{64}$")) {
-            return true;
-        }
-        return value.matches("(?i)^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
+        return value.matches("(?i)^0x[a-f0-9]{64}$");
     }
 
     private static boolean isChainBackedProposalId(String proposalId) {

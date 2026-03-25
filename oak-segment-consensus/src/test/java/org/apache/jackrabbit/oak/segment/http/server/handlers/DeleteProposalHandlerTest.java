@@ -36,6 +36,7 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.lang.reflect.Field;
 import java.nio.file.Paths;
 
 import static org.junit.Assert.assertEquals;
@@ -52,6 +53,8 @@ public class DeleteProposalHandlerTest {
     private static final String OTHER_WALLET = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
     private static final String VALID_SIGNATURE = "0xabcdef12";
     private static final String PRIORITY_TX_HASH = "0xabcdef123456789f";
+    private static final String VALID_CHAIN_PROPOSAL_ID =
+        "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     @After
     public void tearDown() {
@@ -160,7 +163,59 @@ public class DeleteProposalHandlerTest {
     }
 
     @Test
+    public void testHandleDeleteProposalRejectsMissingProposalIdInMockMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedContent(nodeStore, VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("proposalId")).thenReturn(null);
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Missing proposalId parameter"));
+    }
+
+    @Test
     public void testHandleDeleteProposalRejectsMissingProposalIdInChainBackedMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedContent(nodeStore, VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("proposalId")).thenReturn(null);
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("Missing proposalId parameter"));
+    }
+
+    @Test
+    public void testHandleDeleteProposalRejectsWhenFullVerificationUnavailable() throws Exception {
         System.setProperty("oak.blockchain.mode", "sepolia");
         org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
 
@@ -178,10 +233,13 @@ public class DeleteProposalHandlerTest {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
 
-        handler.handleDeleteProposal(request, response);
+        withForcedSignatureVerifierUnavailable("simulated verifier outage", () -> {
+            handler.handleDeleteProposal(request, response);
+        });
 
-        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        assertTrue(body.toString().contains("client-supplied proposalId"));
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("Full Ethereum signature verification unavailable"));
+        assertEquals(1L, context.apiRejectedRequests.get());
     }
 
     @Test
@@ -381,6 +439,7 @@ public class DeleteProposalHandlerTest {
     private static HttpServletRequest request() {
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(request.getContentType()).thenReturn(null);
+        when(request.getParameter("proposalId")).thenReturn(VALID_CHAIN_PROPOSAL_ID);
         return request;
     }
 
@@ -388,5 +447,52 @@ public class DeleteProposalHandlerTest {
         HttpServletResponse response = mock(HttpServletResponse.class);
         when(response.getWriter()).thenReturn(new PrintWriter(body));
         return response;
+    }
+
+    private static void withForcedSignatureVerifierUnavailable(String reason, ThrowingRunnable runnable)
+            throws Exception {
+        boolean originalAvailable = readVerifierAvailability();
+        String originalReason = readVerifierReason();
+        setVerifierAvailability(false);
+        setVerifierReason(reason);
+        try {
+            runnable.run();
+        } finally {
+            setVerifierAvailability(originalAvailable);
+            setVerifierReason(originalReason);
+        }
+    }
+
+    private static boolean readVerifierAvailability() throws Exception {
+        Field field = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.class
+            .getDeclaredField("bouncyCastleAvailable");
+        field.setAccessible(true);
+        return field.getBoolean(null);
+    }
+
+    private static void setVerifierAvailability(boolean available) throws Exception {
+        Field field = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.class
+            .getDeclaredField("bouncyCastleAvailable");
+        field.setAccessible(true);
+        field.setBoolean(null, available);
+    }
+
+    private static String readVerifierReason() throws Exception {
+        Field field = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.class
+            .getDeclaredField("availabilityReason");
+        field.setAccessible(true);
+        return (String) field.get(null);
+    }
+
+    private static void setVerifierReason(String reason) throws Exception {
+        Field field = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.class
+            .getDeclaredField("availabilityReason");
+        field.setAccessible(true);
+        field.set(null, reason);
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 }

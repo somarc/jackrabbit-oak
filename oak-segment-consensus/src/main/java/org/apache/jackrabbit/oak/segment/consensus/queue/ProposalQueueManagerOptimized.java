@@ -2030,17 +2030,19 @@ public class ProposalQueueManagerOptimized {
                         // Check proposal type: WRITE or DELETE
                         if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
                             log.debug("🗑️  Sending DELETE proposal (templateId 101)");
-                            raftAppendCallback.appendDeleteProposalWithId(
+                            if (raftAppendCallback.tryAppendDeleteProposalWithId(
                                 proposal.getProposalId(),
                                 proposal.getWalletAddress(),
                                 proposal.getPath(),
                                 proposal.getSignature()
-                            );
+                            )) {
+                                sent = 1;
+                            }
                         } else {
                             String resolvedMessage = resolveProposalMessage(proposal);
                             log.debug("📝 Sending WRITE proposal (templateId 100) blobId={}, ipfsCid={}", 
                                 proposal.getBlobId(), proposal.getIpfsCid());
-                            raftAppendCallback.appendProposalWithId(
+                            if (raftAppendCallback.tryAppendProposalWithId(
                                 proposal.getProposalId(),
                                 proposal.getWalletAddress(),
                                 proposal.getPath(),
@@ -2050,9 +2052,10 @@ public class ProposalQueueManagerOptimized {
                                 proposal.getBlobId(),
                                 proposal.getMimeType(),
                                 proposal.getIpfsCid()
-                            );
+                            )) {
+                                sent = 1;
+                            }
                         }
-                        sent = 1; // appendProposal/appendDeleteProposal returns void, assume success
                     } else {
                         // Multi-proposal batch: use templateId 106
                         java.util.List<QueuedProposal> hydrated = hydrateBatchMessages(batch);
@@ -2258,16 +2261,6 @@ public class ProposalQueueManagerOptimized {
                     long proofNanos = System.nanoTime() - proofStartNs;
                     verifierProofNanos.addAndGet(proofNanos);
                     verifierLastProofMs.set(proofNanos / 1_000_000L);
-                    
-                    if (proof == null) {
-                        if (org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance().isMockMode()) {
-                            proof = createMockProof(proposal);
-                            if (proof != null && evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
-                                ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
-                                    .simulatePayment(proof);
-                            }
-                        }
-                    }
 
                     if (proof == null) {
                         // No payment found yet - re-queue (will retry)
@@ -2379,30 +2372,38 @@ public class ProposalQueueManagerOptimized {
                     if (!isMockMode) {
                         String signedMessage = resolveProposalMessage(proposal);
                         String proposalSignature = proposal.getSignature();
-                        
-                        if (proposalSignature != null && !proposalSignature.isEmpty() && 
-                            org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.isFullVerificationAvailable()) {
-                            
-                            long signatureStartNs = System.nanoTime();
-                            boolean signatureValid = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
-                                .verifySignature(signedMessage, proposalSignature, proposal.getWalletAddress());
-                            long signatureNanos = System.nanoTime() - signatureStartNs;
-                            verifierSignatureNanos.addAndGet(signatureNanos);
-                            verifierLastSignatureMs.set(signatureNanos / 1_000_000L);
-                            
-                            if (!signatureValid) {
-                                verifierRejectedCount.incrementAndGet();
-                                rejectProposal(proposal, "Cryptographic signature verification failed for wallet " + 
-                                    proposal.getWalletAddress());
-                                continue;
-                            }
-                            log.debug("✅ CHECKPOINT 2 PASSED: Signature cryptographically verified for wallet {}",
-                                proposal.getWalletAddress());
-                        } else {
-                            // Signature already verified at API entry, or BC not available
-                            log.debug("✅ CHECKPOINT 2 PASSED: Signature format verified for wallet {} (crypto check at API entry)",
-                                proposal.getWalletAddress());
+
+                        if (proposalSignature == null || proposalSignature.isEmpty()) {
+                            verifierRejectedCount.incrementAndGet();
+                            rejectProposal(proposal, "Missing cryptographic signature for wallet "
+                                + proposal.getWalletAddress());
+                            continue;
                         }
+
+                        if (!org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
+                            .isFullVerificationAvailable()) {
+                            verifierRejectedCount.incrementAndGet();
+                            rejectProposal(proposal, "Full Ethereum signature verification unavailable: "
+                                + org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
+                                    .getAvailabilityReason());
+                            continue;
+                        }
+
+                        long signatureStartNs = System.nanoTime();
+                        boolean signatureValid = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
+                            .verifySignature(signedMessage, proposalSignature, proposal.getWalletAddress());
+                        long signatureNanos = System.nanoTime() - signatureStartNs;
+                        verifierSignatureNanos.addAndGet(signatureNanos);
+                        verifierLastSignatureMs.set(signatureNanos / 1_000_000L);
+
+                        if (!signatureValid) {
+                            verifierRejectedCount.incrementAndGet();
+                            rejectProposal(proposal, "Cryptographic signature verification failed for wallet "
+                                + proposal.getWalletAddress());
+                            continue;
+                        }
+                        log.debug("✅ CHECKPOINT 2 PASSED: Signature cryptographically verified for wallet {}",
+                            proposal.getWalletAddress());
                     } else {
                         log.debug("✅ CHECKPOINT 2 PASSED: Signature verification skipped (mock mode) for wallet {}",
                             proposal.getWalletAddress());
@@ -2463,6 +2464,7 @@ public class ProposalQueueManagerOptimized {
                     long queueWaitMs = System.currentTimeMillis() - proposal.getTimestamp();
                     verifierQueueWaitMsTotal.addAndGet(queueWaitMs);
                     updateMax(verifierQueueWaitMsMax, queueWaitMs);
+                    String txHashSummary = summarizeTxHash(proof.getTransactionHash());
                     
                     // ═══════════════════════════════════════════════════════════
                     // PRIORITY DIRECT RELEASE: Optional compatibility fast-path to Aeron
@@ -2472,11 +2474,10 @@ public class ProposalQueueManagerOptimized {
                             proposal.getProposalId(), proposal.getType());
                         
                         try {
-                            // Send directly to Aeron (bypass batch queue)
-                            // Check type: WRITE or DELETE
+                            boolean sentToAeron;
                             if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
                                 log.debug("🗑️  PRIORITY DELETE: Sending directly to Aeron");
-                                raftAppendCallback.appendDeleteProposalWithId(
+                                sentToAeron = raftAppendCallback.tryAppendDeleteProposalWithId(
                                     proposal.getProposalId(),
                                     proposal.getWalletAddress(),
                                     proposal.getPath(),
@@ -2485,7 +2486,7 @@ public class ProposalQueueManagerOptimized {
                             } else {
                                 String resolvedMessage = resolveProposalMessage(proposal);
                                 log.debug("📝 PRIORITY WRITE: Sending directly to Aeron (ipfsCid={})", proposal.getIpfsCid());
-                                raftAppendCallback.appendProposalWithId(
+                                sentToAeron = raftAppendCallback.tryAppendProposalWithId(
                                     proposal.getProposalId(),
                                     proposal.getWalletAddress(),
                                     proposal.getPath(),
@@ -2497,29 +2498,36 @@ public class ProposalQueueManagerOptimized {
                                     proposal.getIpfsCid()
                                 );
                             }
-                            
-                            transitionProposalToProcessed(proposal);
-                            long priorityPersistStartNs = System.nanoTime();
-                            persistProposals();
-                            long priorityPersistNanos = System.nanoTime() - priorityPersistStartNs;
-                            verifierPersistNanos.addAndGet(priorityPersistNanos);
-                            verifierLastPersistMs.set(priorityPersistNanos / 1_000_000L);
-                            
-                            logRateLimitedInfo(lastPriorityLogMs, prioritySuppressed,
-                                "✅ Priority proposal {} sent to Aeron (tx: {}, block: {}, latency: ~30s)",
-                                proposal.getProposalId(),
-                                proof.getTransactionHash().substring(0, Math.min(10, proof.getTransactionHash().length())) + "...",
-                                proof.getBlockNumber());
-                            priorityProposalsSent.incrementAndGet();
-                            workCount++;
-                            
+
+                            if (sentToAeron) {
+                                transitionProposalToProcessed(proposal);
+                                long priorityPersistStartNs = System.nanoTime();
+                                persistProposals();
+                                long priorityPersistNanos = System.nanoTime() - priorityPersistStartNs;
+                                verifierPersistNanos.addAndGet(priorityPersistNanos);
+                                verifierLastPersistMs.set(priorityPersistNanos / 1_000_000L);
+
+                                logRateLimitedInfo(lastPriorityLogMs, prioritySuppressed,
+                                    "✅ Priority proposal {} sent to Aeron (tx: {}, block: {}, latency: ~30s)",
+                                    proposal.getProposalId(),
+                                    txHashSummary,
+                                    proof.getBlockNumber());
+                                priorityProposalsSent.incrementAndGet();
+                                workCount++;
+                            } else {
+                                log.warn("⚠️  Priority direct release was not accepted by Aeron ingress - routing {} through the scheduled release queue",
+                                    proposal.getProposalId());
+                                routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());
+                                workCount++;
+                            }
                         } catch (Exception e) {
-                            log.error("❌ Failed to send priority proposal {} to Aeron", proposal.getProposalId(), e);
-                            rejectProposal(proposal, "Aeron send failed: " + e.getMessage());
+                            log.error("❌ Failed to send priority proposal {} directly to Aeron - falling back to scheduled release",
+                                proposal.getProposalId(), e);
+                            routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());
+                            workCount++;
                         }
                     } else {
                         // EXPRESS or STANDARD: route through the active release scheduler
-                        String txHashSummary = summarizeTxHash(proof.getTransactionHash());
                         routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());
                         workCount++;
                     }
@@ -2552,51 +2560,6 @@ public class ProposalQueueManagerOptimized {
         @Override
         public String roleName() {
             return "evm-verifier-agent";
-        }
-    }
-
-    private org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof createMockProof(QueuedProposal proposal) {
-        try {
-            String proposalId = proposal.getProposalId();
-            if (proposalId == null || proposalId.isEmpty()) {
-                return null;
-            }
-            String proposalIdHex = proposalId.replace("-", "");
-            String mockTxHash = "0x" + proposalIdHex;
-            if (mockTxHash.length() < 66) {
-                int paddingNeeded = 66 - mockTxHash.length();
-                StringBuilder padding = new StringBuilder();
-                for (int i = 0; i < paddingNeeded; i++) {
-                    padding.append("0");
-                }
-                mockTxHash = mockTxHash + padding.toString();
-            } else if (mockTxHash.length() > 66) {
-                mockTxHash = mockTxHash.substring(0, 66);
-            }
-
-            String fromAddress = proposal.getWalletAddress() != null ? proposal.getWalletAddress()
-                : "0x0000000000000000000000000000000000000000";
-
-            log.warn("🎭 MOCK MODE: Auto-creating payment proof for proposal {} (from={})", proposalId, fromAddress);
-
-            return new org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof(
-                mockTxHash,
-                evmBridge.getCurrentBlockNumber(),
-                fromAddress,
-                evmBridge.getContractAddress(),
-                proposalId,
-                "1000000000000000",
-                proposal.getTier(),
-                proposal.getType() == QueuedProposal.ProposalType.DELETE
-                    ? org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.DELETE
-                    : org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.WRITE,
-                org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.PaymentToken.ETH,
-                requiresValidatorHostedBinaryCapability(proposal) ? CAPABILITY_VALIDATOR_HOSTED_BINARY : 0,
-                requiredConfirmations
-            );
-        } catch (Exception e) {
-            log.error("Failed to create mock payment proof for proposal {}", proposal.getProposalId(), e);
-            return null;
         }
     }
 

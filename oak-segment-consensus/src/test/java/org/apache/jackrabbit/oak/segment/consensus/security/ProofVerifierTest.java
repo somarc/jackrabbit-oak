@@ -22,6 +22,8 @@ import org.apache.jackrabbit.oak.segment.RecordId;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
+
 import static org.junit.Assert.*;
 import static org.junit.Assume.assumeTrue;
 import static org.mockito.Mockito.*;
@@ -374,6 +376,22 @@ public class ProofVerifierTest {
         assertFalse("Signature mismatch should be rejected", result.isValid());
         assertEquals("SIGNATURE_MISMATCH", result.getErrorCode());
     }
+
+    @Test
+    public void testSignatureVerificationUnavailableRejectsProof() throws Exception {
+        JoinProof proof = createValidProof();
+        proof.setChallengeNonce("test-nonce-12345");
+        proof.setNonceSignature("0x" + "1".repeat(130));
+        proof.setValidatorId(VALID_WALLET);
+
+        withForcedSignatureVerifierUnavailable("simulated Bouncy Castle outage", () -> {
+            ProofVerifier.VerificationResult result = verifier.verify(proof);
+
+            assertFalse("Proof must fail closed when Ethereum signature verification is unavailable", result.isValid());
+            assertEquals("SIGNATURE_VERIFICATION_UNAVAILABLE", result.getErrorCode());
+            assertTrue(result.getMessage().contains("simulated Bouncy Castle outage"));
+        });
+    }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // Full Verification Tests
@@ -446,5 +464,48 @@ public class ProofVerifierTest {
         proof.setNonceSignature(null);
         
         return proof;
+    }
+
+    private static void withForcedSignatureVerifierUnavailable(String reason, ThrowingRunnable runnable)
+            throws Exception {
+        boolean originalAvailable = readVerifierAvailability();
+        String originalReason = readVerifierReason();
+        setVerifierAvailability(false);
+        setVerifierReason(reason);
+        try {
+            runnable.run();
+        } finally {
+            setVerifierAvailability(originalAvailable);
+            setVerifierReason(originalReason);
+        }
+    }
+
+    private static boolean readVerifierAvailability() throws Exception {
+        Field field = EthereumSignatureVerifier.class.getDeclaredField("bouncyCastleAvailable");
+        field.setAccessible(true);
+        return field.getBoolean(null);
+    }
+
+    private static void setVerifierAvailability(boolean available) throws Exception {
+        Field field = EthereumSignatureVerifier.class.getDeclaredField("bouncyCastleAvailable");
+        field.setAccessible(true);
+        field.setBoolean(null, available);
+    }
+
+    private static String readVerifierReason() throws Exception {
+        Field field = EthereumSignatureVerifier.class.getDeclaredField("availabilityReason");
+        field.setAccessible(true);
+        return (String) field.get(null);
+    }
+
+    private static void setVerifierReason(String reason) throws Exception {
+        Field field = EthereumSignatureVerifier.class.getDeclaredField("availabilityReason");
+        field.setAccessible(true);
+        field.set(null, reason);
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 }

@@ -47,6 +47,7 @@ public class DeleteApplicationServiceTest {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = seededNodeStore(EXISTING_PATH);
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        when(flushService.onChangeApplied()).thenReturn(true);
         DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
 
         AtomicReference<String> updatedHead = new AtomicReference<>();
@@ -77,6 +78,36 @@ public class DeleteApplicationServiceTest {
         assertEquals(EXISTING_PATH + "|" + WALLET + "|Acme|0xsig", ssePayload.get());
         verify(flushService).onChangeApplied();
         assertFalse(nodeAt(nodeStore, EXISTING_PATH).exists());
+    }
+
+    @Test
+    public void testApplyDeleteSkipsDurabilityCallbackWhenFlushIsDeferred() throws Exception {
+        FileStore fileStore = fileStoreWithHeads("prev-head", "current-head");
+        MemoryNodeStore nodeStore = seededNodeStore(EXISTING_PATH);
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        when(flushService.onChangeApplied()).thenReturn(false);
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+
+        AtomicReference<String> durableProposal = new AtomicReference<>();
+        AtomicReference<String> durableHead = new AtomicReference<>();
+        service.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+            @Override
+            public void onDurable(String proposalId, String durableHeadValue) {
+                durableProposal.set(proposalId);
+                durableHead.set(durableHeadValue);
+            }
+
+            @Override
+            public void onFailure(String proposalId, String error) {
+            }
+        });
+
+        String newHead = service.applyDelete(WALLET, EXISTING_PATH, "0xsig", "proposal-deferred");
+
+        assertEquals("current-head", newHead);
+        assertNull(durableProposal.get());
+        assertNull(durableHead.get());
+        verify(flushService).onChangeApplied();
     }
 
     @Test

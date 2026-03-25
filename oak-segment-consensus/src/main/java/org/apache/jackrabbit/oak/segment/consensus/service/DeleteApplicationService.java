@@ -196,13 +196,13 @@ public class DeleteApplicationService {
             } catch (CommitFailedException e) {
                 throw new RuntimeException("Failed to commit delete", e);
             }
-            flushService.onChangeApplied();
+            boolean flushed = flushService.onChangeApplied();
             
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
             log.info("✅ DELETE applied, HEAD: {}...", truncate(newHead, 20));
 
-            if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
+            if (flushed && durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
                 durabilityCallback.onDurable(proposalId, newHead);
             }
             

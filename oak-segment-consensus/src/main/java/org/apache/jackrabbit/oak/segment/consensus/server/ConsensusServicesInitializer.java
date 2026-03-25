@@ -212,15 +212,22 @@ final class ConsensusServicesInitializer {
             @Override
             public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
                                              String message, String signature) {
+                tryAppendProposalWithId(proposalId, walletAddress, path, contentType, message, signature);
+            }
+
+            @Override
+            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                                   String message, String signature) {
                 if (aeronEngine == null) {
                     log.error("❌ aeronEngine is NULL in appendProposalWithId!");
-                    return;
+                    return false;
                 }
                 boolean success = aeronEngine.sendWriteThroughIngressWithId(
                     walletAddress, path, contentType, message, signature, null, proposalId);
                 if (!success) {
                     log.error("❌ sendWriteThroughIngress() returned false!");
                 }
+                return success;
             }
 
             @Override
@@ -240,15 +247,24 @@ final class ConsensusServicesInitializer {
             @Override
             public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
                                              String message, String signature, String blobId, String mimeType, String ipfsCid) {
+                tryAppendProposalWithId(
+                    proposalId, walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid);
+            }
+
+            @Override
+            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                                   String message, String signature, String blobId, String mimeType,
+                                                   String ipfsCid) {
                 if (aeronEngine == null) {
                     log.error("❌ aeronEngine is NULL in appendProposalWithId!");
-                    return;
+                    return false;
                 }
                 boolean success = aeronEngine.sendWriteThroughIngress(
                     walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid, proposalId);
                 if (!success) {
                     log.error("❌ sendWriteThroughIngress() with binary returned false!");
                 }
+                return success;
             }
 
             @Override
@@ -266,14 +282,20 @@ final class ConsensusServicesInitializer {
 
             @Override
             public void appendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
+                tryAppendDeleteProposalWithId(proposalId, walletAddress, path, signature);
+            }
+
+            @Override
+            public boolean tryAppendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
                 if (aeronEngine == null) {
                     log.error("❌ aeronEngine is NULL in appendDeleteProposalWithId!");
-                    return;
+                    return false;
                 }
                 boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature, proposalId);
                 if (!success) {
                     log.error("❌ sendDeleteThroughIngress() returned false!");
                 }
+                return success;
             }
 
             @Override

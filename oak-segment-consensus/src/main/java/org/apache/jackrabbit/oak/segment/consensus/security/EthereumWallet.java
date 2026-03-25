@@ -18,6 +18,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.security;
 
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +30,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.PublicKey;
@@ -100,52 +102,27 @@ public class EthereumWallet {
      * Generate a new secp256k1 key pair (Ethereum standard).
      */
     private KeyPair generateKeyPair() throws Exception {
-        // Prefer Bouncy Castle for reliable secp256k1 support.
-        if (ensureBouncyCastleProvider()) {
-            try {
-                KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC", BC_PROVIDER);
-                ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256k1");
-                keyGen.initialize(ecSpec, new SecureRandom());
-                KeyPair kp = keyGen.generateKeyPair();
-                log.info("✅ Generated new secp256k1 key pair (provider={})", BC_PROVIDER);
-                return kp;
-            } catch (Exception e) {
-                log.warn("⚠️  {} provider could not generate secp256k1 key pair, trying default provider", BC_PROVIDER);
-            }
-        }
-
-        try {
-            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC");
-            ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256k1");
-            keyGen.initialize(ecSpec, new SecureRandom());
-            KeyPair kp = keyGen.generateKeyPair();
-            log.info("✅ Generated new secp256k1 key pair (provider=default)");
-            return kp;
-        } catch (Exception e) {
-            // Fallback to secp256r1 if secp256k1 is not available
-            log.warn("⚠️  secp256k1 not available, falling back to secp256r1 (for POC)");
-            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC");
-            ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256r1");
-            keyGen.initialize(ecSpec, new SecureRandom());
-            return keyGen.generateKeyPair();
-        }
+        ensureBouncyCastleProvider();
+        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC", BC_PROVIDER);
+        ECGenParameterSpec ecSpec = new ECGenParameterSpec("secp256k1");
+        keyGen.initialize(ecSpec, new SecureRandom());
+        KeyPair kp = keyGen.generateKeyPair();
+        log.info("✅ Generated new secp256k1 key pair (provider={})", BC_PROVIDER);
+        return kp;
     }
 
-    private boolean ensureBouncyCastleProvider() {
+    private void ensureBouncyCastleProvider() {
         if (Security.getProvider(BC_PROVIDER) != null) {
-            return true;
+            return;
         }
         try {
-            Class<?> bcProviderClass = Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider");
-            java.security.Provider bcProvider = (java.security.Provider) bcProviderClass
-                .getDeclaredConstructor()
-                .newInstance();
-            Security.addProvider(bcProvider);
+            Security.addProvider(new BouncyCastleProvider());
             log.info("✅ Bouncy Castle provider registered (provider={})", BC_PROVIDER);
-            return true;
-        } catch (Exception e) {
-            log.warn("⚠️  Bouncy Castle provider unavailable, continuing with default JCA provider");
-            return false;
+        } catch (Throwable t) {
+            throw new IllegalStateException(
+                "Bouncy Castle provider unavailable; cannot create Ethereum secp256k1 wallets",
+                t
+            );
         }
     }
     
@@ -204,7 +181,8 @@ public class EthereumWallet {
         byte[] privateKeyBytes = hexToBytes(privateKeyHex);
         byte[] publicKeyBytes = hexToBytes(publicKeyHex);
         
-        java.security.KeyFactory keyFactory = java.security.KeyFactory.getInstance("EC");
+        ensureBouncyCastleProvider();
+        KeyFactory keyFactory = KeyFactory.getInstance("EC", BC_PROVIDER);
         
         // Reconstruct private key
         java.security.spec.PKCS8EncodedKeySpec privateKeySpec = 

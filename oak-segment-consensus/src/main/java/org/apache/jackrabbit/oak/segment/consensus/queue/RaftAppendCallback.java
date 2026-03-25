@@ -40,6 +40,15 @@ public interface RaftAppendCallback {
                                      String message, String signature) {
         appendProposal(walletAddress, path, contentType, message, signature);
     }
+
+    /**
+     * Try to append a verified write proposal with proposalId and report whether ingress accepted it.
+     */
+    default boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                            String message, String signature) {
+        appendProposalWithId(proposalId, walletAddress, path, contentType, message, signature);
+        return true;
+    }
     
     /**
      * Append a verified write proposal with binary to Raft log.
@@ -91,6 +100,16 @@ public interface RaftAppendCallback {
                                      String message, String signature, String blobId, String mimeType, String ipfsCid) {
         appendProposal(walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid);
     }
+
+    /**
+     * Try to append a verified write proposal with proposalId, binary, and IPFS CID.
+     */
+    default boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                            String message, String signature, String blobId, String mimeType,
+                                            String ipfsCid) {
+        appendProposalWithId(proposalId, walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid);
+        return true;
+    }
     
     /**
      * Append a verified delete proposal to Raft log.
@@ -112,6 +131,14 @@ public interface RaftAppendCallback {
     default void appendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
         appendDeleteProposal(walletAddress, path, signature);
     }
+
+    /**
+     * Try to append a verified delete proposal with proposalId and report whether ingress accepted it.
+     */
+    default boolean tryAppendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
+        appendDeleteProposalWithId(proposalId, walletAddress, path, signature);
+        return true;
+    }
     
     /**
      * Append a batch of verified proposals to Raft log as a single message.
@@ -126,25 +153,26 @@ public interface RaftAppendCallback {
         int sent = 0;
         for (QueuedProposal proposal : proposals) {
             if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
-                // DELETE proposal: send via appendDeleteProposal
-                appendDeleteProposalWithId(
+                if (tryAppendDeleteProposalWithId(
                     proposal.getProposalId(),
                     proposal.getWalletAddress(),
                     proposal.getPath(),
                     proposal.getSignature()
-                );
+                )) {
+                    sent++;
+                }
             } else {
-                // WRITE proposal: send via appendProposal
-                appendProposalWithId(
+                if (tryAppendProposalWithId(
                     proposal.getProposalId(),
                     proposal.getWalletAddress(),
                     proposal.getPath(),
                     proposal.getContentType(),
                     proposal.getMessage(),
                     proposal.getSignature()
-                );
+                )) {
+                    sent++;
+                }
             }
-            sent++;
         }
         return sent;
     }

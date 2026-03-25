@@ -24,6 +24,7 @@ import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof;
 import org.junit.After;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
 import java.util.Map;
 
 import static org.junit.Assert.assertNotNull;
@@ -260,6 +261,308 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
         }
     }
 
+    @Test
+    public void testVerifierRejectsPaymentToWrongContractInChainBackedMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        String proposalId = "0x4444444444444444444444444444444444444444444444444444444444444444";
+        String declaredTxHash = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        String walletAddress = "0x1234567890abcdef1234567890abcdef12345678";
+
+        EvmBridge evmBridge = mock(EvmBridge.class);
+        when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
+        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
+        when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
+            declaredTxHash,
+            123L,
+            walletAddress,
+            "0x2222222222222222222222222222222222222222",
+            proposalId,
+            "1",
+            ValidatorEarningsTracker.PaymentTier.STANDARD,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.ETH,
+            0,
+            12
+        ));
+
+        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+        when(beaconClient.getCachedCurrentEpoch()).thenReturn(10L);
+        when(beaconClient.getCachedFinalizedEpoch()).thenReturn(8L);
+
+        ProposalQueueManagerOptimized queueManager = new ProposalQueueManagerOptimized(
+            evmBridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient
+        );
+        queueManager.start();
+        try {
+            queueManager.queueProposal(
+                proposalId,
+                declaredTxHash,
+                walletAddress,
+                "/oak-chain/12/34/56/0x1234567890abcdef1234567890abcdef12345678/content/page-contract",
+                "page",
+                "message",
+                "",
+                ValidatorEarningsTracker.PaymentTier.STANDARD,
+                null
+            );
+
+            assertTrue(waitForCondition(() -> rejectedCount(queueManager) == 1L, 5_000L));
+            ProposalStatus status = queueManager.getProposalStatus(proposalId);
+            assertNotNull(status);
+            assertEquals(ProposalState.REJECTED, status.getState());
+            assertTrue(status.getRejectionReason().contains("Payment to wrong contract"));
+        } finally {
+            queueManager.stop();
+        }
+    }
+
+    @Test
+    public void testVerifierRejectsProofFromDifferentWalletInChainBackedMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        String proposalId = "0x5555555555555555555555555555555555555555555555555555555555555555";
+        String declaredTxHash = "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        String walletAddress = "0x1234567890abcdef1234567890abcdef12345678";
+
+        EvmBridge evmBridge = mock(EvmBridge.class);
+        when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
+        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
+        when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
+            declaredTxHash,
+            123L,
+            "0x9999999999999999999999999999999999999999",
+            "0x1111111111111111111111111111111111111111",
+            proposalId,
+            "1",
+            ValidatorEarningsTracker.PaymentTier.STANDARD,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.ETH,
+            0,
+            12
+        ));
+
+        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+        when(beaconClient.getCachedCurrentEpoch()).thenReturn(10L);
+        when(beaconClient.getCachedFinalizedEpoch()).thenReturn(8L);
+
+        ProposalQueueManagerOptimized queueManager = new ProposalQueueManagerOptimized(
+            evmBridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient
+        );
+        queueManager.start();
+        try {
+            queueManager.queueProposal(
+                proposalId,
+                declaredTxHash,
+                walletAddress,
+                "/oak-chain/12/34/56/0x1234567890abcdef1234567890abcdef12345678/content/page-wallet",
+                "page",
+                "message",
+                "",
+                ValidatorEarningsTracker.PaymentTier.STANDARD,
+                null
+            );
+
+            assertTrue(waitForCondition(() -> rejectedCount(queueManager) == 1L, 5_000L));
+            ProposalStatus status = queueManager.getProposalStatus(proposalId);
+            assertNotNull(status);
+            assertEquals(ProposalState.REJECTED, status.getState());
+            assertTrue(status.getRejectionReason().contains("does not match proposal wallet"));
+        } finally {
+            queueManager.stop();
+        }
+    }
+
+    @Test
+    public void testVerifierRejectsNonPositivePaymentAmountInChainBackedMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        String proposalId = "0x6666666666666666666666666666666666666666666666666666666666666666";
+        String declaredTxHash = "0x1212121212121212121212121212121212121212121212121212121212121212";
+        String walletAddress = "0x1234567890abcdef1234567890abcdef12345678";
+
+        EvmBridge evmBridge = mock(EvmBridge.class);
+        when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
+        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
+        when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
+            declaredTxHash,
+            123L,
+            walletAddress,
+            "0x1111111111111111111111111111111111111111",
+            proposalId,
+            "0",
+            ValidatorEarningsTracker.PaymentTier.STANDARD,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.ETH,
+            0,
+            12
+        ));
+
+        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+        when(beaconClient.getCachedCurrentEpoch()).thenReturn(10L);
+        when(beaconClient.getCachedFinalizedEpoch()).thenReturn(8L);
+
+        ProposalQueueManagerOptimized queueManager = new ProposalQueueManagerOptimized(
+            evmBridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient
+        );
+        queueManager.start();
+        try {
+            queueManager.queueProposal(
+                proposalId,
+                declaredTxHash,
+                walletAddress,
+                "/oak-chain/12/34/56/0x1234567890abcdef1234567890abcdef12345678/content/page-amount-zero",
+                "page",
+                "message",
+                "",
+                ValidatorEarningsTracker.PaymentTier.STANDARD,
+                null
+            );
+
+            assertTrue(waitForCondition(() -> rejectedCount(queueManager) == 1L, 5_000L));
+            ProposalStatus status = queueManager.getProposalStatus(proposalId);
+            assertNotNull(status);
+            assertEquals(ProposalState.REJECTED, status.getState());
+            assertTrue(status.getRejectionReason().contains("Insufficient payment amount"));
+        } finally {
+            queueManager.stop();
+        }
+    }
+
+    @Test
+    public void testVerifierRejectsInvalidPaymentAmountFormatInChainBackedMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        String proposalId = "0x7777777777777777777777777777777777777777777777777777777777777777";
+        String declaredTxHash = "0x3434343434343434343434343434343434343434343434343434343434343434";
+        String walletAddress = "0x1234567890abcdef1234567890abcdef12345678";
+
+        EvmBridge evmBridge = mock(EvmBridge.class);
+        when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
+        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
+        when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
+            declaredTxHash,
+            123L,
+            walletAddress,
+            "0x1111111111111111111111111111111111111111",
+            proposalId,
+            "not-a-number",
+            ValidatorEarningsTracker.PaymentTier.STANDARD,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.ETH,
+            0,
+            12
+        ));
+
+        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+        when(beaconClient.getCachedCurrentEpoch()).thenReturn(10L);
+        when(beaconClient.getCachedFinalizedEpoch()).thenReturn(8L);
+
+        ProposalQueueManagerOptimized queueManager = new ProposalQueueManagerOptimized(
+            evmBridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient
+        );
+        queueManager.start();
+        try {
+            queueManager.queueProposal(
+                proposalId,
+                declaredTxHash,
+                walletAddress,
+                "/oak-chain/12/34/56/0x1234567890abcdef1234567890abcdef12345678/content/page-amount-bad",
+                "page",
+                "message",
+                "",
+                ValidatorEarningsTracker.PaymentTier.STANDARD,
+                null
+            );
+
+            assertTrue(waitForCondition(() -> rejectedCount(queueManager) == 1L, 5_000L));
+            ProposalStatus status = queueManager.getProposalStatus(proposalId);
+            assertNotNull(status);
+            assertEquals(ProposalState.REJECTED, status.getState());
+            assertTrue(status.getRejectionReason().contains("Invalid payment amount format"));
+        } finally {
+            queueManager.stop();
+        }
+    }
+
+    @Test
+    public void testVerifierRejectsWhenFullSignatureVerificationUnavailableInChainBackedMode() throws Exception {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+
+        String proposalId = "0x8888888888888888888888888888888888888888888888888888888888888888";
+        String declaredTxHash = "0x5656565656565656565656565656565656565656565656565656565656565656";
+        String walletAddress = "0x1234567890abcdef1234567890abcdef12345678";
+
+        EvmBridge evmBridge = mock(EvmBridge.class);
+        when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
+        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
+        when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
+            declaredTxHash,
+            123L,
+            walletAddress,
+            "0x1111111111111111111111111111111111111111",
+            proposalId,
+            "1",
+            ValidatorEarningsTracker.PaymentTier.STANDARD,
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.ETH,
+            0,
+            12
+        ));
+
+        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
+        when(beaconClient.getCachedCurrentEpoch()).thenReturn(10L);
+        when(beaconClient.getCachedFinalizedEpoch()).thenReturn(8L);
+
+        ProposalQueueManagerOptimized queueManager = new ProposalQueueManagerOptimized(
+            evmBridge,
+            new NoopRaftAppendCallback(),
+            new BackpressureManager(),
+            beaconClient
+        );
+        queueManager.start();
+        try {
+            withForcedSignatureVerifierUnavailable("simulated verifier outage", () -> {
+                queueManager.queueProposal(
+                    proposalId,
+                    declaredTxHash,
+                    walletAddress,
+                    "/oak-chain/12/34/56/0x1234567890abcdef1234567890abcdef12345678/content/page-signature-unavailable",
+                    "page",
+                    "message",
+                    "0x" + "1".repeat(130),
+                    ValidatorEarningsTracker.PaymentTier.STANDARD,
+                    null
+                );
+                assertTrue(waitForCondition(() -> rejectedCount(queueManager) == 1L, 5_000L));
+                ProposalStatus status = queueManager.getProposalStatus(proposalId);
+                assertNotNull(status);
+                assertEquals(ProposalState.REJECTED, status.getState());
+                assertTrue(status.getRejectionReason().contains("Full Ethereum signature verification unavailable"));
+                assertTrue(status.getRejectionReason().contains("simulated verifier outage"));
+            });
+        } finally {
+            queueManager.stop();
+        }
+    }
+
     private static long rejectedCount(ProposalQueueManagerOptimized queueManager) {
         Map<String, Object> stats = queueManager.getQueueStats();
         Object value = stats.get("totalRejectedCount");
@@ -276,6 +579,53 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
             Thread.sleep(25L);
         }
         return condition.getAsBoolean();
+    }
+
+    private static void withForcedSignatureVerifierUnavailable(String reason, ThrowingRunnable runnable)
+            throws Exception {
+        boolean originalAvailable = readVerifierAvailability();
+        String originalReason = readVerifierReason();
+        setVerifierAvailability(false);
+        setVerifierReason(reason);
+        try {
+            runnable.run();
+        } finally {
+            setVerifierAvailability(originalAvailable);
+            setVerifierReason(originalReason);
+        }
+    }
+
+    private static boolean readVerifierAvailability() throws Exception {
+        Field field = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.class
+            .getDeclaredField("bouncyCastleAvailable");
+        field.setAccessible(true);
+        return field.getBoolean(null);
+    }
+
+    private static void setVerifierAvailability(boolean available) throws Exception {
+        Field field = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.class
+            .getDeclaredField("bouncyCastleAvailable");
+        field.setAccessible(true);
+        field.setBoolean(null, available);
+    }
+
+    private static String readVerifierReason() throws Exception {
+        Field field = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.class
+            .getDeclaredField("availabilityReason");
+        field.setAccessible(true);
+        return (String) field.get(null);
+    }
+
+    private static void setVerifierReason(String reason) throws Exception {
+        Field field = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.class
+            .getDeclaredField("availabilityReason");
+        field.setAccessible(true);
+        field.set(null, reason);
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 
     private static final class NoopRaftAppendCallback implements RaftAppendCallback {

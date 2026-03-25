@@ -25,6 +25,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -118,10 +121,7 @@ public class SimpleEvmBridge implements EvmBridge {
                 throw new IllegalStateException(errorMsg);
             }
             
-            // Create a simulated payment proof
-            // Generate a 64-char mock tx hash (UUID without dashes is only 32 chars, so double it)
-            String uuidHex = proposalId.replaceAll("-", "");
-            String mockTxHash = "0x" + uuidHex + uuidHex.substring(0, 64 - uuidHex.length());
+            String mockTxHash = buildMockTransactionHash(proposalId);
             
             PaymentProof mockPayment = new SimplePaymentProof(
                 mockTxHash, // Mock tx hash (64 chars)
@@ -239,6 +239,28 @@ public class SimpleEvmBridge implements EvmBridge {
      */
     public void advanceBlock() {
         currentBlock++;
+    }
+
+    private String buildMockTransactionHash(String proposalId) {
+        if (proposalId != null && proposalId.matches("^0x[0-9a-fA-F]{64}$")) {
+            return proposalId;
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(String.valueOf(proposalId).getBytes(StandardCharsets.UTF_8));
+            return "0x" + toHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 must be available for mock transaction synthesis", e);
+        }
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder hex = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) {
+            hex.append(Character.forDigit((value >>> 4) & 0xF, 16));
+            hex.append(Character.forDigit(value & 0xF, 16));
+        }
+        return hex.toString();
     }
     
     /**
