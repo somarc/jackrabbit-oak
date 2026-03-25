@@ -2421,7 +2421,9 @@ public class ProposalQueueManagerOptimized {
                     // Verify path belongs to wallet's shard (using WalletPathUtil for wallet-scoped paths)
                     long authStartNs = System.nanoTime();
                     String expectedShardRoot = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.getShardRoot(proposal.getWalletAddress());
-                    if (!proposal.getPath().startsWith(expectedShardRoot + "/")) {
+                    boolean ownsPath = proposal.getPath().equals(expectedShardRoot)
+                        || proposal.getPath().startsWith(expectedShardRoot + "/");
+                    if (!ownsPath) {
                         verifierRejectedCount.incrementAndGet();
                         rejectProposal(proposal, "Wallet " + proposal.getWalletAddress() + 
                             " cannot write to path outside its shard: " + proposal.getPath() + 

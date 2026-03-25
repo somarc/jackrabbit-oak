@@ -261,7 +261,7 @@ public class WriteApplicationService {
             } catch (CommitFailedException e) {
                 throw new RuntimeException("Failed to commit write", e);
             }
-            boolean flushed = flushService.onChangeApplied();
+            flushService.onChangeApplied(buildDurabilityCallback(proposalId));
             
             // Track fragmentation
             if (fragmentationCallback != null) {
@@ -271,10 +271,6 @@ public class WriteApplicationService {
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
             log.debug("✅ Write applied, HEAD: {}...", truncate(newHead, 20));
-
-            if (flushed && durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
-                durabilityCallback.onDurable(proposalId, newHead);
-            }
             
             // Update HEAD cache
             if (headUpdateCallback != null) {
@@ -302,6 +298,16 @@ public class WriteApplicationService {
             log.error("❌ Failed to apply replicated write", e);
             throw new RuntimeException("Failed to apply replicated write", e);
         }
+    }
+
+    private Runnable buildDurabilityCallback(String proposalId) {
+        if (durabilityCallback == null || proposalId == null || proposalId.isEmpty()) {
+            return null;
+        }
+        return () -> durabilityCallback.onDurable(
+            proposalId,
+            fileStore.getHead().getRecordId().toString10()
+        );
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

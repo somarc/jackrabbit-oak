@@ -16,6 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.api.PropertyState;
+import org.apache.jackrabbit.oak.api.Type;
+import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
@@ -27,6 +30,7 @@ import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfi
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.WriteMetadata;
@@ -34,6 +38,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -87,6 +92,7 @@ public class ServerContext {
     
     // Shared state
     public final Map<String, ClientRegistration> registeredClients;
+    private final DurableClientRegistrationStore durableClientRegistrationStore;
     public final Map<String, ValidatorRegistration> registeredValidators;
     public final Set<String> connectedPeers;
     public final Map<String, WriteMetadata> recentWriteMetadata;
@@ -114,9 +120,11 @@ public class ServerContext {
         
         // Initialize shared state
         this.registeredClients = new ConcurrentHashMap<>();
+        this.durableClientRegistrationStore = new DurableClientRegistrationStore(storeDirectory);
         this.registeredValidators = new ConcurrentHashMap<>();
         this.connectedPeers = java.util.concurrent.ConcurrentHashMap.newKeySet();
         this.recentWriteMetadata = new ConcurrentHashMap<>();
+        loadDurableClientRegistrations();
     }
     
     // Setters for consensus engines (can be set after construction)
@@ -176,6 +184,86 @@ public class ServerContext {
         this.authoritativeNodeStore = authoritativeNodeStore;
         log.info("✅ Authoritative NodeStore initialized");
     }
+
+    public ClientRegistration findClientRegistrationByWallet(String walletAddress) {
+        if (walletAddress == null || walletAddress.isBlank()) {
+            return null;
+        }
+
+        String normalizedWallet = walletAddress.trim().toLowerCase();
+        ClientRegistration existing = registeredClients.get(normalizedWallet);
+        if (existing != null) {
+            return existing;
+        }
+
+        for (ClientRegistration registration : registeredClients.values()) {
+            if (registration != null
+                    && registration.walletAddress != null
+                    && normalizedWallet.equals(registration.walletAddress.toLowerCase())) {
+                indexClientRegistration(registration);
+                return registration;
+            }
+        }
+
+        return recoverClientRegistrationFromWalletContent(normalizedWallet);
+    }
+
+    public ClientRegistration findClientRegistrationByClientId(String clientId) {
+        if (clientId == null || clientId.isBlank()) {
+            return null;
+        }
+        return registeredClients.get(clientId);
+    }
+
+    public synchronized ClientRegistration registerClient(
+            String clientId,
+            String clientUrl,
+            String walletAddress,
+            String clientType) {
+        String normalizedWallet = walletAddress.trim().toLowerCase();
+        String resolvedClientId = clientId == null || clientId.isBlank() ? normalizedWallet : clientId;
+        String resolvedClientUrl = clientUrl == null || clientUrl.isBlank() ? "wallet://" + normalizedWallet : clientUrl;
+
+        ClientRegistration walletRegistration = registeredClients.get(normalizedWallet);
+        ClientRegistration clientIdRegistration = resolvedClientId.equals(normalizedWallet)
+            ? walletRegistration
+            : registeredClients.get(resolvedClientId);
+        ClientRegistration existing = walletRegistration != null ? walletRegistration : clientIdRegistration;
+
+        if (clientIdRegistration != null
+                && clientIdRegistration.walletAddress != null
+                && !normalizedWallet.equals(clientIdRegistration.walletAddress.toLowerCase())) {
+            throw new IllegalStateException(String.format(
+                "Client %s already registered with wallet %s",
+                resolvedClientId,
+                clientIdRegistration.walletAddress
+            ));
+        }
+
+        long registeredAt = existing != null ? existing.registeredAt : System.currentTimeMillis();
+        ClientRegistration updated = ClientRegistration.restore(
+            resolvedClientId,
+            resolvedClientUrl,
+            normalizedWallet,
+            clientType,
+            registeredAt,
+            System.currentTimeMillis()
+        );
+
+        removeClientRegistrationAliases(existing);
+        indexClientRegistration(updated);
+        persistRegisteredClients();
+        return updated;
+    }
+
+    public synchronized void touchClientRegistration(ClientRegistration registration) {
+        if (registration == null) {
+            return;
+        }
+        registration.updateLastSeen();
+        indexClientRegistration(registration);
+        persistRegisteredClients();
+    }
     
     public void setFragmentationTracker(FragmentationTracker fragmentationTracker) {
         this.fragmentationTracker = fragmentationTracker;
@@ -220,6 +308,113 @@ public class ServerContext {
             log.info("   - Remote routes: {}", this.shardingRuntimeConfig.describeRemoteRoutes());
         } else {
             log.info("ℹ️  Sharding runtime disabled");
+        }
+    }
+
+    private void loadDurableClientRegistrations() {
+        int loaded = 0;
+        for (ClientRegistration registration : durableClientRegistrationStore.load()) {
+            indexClientRegistration(registration);
+            loaded++;
+        }
+        if (loaded > 0) {
+            log.info("✅ Restored {} durable client registrations", loaded);
+        }
+    }
+
+    private synchronized ClientRegistration recoverClientRegistrationFromWalletContent(String normalizedWallet) {
+        ClientRegistration existing = registeredClients.get(normalizedWallet);
+        if (existing != null) {
+            return existing;
+        }
+
+        NodeStore lookupStore = authoritativeNodeStore != null ? authoritativeNodeStore : nodeStore;
+        if (lookupStore == null) {
+            return null;
+        }
+
+        NodeState walletRoot = findWalletRoot(lookupStore, normalizedWallet);
+        if (walletRoot == null || !walletRoot.exists()) {
+            return null;
+        }
+
+        long registeredAt = longProperty(walletRoot, "walletCreated", System.currentTimeMillis());
+        long lastSeen = longProperty(walletRoot, "lastWrite", registeredAt);
+        ClientRegistration recovered = ClientRegistration.restore(
+            normalizedWallet,
+            "wallet://" + normalizedWallet,
+            normalizedWallet,
+            ClientRegistration.CLIENT_TYPE_SUPPLY_CHAIN,
+            registeredAt,
+            lastSeen
+        );
+        indexClientRegistration(recovered);
+        persistRegisteredClients();
+        log.info("♻️  Recovered durable client registration from wallet content: {}", normalizedWallet);
+        return recovered;
+    }
+
+    private static NodeState findWalletRoot(NodeStore nodeStore, String normalizedWallet) {
+        try {
+            String shardRoot = WalletPathUtil.getShardRoot(normalizedWallet);
+            NodeState current = nodeStore.getRoot();
+            if (current == null) {
+                return null;
+            }
+            for (String part : shardRoot.substring(1).split("/")) {
+                if (!current.hasChildNode(part)) {
+                    return null;
+                }
+                current = current.getChildNode(part);
+            }
+            return current;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static long longProperty(NodeState nodeState, String propertyName, long defaultValue) {
+        PropertyState propertyState = nodeState.getProperty(propertyName);
+        if (propertyState == null) {
+            return defaultValue;
+        }
+        try {
+            return propertyState.getValue(Type.LONG);
+        } catch (Exception e) {
+            return defaultValue;
+        }
+    }
+
+    private synchronized void persistRegisteredClients() {
+        Map<String, ClientRegistration> primaryRegistrations = new LinkedHashMap<>();
+        for (ClientRegistration registration : registeredClients.values()) {
+            if (registration == null || registration.walletAddress == null || registration.walletAddress.isBlank()) {
+                continue;
+            }
+            primaryRegistrations.putIfAbsent(registration.walletAddress.toLowerCase(), registration);
+        }
+        durableClientRegistrationStore.save(primaryRegistrations.values());
+    }
+
+    private void indexClientRegistration(ClientRegistration registration) {
+        if (registration == null || registration.walletAddress == null || registration.walletAddress.isBlank()) {
+            return;
+        }
+        String normalizedWallet = registration.walletAddress.toLowerCase();
+        registeredClients.put(normalizedWallet, registration);
+        if (registration.clientId != null && !registration.clientId.isBlank() && !normalizedWallet.equals(registration.clientId)) {
+            registeredClients.put(registration.clientId, registration);
+        }
+    }
+
+    private void removeClientRegistrationAliases(ClientRegistration registration) {
+        if (registration == null || registration.walletAddress == null || registration.walletAddress.isBlank()) {
+            return;
+        }
+        String normalizedWallet = registration.walletAddress.toLowerCase();
+        registeredClients.remove(normalizedWallet, registration);
+        if (registration.clientId != null && !registration.clientId.isBlank() && !normalizedWallet.equals(registration.clientId)) {
+            registeredClients.remove(registration.clientId, registration);
         }
     }
 }

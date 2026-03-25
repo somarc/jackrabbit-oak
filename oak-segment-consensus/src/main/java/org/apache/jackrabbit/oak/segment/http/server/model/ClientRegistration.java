@@ -37,12 +37,32 @@ public class ClientRegistration {
     }
 
     public ClientRegistration(String clientId, String clientUrl, String walletAddress, String clientType) {
+        this(clientId, clientUrl, walletAddress, clientType, System.currentTimeMillis(), System.currentTimeMillis());
+    }
+
+    private ClientRegistration(
+            String clientId,
+            String clientUrl,
+            String walletAddress,
+            String clientType,
+            long registeredAt,
+            long lastSeen) {
         this.clientId = clientId;
         this.clientUrl = clientUrl;
         this.walletAddress = walletAddress;
         this.clientType = normalizeClientType(clientType);
-        this.registeredAt = System.currentTimeMillis();
-        this.lastSeen = System.currentTimeMillis();
+        this.registeredAt = registeredAt;
+        this.lastSeen = lastSeen;
+    }
+
+    public static ClientRegistration restore(
+            String clientId,
+            String clientUrl,
+            String walletAddress,
+            String clientType,
+            long registeredAt,
+            long lastSeen) {
+        return new ClientRegistration(clientId, clientUrl, walletAddress, clientType, registeredAt, lastSeen);
     }
     
     public void updateLastSeen() {

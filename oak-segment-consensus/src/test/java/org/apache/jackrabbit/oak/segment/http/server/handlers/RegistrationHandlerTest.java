@@ -29,9 +29,12 @@ import java.io.BufferedReader;
 import java.io.PrintWriter;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -113,6 +116,34 @@ public class RegistrationHandlerTest {
     }
 
     @Test
+    public void testHandleClientRegistrationPersistsAcrossServerContextRestart() throws Exception {
+        Path storeDirectory = Files.createTempDirectory("client-registration-store");
+        try {
+            StringWriter body = new StringWriter();
+            HttpServletResponse response = responseWithBody(body);
+            HttpServletRequest request = baseRequest();
+            when(request.getParameter("walletAddress")).thenReturn(WALLET);
+            when(request.getParameter("clientId")).thenReturn("author-1");
+            when(request.getParameter("clientUrl")).thenReturn("http://author-1:4502");
+            when(request.getParameter("clientType")).thenReturn("enterprise");
+
+            RegistrationHandler handler = new RegistrationHandler(newContext(storeDirectory));
+            handler.handleClientRegistration(request, response);
+
+            ServerContext restored = newContext(storeDirectory);
+            ClientRegistration restoredByWallet = restored.findClientRegistrationByWallet(WALLET);
+            ClientRegistration restoredByClientId = restored.findClientRegistrationByClientId("author-1");
+            assertNotNull(restoredByWallet);
+            assertSame(restoredByWallet, restoredByClientId);
+            assertEquals(ClientRegistration.CLIENT_TYPE_ENTERPRISE, restoredByWallet.clientType);
+            assertEquals("http://author-1:4502", restoredByWallet.clientUrl);
+        } finally {
+            Files.deleteIfExists(storeDirectory.resolve("client-registrations.properties"));
+            Files.deleteIfExists(storeDirectory);
+        }
+    }
+
+    @Test
     public void testHandleClientRegistrationRejectsInvalidClientType() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
@@ -178,10 +209,14 @@ public class RegistrationHandlerTest {
     }
 
     private static ServerContext newContext() {
+        return newContext(Paths.get("/tmp/store"));
+    }
+
+    private static ServerContext newContext(Path storeDirectory) {
         return new ServerContext(
             mock(FileStore.class),
             mock(NodeStore.class),
-            Paths.get("/tmp/store"),
+            storeDirectory,
             "http://validator-1:8090"
         );
     }

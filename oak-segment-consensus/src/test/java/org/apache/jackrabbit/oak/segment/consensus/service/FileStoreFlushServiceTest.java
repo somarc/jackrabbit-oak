@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -60,6 +61,36 @@ public class FileStoreFlushServiceTest {
             FileStoreFlushService service = new FileStoreFlushService(fileStore);
 
             assertFalse(service.onChangeApplied());
+            verify(fileStore).flush();
+        }));
+    }
+
+    @Test
+    public void testOnChangeAppliedRunsFlushCallbackImmediatelyWhenFlushedSynchronously() throws Exception {
+        withProperty("oak.filestore.flush.ms", "0", () -> withProperty("oak.filestore.flush.batch", "1", () -> {
+            FileStore fileStore = mock(FileStore.class);
+            FileStoreFlushService service = new FileStoreFlushService(fileStore);
+            AtomicBoolean callbackRan = new AtomicBoolean(false);
+
+            assertTrue(service.onChangeApplied(() -> callbackRan.set(true)));
+
+            assertTrue(callbackRan.get());
+            verify(fileStore).flush();
+        }));
+    }
+
+    @Test
+    public void testDeferredFlushCallbackRunsWhenServiceEventuallyFlushes() throws Exception {
+        withProperty("oak.filestore.flush.ms", "60000", () -> withProperty("oak.filestore.flush.batch", "100", () -> {
+            FileStore fileStore = mock(FileStore.class);
+            AtomicBoolean callbackRan = new AtomicBoolean(false);
+
+            try (FileStoreFlushService service = new FileStoreFlushService(fileStore)) {
+                assertFalse(service.onChangeApplied(() -> callbackRan.set(true)));
+                assertFalse(callbackRan.get());
+            }
+
+            assertTrue(callbackRan.get());
             verify(fileStore).flush();
         }));
     }

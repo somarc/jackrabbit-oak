@@ -1483,6 +1483,39 @@ public class ProposalQueueIntegrationTest {
         assertTrue("Delete should be processed within 10s", raftAppendLatch.await(10, TimeUnit.SECONDS));
         assertEquals("Should capture delete", "delete-captured", appendedProposalId);
     }
+
+    @Test
+    public void testDeleteProposalAllowsWalletRootPath() throws InterruptedException {
+        String proposalId = "test-delete-wallet-root-001";
+        String ethereumTxHash = "0xtxdeletewalletroot001";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+
+        queueManager.queueDeleteProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY
+        );
+
+        QueuedProposal proposal = queueManager.getProposal(proposalId);
+        assertNotNull("Wallet-root delete proposal should be queued", proposal);
+        assertEquals("Should be DELETE type", QueuedProposal.ProposalType.DELETE, proposal.getType());
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(2_000_000),
+            12350L,
+            ethereumTxHash
+        );
+
+        assertTrue("Wallet-root delete should be processed within 10s", raftAppendLatch.await(10, TimeUnit.SECONDS));
+        assertEquals("Wallet-root delete should use delete callback", "delete-captured", appendedProposalId);
+    }
     
     @Test
     public void testQueueStats() {

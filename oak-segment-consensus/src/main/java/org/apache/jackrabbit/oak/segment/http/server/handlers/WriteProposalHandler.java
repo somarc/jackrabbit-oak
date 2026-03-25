@@ -26,6 +26,7 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -73,9 +74,10 @@ public class WriteProposalHandler {
             return;
         }
 
-        // ✈️ AERON MODE: All nodes (leader and followers) send writes through Aeron ingress
-        // Aeron Cluster handles routing to leader and replication to all nodes via Raft
-        // No proxy needed - Aeron handles it natively
+        // Shard routing decides which cluster owns the wallet prefix. Within that
+        // cluster, only the current leader may originate Aeron proposals. Followers
+        // must redirect the caller to the leader rather than sending ingress with a
+        // potentially stale term.
 
         try {
             // ============================================================
@@ -183,6 +185,10 @@ public class WriteProposalHandler {
                 return;
             }
 
+            if (!LeaderWriteRedirectUtil.allowLeaderWrite(context, "/v1/propose-write", response)) {
+                return;
+            }
+
             // ============================================================
             // ORGANIZATION VALIDATION (ADR 037)
             // ============================================================
@@ -200,17 +206,8 @@ public class WriteProposalHandler {
 
             // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
             // This is the primary identifier - clientId is secondary
-            ClientRegistration clientReg = null;
-            String clientId = null;
-
-            // First, try to find client by wallet address (primary lookup)
-            for (ClientRegistration reg : context.registeredClients.values()) {
-                if (reg.walletAddress != null && reg.walletAddress.toLowerCase().equals(normalizedWallet)) {
-                    clientReg = reg;
-                    clientId = reg.clientId;
-                    break;
-                }
-            }
+            ClientRegistration clientReg = context.findClientRegistrationByWallet(normalizedWallet);
+            String clientId = clientReg != null ? clientReg.clientId : null;
 
             // If not found by wallet, try clientId lookup (wallet address is preferred)
             // Note: IP-based fallback has been removed - wallet address is required
@@ -221,7 +218,7 @@ public class WriteProposalHandler {
                 }
                 // Only use explicit clientId header/param, not IP address
                 if (clientIdHeader != null && !clientIdHeader.isEmpty()) {
-                    clientReg = context.registeredClients.get(clientIdHeader);
+                    clientReg = context.findClientRegistrationByClientId(clientIdHeader);
                     if (clientReg != null) {
                         clientId = clientIdHeader;
                     }
@@ -266,9 +263,8 @@ public class WriteProposalHandler {
 
                 if (isValidatorWallet && blockchainConfig.isMockMode()) {
                     log.debug("✅ Auto-registering wallet {} as client (MOCK MODE - testing only)", validatorId);
-                    clientReg = new ClientRegistration(validatorId, context.selfUrl, normalizedWallet);
-                    context.registeredClients.put(validatorId, clientReg);
-                    clientId = validatorId;
+                    clientReg = context.registerClient(validatorId, context.selfUrl, normalizedWallet, ClientRegistration.CLIENT_TYPE_SUPPLY_CHAIN);
+                    clientId = clientReg.clientId;
                 } else {
                     log.warn("🚫 Write rejected: Wallet {} not registered and not a valid Ethereum address", normalizedWallet);
                     ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,

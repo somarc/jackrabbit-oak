@@ -109,6 +109,29 @@ public class DeleteProposalHandlerTest {
     }
 
     @Test
+    public void testHandleDeleteProposalRedirectsFollowerToCurrentLeader() throws Exception {
+        ServerContext context = readyContext(new MemoryNodeStore());
+        when(context.aeronConsensusEngine.isLeader()).thenReturn(false);
+        when(context.aeronConsensusEngine.getCurrentLeader()).thenReturn("http://leader-2:8094");
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(WalletPathUtil.getShardRoot(VALID_WALLET) + "/content/doc-1");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_TEMPORARY_REDIRECT);
+        verify(response).setHeader("Location", "http://leader-2:8094/v1/propose-delete");
+        assertTrue(body.toString().contains("\"code\":\"wrong_leader\""));
+        assertTrue(body.toString().contains("\"currentLeader\":\"http://leader-2:8094\""));
+        assertTrue(body.toString().contains("\"redirectUrl\":\"http://leader-2:8094/v1/propose-delete\""));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
     public void testHandleDeleteProposalRejectsClientIdWalletMismatch() throws Exception {
         ServerContext context = readyContext(new MemoryNodeStore());
         context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author-1:4502", OTHER_WALLET));
@@ -145,6 +168,65 @@ public class DeleteProposalHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_FORBIDDEN);
         assertTrue(body.toString().contains("Path ownership violation"));
+    }
+
+    @Test
+    public void testHandleDeleteProposalAllowsWalletRootDeletion() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedContent(nodeStore, VALID_WALLET);
+        String contentPath = WalletPathUtil.getShardRoot(VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.gcAccountManager = new GCAccountManager();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        verify(context.proposalQueueManager).queueDeleteProposal(
+            anyString(),
+            eq(PRIORITY_TX_HASH),
+            eq(VALID_WALLET),
+            eq(contentPath),
+            eq(VALID_SIGNATURE)
+        );
+        assertTrue(body.toString().contains("\"type\":\"DELETE\""));
+    }
+
+    @Test
+    public void testHandleDeleteProposalRecoversWalletRegistrationFromWalletContent() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedContent(nodeStore, VALID_WALLET);
+        ServerContext context = readyContext(nodeStore);
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        DeleteProposalHandler handler = new DeleteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        verify(context.proposalQueueManager).queueDeleteProposal(
+            anyString(),
+            eq(PRIORITY_TX_HASH),
+            eq(VALID_WALLET),
+            eq(contentPath),
+            eq(VALID_SIGNATURE)
+        );
+        assertTrue(context.registeredClients.containsKey(VALID_WALLET));
     }
 
     @Test
@@ -431,6 +513,8 @@ public class DeleteProposalHandlerTest {
         );
         AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
         when(engine.isClusterHealthy()).thenReturn(true);
+        when(engine.isLeader()).thenReturn(true);
+        when(engine.getCurrentLeader()).thenReturn("http://localhost:8090");
         context.aeronConsensusEngine = engine;
         return context;
     }

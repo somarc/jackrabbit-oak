@@ -152,6 +152,47 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
+    public void testHandleProposeWriteRedirectsFollowerToCurrentLeader() throws Exception {
+        ServerContext context = readyContext();
+        when(context.aeronConsensusEngine.isLeader()).thenReturn(false);
+        when(context.aeronConsensusEngine.getCurrentLeader()).thenReturn("http://leader-2:8094");
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_TEMPORARY_REDIRECT);
+        verify(response).setHeader("Location", "http://leader-2:8094/v1/propose-write");
+        assertTrue(body.toString().contains("\"code\":\"wrong_leader\""));
+        assertTrue(body.toString().contains("\"currentLeader\":\"http://leader-2:8094\""));
+        assertTrue(body.toString().contains("\"redirectUrl\":\"http://leader-2:8094/v1/propose-write\""));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
+    public void testHandleProposeWriteRejectsFollowerWhenLeaderUnknown() throws Exception {
+        ServerContext context = readyContext();
+        when(context.aeronConsensusEngine.isLeader()).thenReturn(false);
+        when(context.aeronConsensusEngine.getCurrentLeader()).thenReturn(null);
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        verify(response).setHeader("Retry-After", "1");
+        assertTrue(body.toString().contains("\"code\":\"leader_unknown\""));
+        assertTrue(body.toString().contains("Current leader is not yet known"));
+        assertEquals(1L, context.apiRejectedRequests.get());
+    }
+
+    @Test
     public void testHandleProposeWriteRejectsNonEnterpriseClientIpfsCid() throws Exception {
         ServerContext context = readyContext();
         WriteProposalHandler handler = new WriteProposalHandler(context);
@@ -931,6 +972,8 @@ public class WriteProposalHandlerTest {
     private static AeronConsensusEngine baseEngine() {
         AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
         when(engine.isClusterHealthy()).thenReturn(true);
+        when(engine.isLeader()).thenReturn(true);
+        when(engine.getCurrentLeader()).thenReturn("http://localhost:8090");
         return engine;
     }
 

@@ -28,6 +28,7 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUtil;
 import org.apache.jackrabbit.oak.spi.state.ChildNodeEntry;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.slf4j.Logger;
@@ -133,19 +134,14 @@ public class DeleteProposalHandler {
                 return;
             }
 
+            if (!LeaderWriteRedirectUtil.allowLeaderWrite(context, "/v1/propose-delete", response)) {
+                return;
+            }
+
             // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
             // This is the primary identifier - clientId is secondary
-            ClientRegistration clientReg = null;
-            String clientId = null;
-
-            // First, try to find client by wallet address (primary lookup)
-            for (ClientRegistration reg : context.registeredClients.values()) {
-                if (reg.walletAddress != null && reg.walletAddress.toLowerCase().equals(normalizedWallet)) {
-                    clientReg = reg;
-                    clientId = reg.clientId;
-                    break;
-                }
-            }
+            ClientRegistration clientReg = context.findClientRegistrationByWallet(normalizedWallet);
+            String clientId = clientReg != null ? clientReg.clientId : null;
 
             // If not found by wallet, try clientId lookup (wallet address is preferred)
             // Note: IP-based fallback has been removed - wallet address is required
@@ -156,7 +152,7 @@ public class DeleteProposalHandler {
                 }
                 // Only use explicit clientId header/param, not IP address
                 if (clientIdHeader != null && !clientIdHeader.isEmpty()) {
-                    clientReg = context.registeredClients.get(clientIdHeader);
+                    clientReg = context.findClientRegistrationByClientId(clientIdHeader);
                     if (clientReg != null) {
                         clientId = clientIdHeader;
                     }
@@ -198,15 +194,20 @@ public class DeleteProposalHandler {
                 }
             }
 
-            // Verify path ownership: must be under /oak-chain/{shard}/
+            // Verify path ownership: allow deleting either the wallet root itself
+            // or any descendant beneath it.
             String shardRoot = WalletPathUtil.getShardRoot(normalizedWallet);
-            if (!contentPath.toLowerCase().startsWith(shardRoot + "/")) {
+            String normalizedContentPath = contentPath.toLowerCase();
+            String normalizedShardRoot = shardRoot.toLowerCase();
+            boolean ownsPath = normalizedContentPath.equals(normalizedShardRoot)
+                || normalizedContentPath.startsWith(normalizedShardRoot + "/");
+            if (!ownsPath) {
                 log.warn("🚫 Delete proposal rejected: Path ownership violation");
                 log.warn("   Content path: {}", contentPath);
                 log.warn("   Expected shard root: {}", shardRoot);
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,
                     String.format("Path ownership violation: Content at %s does not belong to wallet %s. " +
-                                 "Only content under %s/ can be deleted.",
+                                 "Only content at or under %s can be deleted.",
                                  contentPath, wallet, shardRoot));
                 return;
             }

@@ -139,48 +139,35 @@ public class RegistrationHandler {
                 clientUrl = "wallet://" + walletAddress;
             }
             
-            // Register or update client - use wallet address as the lookup key
-            ClientRegistration registration = context.registeredClients.get(walletAddress);
-            if (registration == null) {
-                // Also check by clientId for backward compatibility
-                registration = context.registeredClients.get(clientId);
-            }
-            
-            if (registration == null) {
-                registration = new ClientRegistration(clientId, clientUrl, walletAddress, normalizedClientType);
-                // Store by wallet address (primary) and clientId (secondary)
-                context.registeredClients.put(walletAddress, registration);
-                if (!walletAddress.equals(clientId)) {
-                    context.registeredClients.put(clientId, registration);
-                }
-                log.info("✅ New client registered: wallet={} (clientId={}, type={}, url={})",
-                    walletAddress, clientId, registration.clientType, clientUrl);
-            } else {
-                // Verify wallet matches
-                if (registration.walletAddress != null && !registration.walletAddress.equalsIgnoreCase(walletAddress)) {
-                    log.warn("⚠️  Client {} already registered with different wallet: {} (attempted: {})", 
-                        clientId, registration.walletAddress, walletAddress);
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_CONFLICT, 
-                        String.format("Client %s already registered with wallet %s", clientId, registration.walletAddress));
-                    return;
-                }
+            ClientRegistration existingByWallet = context.findClientRegistrationByWallet(walletAddress);
+            ClientRegistration existingByClientId = walletAddress.equals(clientId)
+                ? existingByWallet
+                : context.findClientRegistrationByClientId(clientId);
+            ClientRegistration existing = existingByWallet != null ? existingByWallet : existingByClientId;
 
-                if (!registration.clientType.equals(normalizedClientType)) {
-                    String previousType = registration.clientType;
-                    ClientRegistration updated = new ClientRegistration(clientId, clientUrl, walletAddress, normalizedClientType);
-                    updated.lastSeen = registration.lastSeen;
-                    context.registeredClients.put(walletAddress, updated);
-                    if (!walletAddress.equals(clientId)) {
-                        context.registeredClients.put(clientId, updated);
-                    }
-                    registration = updated;
-                    log.info("🔄 Updated clientType for wallet {}: {} -> {}", walletAddress,
-                        previousType, normalizedClientType);
-                } else {
-                    registration.updateLastSeen();
-                    log.debug("Client heartbeat: wallet={} (clientId={}, type={})",
-                        walletAddress, clientId, registration.clientType);
-                }
+            if (existingByClientId != null
+                    && existingByClientId.walletAddress != null
+                    && !existingByClientId.walletAddress.equalsIgnoreCase(walletAddress)) {
+                log.warn("⚠️  Client {} already registered with different wallet: {} (attempted: {})",
+                    clientId, existingByClientId.walletAddress, walletAddress);
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_CONFLICT,
+                    String.format("Client %s already registered with wallet %s", clientId, existingByClientId.walletAddress));
+                return;
+            }
+
+            String previousType = existing != null ? existing.clientType : null;
+            boolean created = existing == null;
+            ClientRegistration registration = context.registerClient(clientId, clientUrl, walletAddress, normalizedClientType);
+
+            if (created) {
+                log.info("✅ New client registered: wallet={} (clientId={}, type={}, url={})",
+                    walletAddress, registration.clientId, registration.clientType, registration.clientUrl);
+            } else if (previousType != null && !previousType.equals(registration.clientType)) {
+                log.info("🔄 Updated clientType for wallet {}: {} -> {}", walletAddress,
+                    previousType, normalizedClientType);
+            } else {
+                log.debug("Client heartbeat: wallet={} (clientId={}, type={})",
+                    walletAddress, registration.clientId, registration.clientType);
             }
             
             // Return success
@@ -188,12 +175,14 @@ public class RegistrationHandler {
             response.setStatus(HttpServletResponse.SC_OK);
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("success", true);
-            result.put("clientId", clientId);
+            result.put("clientId", registration.clientId);
             result.put("walletAddress", walletAddress);
             result.put("clientType", registration.clientType);
             result.put("message", "Client registered");
             response.getWriter().write(JsonOutputUtil.toJson(result));
             
+        } catch (IllegalStateException e) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_CONFLICT, e.getMessage());
         } catch (Exception e) {
             log.error("Failed to register client", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Registration failed: " + e.getMessage());

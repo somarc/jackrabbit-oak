@@ -196,15 +196,11 @@ public class DeleteApplicationService {
             } catch (CommitFailedException e) {
                 throw new RuntimeException("Failed to commit delete", e);
             }
-            boolean flushed = flushService.onChangeApplied();
+            flushService.onChangeApplied(buildDurabilityCallback(proposalId));
             
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
             log.info("✅ DELETE applied, HEAD: {}...", truncate(newHead, 20));
-
-            if (flushed && durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
-                durabilityCallback.onDurable(proposalId, newHead);
-            }
             
             // Update HEAD cache
             if (headUpdateCallback != null) {
@@ -227,6 +223,16 @@ public class DeleteApplicationService {
             log.error("❌ Failed to apply replicated delete", e);
             throw new RuntimeException("Failed to apply replicated delete", e);
         }
+    }
+
+    private Runnable buildDurabilityCallback(String proposalId) {
+        if (durabilityCallback == null || proposalId == null || proposalId.isEmpty()) {
+            return null;
+        }
+        return () -> durabilityCallback.onDurable(
+            proposalId,
+            fileStore.getHead().getRecordId().toString10()
+        );
     }
 
     @NotNull

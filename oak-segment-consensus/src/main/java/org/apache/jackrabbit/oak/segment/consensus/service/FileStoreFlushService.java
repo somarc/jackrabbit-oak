@@ -17,7 +17,9 @@
 package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import java.io.IOException;
+import java.util.Queue;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -47,6 +49,7 @@ public final class FileStoreFlushService implements AutoCloseable {
     private final AtomicLong pendingChanges = new AtomicLong(0);
     private final AtomicBoolean flushInProgress = new AtomicBoolean(false);
     private final Object flushLock = new Object();
+    private final Queue<Runnable> pendingFlushCallbacks = new ConcurrentLinkedQueue<>();
     private volatile boolean dirty = false;
     private final ScheduledExecutorService scheduler;
 
@@ -76,11 +79,18 @@ public final class FileStoreFlushService implements AutoCloseable {
     }
 
     public boolean onChangeApplied() {
-        if (!isAsyncEnabled()) {
-            return flushNow();
+        return onChangeApplied(null);
+    }
+
+    public boolean onChangeApplied(Runnable onFlushed) {
+        if (onFlushed != null) {
+            pendingFlushCallbacks.offer(onFlushed);
         }
         pendingChanges.incrementAndGet();
         dirty = true;
+        if (!isAsyncEnabled()) {
+            return flushIfDirty();
+        }
         if (flushBatch > 0 && pendingChanges.get() >= flushBatch) {
             return flushIfDirty();
         }
@@ -114,6 +124,7 @@ public final class FileStoreFlushService implements AutoCloseable {
             } else {
                 dirty = true;
             }
+            runPendingFlushCallbacks();
             return true;
         } finally {
             flushInProgress.set(false);
@@ -128,6 +139,17 @@ public final class FileStoreFlushService implements AutoCloseable {
             } catch (IOException e) {
                 log.warn("FileStore flush failed: {}", e.getMessage());
                 return false;
+            }
+        }
+    }
+
+    private void runPendingFlushCallbacks() {
+        Runnable callback;
+        while ((callback = pendingFlushCallbacks.poll()) != null) {
+            try {
+                callback.run();
+            } catch (RuntimeException e) {
+                log.warn("Flush callback failed: {}", e.getMessage(), e);
             }
         }
     }

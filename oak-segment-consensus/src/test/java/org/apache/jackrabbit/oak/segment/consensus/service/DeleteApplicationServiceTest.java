@@ -31,9 +31,11 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 public class DeleteApplicationServiceTest {
 
@@ -50,7 +52,13 @@ public class DeleteApplicationServiceTest {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = seededNodeStore(EXISTING_PATH);
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
-        when(flushService.onChangeApplied()).thenReturn(true);
+        doAnswer(invocation -> {
+            Runnable callback = invocation.getArgument(0);
+            if (callback != null) {
+                callback.run();
+            }
+            return true;
+        }).when(flushService).onChangeApplied(any());
         DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
 
         AtomicReference<String> updatedHead = new AtomicReference<>();
@@ -79,16 +87,20 @@ public class DeleteApplicationServiceTest {
         assertEquals("proposal-1", durableProposal.get());
         assertEquals("new-head", durableHead.get());
         assertEquals(EXISTING_PATH + "|" + WALLET + "|Acme|0xsig", ssePayload.get());
-        verify(flushService).onChangeApplied();
+        verify(flushService).onChangeApplied(any());
         assertFalse(nodeAt(nodeStore, EXISTING_PATH).exists());
     }
 
     @Test
-    public void testApplyDeleteSkipsDurabilityCallbackWhenFlushIsDeferred() throws Exception {
+    public void testApplyDeleteDeliversDurabilityCallbackWhenDeferredFlushCompletes() throws Exception {
         FileStore fileStore = fileStoreWithHeads("prev-head", "current-head");
         MemoryNodeStore nodeStore = seededNodeStore(EXISTING_PATH);
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
-        when(flushService.onChangeApplied()).thenReturn(false);
+        AtomicReference<Runnable> deferredFlush = new AtomicReference<>();
+        doAnswer(invocation -> {
+            deferredFlush.set(invocation.getArgument(0));
+            return false;
+        }).when(flushService).onChangeApplied(any());
         DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
@@ -110,7 +122,11 @@ public class DeleteApplicationServiceTest {
         assertEquals("current-head", newHead);
         assertNull(durableProposal.get());
         assertNull(durableHead.get());
-        verify(flushService).onChangeApplied();
+        assertTrue(deferredFlush.get() != null);
+        deferredFlush.get().run();
+        assertEquals("proposal-deferred", durableProposal.get());
+        assertEquals("current-head", durableHead.get());
+        verify(flushService).onChangeApplied(any());
     }
 
     @Test
@@ -205,7 +221,7 @@ public class DeleteApplicationServiceTest {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = seededLargeDeleteNodeStore();
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
-        when(flushService.onChangeApplied()).thenReturn(true);
+        doAnswer(invocation -> true).when(flushService).onChangeApplied(any());
         DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
 
         assertTrue(nodeAt(nodeStore, LARGE_DELETE_DESCENDANT_PATH).exists());
@@ -217,7 +233,7 @@ public class DeleteApplicationServiceTest {
         assertFalse(nodeAt(nodeStore, LARGE_DELETE_ROOT_PATH).exists());
         assertFalse(nodeAt(nodeStore, LARGE_DELETE_DESCENDANT_PATH).exists());
         assertTrue(nodeAt(nodeStore, LARGE_DELETE_SIBLING_PATH).exists());
-        verify(flushService).onChangeApplied();
+        verify(flushService).onChangeApplied(any());
     }
 
     private static FileStore fileStoreWithHeads(String previousHead, String currentHead) {
