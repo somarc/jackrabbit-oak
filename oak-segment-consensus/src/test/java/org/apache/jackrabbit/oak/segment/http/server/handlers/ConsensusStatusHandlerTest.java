@@ -45,6 +45,7 @@ public class ConsensusStatusHandlerTest {
         new ConsensusStatusHandler(newContext(null)).handleGetConsensusStatus(response);
 
         verify(response).setStatus(HttpServletResponse.SC_OK);
+        assertTrue(body.toString().contains("\"contractVersion\":\"consensus.status.v1\""));
         assertTrue(body.toString().contains("\"consensusType\":\"none\""));
         assertTrue(body.toString().contains("\"currentRole\":\"STANDALONE\""));
     }
@@ -66,6 +67,7 @@ public class ConsensusStatusHandlerTest {
         new ConsensusStatusHandler(newContext(engine)).handleGetConsensusStatus(response);
 
         String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"consensus.status.v1\""));
         assertTrue(json.contains("\"consensusType\":\"aeron-cluster\""));
         assertTrue(json.contains("\"currentRole\":\"FOLLOWER\""));
         assertTrue(json.contains("\"isLeader\":false"));

@@ -70,6 +70,7 @@ public class MetricsHandler {
         response.setStatus(HttpServletResponse.SC_OK);
 
         Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contractVersion", "metrics.json.v1");
         payload.put("success", true);
         payload.put("status", "UP");
         payload.put("timestamp", System.currentTimeMillis());

@@ -70,6 +70,7 @@ public class GcCostHandler {
             response.setStatus(HttpServletResponse.SC_OK);
 
             Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("contractVersion", "gc.estimate.v1");
             payload.put("reclaimableSegmentCount", estimate.getReclaimableSegmentCount());
             payload.put("reclaimableSizeBytes", estimate.getReclaimableSizeBytes());
             payload.put("reclaimableSizeMB", estimate.getReclaimableSizeMB());

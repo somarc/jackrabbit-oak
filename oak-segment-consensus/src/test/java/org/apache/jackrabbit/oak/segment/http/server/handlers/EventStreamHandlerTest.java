@@ -76,6 +76,7 @@ public class EventStreamHandlerTest {
 
             new EventStreamHandler(newContext(), broadcaster).handleRecentEvents(request, response);
 
+            assertTrue(body.toString().contains("\"contractVersion\":\"events.recent.v1\""));
             assertTrue(body.toString().contains("\"count\":1"));
             assertTrue(body.toString().contains("\"hasMore\":true"));
             assertTrue(body.toString().contains("\"lastId\":\"evt-2\""));
@@ -96,6 +97,7 @@ public class EventStreamHandlerTest {
             new EventStreamHandler(newContext(), broadcaster).handleStats(mock(HttpServletRequest.class), response);
 
             verify(response).setContentType("application/json");
+            assertTrue(body.toString().contains("\"contractVersion\":\"events.stats.v1\""));
             assertTrue(body.toString().contains("\"connectedClients\":0"));
             assertTrue(body.toString().contains("\"eventBufferSize\":1"));
             assertTrue(body.toString().contains("\"totalEventsBroadcast\":1"));

@@ -80,6 +80,7 @@ public class MetricsHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_OK);
         String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"metrics.json.v1\""));
         assertTrue(json.contains("\"role\":\"LEADER\""));
         assertTrue(json.contains("\"reachableValidators\":2"));
         assertTrue(json.contains("\"replicationLag\":0"));
@@ -104,6 +105,7 @@ public class MetricsHandlerTest {
         handler.handleMetrics(response);
 
         String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"metrics.json.v1\""));
         assertTrue(json.contains("\"consensus\":null"));
         assertTrue(json.contains("\"replication\":null"));
     }
@@ -154,6 +156,7 @@ public class MetricsHandlerTest {
         handler.handleMetrics(response);
 
         String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"metrics.json.v1\""));
         assertTrue(json.contains("\"unhealthyReason\":\"leader_unreachable\""));
         assertTrue(json.contains("\"reason\":\"lagging\""));
         assertTrue(json.contains("\"storePath\":\"\""));

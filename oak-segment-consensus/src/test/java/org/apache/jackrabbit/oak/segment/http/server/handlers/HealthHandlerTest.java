@@ -456,6 +456,72 @@ public class HealthHandlerTest {
         assertTrue(json.contains("\"degradedReason\":\"UPSTREAM_UNAVAILABLE\""));
     }
 
+    @Test
+    public void testHandleGetOpsRuntimeSnapshotIncludesGovernedRuntimeData() throws Exception {
+        ServerContext context = newContext(Files.createTempDirectory("health-ops-runtime"));
+        context.selfUrl = "http://localhost:8090";
+        context.blobStoreType = "ipfs";
+        context.blobStore = mock(org.apache.jackrabbit.oak.spi.blob.BlobStore.class);
+
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class, RETURNS_DEEP_STUBS);
+        when(engine.isClusterHealthy()).thenReturn(true);
+        when(engine.getCurrentRole()).thenReturn(ValidatorRole.LEADER);
+        when(engine.isLeader()).thenReturn(true);
+        when(engine.getCurrentLeader()).thenReturn("http://localhost:8090");
+        when(engine.getCurrentLeaderHint()).thenReturn("http://localhost:8090");
+        when(engine.getCurrentEpoch()).thenReturn(7);
+        when(engine.getCurrentTerm()).thenReturn(4);
+        when(engine.getCurrentEthereumEpoch()).thenReturn(1024);
+        when(engine.getReachableValidatorCount()).thenReturn(3);
+        when(engine.getTotalMemberCount()).thenReturn(3);
+        when(engine.getQuorumSize()).thenReturn(2);
+        when(engine.getLastHeartbeatTime()).thenReturn(1234L);
+        when(engine.getHeartbeatAgeMs()).thenReturn(55L);
+        when(engine.getWalletAddress()).thenReturn("0xabc");
+        when(engine.getPublicKeyHex()).thenReturn("0xpub");
+        when(engine.getAllFollowers()).thenReturn(Collections.singletonList("http://localhost:8092"));
+        when(engine.getReplicationLagStatus()).thenReturn(Collections.singletonMap("healthy", true));
+        when(engine.getNativeClusterState()).thenReturn(Collections.singletonMap("memberId", 0));
+        context.aeronConsensusEngine = engine;
+
+        HealthHandler handler = newHandler(context);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        handler.handleGetOpsRuntimeSnapshot(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"ops.runtime.v1\""));
+        assertTrue(json.contains("\"validator\":"));
+        assertTrue(json.contains("\"aeron\":"));
+        assertTrue(json.contains("\"mediaDriver\":"));
+        assertTrue(json.contains("\"metrics\":"));
+    }
+
+    @Test
+    public void testHandleGetOpsStorageSnapshotIncludesTarInventory() throws Exception {
+        Path storeDirectory = Files.createTempDirectory("health-ops-storage");
+        Files.write(storeDirectory.resolve("journal.log"), Collections.singletonList("a b"));
+        Files.write(storeDirectory.resolve("data00000a.tar"), new byte[] {1, 2, 3});
+
+        ServerContext context = newContext(storeDirectory);
+        context.blobStoreType = "ipfs";
+        context.blobStore = mock(org.apache.jackrabbit.oak.spi.blob.BlobStore.class);
+
+        HealthHandler handler = newHandler(context);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        handler.handleGetOpsStorageSnapshot(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"ops.storage.v1\""));
+        assertTrue(json.contains("\"tarFiles\""));
+        assertTrue(json.contains("\"tarFileCount\":1"));
+        assertTrue(json.contains("\"blobStore\""));
+        assertTrue(json.contains("\"diskSpace\""));
+    }
+
     private static ServerContext newContext(Path storeDirectory) {
         return new ServerContext(mock(FileStore.class), mock(NodeStore.class), storeDirectory, "http://localhost:8090");
     }

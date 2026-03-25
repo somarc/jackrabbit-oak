@@ -61,6 +61,7 @@ public class ConsensusStatusHandler {
 
     private Map<String, Object> buildConsensusStatus() {
         Map<String, Object> status = new LinkedHashMap<>();
+        status.put("contractVersion", "consensus.status.v1");
 
         if (context.aeronConsensusEngine != null) {
             status.put("consensusType", "aeron-cluster");

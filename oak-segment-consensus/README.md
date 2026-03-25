@@ -51,11 +51,19 @@ This module is part of the **Blockchain AEM** project and is maintained as a for
 - **Epoch Tracking**: Ethereum Beacon Chain epoch integration (via `EpochListener`)
 
 ### HTTP Server & APIs
-- **Dashboard UI**: Web-based dashboard at `/` (cluster state, metrics, explorer)
+- **Dashboard UI**: Web-based local control-plane page at `/` (cluster state, metrics, explorer)
 - **Chat Interface**: LLM-powered chat at `/chat` (requires `oak-segment-agentic`)
-- **REST APIs**: Comprehensive API endpoints for cluster state, consensus status, health
+- **REST APIs**: Validator-native HTTP endpoints for cluster state, consensus status, health, and operator automation
 - **OSGi Config Surface**: Read-only introspection endpoints at `/v1/config/osgi*`
 - **Segment Serving**: HTTP endpoints for segment transfer (`/segments/{id}`, `/journal.log`)
+
+### API Contract Boundaries
+
+- Validator-native `/v1/*` routes are the direct runtime surface for operators, edge adapters, CLIs, and automation.
+- `/v1/index` is the live route taxonomy and identifies which validator routes are governed source contracts versus local-only or internal surfaces.
+- Governed source routes now include `/v1/consensus/*`, `/v1/ops/snapshots/{health,runtime,storage,cluster,replication,queue}`, `/v1/proposals/release-flow`, `/v1/explorer/*`, `/v1/config/osgi*`, `/v1/events/{recent,stats}`, `/v1/blockchain/config`, `/v1/gc/status`, `/v1/gc/estimate`, `/v1/compaction/proposals`, and `/v1/fragmentation/*`.
+- Browser-facing product UX should sit above the validator behind an edge/gateway contract rather than coupling directly to raw validator routes.
+- Local UI routes such as `/`, `/dashboard`, and `/api-browser` are optional diagnostic/operator surfaces, not the long-term upstream browser contract.
 
 **Security Note**: Validators are pure Oak (no Sling), so they don't have Sling authentication.
 
@@ -214,20 +222,24 @@ java -jar oak-segment-consensus.jar \
 - `OAK_VALIDATOR_AUTH_TOKEN`: Secret token for API authentication (optional)
 
 ### Access Dashboard
-Once running, access the dashboard at:
+Once running, access the local control-plane page at:
 ```
 http://localhost:8091/
 ```
 
+For upstream browser UX, prefer a gateway/BFF contract above the validator instead of binding browsers directly to validator-native routes.
+
 ## API Endpoints
 
 ### Dashboard & UI
-- `GET /` - Main dashboard (cluster state, metrics, explorer links)
+- `GET /` - Local control-plane landing page
 - `GET /chat` - LLM Chat interface (requires `oak-segment-agentic`)
 - `GET /explorer` - Content explorer UI
 - `GET /api-browser` - Interactive API browser
+- `GET /v1/index` - Live validator-native API discovery index
 
 ### Consensus APIs
+- `GET /v1/consensus/leader` - Canonical leader resolution payload
 - `GET /v1/aeron/cluster-state` - Current cluster state and leader info
 - `GET /v1/consensus/status` - Consensus status (Aeron-aware)
 - `GET /v1/peers` - List all peers in cluster
@@ -240,6 +252,9 @@ http://localhost:8091/
 ### Health & Metrics
 - `GET /health` - Basic health check
 - `GET /health/deep` - Comprehensive health validation
+- `GET /v1/ops/snapshots/health` - Governed health source snapshot for edge/BFF composition
+- `GET /v1/ops/snapshots/runtime` - Governed runtime/operator snapshot (Aeron, media driver, metrics)
+- `GET /v1/ops/snapshots/storage` - Governed storage/operator snapshot (disk, blob store, TAR inventory)
 - `GET /metrics` - Prometheus metrics
 - `GET /api/metrics` - JSON metrics
 

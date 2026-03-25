@@ -55,6 +55,7 @@ public class BlockchainConfigApiHandler {
         BlockchainConfig config = BlockchainConfig.getInstance();
 
         Map<String, Object> json = new LinkedHashMap<>();
+        json.put("contractVersion", "blockchain.config.v1");
         json.put("mode", config.getMode().getKey());
         json.put("network", getNetworkName(config.getMode()));
         json.put("chainId", getChainId(config.getMode()));

@@ -75,6 +75,7 @@ import java.nio.file.Paths;
 import java.nio.file.Path;
 import java.io.IOException;
 import java.util.Comparator;
+import java.util.Collections;
 import java.util.UUID;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -318,6 +319,41 @@ public class RequestRouterTest {
             verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"index.v1\""));
+        });
+    }
+
+    @Test
+    public void testOpsRuntimeSnapshotRouteReturnsRuntimeEnvelope() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.aeronConsensusEngine = mock(AeronConsensusEngine.class, RETURNS_DEEP_STUBS);
+            when(context.aeronConsensusEngine.isClusterHealthy()).thenReturn(true);
+            when(context.aeronConsensusEngine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
+            when(context.aeronConsensusEngine.isLeader()).thenReturn(false);
+            when(context.aeronConsensusEngine.getCurrentLeader()).thenReturn("http://localhost:8090");
+            when(context.aeronConsensusEngine.getCurrentLeaderHint()).thenReturn("http://localhost:8090");
+            when(context.aeronConsensusEngine.getCurrentEpoch()).thenReturn(5);
+            when(context.aeronConsensusEngine.getCurrentTerm()).thenReturn(2);
+            when(context.aeronConsensusEngine.getCurrentEthereumEpoch()).thenReturn(100);
+            when(context.aeronConsensusEngine.getReachableValidatorCount()).thenReturn(3);
+            when(context.aeronConsensusEngine.getTotalMemberCount()).thenReturn(3);
+            when(context.aeronConsensusEngine.getQuorumSize()).thenReturn(2);
+            when(context.aeronConsensusEngine.getHeartbeatAgeMs()).thenReturn(12L);
+            when(context.aeronConsensusEngine.getLastHeartbeatTime()).thenReturn(1234L);
+            when(context.aeronConsensusEngine.getAllFollowers()).thenReturn(Arrays.asList("http://localhost:8092"));
+            when(context.aeronConsensusEngine.getNativeClusterState()).thenReturn(Collections.singletonMap("memberId", 0));
+            when(context.aeronConsensusEngine.getReplicationLagStatus()).thenReturn(Collections.singletonMap("healthy", true));
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/ops/snapshots/runtime");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"ops.runtime.v1\""));
         });
     }
 

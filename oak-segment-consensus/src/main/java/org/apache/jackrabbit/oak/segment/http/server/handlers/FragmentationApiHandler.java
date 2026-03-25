@@ -74,6 +74,7 @@ public class FragmentationApiHandler {
             }
 
             Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("contractVersion", "fragmentation.metrics.v1");
             payload.put("totalEntities", allMetrics.size());
             payload.put("entities", entities);
             response.setStatus(HttpServletResponse.SC_OK);
@@ -104,8 +105,12 @@ public class FragmentationApiHandler {
                 return;
             }
 
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("contractVersion", "fragmentation.metrics.entity.v1");
+            payload.put("walletAddress", walletAddress);
+            payload.put("data", metricsToMap(metrics, tracker));
             response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(metricsToMap(metrics, tracker)));
+            response.getWriter().write(JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Error getting entity fragmentation metrics", e);
@@ -144,6 +149,7 @@ public class FragmentationApiHandler {
             }
 
             Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("contractVersion", "fragmentation.top.v1");
             payload.put("limit", limit);
             payload.put("entities", entities);
             response.setStatus(HttpServletResponse.SC_OK);
@@ -176,6 +182,7 @@ public class FragmentationApiHandler {
             org.apache.jackrabbit.oak.segment.consensus.gc.GCExecutionResult lastGC = history.isEmpty() ? null : history.get(0);
 
             Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("contractVersion", "gc.status.v1");
             payload.put("gcEnabled", true);
             payload.put("pendingProposals", pending.size());
             payload.put("lastGcRun", lastGC != null ? lastGC.timestamp : null);
@@ -212,6 +219,7 @@ public class FragmentationApiHandler {
             }
 
             Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("contractVersion", "gc.compaction.proposals.v1");
             payload.put("proposals", serialized);
             response.setStatus(HttpServletResponse.SC_OK);
             response.getWriter().write(JsonOutputUtil.toJson(payload));

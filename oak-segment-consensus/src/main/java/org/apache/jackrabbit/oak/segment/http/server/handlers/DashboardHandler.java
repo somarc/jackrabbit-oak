@@ -33,6 +33,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -155,99 +156,110 @@ public class DashboardHandler {
         response.setContentType("application/json; charset=UTF-8");
 
         List<Map<String, Object>> endpoints = new ArrayList<>();
-        addIndexEntry(endpoints, "GET", "/v1/index", "Live API discovery index", "Discovery");
-        addIndexEntry(endpoints, "GET", "/v1/config/osgi", "Effective OSGi config values", "Configuration");
-        addIndexEntry(endpoints, "GET", "/v1/config/osgi/schema", "OSGi config metadata schema", "Configuration");
-        addIndexEntry(endpoints, "GET", "/v1/config/osgi/sources", "OSGi config source map", "Configuration");
-        addIndexEntry(endpoints, "GET", "/v1/config/osgi/coverage", "OSGi config coverage and missing keys", "Configuration");
-        addIndexEntry(endpoints, "GET", "/v1/config/osgi/delta", "OSGi config values drift from defaults", "Configuration");
-        addIndexEntry(endpoints, "GET", "/health", "Shallow health", "Health");
-        addIndexEntry(endpoints, "GET", "/health/deep", "Deep health", "Health");
-        addIndexEntry(endpoints, "GET", "/api/metrics", "Consensus and replication metrics", "Health");
-        addIndexEntry(endpoints, "GET", "/metrics", "Prometheus metrics", "Health");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/index", "Live validator surface manifest", "Discovery", null);
+        addSourceIndexEntry(endpoints, "GET", "/v1/config/osgi", "Effective OSGi config values", "Configuration", "config.osgi.v1", "/ops/v1/config/osgi");
+        addSourceIndexEntry(endpoints, "GET", "/v1/config/osgi/schema", "OSGi config metadata schema", "Configuration", "config.osgi.schema.v1", "/ops/v1/config/osgi/schema");
+        addSourceIndexEntry(endpoints, "GET", "/v1/config/osgi/sources", "OSGi config source map", "Configuration", "config.osgi.sources.v1", "/ops/v1/config/osgi/sources");
+        addSourceIndexEntry(endpoints, "GET", "/v1/config/osgi/coverage", "OSGi config coverage and missing keys", "Configuration", "config.osgi.coverage.v1", "/ops/v1/config/osgi/coverage");
+        addSourceIndexEntry(endpoints, "GET", "/v1/config/osgi/delta", "OSGi config values drift from defaults", "Configuration", "config.osgi.delta.v1", "/ops/v1/config/osgi/delta");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/health", "Shallow health", "Health", "/ops/v1/health");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/health/local", "Local-only liveness", "Health", null);
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/health/deep", "Deep dependency health", "Health", "/v1/ops/snapshots/runtime");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/health/cluster", "Cluster-only health", "Health", "/v1/ops/snapshots/health");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/metrics", "Consensus and replication metrics", "Health", "/v1/ops/snapshots/runtime");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/metrics", "Prometheus metrics", "Health", null);
 
-        addIndexEntry(endpoints, "GET", "/v1/consensus/status", "Consensus status", "Consensus");
-        addIndexEntry(endpoints, "POST", "/v1/propose-write", "Propose signed write", "Consensus");
-        addIndexEntry(endpoints, "POST", "/v1/propose-delete", "Propose signed delete", "Consensus");
-        addIndexEntry(endpoints, "GET", "/v1/proposals/pending/count", "Pending proposal count", "Consensus");
-        addIndexEntry(endpoints, "GET", "/v1/proposals/queue/stats", "Queue and finality counters", "Consensus");
-        addIndexEntry(endpoints, "GET", "/v1/proposals/release-flow", "Adaptive proposal release flow", "Consensus");
-        addIndexEntry(endpoints, "GET", "/v1/proposals/epochs", "Proposal epoch flow compatibility overlay", "Consensus");
-        addIndexEntry(endpoints, "GET", "/v1/proposals/{id}/status", "Proposal status by id", "Consensus");
-        addIndexEntry(endpoints, "GET", "/v1/head", "Head status", "Consensus");
+        addSourceIndexEntry(endpoints, "GET", "/v1/consensus/leader", "Canonical leader resolution", "Consensus", "consensus.leader.v1", "/ops/v1/cluster");
+        addSourceIndexEntry(endpoints, "GET", "/v1/consensus/status", "Consensus status", "Consensus", "consensus.status.v1", "/ops/v1/cluster");
+        addInternalIndexEntry(endpoints, "POST", "/v1/propose-write", "Propose signed write", "Consensus", null);
+        addInternalIndexEntry(endpoints, "POST", "/v1/propose-delete", "Propose signed delete", "Consensus", null);
+        addInternalIndexEntry(endpoints, "GET", "/v1/proposals/pending/count", "Pending proposal count", "Consensus", "/ops/v1/proposals");
+        addSourceIndexEntry(endpoints, "GET", "/v1/proposals/queue/stats", "Queue and finality counters", "Consensus", "ops.v1", "/ops/v1/proposals/queue/stats");
+        addSourceIndexEntry(endpoints, "GET", "/v1/proposals/release-flow", "Adaptive proposal release flow", "Consensus", "release-flow.v1", "/ops/v1/proposals/release-flow");
+        addInternalIndexEntry(endpoints, "GET", "/v1/proposals/epochs", "Proposal epoch flow compatibility overlay", "Consensus", "/ops/v1/proposals/epochs");
+        addInternalIndexEntry(endpoints, "GET", "/v1/proposals/{id}/status", "Proposal status by id", "Consensus", null);
+        addInternalIndexEntry(endpoints, "GET", "/v1/head", "Head status", "Consensus", null);
 
-        addIndexEntry(endpoints, "GET", "/v1/explorer/summary", "Explorer summary contract", "Explorer");
-        addIndexEntry(endpoints, "GET", "/v1/explorer/release-flow", "Explorer adaptive release flow", "Explorer");
-        addIndexEntry(endpoints, "GET", "/v1/explorer/epochs", "Explorer epoch flow compatibility overlay", "Explorer");
-        addIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail", "Explorer");
-        addIndexEntry(endpoints, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail", "Explorer");
-        addIndexEntry(endpoints, "GET", "/explorer", "Explorer UI", "Explorer");
-        addIndexEntry(endpoints, "GET", "/api/explore?path=/", "Node tree browse API", "Explorer");
-        addIndexEntry(endpoints, "GET", "/api/segments/recent", "Recent segments", "Explorer");
-        addIndexEntry(endpoints, "GET", "/api/segments/tars", "TAR file listing", "Explorer");
-        addIndexEntry(endpoints, "GET", "/api/blob/{blobId}", "Blob stream by blob id", "Explorer");
-        addIndexEntry(endpoints, "GET", "/api/cid/{oakBlobId}", "CID mapping by Oak blob id", "Explorer");
-        addIndexEntry(endpoints, "GET", "/api/cid/stats", "CID mapping stats", "Explorer");
-        addIndexEntry(endpoints, "GET", "/api/cid/reverse/{cid}", "Reverse CID lookup", "Explorer");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/summary", "Explorer summary contract", "Explorer", "explorer.v1", "/ops/v1/explorer/summary");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/release-flow", "Explorer adaptive release flow", "Explorer", "explorer.v1", "/ops/v1/explorer/release-flow");
+        addInternalIndexEntry(endpoints, "GET", "/v1/explorer/epochs", "Explorer epoch flow compatibility overlay", "Explorer", "/ops/v1/explorer/epochs");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail", "Explorer", "explorer.v1", "/ops/v1/explorer/proposal/{proposalId}");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail", "Explorer", "explorer.v1", "/ops/v1/explorer/wallets/{walletAddress}");
+        addLocalUiIndexEntry(endpoints, "GET", "/explorer", "Explorer UI", "Explorer");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/explore?path=/", "Node tree browse API", "Explorer", "/ops/v1/explorer/*");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/recent", "Recent segments", "Explorer", "/v1/ops/snapshots/storage");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/tars", "TAR file listing", "Explorer", "/v1/ops/snapshots/storage");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/blob/{blobId}", "Blob stream by blob id", "Explorer", null);
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/{oakBlobId}", "CID mapping by Oak blob id", "Explorer", null);
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/stats", "CID mapping stats", "Explorer", null);
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/reverse/{cid}", "Reverse CID lookup", "Explorer", null);
 
-        addIndexEntry(endpoints, "GET", "/v1/wallets/stats", "Wallet usage and counts", "Wallets");
-        addIndexEntry(endpoints, "GET", "/v1/wallets/content?wallet=0x...", "Wallet content query", "Wallets");
-        addIndexEntry(endpoints, "POST|PUT", "/v1/register-client", "Register client", "Registration");
-        addIndexEntry(endpoints, "GET", "/v1/peers", "Peer list", "Registration");
-        addIndexEntry(endpoints, "GET", "/v1/ngrok-url", "Current ngrok URL", "Registration");
-        addIndexEntry(endpoints, "GET", "/v1/blockchain/config", "Blockchain mode config", "Configuration");
+        addInternalIndexEntry(endpoints, "GET", "/v1/wallets/stats", "Wallet usage and counts", "Wallets", null);
+        addInternalIndexEntry(endpoints, "GET", "/v1/wallets/content?wallet=0x...", "Wallet content query", "Wallets", null);
+        addInternalIndexEntry(endpoints, "POST|PUT", "/v1/register-client", "Register client", "Registration", null);
+        addInternalIndexEntry(endpoints, "GET", "/v1/peers", "Peer list", "Registration", null);
+        addInternalIndexEntry(endpoints, "GET", "/v1/ngrok-url", "Current ngrok URL", "Registration", null);
+        addSourceIndexEntry(endpoints, "GET", "/v1/blockchain/config", "Blockchain mode config", "Configuration", "blockchain.config.v1", "/ops/v1/blockchain/config");
 
-        addIndexEntry(endpoints, "GET", "/v1/aeron/cluster-state", "Aeron cluster state", "Aeron");
-        addIndexEntry(endpoints, "GET", "/v1/aeron/validator-identities", "Validator identity map", "Aeron");
-        addIndexEntry(endpoints, "GET", "/v1/aeron/raft-metrics", "Raft metrics", "Aeron");
-        addIndexEntry(endpoints, "GET", "/v1/aeron/node-status?nodeId=0", "Per-node status", "Aeron");
-        addIndexEntry(endpoints, "GET", "/v1/aeron/leadership-history?limit=10", "Leadership history", "Aeron");
-        addIndexEntry(endpoints, "GET", "/v1/aeron/replication-lag", "Replication lag", "Aeron");
-        addIndexEntry(endpoints, "POST", "/v1/follower/head-update", "Follower head update (internal)", "Aeron");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/cluster-state", "Aeron cluster state", "Aeron", "/v1/ops/snapshots/cluster");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/validator-identities", "Validator identity map", "Aeron", "/v1/ops/snapshots/runtime");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/raft-metrics", "Raft metrics", "Aeron", "/v1/ops/snapshots/runtime");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/node-status?nodeId=0", "Per-node status", "Aeron", "/v1/ops/snapshots/runtime");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/leadership-history?limit=10", "Leadership history", "Aeron", "/ops/v1/events/recent");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/replication-lag", "Replication lag", "Aeron", "/v1/ops/snapshots/replication");
+        addInternalIndexEntry(endpoints, "POST", "/v1/follower/head-update", "Follower head update (internal)", "Aeron", null);
 
-        addIndexEntry(endpoints, "GET", "/v1/ops/snapshots/health", "Ops health snapshot", "Ops Snapshots");
-        addIndexEntry(endpoints, "GET", "/v1/ops/snapshots/cluster", "Ops cluster snapshot", "Ops Snapshots");
-        addIndexEntry(endpoints, "GET", "/v1/ops/snapshots/replication", "Ops replication snapshot", "Ops Snapshots");
-        addIndexEntry(endpoints, "GET", "/v1/ops/snapshots/queue", "Ops queue snapshot", "Ops Snapshots");
-        addIndexEntry(endpoints, "GET", "/v1/ops/operations/{operationId}", "Ops operation status", "Ops Snapshots");
+        addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/health", "Ops health snapshot", "Ops Snapshots", "ops.v1", "/ops/v1/health");
+        addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/runtime", "Ops runtime snapshot", "Ops Snapshots", "ops.runtime.v1", "/ops/v1/runtime/*");
+        addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/storage", "Ops storage snapshot", "Ops Snapshots", "ops.storage.v1", "/ops/v1/runtime/storage");
+        addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/cluster", "Ops cluster snapshot", "Ops Snapshots", "ops.v1", "/ops/v1/cluster");
+        addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/replication", "Ops replication snapshot", "Ops Snapshots", "ops.v1", "/ops/v1/replication");
+        addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/queue", "Ops queue snapshot", "Ops Snapshots", "ops.v1", "/ops/v1/queue");
+        addInternalIndexEntry(endpoints, "GET", "/v1/ops/operations/{operationId}", "Ops operation status", "Ops Snapshots", null);
 
-        addIndexEntry(endpoints, "GET", "/v1/events/recent?limit=50", "Recent events", "Events");
-        addIndexEntry(endpoints, "GET", "/v1/events/stats", "Event stats", "Events");
-        addIndexEntry(endpoints, "GET", "/v1/events/stream", "Event stream (SSE)", "Events");
-        addIndexEntry(endpoints, "GET", "/v1/ops/events/stream", "Ops event stream (SSE)", "Events");
+        addSourceIndexEntry(endpoints, "GET", "/v1/events/recent?limit=50", "Recent events", "Events", "events.recent.v1", "/ops/v1/events/recent");
+        addSourceIndexEntry(endpoints, "GET", "/v1/events/stats", "Event stats", "Events", "events.stats.v1", "/ops/v1/events/stats");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/events/stream", "Event stream (SSE)", "Events", "/ops/v1/events/*");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/ops/events/stream", "Ops event stream (SSE)", "Events", "/ops/v1/events/*");
 
-        addIndexEntry(endpoints, "GET", "/v1/gc/estimate", "GC estimate", "GC");
-        addIndexEntry(endpoints, "GET", "/v1/gc/status", "GC status", "GC");
-        addIndexEntry(endpoints, "POST", "/v1/propose-gc", "Propose GC operation", "GC");
-        addIndexEntry(endpoints, "POST", "/v1/gc/trigger", "Trigger GC check", "GC");
-        addIndexEntry(endpoints, "POST", "/v1/gc/execute", "Execute approved GC", "GC");
-        addIndexEntry(endpoints, "GET", "/v1/compaction/proposals", "Compaction proposals", "GC");
-        addIndexEntry(endpoints, "GET", "/v1/gc/account/{walletAddress}", "GC account status", "GC Accounts");
-        addIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/pay?amount=X", "GC debt payment", "GC Accounts");
-        addIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/set-limit?limit=X", "Set debt limit", "GC Accounts");
-        addIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/execute-pending", "Execute pending debt", "GC Accounts");
+        addInternalIndexEntry(endpoints, "GET", "/v1/gc/estimate", "GC estimate", "GC", "/ops/v1/gc/estimate");
+        addSourceIndexEntry(endpoints, "GET", "/v1/gc/status", "GC status", "GC", "gc.status.v1", "/ops/v1/gc/status");
+        addInternalIndexEntry(endpoints, "POST", "/v1/propose-gc", "Propose GC operation", "GC", null);
+        addInternalIndexEntry(endpoints, "POST", "/v1/gc/trigger", "Trigger GC check", "GC", null);
+        addInternalIndexEntry(endpoints, "POST", "/v1/gc/execute", "Execute approved GC", "GC", null);
+        addSourceIndexEntry(endpoints, "GET", "/v1/compaction/proposals", "Compaction proposals", "GC", "gc.compaction.proposals.v1", "/ops/v1/compaction/proposals");
+        addInternalIndexEntry(endpoints, "GET", "/v1/gc/account/{walletAddress}", "GC account status", "GC Accounts", "/ops/v1/gc/account/{walletAddress}");
+        addInternalIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/pay?amount=X", "GC debt payment", "GC Accounts", null);
+        addInternalIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/set-limit?limit=X", "Set debt limit", "GC Accounts", null);
+        addInternalIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/execute-pending", "Execute pending debt", "GC Accounts", null);
 
-        addIndexEntry(endpoints, "GET", "/v1/fragmentation/metrics", "All fragmentation metrics", "Fragmentation");
-        addIndexEntry(endpoints, "GET", "/v1/fragmentation/metrics/{walletAddress}", "Fragmentation by wallet", "Fragmentation");
-        addIndexEntry(endpoints, "GET", "/v1/fragmentation/top?limit=20", "Top fragmented wallets", "Fragmentation");
+        addSourceIndexEntry(endpoints, "GET", "/v1/fragmentation/metrics", "All fragmentation metrics", "Fragmentation", "fragmentation.metrics.v1", "/ops/v1/fragmentation/metrics");
+        addSourceIndexEntry(endpoints, "GET", "/v1/fragmentation/metrics/{walletAddress}", "Fragmentation by wallet", "Fragmentation", "fragmentation.metrics.entity.v1", "/ops/v1/fragmentation/metrics/{walletAddress}");
+        addSourceIndexEntry(endpoints, "GET", "/v1/fragmentation/top?limit=20", "Top fragmented wallets", "Fragmentation", "fragmentation.top.v1", "/ops/v1/fragmentation/top");
 
-        addIndexEntry(endpoints, "POST", "/v1/binary/declare-intent", "Declare binary upload intent", "Binary");
-        addIndexEntry(endpoints, "GET", "/v1/binary/check-intent/{token}", "Check binary intent", "Binary");
-        addIndexEntry(endpoints, "POST", "/v1/binary/complete-upload", "Complete binary upload", "Binary");
+        addInternalIndexEntry(endpoints, "POST", "/v1/binary/declare-intent", "Declare binary upload intent", "Binary", null);
+        addInternalIndexEntry(endpoints, "GET", "/v1/binary/check-intent/{token}", "Check binary intent", "Binary", null);
+        addInternalIndexEntry(endpoints, "POST", "/v1/binary/complete-upload", "Complete binary upload", "Binary", null);
 
-        addIndexEntry(endpoints, "POST", "/api/mock/advance-epoch?epochs=1", "Advance mock epoch", "Mock");
-        addIndexEntry(endpoints, "POST", "/api/mock/set-epoch-offset?offset=0", "Set mock epoch offset", "Mock");
-        addIndexEntry(endpoints, "GET", "/api/mock/epoch-status", "Mock epoch status", "Mock");
+        addInternalIndexEntry(endpoints, "POST", "/api/mock/advance-epoch?epochs=1", "Advance mock epoch", "Mock", null);
+        addInternalIndexEntry(endpoints, "POST", "/api/mock/set-epoch-offset?offset=0", "Set mock epoch offset", "Mock", null);
+        addInternalIndexEntry(endpoints, "GET", "/api/mock/epoch-status", "Mock epoch status", "Mock", null);
 
-        addIndexEntry(endpoints, "POST", "/v1/chat", "Agentic chat endpoint", "LLM");
+        addInternalIndexEntry(endpoints, "POST", "/v1/chat", "Agentic chat endpoint", "LLM", null);
 
-        addIndexEntry(endpoints, "GET", "/api-browser", "Interactive API browser", "UI");
-        addIndexEntry(endpoints, "GET", "/chat", "Chat UI", "UI");
-        addIndexEntry(endpoints, "GET", "/dashboard", "Control-plane landing page", "UI");
-        addIndexEntry(endpoints, "GET", "/", "Control-plane landing page", "UI");
+        addLocalUiIndexEntry(endpoints, "GET", "/api-browser", "Interactive API browser", "UI");
+        addLocalUiIndexEntry(endpoints, "GET", "/chat", "Chat UI", "UI");
+        addLocalUiIndexEntry(endpoints, "GET", "/dashboard", "Control-plane landing page", "UI");
+        addLocalUiIndexEntry(endpoints, "GET", "/", "Control-plane landing page", "UI");
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("contractVersion", "index.v1");
+        payload.put("surfaceRole", "validator-native");
+        payload.put("surfaceAuthority", "runtime-and-source");
+        payload.put("preferredBrowserContract", "/ops/v1/* via edge/gateway");
+        payload.put("upstreamAuthority", "/ops/v1/*");
+        payload.put("surfaceClasses", Arrays.asList("source", "local-ui", "local-diagnostic", "internal"));
+        payload.put("intendedConsumers", Arrays.asList("operators", "edge-adapters", "automation", "cli"));
         payload.put("generatedAtMs", System.currentTimeMillis());
         payload.put("count", endpoints.size());
         payload.put("endpoints", endpoints);
@@ -257,16 +269,72 @@ public class DashboardHandler {
 
     // ========== Helper methods shared by dashboard handlers (explorer, api-browser, etc.) ==========
 
-    private void addIndexEntry(List<Map<String, Object>> endpoints,
-                               String method,
-                               String path,
-                               String description,
-                               String category) {
+    private void addSourceIndexEntry(List<Map<String, Object>> endpoints,
+                                     String method,
+                                     String path,
+                                     String description,
+                                     String category,
+                                     String contractVersion,
+                                     String replacement) {
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("method", method);
         item.put("path", path);
         item.put("description", description);
         item.put("category", category);
+        item.put("surfaceClass", "source");
+        item.put("contractVersion", contractVersion);
+        item.put("upstreamAllowed", true);
+        item.put("replacement", replacement);
+        endpoints.add(item);
+    }
+
+    private void addLocalUiIndexEntry(List<Map<String, Object>> endpoints,
+                                      String method,
+                                      String path,
+                                      String description,
+                                      String category) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("method", method);
+        item.put("path", path);
+        item.put("description", description);
+        item.put("category", category);
+        item.put("surfaceClass", "local-ui");
+        item.put("upstreamAllowed", false);
+        item.put("replacement", "/ops/v1/* via edge/gateway");
+        endpoints.add(item);
+    }
+
+    private void addLocalDiagnosticIndexEntry(List<Map<String, Object>> endpoints,
+                                              String method,
+                                              String path,
+                                              String description,
+                                              String category,
+                                              String replacement) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("method", method);
+        item.put("path", path);
+        item.put("description", description);
+        item.put("category", category);
+        item.put("surfaceClass", "local-diagnostic");
+        item.put("upstreamAllowed", false);
+        item.put("replacement", replacement);
+        endpoints.add(item);
+    }
+
+    private void addInternalIndexEntry(List<Map<String, Object>> endpoints,
+                                       String method,
+                                       String path,
+                                       String description,
+                                       String category,
+                                       String replacement) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("method", method);
+        item.put("path", path);
+        item.put("description", description);
+        item.put("category", category);
+        item.put("surfaceClass", "internal");
+        item.put("upstreamAllowed", false);
+        item.put("replacement", replacement);
         endpoints.add(item);
     }
     

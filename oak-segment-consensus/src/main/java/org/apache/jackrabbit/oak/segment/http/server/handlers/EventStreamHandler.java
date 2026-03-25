@@ -211,6 +211,8 @@ public class EventStreamHandler {
 
         List<Map<String, Object>> eventPayloads = filteredEvents.stream().map(this::toEventMap).collect(Collectors.toList());
         Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contractVersion", "events.recent.v1");
+        payload.put("generatedAtMs", System.currentTimeMillis());
         payload.put("events", eventPayloads);
         payload.put("count", filteredEvents.size());
         payload.put("hasMore", events.size() > filteredEvents.size());
@@ -232,6 +234,8 @@ public class EventStreamHandler {
         long totalEvents = broadcaster.getTotalEventsBroadcast();
 
         Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contractVersion", "events.stats.v1");
+        payload.put("generatedAtMs", System.currentTimeMillis());
         payload.put("connectedClients", clientCount);
         payload.put("eventBufferSize", bufferSize);
         payload.put("totalEventsBroadcast", totalEvents);

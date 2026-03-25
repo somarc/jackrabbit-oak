@@ -236,6 +236,18 @@ public class RequestRouter implements AutoCloseable {
                 baseRequest.setHandled(true);
                 return;
             }
+
+            if ("/v1/ops/snapshots/runtime".equals(path) && "GET".equals(method)) {
+                healthHandler.handleGetOpsRuntimeSnapshot(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if ("/v1/ops/snapshots/storage".equals(path) && "GET".equals(method)) {
+                healthHandler.handleGetOpsStorageSnapshot(response);
+                baseRequest.setHandled(true);
+                return;
+            }
             
             // Internal segment-transfer endpoints are part of cluster-to-cluster read fabric,
             // not public API traffic, so they must bypass public rate limiting.
@@ -265,7 +277,7 @@ public class RequestRouter implements AutoCloseable {
                 ApiErrorUtil.sendJsonError(
                     response,
                     HttpServletResponse.SC_GONE,
-                    "Browser UI routes are disabled. Use API surface (/v1/index). Set -Doak.http.browser.ui.enabled=true to enable."
+                    "Browser UI routes are disabled. Use validator-native API surface (/v1/index) or an external gateway/UI. Set -Doak.http.browser.ui.enabled=true to enable."
                 );
                 baseRequest.setHandled(true);
                 return;

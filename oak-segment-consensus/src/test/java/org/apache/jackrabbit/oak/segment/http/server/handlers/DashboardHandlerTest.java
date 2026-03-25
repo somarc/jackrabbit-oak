@@ -65,8 +65,18 @@ public class DashboardHandlerTest {
         verify(response).setContentType("application/json; charset=UTF-8");
         String json = body.toString();
         assertTrue(json.contains("\"contractVersion\":\"index.v1\""));
+        assertTrue(json.contains("\"surfaceRole\":\"validator-native\""));
+        assertTrue(json.contains("\"surfaceClasses\":[\"source\",\"local-ui\",\"local-diagnostic\",\"internal\"]"));
+        assertTrue(json.contains("\"preferredBrowserContract\":\"/ops/v1/* via edge/gateway\""));
         assertTrue(json.contains("\"count\":"));
         assertTrue(json.contains("\"path\":\"/v1/index\""));
+        assertTrue(json.contains("\"path\":\"/v1/consensus/leader\""));
+        assertTrue(json.contains("\"surfaceClass\":\"source\""));
+        assertTrue(json.contains("\"surfaceClass\":\"local-ui\""));
+        assertTrue(json.contains("\"surfaceClass\":\"local-diagnostic\""));
+        assertTrue(json.contains("\"surfaceClass\":\"internal\""));
+        assertTrue(json.contains("\"path\":\"/v1/ops/snapshots/runtime\""));
+        assertTrue(json.contains("\"path\":\"/v1/ops/snapshots/storage\""));
         assertTrue(json.contains("\"path\":\"/v1/config/osgi/coverage\""));
         assertTrue(json.contains("\"path\":\"/v1/config/osgi/delta\""));
         assertTrue(json.contains("\"path\":\"/v1/proposals/queue/stats\""));
