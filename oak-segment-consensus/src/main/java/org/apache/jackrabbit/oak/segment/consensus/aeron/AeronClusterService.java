@@ -145,6 +145,7 @@ public class AeronClusterService {
         log.info("  reachabilityConnectTimeoutMs: {}", config.reachabilityConnectTimeoutMs());
         log.info("  reachabilityReadTimeoutMs: {}", config.reachabilityReadTimeoutMs());
         log.info("  reconnectMaxAttempts: {}", config.reconnectMaxAttempts());
+        log.info("  maxConcurrentSessions: {}", config.maxConcurrentSessions());
         log.info("  peerProbeMode: {}", config.peerProbeMode());
         log.info("  deleteAeronDirsOnStartup: {}", config.deleteAeronDirsOnStartup());
     }
@@ -206,6 +207,7 @@ public class AeronClusterService {
         setIfPositive("oak.cluster.reachability.connectTimeoutMs", config.reachabilityConnectTimeoutMs());
         setIfPositive("oak.cluster.reachability.readTimeoutMs", config.reachabilityReadTimeoutMs());
         setIfPositive("oak.cluster.reconnect.maxAttempts", config.reconnectMaxAttempts());
+        setIfPositive("oak.cluster.max.concurrent.sessions", config.maxConcurrentSessions());
         setIfNotBlank("oak.health.peerProbeMode", config.peerProbeMode());
         if (config.deleteAeronDirsOnStartup()) {
             System.setProperty("aeron.delete.dirs.on.startup", "true");

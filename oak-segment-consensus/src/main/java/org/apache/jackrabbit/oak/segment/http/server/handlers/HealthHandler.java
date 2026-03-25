@@ -126,6 +126,7 @@ public class HealthHandler {
             payload.put("totalMembers", context.aeronConsensusEngine.getTotalMemberCount());
             payload.put("quorumSize", context.aeronConsensusEngine.getQuorumSize());
             payload.put("currentRole", context.aeronConsensusEngine.getCurrentRole().name());
+            payload.put("internalIngressClient", context.aeronConsensusEngine.getInternalIngressClientDiagnostics());
 
             String committedHead = context.aeronConsensusEngine.getCommittedHead();
             String latestHead = context.aeronConsensusEngine.getLatestHead();
@@ -235,6 +236,7 @@ public class HealthHandler {
                 cluster.put("quorumSize", aeronEngine.getQuorumSize());
                 cluster.put("currentRole", aeronEngine.getCurrentRole().name());
                 cluster.put("heartbeatAgeMs", aeronEngine.getHeartbeatAgeMs());
+                cluster.put("internalIngressClient", aeronEngine.getInternalIngressClientDiagnostics());
                 if (!clusterHealthy && aeronEngine.getUnhealthyReason() != null) {
                     cluster.put("unhealthyReason", aeronEngine.getUnhealthyReason());
                 }

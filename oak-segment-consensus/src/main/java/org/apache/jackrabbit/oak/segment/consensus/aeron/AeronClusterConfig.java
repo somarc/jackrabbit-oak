@@ -149,6 +149,12 @@ public @interface AeronClusterConfig {
     int reconnectMaxAttempts() default 0;
 
     @AttributeDefinition(
+        name = "Max Concurrent Sessions",
+        description = "ConsensusModule max concurrent sessions. 0 = use built-in default."
+    )
+    int maxConcurrentSessions() default 0;
+
+    @AttributeDefinition(
         name = "Peer Probe Mode",
         description = "Peer probe mode for health checks: http or none. Defaults to http."
     )

@@ -186,6 +186,7 @@ public class AeronApiHandler {
         health.put("hasQuorum", hasQuorum);
         health.put("mediaDriverHealthy", mediaDriver.get("status").equals("HEALTHY"));
         state.put("health", health);
+        state.put("internalIngressClient", context.aeronConsensusEngine.getInternalIngressClientDiagnostics());
         
         return state;
     }

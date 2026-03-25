@@ -26,6 +26,36 @@ import java.util.function.IntToLongFunction;
 
 final class AeronInternalClusterClientConnector {
 
+    enum FailureKind {
+        NONE,
+        SESSION_LIMIT,
+        FAILED
+    }
+
+    static final class ConnectAttemptResult {
+        final AeronCluster client;
+        final FailureKind failureKind;
+        final String failureMessage;
+
+        private ConnectAttemptResult(AeronCluster client, FailureKind failureKind, String failureMessage) {
+            this.client = client;
+            this.failureKind = failureKind;
+            this.failureMessage = failureMessage;
+        }
+
+        static ConnectAttemptResult success(AeronCluster client) {
+            return new ConnectAttemptResult(client, FailureKind.NONE, null);
+        }
+
+        static ConnectAttemptResult failure(FailureKind failureKind, String failureMessage) {
+            return new ConnectAttemptResult(null, failureKind, failureMessage);
+        }
+
+        boolean isSuccess() {
+            return client != null;
+        }
+    }
+
     interface ClusterClientFactory {
         AeronCluster connect(String aeronDirectoryName,
                              AeronIngressEndpointPlanner.Plan ingressPlan,
@@ -93,6 +123,43 @@ final class AeronInternalClusterClientConnector {
         }
 
         return null;
+    }
+
+    ConnectAttemptResult connectOnce(AeronCluster currentClient,
+                                     String aeronDirectoryName,
+                                     AeronIngressEndpointPlanner.Plan ingressPlan,
+                                     IdleStrategy idleStrategy) {
+        if (currentClient != null && !currentClient.isClosed()) {
+            return ConnectAttemptResult.success(currentClient);
+        }
+
+        if (currentClient != null) {
+            try {
+                currentClient.close();
+            } catch (Exception e) {
+                log.debug("Error closing stale internal cluster client: {}", e.getMessage());
+            }
+        }
+
+        try {
+            return ConnectAttemptResult.success(clusterClientFactory.connect(aeronDirectoryName, ingressPlan, idleStrategy));
+        } catch (Exception e) {
+            FailureKind failureKind = isSessionLimitFailure(e) ? FailureKind.SESSION_LIMIT : FailureKind.FAILED;
+            String failureMessage = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            return ConnectAttemptResult.failure(failureKind, failureMessage);
+        }
+    }
+
+    private static boolean isSessionLimitFailure(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null && message.toLowerCase(java.util.Locale.ROOT).contains("concurrent session limit")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private static AeronCluster connectCluster(String aeronDirectoryName,

@@ -142,7 +142,8 @@ public class AeronConsensusEngine implements ClusteredService {
     private final AeronIngressControlPayloadBuilder ingressControlPayloadBuilder;
     private final AeronClusterStateView clusterStateView;
     private final AeronIngressEndpointPlanner internalIngressEndpointPlanner;
-    private final AeronInternalClusterClientConnector internalClusterClientConnector;
+    private AeronInternalClusterClientConnector internalClusterClientConnector;
+    private final AeronInternalIngressClientManager internalIngressClientManager;
     private final HeadStateService headStateService;
     
     // Aeron Cluster components
@@ -160,7 +161,7 @@ public class AeronConsensusEngine implements ClusteredService {
     
     // ✈️ AERON NATIVE: Internal AeronCluster client for sending writes through ingress
     // This client connects to the same media driver (via IPC) to send messages
-    private io.aeron.cluster.client.AeronCluster internalClusterClient = null;
+    private volatile io.aeron.cluster.client.AeronCluster internalClusterClient = null;
     
     // ✈️ AERON NATIVE: Callback interface for applying replicated writes and deletes
     public interface WriteApplicationCallback {
@@ -222,7 +223,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private volatile long lastSummaryLogTime = System.currentTimeMillis();
     private volatile long lastSummaryWriteCount = 0;
     private static final long SUMMARY_LOG_INTERVAL_MS = 10000; // Log summary every 10 seconds
-    private static final long INGRESS_CLIENT_REBIND_DELAY_MS = 250L;
+    private static final long INGRESS_CLIENT_REQUEST_WAIT_MS = 3000L;
     private static final long DURABILITY_RETRY_DELAY_MS = 250L;
     private static final int MAX_DURABILITY_RETRY_ATTEMPTS = 4;
     
@@ -327,6 +328,14 @@ public class AeronConsensusEngine implements ClusteredService {
         this.clusterStateView = new AeronClusterStateView(selfUrl, peerUrls, nodeIdToUrl, this::isSameUrlByPort);
         this.internalIngressEndpointPlanner = AeronIngressEndpointPlanner.systemFromUrls(selfUrl, peerUrls);
         this.internalClusterClientConnector = AeronEngineComponentFactory.createInternalClusterClientConnector();
+        this.internalIngressClientManager = new AeronInternalIngressClientManager(
+            () -> internalClusterClientConnector,
+            internalIngressEndpointPlanner,
+            () -> aeronDirectoryName,
+            () -> idleStrategy,
+            () -> internalClusterClient,
+            client -> internalClusterClient = client
+        );
         this.leaderDiscoveryService = AeronEngineComponentFactory.createLeaderDiscoveryService(nodeIdToUrl, peerUrls, selfUrl);
         this.messageDispatcher = AeronEngineComponentFactory.createMessageDispatcher(
             new MessageDispatcher.WriteCallback() {
@@ -458,7 +467,7 @@ public class AeronConsensusEngine implements ClusteredService {
         this.ingressHandler = AeronEngineComponentFactory.createIngressHandler(
             messageCodec, messageDispatcher, this::markHeartbeat, this::applyGenesisCreation
         );
-        this.sessionManager = AeronEngineComponentFactory.createSessionManager(this::markHeartbeat, this::scheduleReconnect);
+        this.sessionManager = AeronEngineComponentFactory.createSessionManager(this::markHeartbeat, null);
         this.leaderTracker = AeronEngineComponentFactory.createLeaderTracker(leaderDiscoveryService);
         
         log.info("Aeron Consensus Engine initializing - Consensus: Aeron Cluster (Raft), Self: {}, Peers: {}, Wallet: {}", 
@@ -760,10 +769,8 @@ public class AeronConsensusEngine implements ClusteredService {
         } else {
             log.info("Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
             markHeartbeat();
-            if (closeReason == CloseReason.TIMEOUT) {
-                scheduleReconnect("session_timeout");
-            }
         }
+        internalIngressClientManager.handleClusterSessionClose(session.id(), closeReason);
     }
     
     @Override
@@ -857,71 +864,16 @@ public class AeronConsensusEngine implements ClusteredService {
      * Create internal AeronCluster client lazily (on first write attempt).
      * This avoids timeout issues during cluster startup.
      */
-    private synchronized void ensureInternalClusterClient() {
-        log.debug("🔧 ensureInternalClusterClient() called - checking if client exists...");
-
-        if (internalClusterClient != null && !internalClusterClient.isClosed()) {
-            log.debug("✅ Internal cluster client already exists and is healthy (not closed)");
-            return;
-        }
-
-        log.info("🔧 Internal cluster client is null - checking aeron directory...");
-        log.info("   aeronDirectoryName: {}", aeronDirectoryName);
-        log.info("   peerUrls: {}", peerUrls);
-        if (aeronDirectoryName == null || aeronDirectoryName.isEmpty()) {
-            log.warn("⚠️  Cannot create internal cluster client - aeron directory not set");
-            return;
-        }
-        AeronIngressEndpointPlanner.Plan ingressPlan = internalIngressEndpointPlanner.plan();
-        String ingressEndpointsStr = ingressPlan.ingressEndpoints;
-        if (ingressEndpointsStr == null || ingressEndpointsStr.isEmpty()) {
-            log.warn("⚠️  Cannot create internal cluster client - no valid ingress endpoints available");
-            return;
-        }
-        
-        log.info("✈️  Creating internal AeronCluster client for ingress (UDP - distributed network)...");
-        log.info("   Aeron directory: {}", aeronDirectoryName);
-        log.info("   Using UDP endpoints for distributed network communication");
-        log.info("   Ingress endpoints: {} (resolved from configured node URLs)", ingressEndpointsStr);
-
-        internalClusterClient = internalClusterClientConnector.ensureConnected(
-            internalClusterClient,
-            aeronDirectoryName,
-            ingressPlan,
-            idleStrategy
-        );
-    }
-
-    private synchronized void invalidateInternalClusterClient(String reason, boolean closeExisting) {
-        io.aeron.cluster.client.AeronCluster existingClient = internalClusterClient;
-        internalClusterClient = null;
-
-        if (existingClient == null) {
-            return;
-        }
-
-        if (!closeExisting) {
-            log.info("🔄 Invalidated internal cluster client ({})", reason);
-            return;
-        }
-
-        try {
-            existingClient.close();
-            log.info("🔄 Closed internal cluster client ({})", reason);
-        } catch (Exception e) {
-            log.debug("Error closing internal cluster client during {}: {}", reason, e.getMessage());
+    private void ensureInternalClusterClient() {
+        if (!internalIngressClientManager.ensureAvailable("request ingress", INGRESS_CLIENT_REQUEST_WAIT_MS)) {
+            log.warn("⚠️  Internal ingress client unavailable after wait (state={})",
+                internalIngressClientManager.diagnostics().get("state"));
         }
     }
 
     private void scheduleIngressClientRebind(String reason) {
-        backgroundCoordinator.schedule("aeron-ingress-rebind", INGRESS_CLIENT_REBIND_DELAY_MS, () -> {
-            try {
-                log.info("🔄 Rebinding internal cluster client ({})", reason);
-                ensureInternalClusterClient();
-            } catch (RuntimeException e) {
-                log.warn("⚠️  Failed to rebind internal cluster client ({}): {}", reason, e.getMessage());
-            }
-        });
+        log.info("🔄 Scheduling internal ingress client rebind ({})", reason);
+        internalIngressClientManager.requestRebind(reason);
     }
 
     private void handleIngressClientRoleChange(Cluster.Role previousRole, Cluster.Role newRole) {
@@ -933,7 +885,9 @@ public class AeronConsensusEngine implements ClusteredService {
         }
 
         String reason = "role change " + previousRole + " -> " + newRole;
-        invalidateInternalClusterClient(reason, true);
+        if (lostLeadership) {
+            internalIngressClientManager.requestClose(reason);
+        }
 
         if (becameLeader) {
             scheduleIngressClientRebind(reason);
@@ -1049,7 +1003,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
 
     private boolean sendDurabilityMessage(AeronEncodedMessage encoded, String label, int attempt) {
-        if (!ensureIngressClient("durability message (" + label + ")")) {
+        if (!ensureIngressClient("durability message (" + label + ")", 0L)) {
             scheduleDurabilityRetry(encoded, label, attempt, "ingress client unavailable");
             return false;
         }
@@ -1074,13 +1028,12 @@ public class AeronConsensusEngine implements ClusteredService {
         log.warn("⚠️  Durability message {} failed (attempt {}/{}: {}) - retrying in {}ms",
             label, nextAttempt, MAX_DURABILITY_RETRY_ATTEMPTS + 1, reason, delayMs);
         backgroundCoordinator.schedule("aeron-durability-retry-" + label + "-" + nextAttempt, delayMs, () -> {
-            invalidateInternalClusterClient("durability retry " + label + " attempt " + nextAttempt, true);
             sendDurabilityMessage(encoded, label, nextAttempt);
         });
     }
 
     private boolean sendTransactionMessage(AeronEncodedMessage encoded, String label) {
-        if (!ensureIngressClient("transaction message (" + label + ")")) {
+        if (!ensureIngressClient("transaction message (" + label + ")", INGRESS_CLIENT_REQUEST_WAIT_MS)) {
             return false;
         }
         return sendEncodedMessage(
@@ -1598,14 +1551,13 @@ public class AeronConsensusEngine implements ClusteredService {
         }
     }
 
-    private boolean ensureIngressClient(String operationDescription) {
+    private boolean ensureIngressClient(String operationDescription, long waitMs) {
         if (cluster == null) {
             log.error("❌ Cluster not initialized - cannot send {}", operationDescription);
             return false;
         }
 
-        ensureInternalClusterClient();
-        if (internalClusterClient == null) {
+        if (!internalIngressClientManager.ensureAvailable(operationDescription, waitMs)) {
             log.error("❌ Internal AeronCluster client not available - cannot send {}", operationDescription);
             return false;
         }
@@ -1623,13 +1575,22 @@ public class AeronConsensusEngine implements ClusteredService {
                                        Runnable onSuccess,
                                        boolean reconnectImmediatelyOnSendFailure) {
         try {
-            if (internalClusterClient.isClosed()) {
+            io.aeron.cluster.client.AeronCluster currentClient = internalClusterClient;
+            if (currentClient == null) {
+                log.error("❌ Cannot send {} - internal cluster client is unavailable", messageType);
+                return false;
+            }
+
+            if (currentClient.isClosed()) {
                 log.error("❌ Cannot send {} - internal cluster client session is CLOSED", messageType);
-                synchronized (this) {
-                    internalClusterClient = null;
-                    ensureInternalClusterClient();
+                internalIngressClientManager.notifySendFailure("closed client for " + messageType);
+                if (!reconnectImmediatelyOnSendFailure
+                        || !internalIngressClientManager.ensureAvailable(messageType, INGRESS_CLIENT_REQUEST_WAIT_MS)) {
+                    log.error("❌ Reconnection failed - cannot send {}", messageType);
+                    return false;
                 }
-                if (internalClusterClient == null || internalClusterClient.isClosed()) {
+                currentClient = internalClusterClient;
+                if (currentClient == null || currentClient.isClosed()) {
                     log.error("❌ Reconnection failed - cannot send {}", messageType);
                     return false;
                 }
@@ -1637,7 +1598,7 @@ public class AeronConsensusEngine implements ClusteredService {
 
             Runnable successCallback = onSuccess != null ? onSuccess : () -> { };
             AeronEgressHandler.OfferResult result = egressHandler.offerWithRetryResult(
-                internalClusterClient,
+                currentClient,
                 idleStrategy,
                 encoded.buffer,
                 encoded.totalLength,
@@ -1653,22 +1614,28 @@ public class AeronConsensusEngine implements ClusteredService {
             if (!reconnectImmediatelyOnSendFailure) {
                 if (result == AeronEgressHandler.OfferResult.NOT_CONNECTED) {
                     log.warn("⚠️  {} not connected after retries - deferring to scheduled retry", messageType);
+                    internalIngressClientManager.notifySendFailure("not connected for " + messageType);
                 } else {
                     log.warn("⚠️  {} send failed - deferring to scheduled retry", messageType);
+                    internalIngressClientManager.notifySendFailure("send failure for " + messageType);
                 }
                 return false;
             }
 
-            log.warn("⚠️  {} send failed - resetting internal cluster client and retrying once", messageType);
-            invalidateInternalClusterClient("send failure for " + messageType, true);
-            ensureInternalClusterClient();
-            if (internalClusterClient == null || internalClusterClient.isClosed()) {
+            log.warn("⚠️  {} send failed - rebinding internal ingress client and retrying once", messageType);
+            internalIngressClientManager.notifySendFailure("send failure for " + messageType);
+            if (!internalIngressClientManager.ensureAvailable(messageType, INGRESS_CLIENT_REQUEST_WAIT_MS)) {
+                log.error("❌ Retry rebind failed - cannot send {}", messageType);
+                return false;
+            }
+            currentClient = internalClusterClient;
+            if (currentClient == null || currentClient.isClosed()) {
                 log.error("❌ Retry rebind failed - cannot send {}", messageType);
                 return false;
             }
 
             return egressHandler.offerWithRetryResult(
-                internalClusterClient,
+                currentClient,
                 idleStrategy,
                 encoded.buffer,
                 encoded.totalLength,
@@ -1792,16 +1759,8 @@ public class AeronConsensusEngine implements ClusteredService {
     @Override
     public void onTerminate(Cluster cluster) {
         log.info("Aeron Cluster service terminating (role: {})", cluster.role());
-        
-        // Close internal cluster client
-        if (internalClusterClient != null) {
-            try {
-                internalClusterClient.close();
-                log.info("Internal AeronCluster client closed");
-            } catch (Exception e) {
-                log.error("Error closing internal cluster client", e);
-            }
-        }
+
+        internalIngressClientManager.close();
         stopTransactionTimeoutScheduler();
         backgroundCoordinator.close();
         
@@ -1913,6 +1872,10 @@ public class AeronConsensusEngine implements ClusteredService {
             this::hasQuorum,
             () -> internalClusterClient
         );
+    }
+
+    public Map<String, Object> getInternalIngressClientDiagnostics() {
+        return internalIngressClientManager.diagnostics();
     }
     
     // HEAD tracking and finality-aware commits are handled by HeadStateService.
@@ -2290,10 +2253,9 @@ public class AeronConsensusEngine implements ClusteredService {
                 // This causes the cluster to detect leader absence and trigger election
                 if (internalClusterClient != null && !internalClusterClient.isClosed()) {
                     log.info("🔄 Closing internal cluster client to trigger re-election...");
-                    
+
                     // Close the client - this signals to the cluster that we're stepping down
-                    internalClusterClient.close();
-                    internalClusterClient = null;
+                    internalIngressClientManager.closeClientNow("leader step-down");
                     
                     // Update local state
                     currentRole = ValidatorRole.FOLLOWER;
@@ -2854,7 +2816,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
 
     private boolean isInternalClusterClientHealthy() {
-        return internalClusterClient != null && !internalClusterClient.isClosed();
+        return internalIngressClientManager.isHealthy();
     }
 
     private boolean sleepBackoff(long backoffMs) {

@@ -372,6 +372,14 @@ public class OsgiConfigApiHandler {
             "Peer reconnect attempt ceiling",
             "oak.cluster.reconnect.maxAttempts"));
         schema.add(schemaEntry(
+            "aeronClusterTuning.max_concurrent_sessions",
+            "int",
+            0,
+            "startup-only",
+            "expert-only",
+            "ConsensusModule max concurrent sessions override",
+            "oak.cluster.max.concurrent.sessions"));
+        schema.add(schemaEntry(
             "aeronClusterTuning.delete_aeron_dirs_on_startup",
             "boolean",
             false,

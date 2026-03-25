@@ -34,6 +34,8 @@ import org.agrona.concurrent.ShutdownSignalBarrier;
 
 final class AeronClusterContextFactory {
 
+    private static final String MAX_CONCURRENT_SESSIONS_PROPERTY = "oak.cluster.max.concurrent.sessions";
+
     static LaunchContexts create(int nodeId,
                                  File baseDir,
                                  ClusteredService clusteredService,
@@ -93,6 +95,11 @@ final class AeronClusterContextFactory {
                 .replicationChannel(AeronClusterTopology.replicationChannel(myIPAddress))
                 .sessionTimeoutNs(sessionTimeoutConfig.timeoutNs)
                 .archiveContext(aeronArchiveContext.clone());
+
+        int maxConcurrentSessions = Integer.getInteger(MAX_CONCURRENT_SESSIONS_PROPERTY, 0);
+        if (maxConcurrentSessions > 0) {
+            consensusModuleContext.maxConcurrentSessions(maxConcurrentSessions);
+        }
 
         ClusteredServiceContainer.Context clusteredServiceContext =
                 new ClusteredServiceContainer.Context()

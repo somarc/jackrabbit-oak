@@ -49,6 +49,7 @@ public final class AeronClusterTuningIntrospection {
         values.put("reachability_connect_timeout_ms", readInt("oak.cluster.reachability.connectTimeoutMs", 0));
         values.put("reachability_read_timeout_ms", readInt("oak.cluster.reachability.readTimeoutMs", 0));
         values.put("reconnect_max_attempts", readInt("oak.cluster.reconnect.maxAttempts", 0));
+        values.put("max_concurrent_sessions", readInt("oak.cluster.max.concurrent.sessions", 0));
         values.put("peer_probe_mode", readString("oak.health.peerProbeMode", ""));
         values.put("delete_aeron_dirs_on_startup", readBoolean("aeron.delete.dirs.on.startup", false));
         values.put("beacon_api_url", readString("ethereum.beacon.api.url", "https://beaconcha.in/api"));

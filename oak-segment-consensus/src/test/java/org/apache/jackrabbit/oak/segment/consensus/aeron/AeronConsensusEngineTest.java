@@ -62,6 +62,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.mock;
@@ -193,12 +194,28 @@ public class AeronConsensusEngineTest {
         io.aeron.cluster.client.AeronCluster client = mock(io.aeron.cluster.client.AeronCluster.class);
         when(client.isClosed()).thenReturn(false);
         setField(engine, "internalClusterClient", client);
+        setField(engine, "idleStrategy", mock(IdleStrategy.class));
+        engine.setAeronDirectoryName(storeDirectory.getAbsolutePath() + "/aeron-test");
+
+        AeronInternalClusterClientConnector connector = mock(AeronInternalClusterClientConnector.class);
+        when(connector.connectOnce(any(), any(), any(), any()))
+            .thenReturn(AeronInternalClusterClientConnector.ConnectAttemptResult.failure(
+                AeronInternalClusterClientConnector.FailureKind.FAILED,
+                "connect failed"));
+        setField(engine, "internalClusterClientConnector", connector);
 
         engine.onRoleChange(Cluster.Role.LEADER);
 
-        verify(client).close();
+        assertTrue(waitUntil(() -> {
+            try {
+                verify(client).close();
+                return true;
+            } catch (AssertionError assertionError) {
+                return false;
+            }
+        }, 1500L));
         assertNull(getField(engine, "internalClusterClient"));
-        assertEquals("aeron-ingress-rebind", scheduler.tasks.get(0).name);
+        assertEquals(0, scheduler.tasks.size());
     }
 
     @Test
@@ -541,8 +558,7 @@ public class AeronConsensusEngineTest {
 
         engine.onRoleChange(Cluster.Role.LEADER);
 
-        assertEquals(1, scheduler.tasks.size());
-        assertEquals("aeron-ingress-rebind", scheduler.tasks.get(0).name);
+        assertEquals(0, scheduler.tasks.size());
     }
 
     @Test
@@ -627,7 +643,14 @@ public class AeronConsensusEngineTest {
 
         engine.onRoleChange(Cluster.Role.FOLLOWER);
 
-        verify(client).close();
+        assertTrue(waitUntil(() -> {
+            try {
+                verify(client).close();
+                return true;
+            } catch (AssertionError assertionError) {
+                return false;
+            }
+        }, 1500L));
         assertNull(getField(engine, "internalClusterClient"));
         assertEquals(1, scheduler.tasks.size());
         assertEquals("aeron-leader-discovery", scheduler.tasks.get(0).name);
@@ -689,41 +712,26 @@ public class AeronConsensusEngineTest {
             .thenReturn(io.aeron.Publication.CLOSED);
         setField(engine, "internalClusterClient", staleClient);
 
-        io.aeron.cluster.client.AeronCluster staleRetryClient = mock(io.aeron.cluster.client.AeronCluster.class);
-        when(staleRetryClient.isClosed()).thenReturn(false);
-        when(staleRetryClient.offer(any(MutableDirectBuffer.class), eq(0), anyInt()))
-            .thenReturn(io.aeron.Publication.CLOSED);
-
         io.aeron.cluster.client.AeronCluster healthyClient = mock(io.aeron.cluster.client.AeronCluster.class);
         when(healthyClient.isClosed()).thenReturn(false);
         when(healthyClient.clusterSessionId()).thenReturn(91L);
         when(healthyClient.offer(any(MutableDirectBuffer.class), eq(0), anyInt())).thenReturn(1L);
 
         AeronInternalClusterClientConnector connector = mock(AeronInternalClusterClientConnector.class);
-        when(connector.ensureConnected(any(), any(), any(), any()))
-            .thenReturn(staleRetryClient)
-            .thenReturn(healthyClient);
+        when(connector.connectOnce(any(), any(), any(), any()))
+            .thenReturn(AeronInternalClusterClientConnector.ConnectAttemptResult.success(healthyClient));
         setField(engine, "internalClusterClientConnector", connector);
 
         assertFalse(engine.sendSegmentPersisted("proposal-7", "head-1", true, null));
 
         assertEquals(1, scheduler.tasks.size());
         assertEquals("aeron-durability-retry-segment-persisted-1", scheduler.tasks.get(0).name);
-        verify(staleClient, never()).close();
-        verify(connector, never()).ensureConnected(any(), any(), any(), any());
+        assertTrue(waitUntil(() -> getFieldUnchecked(engine, "internalClusterClient") == healthyClient, 1500L));
+        verify(staleClient).close();
+        verify(connector, atLeastOnce()).connectOnce(any(), any(), any(), any());
 
         scheduler.tasks.get(0).runnable.run();
 
-        assertEquals(2, scheduler.tasks.size());
-        verify(staleClient).close();
-        verify(connector).ensureConnected(any(), any(), any(), any());
-        verify(staleRetryClient, never()).close();
-        verify(staleRetryClient).offer(any(MutableDirectBuffer.class), eq(0), anyInt());
-
-        scheduler.tasks.get(1).runnable.run();
-
-        verify(connector, times(2)).ensureConnected(any(), any(), any(), any());
-        verify(staleRetryClient).close();
         verify(healthyClient).offer(any(MutableDirectBuffer.class), eq(0), anyInt());
 
         CapturedOffer offer = captureOffer(healthyClient);
@@ -760,19 +768,18 @@ public class AeronConsensusEngineTest {
         when(healthyClient.offer(any(MutableDirectBuffer.class), eq(0), anyInt())).thenReturn(1L);
 
         AeronInternalClusterClientConnector connector = mock(AeronInternalClusterClientConnector.class);
-        when(connector.ensureConnected(any(), any(), any(), any())).thenReturn(healthyClient);
+        when(connector.connectOnce(any(), any(), any(), any()))
+            .thenReturn(AeronInternalClusterClientConnector.ConnectAttemptResult.success(healthyClient));
         setField(engine, "internalClusterClientConnector", connector);
 
         assertFalse(engine.sendSegmentPersisted("proposal-8", "head-2", true, null));
 
         assertEquals(1, scheduler.tasks.size());
-        verify(staleClient, never()).close();
-        verify(connector, never()).ensureConnected(any(), any(), any(), any());
-
+        assertTrue(waitUntil(() -> getFieldUnchecked(engine, "internalClusterClient") == healthyClient, 1500L));
         scheduler.tasks.get(0).runnable.run();
 
         verify(staleClient).close();
-        verify(connector).ensureConnected(any(), any(), any(), any());
+        verify(connector, atLeastOnce()).connectOnce(any(), any(), any(), any());
         verify(healthyClient).offer(any(MutableDirectBuffer.class), eq(0), anyInt());
     }
 
@@ -883,7 +890,8 @@ public class AeronConsensusEngineTest {
         when(healthyClient.offer(any(MutableDirectBuffer.class), eq(0), anyInt())).thenReturn(1L);
 
         AeronInternalClusterClientConnector connector = mock(AeronInternalClusterClientConnector.class);
-        when(connector.ensureConnected(any(), any(), any(), any())).thenReturn(healthyClient);
+        when(connector.connectOnce(any(), any(), any(), any()))
+            .thenReturn(AeronInternalClusterClientConnector.ConnectAttemptResult.success(healthyClient));
         setField(engine, "internalClusterClientConnector", connector);
 
         assertTrue(engine.sendWriteThroughIngressWithId(
@@ -896,8 +904,9 @@ public class AeronConsensusEngineTest {
             "proposal-3"
         ));
 
+        assertTrue(waitUntil(() -> getFieldUnchecked(engine, "internalClusterClient") == healthyClient, 1500L));
         verify(staleClient).close();
-        verify(connector).ensureConnected(any(), any(), any(), any());
+        verify(connector, atLeastOnce()).connectOnce(any(), any(), any(), any());
         verify(healthyClient).offer(any(MutableDirectBuffer.class), eq(0), anyInt());
     }
 
@@ -1112,6 +1121,25 @@ public class AeronConsensusEngineTest {
         return field.get(target);
     }
 
+    private static Object getFieldUnchecked(Object target, String name) {
+        try {
+            return getField(target, name);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static boolean waitUntil(java.util.concurrent.Callable<Boolean> condition, long timeoutMs) throws Exception {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (Boolean.TRUE.equals(condition.call())) {
+                return true;
+            }
+            Thread.sleep(25L);
+        }
+        return Boolean.TRUE.equals(condition.call());
+    }
+
     private io.aeron.cluster.client.AeronCluster installHealthyClient(AeronConsensusEngine engine,
                                                                        Cluster.Role role) throws Exception {
         Cluster cluster = mock(Cluster.class);
@@ -1125,6 +1153,9 @@ public class AeronConsensusEngineTest {
         when(client.clusterSessionId()).thenReturn(99L);
         when(client.offer(any(MutableDirectBuffer.class), eq(0), anyInt())).thenReturn(1L);
         setField(engine, "internalClusterClient", client);
+        AeronInternalIngressClientManager manager =
+            (AeronInternalIngressClientManager) getField(engine, "internalIngressClientManager");
+        assertTrue(manager.ensureAvailable("test install", 250L));
         return client;
     }
 
