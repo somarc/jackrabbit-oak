@@ -64,7 +64,6 @@
     <module>oak-lucene</module>
     <module>oak-auth-external</module>
     <module>oak-auth-ldap</module>
-    <module>oak-auth-web3</module>
     <module>oak-run-commons</module>
     <module>oak-run</module>
     <module>oak-it-osgi</module>
@@ -79,7 +78,6 @@
     <module>oak-segment-aws</module>
     <module>oak-segment-azure</module>
     <module>oak-segment-consensus</module>
-    <module>oak-segment-agentic</module>
     <module>oak-benchmarks</module>
     <module>oak-search-elastic</module>
     <module>oak-benchmarks-lucene</module>
