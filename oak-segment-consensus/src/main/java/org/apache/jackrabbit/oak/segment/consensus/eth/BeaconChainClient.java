@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.consensus.eth;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
-import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +33,7 @@ import java.nio.charset.StandardCharsets;
  * <ul>
  *   <li><strong>MAINNET</strong>: Fetches real epochs from beaconcha.in mainnet API</li>
  *   <li><strong>SEPOLIA</strong>: Fetches real epochs from beaconcha.in Sepolia API</li>
- *   <li><strong>MOCK</strong>: Uses synthetic epochs for fast iteration without Ethereum</li>
+ *   <li><strong>MOCK</strong>: Uses Sepolia chain context without a synthetic mock epoch clock</li>
  * </ul>
  * 
  * <p>SINGLE SOURCE OF TRUTH for Ethereum epoch data across oak-segment-consensus.
@@ -43,6 +42,11 @@ import java.nio.charset.StandardCharsets;
  */
 public class BeaconChainClient {
     private static final Logger log = LoggerFactory.getLogger(BeaconChainClient.class);
+
+    @FunctionalInterface
+    interface HttpFetcher {
+        String fetch(String endpoint) throws Exception;
+    }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // API ENDPOINTS (beaconcha.in provides both mainnet and Sepolia)
@@ -53,29 +57,19 @@ public class BeaconChainClient {
     // Epoch duration is 6.4 minutes on all networks
     private static final long EPOCH_DURATION_MS = 384000L; // 32 slots × 12 seconds
     
-    // Mock mode: configurable epoch duration (default 300 seconds)
-    private static final String ENV_MOCK_EPOCH_DURATION_SECONDS = "OAK_MOCK_EPOCH_DURATION_SECONDS";
-    private static final String PROP_MOCK_EPOCH_DURATION_SECONDS = "oak.mock.epoch.duration.seconds";
-    private static final long DEFAULT_MOCK_EPOCH_DURATION_MS = 300_000L;
-    
     // Poll intervals
     private static final long REAL_POLL_INTERVAL_MS = 60_000L;  // 1 minute for real chains
-    private static final long MOCK_POLL_INTERVAL_MS = 5_000L;   // 5 seconds for mock
     
     // Network mode
     private final BlockchainConfig.Mode networkMode;
     private final String apiBaseUrl;
+    private final HttpFetcher httpFetcher;
     
     // Cached epoch state (single source of truth)
     private volatile long cachedFinalizedEpoch = -1;
     private volatile long cachedCurrentEpoch = -1;
     private volatile long lastUpdateTime = 0;
     private volatile String lastError = null;
-    
-    // Mock mode state
-    private final long mockStartTime;
-    private final long mockEpochDurationMs;
-    private volatile long mockEpochOffset = 0; // Can be set via API for testing
     
     // Background polling thread
     private java.util.concurrent.ScheduledExecutorService pollingExecutor;
@@ -94,22 +88,24 @@ public class BeaconChainClient {
      * @param beaconApiUrl Ignored - we use mode-specific URLs now
      */
     public BeaconChainClient(String beaconApiUrl) {
-        BlockchainConfig config = BlockchainConfig.getInstance();
-        this.networkMode = config.getMode();
-        this.mockStartTime = System.currentTimeMillis();
-        this.mockEpochDurationMs = resolveMockEpochDurationMs();
+        this(BlockchainConfig.getInstance().getMode(), BeaconChainClient::httpGet);
+    }
+
+    BeaconChainClient(BlockchainConfig.Mode networkMode, HttpFetcher httpFetcher) {
+        this.networkMode = networkMode;
+        this.httpFetcher = httpFetcher != null ? httpFetcher : BeaconChainClient::httpGet;
         
         // Select API URL based on mode
         switch (networkMode) {
             case MAINNET:
                 this.apiBaseUrl = MAINNET_API;
                 break;
+            case MOCK:
             case SEPOLIA:
                 this.apiBaseUrl = SEPOLIA_API;
                 break;
-            case MOCK:
             default:
-                this.apiBaseUrl = null; // Mock mode doesn't use API
+                this.apiBaseUrl = SEPOLIA_API;
                 break;
         }
         
@@ -119,8 +115,8 @@ public class BeaconChainClient {
         log.info("   Mode: {}", networkMode);
         
         if (networkMode == BlockchainConfig.Mode.MOCK) {
-            log.info("   📝 MOCK MODE - Synthetic epochs ({}s/epoch)", mockEpochDurationMs / 1000);
-            log.info("   📝 Use /api/mock/set-epoch to control epoch");
+            log.info("   📝 MOCK MODE - using Sepolia chain context (no synthetic epoch clock)");
+            log.info("   API: {}", apiBaseUrl);
         } else {
             log.info("   API: {}", apiBaseUrl);
             log.info("   📡 REAL API - Fetching from beaconcha.in");
@@ -140,9 +136,7 @@ public class BeaconChainClient {
             return;
         }
         
-        long pollInterval = (networkMode == BlockchainConfig.Mode.MOCK) 
-            ? MOCK_POLL_INTERVAL_MS 
-            : REAL_POLL_INTERVAL_MS;
+        long pollInterval = REAL_POLL_INTERVAL_MS;
         
         pollingExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "beacon-chain-epoch-poller");
@@ -157,10 +151,7 @@ public class BeaconChainClient {
                 log.error("Epoch update failed: {}", e.getMessage());
                 lastError = e.getMessage();
                 apiErrorCount++;
-                // Don't crash in mock mode - just log and continue
-                if (networkMode != BlockchainConfig.Mode.MOCK) {
-                    log.error("Real mode epoch failure - this may impact finality tracking!");
-                }
+                log.error("Chain epoch failure - this may impact finality tracking!");
             }
         }, pollInterval, pollInterval, java.util.concurrent.TimeUnit.MILLISECONDS);
         
@@ -187,43 +178,11 @@ public class BeaconChainClient {
      */
     private void updateCachedEpochs() {
         long startTime = System.nanoTime();
-        
-        if (networkMode == BlockchainConfig.Mode.MOCK) {
-            updateMockEpochs();
-        } else {
-            updateRealEpochs();
-        }
+        updateRealEpochs();
         
         long durationMs = (System.nanoTime() - startTime) / 1_000_000;
         log.debug("Epoch update completed in {}ms: finalized={}, current={}", 
             durationMs, cachedFinalizedEpoch, cachedCurrentEpoch);
-    }
-    
-    /**
-     * Mock mode: Calculate synthetic epochs for testing.
-     * 
-     * <p>Epochs increment every 30 seconds, starting from a reasonable base.
-     * Use setMockEpoch() to control the epoch for specific test scenarios.
-     */
-    private void updateMockEpochs() {
-        long elapsed = System.currentTimeMillis() - mockStartTime;
-        long baseEpoch = elapsed / mockEpochDurationMs;
-        
-        // Start at epoch 1000 so it looks realistic, plus any manual offset
-        long currentEpoch = 1000 + baseEpoch + mockEpochOffset;
-        long finalizedEpoch = currentEpoch - 2;
-        
-        boolean epochAdvanced = (finalizedEpoch != cachedFinalizedEpoch);
-        
-        if (epochAdvanced) {
-            log.info("🧪 MOCK epoch advanced: {} -> {} (current: {})", 
-                cachedFinalizedEpoch, finalizedEpoch, currentEpoch);
-        }
-        
-        cachedFinalizedEpoch = finalizedEpoch;
-        cachedCurrentEpoch = currentEpoch;
-        lastUpdateTime = System.currentTimeMillis();
-        lastError = null;
     }
     
     /**
@@ -238,7 +197,7 @@ public class BeaconChainClient {
             // Preferred endpoint (historical behavior)
             try {
                 String endpoint = "/epoch/finalized";
-                String response = httpGet(apiBaseUrl + endpoint);
+                String response = httpFetcher.fetch(apiBaseUrl + endpoint);
                 apiCallCount++;
                 finalizedEpoch = parseEpochFromResponse(response);
                 if (finalizedEpoch >= 0) {
@@ -255,7 +214,7 @@ public class BeaconChainClient {
             if (finalizedEpoch < 0) {
                 try {
                     String endpoint = "/epoch/latest";
-                    String response = httpGet(apiBaseUrl + endpoint);
+                    String response = httpFetcher.fetch(apiBaseUrl + endpoint);
                     apiCallCount++;
                     long latestEpoch = parseEpochFromResponse(response);
                     if (latestEpoch >= 0) {
@@ -372,7 +331,7 @@ public class BeaconChainClient {
     /**
      * Make HTTP GET request to Beacon Chain API.
      */
-    private String httpGet(String endpoint) throws Exception {
+    private static String httpGet(String endpoint) throws Exception {
         URL url = new URL(endpoint);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
@@ -434,48 +393,26 @@ public class BeaconChainClient {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
     /**
-     * Set mock epoch offset (only works in MOCK mode).
-     * 
-     * <p>Use this to simulate specific epoch scenarios for testing.
-     * 
-     * @param offset Number of epochs to add to the base mock epoch
-     * @return true if set successfully (mock mode), false otherwise
+     * Compatibility stub retained while callers are cleaned up.
      */
     public boolean setMockEpochOffset(long offset) {
-        if (networkMode != BlockchainConfig.Mode.MOCK) {
-            log.warn("Cannot set mock epoch in {} mode", networkMode);
-            return false;
-        }
-        
-        log.info("🧪 Setting mock epoch offset: {} (was: {})", offset, mockEpochOffset);
-        mockEpochOffset = offset;
-        updateMockEpochs(); // Update immediately
-        return true;
+        log.warn("Synthetic mock epoch control removed by ADR 080; mock mode now uses Sepolia chain context");
+        return false;
     }
     
     /**
-     * Advance mock epoch by N epochs (only works in MOCK mode).
-     * 
-     * @param epochs Number of epochs to advance
-     * @return true if advanced successfully
+     * Compatibility stub retained while callers are cleaned up.
      */
     public boolean advanceMockEpoch(int epochs) {
-        if (networkMode != BlockchainConfig.Mode.MOCK) {
-            log.warn("Cannot advance mock epoch in {} mode", networkMode);
-            return false;
-        }
-        
-        log.info("🧪 Advancing mock epoch by {}", epochs);
-        mockEpochOffset += epochs;
-        updateMockEpochs();
-        return true;
+        log.warn("Synthetic mock epoch control removed by ADR 080; mock mode now uses Sepolia chain context");
+        return false;
     }
     
     /**
-     * Get current mock epoch offset.
+     * Compatibility stub retained while callers are cleaned up.
      */
     public long getMockEpochOffset() {
-        return mockEpochOffset;
+        return 0L;
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -486,10 +423,7 @@ public class BeaconChainClient {
      * Check if epoch data is fresh.
      */
     public boolean isEpochDataFresh() {
-        long maxStale = (networkMode == BlockchainConfig.Mode.MOCK) 
-            ? 60_000L   // 1 minute for mock
-            : 300_000L; // 5 minutes for real
-        return (System.currentTimeMillis() - lastUpdateTime) < maxStale;
+        return (System.currentTimeMillis() - lastUpdateTime) < 300_000L;
     }
     
     /**
@@ -509,38 +443,9 @@ public class BeaconChainClient {
         health.put("apiErrorCount", apiErrorCount);
         health.put("lastError", lastError);
         health.put("lastEndpointUsed", lastEndpointUsed);
-        
-        if (networkMode == BlockchainConfig.Mode.MOCK) {
-            health.put("mockEpochOffset", mockEpochOffset);
-            health.put("mockEpochDurationMs", mockEpochDurationMs);
-        }
+        health.put("chainContext", networkMode == BlockchainConfig.Mode.MAINNET ? "mainnet" : "sepolia");
         
         return health;
-    }
-
-    private long resolveMockEpochDurationMs() {
-        long defaultSeconds = DEFAULT_MOCK_EPOCH_DURATION_MS / 1000L;
-        String raw = RuntimeConfigValueResolver.readStringEnvFirst(
-            PROP_MOCK_EPOCH_DURATION_SECONDS,
-            ENV_MOCK_EPOCH_DURATION_SECONDS,
-            null
-        );
-        if (raw == null || raw.trim().isEmpty()) {
-            return DEFAULT_MOCK_EPOCH_DURATION_MS;
-        }
-        try {
-            long seconds = Long.parseLong(raw.trim());
-            if (seconds <= 0) {
-                log.warn("Invalid mock epoch duration seconds ({}={}) - using default {}s",
-                    ENV_MOCK_EPOCH_DURATION_SECONDS, raw, defaultSeconds);
-                return DEFAULT_MOCK_EPOCH_DURATION_MS;
-            }
-            return seconds * 1000L;
-        } catch (NumberFormatException e) {
-            log.warn("Failed to parse mock epoch duration seconds (raw='{}') - using default {}s",
-                raw, defaultSeconds);
-            return DEFAULT_MOCK_EPOCH_DURATION_MS;
-        }
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

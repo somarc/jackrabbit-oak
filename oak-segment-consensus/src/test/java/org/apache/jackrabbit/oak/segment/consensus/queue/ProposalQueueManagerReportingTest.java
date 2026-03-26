@@ -79,92 +79,20 @@ public class ProposalQueueManagerReportingTest {
             assertTrue(governor.containsKey("state"));
             assertTrue(governor.containsKey("action"));
             assertTrue(governor.containsKey("reasonCodes"));
-
-            Map<String, Object> epochCompatibility = mapValue(payload.get("epochCompatibility"));
-            assertEquals("compatibility-epoch-overlay", epochCompatibility.get("source"));
-            assertEquals("/v1/proposals/release-flow", epochCompatibility.get("replacementEndpoint"));
+            assertTrue(!payload.containsKey("epochCompatibility"));
         } finally {
             queueManager.stop();
         }
     }
 
     @Test
-    public void getProposalEpochFlowStatsGroupsProposalStatesByTierAndEpoch() throws Exception {
-        BeaconChainClient beaconClient = beaconClient(9L, 7L);
-        ProposalQueueManagerOptimized queueManager = createQueueManager(beaconClient);
-        try {
-            queueManager.queueProposal(
-                "epoch-current-standard",
-                "0xtx-epoch-current-standard",
-                WALLET,
-                walletPath("epoch-current-standard"),
-                "page",
-                "pending payload",
-                "0xsig-pending",
-                ValidatorEarningsTracker.PaymentTier.STANDARD,
-                null
-            );
-
-            queueManager.queueProposal(
-                "epoch-next-express",
-                "0xtx-epoch-next-express",
-                WALLET,
-                walletPath("epoch-next-express"),
-                "page",
-                "verified payload",
-                "0xsig-verified",
-                ValidatorEarningsTracker.PaymentTier.EXPRESS,
-                null
-            );
-
-            QueuedProposal current = queueManager.getProposal("epoch-current-standard");
-            current.setEpoch(9L);
-
-            QueuedProposal next = queueManager.getProposal("epoch-next-express");
-            next.setEpoch(9L);
-            next.setState(ProposalState.VERIFIED);
-
-            putTerminalCounter(queueManager, "finalizedByEpochAndTier", 7L, "priority", 2L);
-            putTerminalCounter(queueManager, "rejectedByEpochAndTier", 7L, "standard", 1L);
-
-            Map<String, Object> payload = queueManager.getProposalEpochFlowStats();
-
-            assertEquals("proposal.epoch-overlay.v1", payload.get("contractVersion"));
-            assertEquals(Boolean.TRUE, payload.get("deprecated"));
-            assertEquals("/v1/proposals/release-flow", payload.get("replacementEndpoint"));
-            assertEquals(9L, longValue(payload.get("currentEpoch")));
-            assertEquals(7L, longValue(payload.get("finalizedEpoch")));
-
-            List<Map<String, Object>> blocks = listValue(payload.get("blocks"));
-            Map<String, Object> finalized = findBlock(blocks, "finalized");
-            Map<String, Object> nextBlock = findBlock(blocks, "next");
-            Map<String, Object> currentBlock = findBlock(blocks, "current");
-
-            Map<String, Map<String, Long>> finalizedByPriority = nestedCountMap(finalized.get("byPriority"));
-            assertEquals(2L, finalizedByPriority.get("priority").get("finalized").longValue());
-            assertEquals(1L, finalizedByPriority.get("standard").get("rejected").longValue());
-
-            Map<String, Map<String, Long>> nextByPriority = nestedCountMap(nextBlock.get("byPriority"));
-            assertEquals(1L, nextByPriority.get("express").get("verified").longValue());
-            assertEquals(1L, nextByPriority.get("standard").get("unverified").longValue());
-
-            Map<String, Map<String, Long>> currentByPriority = nestedCountMap(currentBlock.get("byPriority"));
-            assertEquals(1L, currentByPriority.get("standard").get("unverified").longValue());
-            assertEquals(1L, currentByPriority.get("express").get("verified").longValue());
-        } finally {
-            queueManager.stop();
-        }
-    }
-
-    @Test
-    public void getStatsIncludesAdaptiveAndEpochOverlaySummaries() {
+    public void getStatsIncludesAdaptiveAndOverflowSummaries() {
         BeaconChainClient beaconClient = beaconClient(11L, 8L);
         ProposalQueueManagerOptimized queueManager = createQueueManager(beaconClient);
         try {
             String stats = queueManager.getStats();
 
             assertTrue(stats.contains("Unverified: 0"));
-            assertTrue(stats.contains("EpochOverlay[current=11, finalized=8"));
             assertTrue(stats.contains("Adaptive:"));
             assertTrue(stats.contains("Overflow Buffer:"));
         } finally {

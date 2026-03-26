@@ -18,9 +18,11 @@ package org.apache.jackrabbit.oak.segment.consensus.evm.impl;
 
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -139,6 +141,27 @@ public class SimpleEvmBridge implements EvmBridge {
         
         // In SEPOLIA/MAINNET MODE, return null (payment not found - will retry)
         // In production, this would call Web3j to verify the transaction on-chain
+        return null;
+    }
+
+    @Override
+    @Nullable
+    public SettlementDetails getSettlementDetailsByProposalId(@NotNull String proposalId) {
+        PaymentProof proof = verifyPayment(proposalId);
+        return proof != null ? SettlementDetails.fromProof(getNetworkName(), proof) : null;
+    }
+
+    @Override
+    @Nullable
+    public SettlementDetails getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
+        if (transactionHash.trim().isEmpty()) {
+            return null;
+        }
+        for (PaymentProof proof : payments.values()) {
+            if (proof != null && transactionHash.equalsIgnoreCase(proof.getTransactionHash())) {
+                return SettlementDetails.fromProof(getNetworkName(), proof);
+            }
+        }
         return null;
     }
     

@@ -26,6 +26,7 @@ import org.agrona.DirectBuffer;
 import org.agrona.concurrent.IdleStrategy;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.util.SegmentReplicator;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -165,10 +166,38 @@ public class AeronConsensusEngine implements ClusteredService {
     
     // ✈️ AERON NATIVE: Callback interface for applying replicated writes and deletes
     public interface WriteApplicationCallback {
-        void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
-                                  String signature, String intentToken, String blobId, String mimeType,
-                                  String ipfsCid, String proposalId);
-        void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId);
+        default void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
+                                          String signature, String intentToken, String blobId, String mimeType,
+                                          String ipfsCid, MutationAuditMetadata auditMetadata) {
+            applyReplicatedWrite(
+                walletAddress,
+                path,
+                contentType,
+                message,
+                signature,
+                intentToken,
+                blobId,
+                mimeType,
+                ipfsCid,
+                auditMetadata != null ? auditMetadata.getProposalId() : null
+            );
+        }
+
+        default void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
+                                          String signature, String intentToken, String blobId, String mimeType,
+                                          String ipfsCid, String proposalId) {
+            throw new UnsupportedOperationException("Write application callback must implement applyReplicatedWrite");
+        }
+
+        default void applyReplicatedDelete(String walletAddress, String path, String signature,
+                                           MutationAuditMetadata auditMetadata) {
+            applyReplicatedDelete(walletAddress, path, signature,
+                auditMetadata != null ? auditMetadata.getProposalId() : null);
+        }
+
+        default void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId) {
+            throw new UnsupportedOperationException("Write application callback must implement applyReplicatedDelete");
+        }
     }
 
     /**
@@ -342,12 +371,13 @@ public class AeronConsensusEngine implements ClusteredService {
                 @Override
                 public void applyWrite(String walletAddress, String path, String contentType,
                                      String message, String signature, String intentToken,
-                                     String blobId, String mimeType, String ipfsCid, String proposalId) {
+                                     String blobId, String mimeType, String ipfsCid,
+                                     MutationAuditMetadata auditMetadata) {
                     // Delegate to existing write application logic
                     if (writeCallback != null) {
                         writeCallback.applyReplicatedWrite(walletAddress, path, contentType, 
                                                           message, signature, intentToken, 
-                                                          blobId, mimeType, ipfsCid, proposalId);
+                                                          blobId, mimeType, ipfsCid, auditMetadata);
                         
                         // Track metrics after successful write
                         trackWriteMetrics();
@@ -357,10 +387,11 @@ public class AeronConsensusEngine implements ClusteredService {
                 }
                 
                 @Override
-                public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+                public void applyDelete(String walletAddress, String path, String signature,
+                                        MutationAuditMetadata auditMetadata) {
                     // Delegate to existing delete application logic
                     if (writeCallback != null) {
-                        writeCallback.applyReplicatedDelete(walletAddress, path, signature, proposalId);
+                        writeCallback.applyReplicatedDelete(walletAddress, path, signature, auditMetadata);
                         
                         // Track metrics after successful delete
                         trackWriteMetrics();
@@ -1048,12 +1079,34 @@ public class AeronConsensusEngine implements ClusteredService {
     
     public boolean sendWriteThroughIngress(String walletAddress, String path, 
                                            String contentType, String message, String signature) {
-        return sendWriteThroughIngressWithId(walletAddress, path, contentType, message, signature, null, null);
+        return sendWriteThroughIngressWithId(
+            walletAddress,
+            path,
+            contentType,
+            message,
+            signature,
+            null,
+            MutationAuditMetadata.write(null, null, null, null, null, null, null)
+        );
     }
     
     public boolean sendWriteThroughIngressWithId(String walletAddress, String path, 
                                                  String contentType, String message, String signature,
                                                  String ipfsCid, String proposalId) {
+        return sendWriteThroughIngressWithId(
+            walletAddress,
+            path,
+            contentType,
+            message,
+            signature,
+            ipfsCid,
+            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    public boolean sendWriteThroughIngressWithId(String walletAddress, String path,
+                                                 String contentType, String message, String signature,
+                                                 String ipfsCid, MutationAuditMetadata auditMetadata) {
         if (cluster == null) {
             log.error("❌ Cluster not initialized - cannot send write through ingress");
             return false;
@@ -1083,7 +1136,7 @@ public class AeronConsensusEngine implements ClusteredService {
                     signature,
                     shouldIncludeTerm() ? Integer.valueOf(getIngressTerm()) : null,
                     ipfsCid,
-                    proposalId
+                    normalizeAuditMetadata(auditMetadata, MutationAuditMetadata.Operation.WRITE)
                 );
             
             // ✈️ AERON CLUSTER: Send message through internal AeronCluster client
@@ -1122,14 +1175,40 @@ public class AeronConsensusEngine implements ClusteredService {
     public boolean sendWriteThroughIngress(String walletAddress, String path, 
                                            String contentType, String message, String signature,
                                            String blobId, String mimeType) {
-        return sendWriteThroughIngress(walletAddress, path, contentType, message, signature,
-            blobId, mimeType, null, null);
+        return sendWriteThroughIngress(
+            walletAddress,
+            path,
+            contentType,
+            message,
+            signature,
+            blobId,
+            mimeType,
+            null,
+            MutationAuditMetadata.write(null, null, null, null, null, null, null)
+        );
     }
     
     public boolean sendWriteThroughIngress(String walletAddress, String path,
                                            String contentType, String message, String signature,
                                            String blobId, String mimeType,
                                            String ipfsCid, String proposalId) {
+        return sendWriteThroughIngress(
+            walletAddress,
+            path,
+            contentType,
+            message,
+            signature,
+            blobId,
+            mimeType,
+            ipfsCid,
+            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    public boolean sendWriteThroughIngress(String walletAddress, String path,
+                                           String contentType, String message, String signature,
+                                           String blobId, String mimeType,
+                                           String ipfsCid, MutationAuditMetadata auditMetadata) {
         if (cluster == null) {
             log.error("❌ Cluster not initialized - cannot send write through ingress");
             return false;
@@ -1160,7 +1239,7 @@ public class AeronConsensusEngine implements ClusteredService {
                     blobId,
                     mimeType,
                     ipfsCid,
-                    proposalId
+                    normalizeAuditMetadata(auditMetadata, MutationAuditMetadata.Operation.WRITE)
                 );
             log.debug("📤 Sending write with binary - JSON size: {} bytes", encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH);
             if (blobId != null && !blobId.isEmpty()) {
@@ -1202,10 +1281,25 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return true if successfully sent
      */
     public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature) {
-        return sendDeleteThroughIngress(walletAddress, path, signature, null);
+        return sendDeleteThroughIngress(
+            walletAddress,
+            path,
+            signature,
+            MutationAuditMetadata.delete(null, null, null, null, null, null, null)
+        );
     }
     
     public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature, String proposalId) {
+        return sendDeleteThroughIngress(
+            walletAddress,
+            path,
+            signature,
+            MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature,
+                                            MutationAuditMetadata auditMetadata) {
         if (cluster == null) {
             log.error("❌ Cluster not initialized - cannot send delete through ingress");
             return false;
@@ -1228,7 +1322,7 @@ public class AeronConsensusEngine implements ClusteredService {
                     path,
                     signature,
                     shouldIncludeTerm() ? Integer.valueOf(getIngressTerm()) : null,
-                    proposalId
+                    normalizeAuditMetadata(auditMetadata, MutationAuditMetadata.Operation.DELETE)
                 );
             
             boolean sent = sendEncodedMessage(
@@ -1346,6 +1440,14 @@ public class AeronConsensusEngine implements ClusteredService {
             log.error("❌ Exception sending batch write through ingress (batch size: {})", proposals.size(), e);
             return 0;
         }
+    }
+
+    private MutationAuditMetadata normalizeAuditMetadata(MutationAuditMetadata auditMetadata,
+                                                         MutationAuditMetadata.Operation operation) {
+        MutationAuditMetadata normalized = auditMetadata != null
+            ? auditMetadata
+            : new MutationAuditMetadata(operation, null, null, null, null, null, null, null);
+        return normalized.withOperation(operation);
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

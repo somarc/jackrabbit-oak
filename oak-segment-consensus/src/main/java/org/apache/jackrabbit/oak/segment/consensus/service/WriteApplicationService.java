@@ -167,6 +167,33 @@ public class WriteApplicationService {
             @Nullable String mimeType,
             @Nullable String ipfsCid,
             @Nullable String proposalId) {
+        return applyWriteWithAuditMetadata(
+            walletAddress,
+            path,
+            contentType,
+            message,
+            signature,
+            intentToken,
+            blobId,
+            mimeType,
+            ipfsCid,
+            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    @NotNull
+    public String applyWriteWithAuditMetadata(
+            @NotNull String walletAddress,
+            @NotNull String path,
+            @Nullable String contentType,
+            @Nullable String message,
+            @NotNull String signature,
+            @Nullable String intentToken,
+            @Nullable String blobId,
+            @Nullable String mimeType,
+            @Nullable String ipfsCid,
+            @Nullable MutationAuditMetadata auditMetadata) {
+        String proposalId = auditMetadata != null ? auditMetadata.getProposalId() : null;
         
         try {
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 

@@ -16,6 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
@@ -44,6 +47,7 @@ import static org.mockito.Mockito.when;
 public class ProposalQueryHandlerTest {
 
     private ProposalQueueManagerOptimized queueManager;
+    private EvmBridge evmBridge;
     private ProposalQueryHandler handler;
     private HttpServletRequest request;
     private HttpServletResponse response;
@@ -52,7 +56,8 @@ public class ProposalQueryHandlerTest {
     @Before
     public void setUp() throws Exception {
         queueManager = mock(ProposalQueueManagerOptimized.class);
-        handler = newHandler(queueManager);
+        evmBridge = mock(EvmBridge.class);
+        handler = newHandler(queueManager, evmBridge);
         request = mock(HttpServletRequest.class);
         response = mock(HttpServletResponse.class);
         body = new StringWriter();
@@ -108,13 +113,101 @@ public class ProposalQueryHandlerTest {
 
     @Test
     public void testGetProposalStatusRejectsWhenQueueUnavailable() throws Exception {
-        ProposalQueryHandler noQueueHandler = newHandler(null);
+        ProposalQueryHandler noQueueHandler = newHandler(null, evmBridge);
         when(request.getRequestURI()).thenReturn("/v1/proposals/proposal-123/status");
 
         noQueueHandler.handleGetProposalStatus(request, response);
 
         verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
         assertTrue(body.toString().contains("\"error\":\"Proposal queue not available\""));
+    }
+
+    @Test
+    public void testGetSettlementByProposalIdReturnsPayload() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/settlement/proposals/proposal-123");
+        when(evmBridge.getSettlementDetailsByProposalId("proposal-123")).thenReturn(new SettlementDetails(
+            "sepolia",
+            "proposal-123",
+            "0xtx123",
+            12345L,
+            "0xabc",
+            "0xdef",
+            "1000000000000000",
+            PaymentProof.ProposalKind.DELETE,
+            PaymentProof.PaymentToken.USDC,
+            7,
+            12
+        ));
+
+        handler.handleGetSettlementByProposalId(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"settlement.v1\""));
+        assertTrue(json.contains("\"lookupType\":\"proposalId\""));
+        assertTrue(json.contains("\"lookupValue\":\"proposal-123\""));
+        assertTrue(json.contains("\"transactionHash\":\"0xtx123\""));
+        assertTrue(json.contains("\"proposalKind\":\"DELETE\""));
+        assertTrue(json.contains("\"paymentToken\":\"USDC\""));
+    }
+
+    @Test
+    public void testGetSettlementByProposalIdReturnsNotFoundWhenUnavailable() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/settlement/proposals/proposal-missing");
+        when(evmBridge.getSettlementDetailsByProposalId("proposal-missing")).thenReturn(null);
+
+        handler.handleGetSettlementByProposalId(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+        assertTrue(body.toString().contains("\"error\":\"Settlement details not found\""));
+    }
+
+    @Test
+    public void testGetSettlementByProposalIdRejectsWhenBridgeUnavailable() throws Exception {
+        ProposalQueryHandler noBridgeHandler = newHandler(queueManager, null);
+        when(request.getRequestURI()).thenReturn("/v1/settlement/proposals/proposal-123");
+
+        noBridgeHandler.handleGetSettlementByProposalId(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("\"error\":\"Settlement lookup not available\""));
+    }
+
+    @Test
+    public void testGetSettlementByTransactionHashReturnsPayload() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/settlement/transactions/0xtxabc");
+        when(evmBridge.getSettlementDetailsByTransactionHash("0xtxabc")).thenReturn(new SettlementDetails(
+            "sepolia",
+            "proposal-456",
+            "0xtxabc",
+            22222L,
+            "0x111",
+            "0x222",
+            "42",
+            PaymentProof.ProposalKind.WRITE,
+            PaymentProof.PaymentToken.ETH,
+            0,
+            3
+        ));
+
+        handler.handleGetSettlementByTransactionHash(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"lookupType\":\"transactionHash\""));
+        assertTrue(json.contains("\"lookupValue\":\"0xtxabc\""));
+        assertTrue(json.contains("\"proposalId\":\"proposal-456\""));
+        assertTrue(json.contains("\"paymentToken\":\"ETH\""));
+    }
+
+    @Test
+    public void testGetSettlementByTransactionHashRejectsMissingUriSegment() throws Exception {
+        when(request.getRequestURI()).thenReturn("/v1/settlement/transactions/");
+
+        handler.handleGetSettlementByTransactionHash(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+        assertTrue(body.toString().contains("\"error\":\"Invalid transaction hash\""));
     }
 
     @Test
@@ -363,34 +456,7 @@ public class ProposalQueryHandlerTest {
         assertTrue(body.toString().contains("\"error\":\"Error: release flow unavailable\""));
     }
 
-    @Test
-    public void testGetProposalEpochsMarksCompatibilityRouteAsDeprecated() throws Exception {
-        Map<String, Object> flow = new LinkedHashMap<>();
-        flow.put("currentEpoch", 42L);
-        flow.put("finalizedEpoch", 40L);
-        when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
-
-        handler.handleGetProposalEpochs(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        String json = body.toString();
-        assertTrue(json.contains("\"contractVersion\":\"release-flow.v1\""));
-        assertTrue(json.contains("\"deprecated\":true"));
-        assertTrue(json.contains("\"canonicalPath\":\"/v1/proposals/release-flow\""));
-        assertTrue(json.contains("\"currentEpoch\":42"));
-    }
-
-    @Test
-    public void testGetProposalEpochsReturnsServerErrorWhenQueueFails() throws Exception {
-        when(queueManager.getProposalEpochFlowStats()).thenThrow(new IllegalStateException("epoch flow unavailable"));
-
-        handler.handleGetProposalEpochs(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-        assertTrue(body.toString().contains("\"error\":\"Error: epoch flow unavailable\""));
-    }
-
-    private static ProposalQueryHandler newHandler(ProposalQueueManagerOptimized queueManager) {
+    private static ProposalQueryHandler newHandler(ProposalQueueManagerOptimized queueManager, EvmBridge evmBridge) {
         ServerContext context = new ServerContext(
             mock(FileStore.class),
             mock(NodeStore.class),
@@ -398,6 +464,7 @@ public class ProposalQueryHandlerTest {
             "http://localhost:8090"
         );
         context.proposalQueueManager = queueManager;
+        context.evmBridge = evmBridge;
         return new ProposalQueryHandler(context);
     }
 

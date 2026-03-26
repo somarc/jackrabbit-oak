@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.evm;
 
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Bridge to EVM-compatible blockchains for payment verification.
@@ -96,5 +97,30 @@ public interface EvmBridge {
      * Stop listening for payment events.
      */
     void stop();
-}
 
+    /**
+     * Resolve basic settlement details by on-chain proposal identifier.
+     *
+     * <p>This is intentionally a minimal, evolving surface for chain-derived
+     * transaction basics rather than a complete domain model.
+     *
+     * @param proposalId on-chain proposal identifier
+     * @return settlement details, or {@code null} when unavailable
+     */
+    @Nullable
+    default SettlementDetails getSettlementDetailsByProposalId(@NotNull String proposalId) {
+        PaymentProof proof = verifyPayment(proposalId);
+        return proof != null ? SettlementDetails.fromProof(getNetworkName(), proof) : null;
+    }
+
+    /**
+     * Resolve basic settlement details by transaction hash.
+     *
+     * @param transactionHash Ethereum transaction hash
+     * @return settlement details, or {@code null} when unavailable
+     */
+    @Nullable
+    default SettlementDetails getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
+        return null;
+    }
+}

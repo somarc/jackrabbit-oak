@@ -31,6 +31,7 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -231,6 +232,21 @@ final class ConsensusServicesInitializer {
             }
 
             @Override
+            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                                   String message, String signature, MutationAuditMetadata auditMetadata) {
+                if (aeronEngine == null) {
+                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
+                    return false;
+                }
+                boolean success = aeronEngine.sendWriteThroughIngressWithId(
+                    walletAddress, path, contentType, message, signature, null, auditMetadata);
+                if (!success) {
+                    log.error("❌ sendWriteThroughIngress() returned false!");
+                }
+                return success;
+            }
+
+            @Override
             public void appendProposal(String walletAddress, String path, String contentType, String message,
                                        String signature, String blobId, String mimeType) {
                 if (aeronEngine == null) {
@@ -268,6 +284,22 @@ final class ConsensusServicesInitializer {
             }
 
             @Override
+            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                                   String message, String signature, String blobId, String mimeType,
+                                                   String ipfsCid, MutationAuditMetadata auditMetadata) {
+                if (aeronEngine == null) {
+                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
+                    return false;
+                }
+                boolean success = aeronEngine.sendWriteThroughIngress(
+                    walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid, auditMetadata);
+                if (!success) {
+                    log.error("❌ sendWriteThroughIngress() with binary returned false!");
+                }
+                return success;
+            }
+
+            @Override
             public void appendDeleteProposal(String walletAddress, String path, String signature) {
                 if (aeronEngine == null) {
                     log.error("❌ aeronEngine is NULL in appendDeleteProposal!");
@@ -292,6 +324,20 @@ final class ConsensusServicesInitializer {
                     return false;
                 }
                 boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature, proposalId);
+                if (!success) {
+                    log.error("❌ sendDeleteThroughIngress() returned false!");
+                }
+                return success;
+            }
+
+            @Override
+            public boolean tryAppendDeleteProposalWithId(String proposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata auditMetadata) {
+                if (aeronEngine == null) {
+                    log.error("❌ aeronEngine is NULL in appendDeleteProposalWithId!");
+                    return false;
+                }
+                boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature, auditMetadata);
                 if (!success) {
                     log.error("❌ sendDeleteThroughIngress() returned false!");
                 }

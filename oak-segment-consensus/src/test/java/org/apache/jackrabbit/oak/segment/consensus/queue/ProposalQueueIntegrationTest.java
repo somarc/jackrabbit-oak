@@ -43,7 +43,7 @@ import static org.junit.Assert.*;
  * <p>Uses {@link ProposalQueueManagerOptimized} (production implementation) with:
  * <ul>
  *   <li>Mock EVM bridge for instant payment verification</li>
- *   <li>Mock Beacon Chain client for epoch compatibility overlays and mock controls</li>
+ *   <li>Mode-aware Beacon Chain client for epoch compatibility overlays</li>
  *   <li>Tri-agent architecture (EVM verifier, Aeron sender, adaptive release finalizer)</li>
  * </ul>
  * 
@@ -75,7 +75,7 @@ public class ProposalQueueIntegrationTest {
         );
         bridge.start();
         
-        // Create Beacon Chain client (will use mock mode - 30s epochs)
+        // Create Beacon Chain client (mock mode now uses Sepolia-backed chain context)
         beaconClient = new BeaconChainClient("ignored-in-mock-mode");
         beaconClient.startBackgroundPolling();
 
@@ -2032,8 +2032,6 @@ public class ProposalQueueIntegrationTest {
         testQueue.start();
 
         try {
-            assertTrue("Should be able to control mock epoch", beaconClient.setMockEpochOffset(0));
-
             String proposalId = "counter-contract-1";
             String txHash = "0xcounter1";
             String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";

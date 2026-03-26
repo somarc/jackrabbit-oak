@@ -176,13 +176,13 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "GET", "/v1/proposals/pending/count", "Pending proposal count", "Consensus", "/ops/v1/proposals");
         addSourceIndexEntry(endpoints, "GET", "/v1/proposals/queue/stats", "Queue and finality counters", "Consensus", "ops.v1", "/ops/v1/proposals/queue/stats");
         addSourceIndexEntry(endpoints, "GET", "/v1/proposals/release-flow", "Adaptive proposal release flow", "Consensus", "release-flow.v1", "/ops/v1/proposals/release-flow");
-        addSourceIndexEntry(endpoints, "GET", "/v1/proposals/epochs", "Proposal epoch flow compatibility overlay", "Consensus", "proposal.epoch-overlay.v1", "/ops/v1/proposals/epochs");
         addInternalIndexEntry(endpoints, "GET", "/v1/proposals/{id}/status", "Proposal status by id", "Consensus", null);
+        addSourceIndexEntry(endpoints, "GET", "/v1/settlement/proposals/{proposalId}", "Basic settlement details by proposal id", "Settlement", "settlement.v1", "/ops/v1/settlement/proposals/{proposalId}");
+        addSourceIndexEntry(endpoints, "GET", "/v1/settlement/transactions/{transactionHash}", "Basic settlement details by transaction hash", "Settlement", "settlement.v1", "/ops/v1/settlement/transactions/{transactionHash}");
         addInternalIndexEntry(endpoints, "GET", "/v1/head", "Head status", "Consensus", null);
 
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/summary", "Explorer summary contract", "Explorer", "explorer.v1", "/ops/v1/explorer/summary");
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/release-flow", "Explorer adaptive release flow", "Explorer", "explorer.v1", "/ops/v1/explorer/release-flow");
-        addInternalIndexEntry(endpoints, "GET", "/v1/explorer/epochs", "Explorer epoch flow compatibility overlay", "Explorer", "/ops/v1/explorer/epochs");
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail", "Explorer", "explorer.v1", "/ops/v1/explorer/proposal/{proposalId}");
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail", "Explorer", "explorer.v1", "/ops/v1/explorer/wallets/{walletAddress}");
         addLocalUiIndexEntry(endpoints, "GET", "/explorer", "Explorer UI", "Explorer");
@@ -240,10 +240,6 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "POST", "/v1/binary/declare-intent", "Declare binary upload intent", "Binary", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/binary/check-intent/{token}", "Check binary intent", "Binary", null);
         addInternalIndexEntry(endpoints, "POST", "/v1/binary/complete-upload", "Complete binary upload", "Binary", null);
-
-        addInternalIndexEntry(endpoints, "POST", "/api/mock/advance-epoch?epochs=1", "Advance mock epoch", "Mock", null);
-        addInternalIndexEntry(endpoints, "POST", "/api/mock/set-epoch-offset?offset=0", "Set mock epoch offset", "Mock", null);
-        addInternalIndexEntry(endpoints, "GET", "/api/mock/epoch-status", "Mock epoch status", "Mock", null);
 
         addLocalUiIndexEntry(endpoints, "GET", "/api-browser", "Interactive API browser", "UI");
         addLocalUiIndexEntry(endpoints, "GET", "/dashboard", "Control-plane landing page", "UI");

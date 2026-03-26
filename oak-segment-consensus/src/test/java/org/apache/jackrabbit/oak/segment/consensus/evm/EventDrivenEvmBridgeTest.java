@@ -120,5 +120,40 @@ public class EventDrivenEvmBridgeTest {
             bridge.stop();
         }
     }
-}
 
+    @Test
+    public void testSettlementDetailsByTransactionHashUseCachedEventProof() throws InterruptedException {
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        bridge.start();
+
+        try {
+            String proposalId = "0xfeed1234";
+            String payer = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+            String txHash = "0xtxsettled";
+
+            bridge.simulateWriteAuthorizedEvent(
+                proposalId,
+                payer,
+                "0xdef456abc123",
+                BigInteger.valueOf(500_000),
+                54321L,
+                txHash
+            );
+
+            Thread.sleep(1500);
+
+            SettlementDetails details = bridge.getSettlementDetailsByTransactionHash(txHash);
+            assertNotNull("Settlement details should be available from cached event proof", details);
+            assertEquals("sepolia", details.getNetworkName());
+            assertEquals(proposalId, details.getProposalId());
+            assertEquals(txHash, details.getTransactionHash());
+            assertEquals(payer, details.getFromAddress());
+        } finally {
+            bridge.stop();
+        }
+    }
+}

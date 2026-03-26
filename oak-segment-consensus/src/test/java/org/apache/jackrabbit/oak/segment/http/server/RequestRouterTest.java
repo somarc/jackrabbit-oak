@@ -25,6 +25,9 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
+import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
@@ -79,6 +82,7 @@ import java.util.Collections;
 import java.util.UUID;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -87,6 +91,7 @@ import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class RequestRouterTest {
@@ -659,6 +664,76 @@ public class RequestRouterTest {
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"release-flow.v1\""));
             assertTrue(body.toString().contains("\"releaseMode\":\"adaptive-active\""));
+        });
+    }
+
+    @Test
+    public void testSettlementByProposalRouteReturnsSettlementPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            EvmBridge evmBridge = mock(EvmBridge.class);
+            when(evmBridge.getSettlementDetailsByProposalId("proposal-123")).thenReturn(new SettlementDetails(
+                "sepolia",
+                "proposal-123",
+                "0xtx123",
+                12345L,
+                "0xabc",
+                "0xdef",
+                "1000",
+                PaymentProof.ProposalKind.WRITE,
+                PaymentProof.PaymentToken.ETH,
+                0,
+                4
+            ));
+            context.evmBridge = evmBridge;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/settlement/proposals/proposal-123");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"contractVersion\":\"settlement.v1\""));
+            assertTrue(body.toString().contains("\"proposalId\":\"proposal-123\""));
+            assertTrue(body.toString().contains("\"transactionHash\":\"0xtx123\""));
+        });
+    }
+
+    @Test
+    public void testSettlementByTransactionRouteReturnsSettlementPayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            EvmBridge evmBridge = mock(EvmBridge.class);
+            when(evmBridge.getSettlementDetailsByTransactionHash("0xtx999")).thenReturn(new SettlementDetails(
+                "sepolia",
+                "proposal-999",
+                "0xtx999",
+                88888L,
+                "0xaaa",
+                "0xbbb",
+                "777",
+                PaymentProof.ProposalKind.DELETE,
+                PaymentProof.PaymentToken.USDC,
+                8,
+                9
+            ));
+            context.evmBridge = evmBridge;
+
+            RequestRouter router = new RequestRouter(context);
+            Request baseRequest = mock(Request.class);
+            HttpServletRequest request = request("GET", "/v1/settlement/transactions/0xtx999");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(baseRequest, request, response);
+
+            verify(baseRequest).setHandled(true);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString().contains("\"lookupType\":\"transactionHash\""));
+            assertTrue(body.toString().contains("\"proposalKind\":\"DELETE\""));
+            assertTrue(body.toString().contains("\"paymentToken\":\"USDC\""));
         });
     }
 
@@ -1745,17 +1820,9 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testExplorerEpochsRouteReturnsExplorerEpochPayload() throws Exception {
+    public void testExplorerEpochsRouteReturnsNotFound() throws Exception {
         withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-            Map<String, Object> flow = new java.util.LinkedHashMap<>();
-            flow.put("currentEpoch", 42L);
-            flow.put("finalizedEpoch", 40L);
-            when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
-            context.proposalQueueManager = queueManager;
-
-            RequestRouter router = new RequestRouter(context);
+            RequestRouter router = new RequestRouter(newContext());
             Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/explorer/epochs");
             HttpServletResponse response = responseWithBody();
@@ -1763,9 +1830,8 @@ public class RequestRouterTest {
             router.route(baseRequest, request, response);
 
             verify(baseRequest).setHandled(true);
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"deprecated\":true"));
-            assertTrue(body.toString().contains("\"currentEpoch\":42"));
+            verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+            assertTrue(body.toString().contains("\"error\":\"Not found\""));
         });
     }
 
@@ -1816,17 +1882,9 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testProposalEpochsRouteReturnsDeprecatedEpochPayload() throws Exception {
+    public void testProposalEpochsRouteReturnsNotFound() throws Exception {
         withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-            Map<String, Object> flow = new HashMap<>();
-            flow.put("currentEpoch", 42L);
-            flow.put("finalizedEpoch", 40L);
-            when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
-            context.proposalQueueManager = queueManager;
-
-            RequestRouter router = new RequestRouter(context);
+            RequestRouter router = new RequestRouter(newContext());
             Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/proposals/epochs");
             HttpServletResponse response = responseWithBody();
@@ -1834,9 +1892,8 @@ public class RequestRouterTest {
             router.route(baseRequest, request, response);
 
             verify(baseRequest).setHandled(true);
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"deprecated\":true"));
-            assertTrue(body.toString().contains("\"canonicalPath\":\"/v1/proposals/release-flow\""));
+            verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+            assertTrue(body.toString().contains("\"error\":\"Not found\""));
         });
     }
 
@@ -1980,12 +2037,10 @@ public class RequestRouterTest {
             ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
             BeaconChainClient beaconClient = mock(BeaconChainClient.class);
             when(queueManager.getBeaconClient()).thenReturn(beaconClient);
-            when(beaconClient.getHealthStatus()).thenReturn(new HashMap<>());
             when(beaconClient.getCachedCurrentEpoch()).thenReturn(1042L);
             when(beaconClient.getCachedFinalizedEpoch()).thenReturn(1040L);
             when(beaconClient.isEpochDataFresh()).thenReturn(true);
             when(beaconClient.getMillisSinceLastUpdate()).thenReturn(15L);
-            when(beaconClient.getMockEpochOffset()).thenReturn(42L);
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
@@ -1998,21 +2053,18 @@ public class RequestRouterTest {
             verify(baseRequest).setHandled(true);
             assertTrue(body.toString().contains("\"mode\":\"MOCK\""));
             assertTrue(body.toString().contains("\"currentEpoch\":1042"));
-            assertTrue(body.toString().contains("\"mockEpochOffset\":42"));
-            assertTrue(body.toString().contains("\"advanceEpoch\":\"POST /api/mock/advance-epoch?epochs=N\""));
+            assertTrue(body.toString().contains("\"chainContext\":\"Sepolia\""));
+            assertFalse(body.toString().contains("\"mockEpochOffset\""));
         }));
     }
 
     @Test
-    public void testMockAdvanceEpochRouteAdvancesEpochInMockMode() throws Exception {
+    public void testMockAdvanceEpochRouteReturnsGoneInMockMode() throws Exception {
         withBlockchainMode("mock", () -> withRoutingProperties(true, () -> {
             ServerContext context = newContext();
             ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
             BeaconChainClient beaconClient = mock(BeaconChainClient.class);
             when(queueManager.getBeaconClient()).thenReturn(beaconClient);
-            when(beaconClient.advanceMockEpoch(3)).thenReturn(true);
-            when(beaconClient.getCachedCurrentEpoch()).thenReturn(1045L);
-            when(beaconClient.getCachedFinalizedEpoch()).thenReturn(1043L);
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
@@ -2024,23 +2076,19 @@ public class RequestRouterTest {
             router.route(baseRequest, request, response);
 
             verify(baseRequest).setHandled(true);
-            verify(beaconClient).advanceMockEpoch(3);
-            assertTrue(body.toString().contains("\"success\":true"));
-            assertTrue(body.toString().contains("\"advanced\":3"));
-            assertTrue(body.toString().contains("\"currentEpoch\":1045"));
+            verify(response).setStatus(HttpServletResponse.SC_GONE);
+            verifyNoInteractions(beaconClient);
+            assertTrue(body.toString().contains("Synthetic mock epoch control was removed by ADR 080"));
         }));
     }
 
     @Test
-    public void testMockSetEpochOffsetRouteSetsOffsetInMockMode() throws Exception {
+    public void testMockSetEpochOffsetRouteReturnsGoneInMockMode() throws Exception {
         withBlockchainMode("mock", () -> withRoutingProperties(true, () -> {
             ServerContext context = newContext();
             ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
             BeaconChainClient beaconClient = mock(BeaconChainClient.class);
             when(queueManager.getBeaconClient()).thenReturn(beaconClient);
-            when(beaconClient.setMockEpochOffset(42L)).thenReturn(true);
-            when(beaconClient.getCachedCurrentEpoch()).thenReturn(1042L);
-            when(beaconClient.getCachedFinalizedEpoch()).thenReturn(1040L);
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
@@ -2052,10 +2100,9 @@ public class RequestRouterTest {
             router.route(baseRequest, request, response);
 
             verify(baseRequest).setHandled(true);
-            verify(beaconClient).setMockEpochOffset(42L);
-            assertTrue(body.toString().contains("\"success\":true"));
-            assertTrue(body.toString().contains("\"offset\":42"));
-            assertTrue(body.toString().contains("\"finalizedEpoch\":1040"));
+            verify(response).setStatus(HttpServletResponse.SC_GONE);
+            verifyNoInteractions(beaconClient);
+            assertTrue(body.toString().contains("Synthetic mock epoch control was removed by ADR 080"));
         }));
     }
 

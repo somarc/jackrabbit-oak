@@ -126,6 +126,21 @@ public class DeleteApplicationService {
             @NotNull String path,
             @Nullable String signature,
             @Nullable String proposalId) {
+        return applyDeleteWithAuditMetadata(
+            walletAddress,
+            path,
+            signature,
+            MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    @Nullable
+    public String applyDeleteWithAuditMetadata(
+            @NotNull String walletAddress,
+            @NotNull String path,
+            @Nullable String signature,
+            @Nullable MutationAuditMetadata auditMetadata) {
+        String proposalId = auditMetadata != null ? auditMetadata.getProposalId() : null;
         
         try {
             log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);

@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,17 +32,18 @@ final class AeronClusterCallbackBinder {
             @Override
             public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
                                              String signature, String intentToken, String blobId, String mimeType, String ipfsCid,
-                                             String proposalId) {
-                httpServer.getConsensusApiHandler().applyReplicatedWrite(
+                                             MutationAuditMetadata auditMetadata) {
+                httpServer.getConsensusApiHandler().applyReplicatedWriteWithAuditMetadata(
                     walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid,
-                    proposalId
+                    auditMetadata
                 );
             }
 
             @Override
-            public void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId) {
-                httpServer.getConsensusApiHandler().applyReplicatedDelete(
-                    walletAddress, path, signature, proposalId
+            public void applyReplicatedDelete(String walletAddress, String path, String signature,
+                                              MutationAuditMetadata auditMetadata) {
+                httpServer.getConsensusApiHandler().applyReplicatedDeleteWithAuditMetadata(
+                    walletAddress, path, signature, auditMetadata
                 );
             }
         });

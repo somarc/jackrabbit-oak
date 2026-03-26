@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 
 import java.util.List;
 
@@ -30,6 +31,26 @@ final class AeronIngressWritePayloadBuilder {
                                            Integer term,
                                            String ipfsCid,
                                            String proposalId) {
+        return buildWriteProposal(
+            walletAddress,
+            path,
+            contentType,
+            message,
+            signature,
+            term,
+            ipfsCid,
+            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    AeronEncodedMessage buildWriteProposal(String walletAddress,
+                                           String path,
+                                           String contentType,
+                                           String message,
+                                           String signature,
+                                           Integer term,
+                                           String ipfsCid,
+                                           MutationAuditMetadata auditMetadata) {
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
@@ -43,9 +64,10 @@ final class AeronIngressWritePayloadBuilder {
         if (ipfsCid != null && !ipfsCid.isEmpty()) {
             json.append(",\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\"");
         }
-        if (proposalId != null && !proposalId.isEmpty()) {
-            json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
-        }
+        appendAuditMetadata(
+            json,
+            auditMetadata != null ? auditMetadata.withOperation(MutationAuditMetadata.Operation.WRITE) : null
+        );
         json.append("}");
         return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, json.toString());
     }
@@ -60,6 +82,30 @@ final class AeronIngressWritePayloadBuilder {
                                                      String mimeType,
                                                      String ipfsCid,
                                                      String proposalId) {
+        return buildWriteProposalWithBinary(
+            walletAddress,
+            path,
+            contentType,
+            message,
+            signature,
+            term,
+            blobId,
+            mimeType,
+            ipfsCid,
+            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    AeronEncodedMessage buildWriteProposalWithBinary(String walletAddress,
+                                                     String path,
+                                                     String contentType,
+                                                     String message,
+                                                     String signature,
+                                                     Integer term,
+                                                     String blobId,
+                                                     String mimeType,
+                                                     String ipfsCid,
+                                                     MutationAuditMetadata auditMetadata) {
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
@@ -78,9 +124,10 @@ final class AeronIngressWritePayloadBuilder {
         if (ipfsCid != null && !ipfsCid.isEmpty()) {
             json.append(",\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\"");
         }
-        if (proposalId != null && !proposalId.isEmpty()) {
-            json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
-        }
+        appendAuditMetadata(
+            json,
+            auditMetadata != null ? auditMetadata.withOperation(MutationAuditMetadata.Operation.WRITE) : null
+        );
         json.append("}");
         return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, json.toString());
     }
@@ -90,6 +137,20 @@ final class AeronIngressWritePayloadBuilder {
                                             String signature,
                                             Integer term,
                                             String proposalId) {
+        return buildDeleteProposal(
+            walletAddress,
+            path,
+            signature,
+            term,
+            MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    AeronEncodedMessage buildDeleteProposal(String walletAddress,
+                                            String path,
+                                            String signature,
+                                            Integer term,
+                                            MutationAuditMetadata auditMetadata) {
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"walletAddress\":\"").append(escapeJson(walletAddress)).append("\",");
@@ -98,9 +159,10 @@ final class AeronIngressWritePayloadBuilder {
         if (term != null) {
             json.append(",\"term\":").append(term.intValue());
         }
-        if (proposalId != null && !proposalId.isEmpty()) {
-            json.append(",\"proposalId\":\"").append(escapeJson(proposalId)).append("\"");
-        }
+        appendAuditMetadata(
+            json,
+            auditMetadata != null ? auditMetadata.withOperation(MutationAuditMetadata.Operation.DELETE) : null
+        );
         json.append("}");
         return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL, json.toString());
     }
@@ -144,6 +206,8 @@ final class AeronIngressWritePayloadBuilder {
                 json.append(",\"ipfsCid\":\"").append(escapeJson(proposal.getIpfsCid())).append("\"");
             }
 
+            appendAuditMetadata(json, proposal.toAuditMetadata());
+
             json.append("}");
         }
 
@@ -153,5 +217,31 @@ final class AeronIngressWritePayloadBuilder {
 
     String escapeJson(String str) {
         return AeronIngressPayloadSupport.escapeJson(str);
+    }
+
+    private void appendAuditMetadata(StringBuilder json, MutationAuditMetadata auditMetadata) {
+        if (auditMetadata == null) {
+            return;
+        }
+        json.append(",\"operation\":\"").append(auditMetadata.getOperation().name()).append("\"");
+        appendStringField(json, "transactionId", auditMetadata.getTransactionId());
+        appendStringField(json, "correlationId", auditMetadata.getCorrelationId());
+        appendStringField(json, "proposalId", auditMetadata.getProposalId());
+        appendStringField(json, "ethereumTxHash", auditMetadata.getEthereumTxHash());
+        appendLongField(json, "confirmedBlockNumber", auditMetadata.getConfirmedBlockNumber());
+        appendLongField(json, "ethereumObservedEpoch", auditMetadata.getEthereumObservedEpoch());
+        appendLongField(json, "ethereumFinalizedEpoch", auditMetadata.getEthereumFinalizedEpoch());
+    }
+
+    private void appendStringField(StringBuilder json, String field, String value) {
+        if (value != null && !value.isEmpty()) {
+            json.append(",\"").append(field).append("\":\"").append(escapeJson(value)).append("\"");
+        }
+    }
+
+    private void appendLongField(StringBuilder json, String field, Long value) {
+        if (value != null) {
+            json.append(",\"").append(field).append("\":").append(value.longValue());
+        }
     }
 }

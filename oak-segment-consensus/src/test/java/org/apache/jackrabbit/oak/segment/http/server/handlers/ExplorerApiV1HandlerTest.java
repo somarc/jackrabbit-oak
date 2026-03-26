@@ -241,28 +241,6 @@ public class ExplorerApiV1HandlerTest {
         assertTrue(json.contains("\"releaseFlow\":{\"releaseMode\":\"adaptive-active\",\"releaseStages\":{}}"));
     }
 
-    @Test
-    public void testHandleEpochsReturnsDeprecatedCompatibilityPayload() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-        ServerContext context = newContext(new MemoryNodeStore());
-        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-        Map<String, Object> flow = new LinkedHashMap<>();
-        flow.put("currentEpoch", 42L);
-        flow.put("finalizedEpoch", 40L);
-        when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
-        context.proposalQueueManager = queueManager;
-
-        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
-        handler.handleEpochs(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        String json = body.toString();
-        assertTrue(json.contains("\"deprecated\":true"));
-        assertTrue(json.contains("\"canonicalPath\":\"/v1/explorer/release-flow\""));
-        assertTrue(json.contains("\"epochs\":{\"currentEpoch\":42,\"finalizedEpoch\":40}"));
-    }
-
     private static ServerContext newContext(MemoryNodeStore nodeStore) {
         return new ServerContext(
             mock(FileStore.class),

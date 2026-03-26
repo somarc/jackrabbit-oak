@@ -22,6 +22,7 @@ import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingMillisIdleStrategy;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -341,6 +342,12 @@ public class ProposalQueueManagerOptimized {
         return beaconClient;
     }
 
+    private MutationAuditMetadata refreshAuditMetadata(QueuedProposal proposal) {
+        // Audit metadata must be explicitly sourced from transaction/chain details,
+        // not reconstructed from the queue's overlay epoch state.
+        return proposal.toAuditMetadata();
+    }
+
     public long getCurrentEpoch() {
         return resolveCurrentEpoch();
     }
@@ -365,10 +372,8 @@ public class ProposalQueueManagerOptimized {
         
         long currentEpoch = resolveCurrentEpoch();
         long finalizedEpoch = resolveFinalizedEpoch();
-        java.util.Map<String, Object> epochStatsMap = buildEpochOverlayStats(currentEpoch, finalizedEpoch);
         java.util.Map<String, Object> adaptiveStatsMap = adaptivePackingBuffer.getStatsMap();
         java.util.Map<String, Object> overflowStatsMap = backpressureOverflowBuffer.getStatsMap();
-        long epochVerifiedPackingBufferCount = getLongStat(epochStatsMap, "pendingProposals");
         long adaptiveVerifiedPackingBufferCount = getVerifiedPackingBufferCount();
         long verifiedPackingBufferCount = adaptiveVerifiedPackingBufferCount;
         long adaptiveWalletCount = getLongStat(adaptiveStatsMap, "walletCount");
@@ -384,11 +389,9 @@ public class ProposalQueueManagerOptimized {
         stats.put("currentEpoch", currentEpoch);
         stats.put("finalizedEpoch", finalizedEpoch);
         stats.put("epochsUntilFinality", currentEpoch >= 0 && finalizedEpoch >= 0 ? currentEpoch - finalizedEpoch : -1L);
-        stats.put("pendingEpochStats", buildEpochOverlaySummary(currentEpoch, finalizedEpoch));
         stats.put("adaptivePackingBufferStats", adaptivePackingBuffer.getStats());
         stats.put("backpressureOverflowStats", backpressureOverflowBuffer.getStats());
         stats.put("adaptivePackingWalletCount", adaptiveWalletCount);
-        stats.put("epochVerifiedPackingBufferCount", epochVerifiedPackingBufferCount);
         stats.put("adaptiveVerifiedPackingBufferCount", adaptiveVerifiedPackingBufferCount);
         stats.put("verifiedPackingBufferCount", verifiedPackingBufferCount);
         stats.put("adaptivePackingQueuedProposalCountTotal", adaptiveQueuedProposalTotal);
@@ -539,7 +542,6 @@ public class ProposalQueueManagerOptimized {
         java.util.Map<String, Object> runtimeStages = new java.util.LinkedHashMap<>();
         runtimeStages.put("unverifiedMempoolCount", pending);
         runtimeStages.put("verifiedPackingBufferCount", verifiedPackingBufferCount);
-        runtimeStages.put("epochVerifiedPackingBufferCount", epochVerifiedPackingBufferCount);
         runtimeStages.put("adaptiveVerifiedPackingBufferCount", adaptiveVerifiedPackingBufferCount);
         runtimeStages.put("releaseReadyProposalCount", releaseReadyProposalCount);
         runtimeStages.put("releaseReadyBatchCount", batchQueue.size());
@@ -578,16 +580,6 @@ public class ProposalQueueManagerOptimized {
         releaseFlow.put("adaptivePacking", adaptivePackingBuffer.getStats());
         releaseFlow.put("overflow", backpressureOverflowBuffer.getStats());
         stats.put("releaseFlow", releaseFlow);
-        java.util.Map<String, Object> compatibilityEpochOverlay = new java.util.LinkedHashMap<>();
-        compatibilityEpochOverlay.put("source", "compatibility-epoch-overlay");
-        compatibilityEpochOverlay.put("schedulerRetired", Boolean.TRUE);
-        compatibilityEpochOverlay.put("currentEpoch", currentEpoch);
-        compatibilityEpochOverlay.put("finalizedEpoch", finalizedEpoch);
-        compatibilityEpochOverlay.put("pendingEpochs", getPendingSubmissionEpochCount());
-        compatibilityEpochOverlay.put("epochsUntilFinality", currentEpoch >= 0 && finalizedEpoch >= 0 ? Math.max(0L, currentEpoch - finalizedEpoch) : -1L);
-        compatibilityEpochOverlay.put("pendingEpochStats", buildEpochOverlaySummary(currentEpoch, finalizedEpoch));
-        compatibilityEpochOverlay.put("replacementEndpoint", "/v1/proposals/release-flow");
-        stats.put("compatibilityEpochOverlay", compatibilityEpochOverlay);
         
         // Tier routing stats (current window + lifetime)
         stats.put("priorityProposalsSent", priorityCurrent);
@@ -690,39 +682,6 @@ public class ProposalQueueManagerOptimized {
         }
         long currentEpoch = beaconClient != null ? beaconClient.getCachedCurrentEpoch() : -1L;
         return currentEpoch >= 0L ? Math.max(0L, currentEpoch - 2L) : -1L;
-    }
-
-    private long getPendingSubmissionEpochCount() {
-        java.util.Set<Long> epochs = new java.util.HashSet<>();
-        for (QueuedProposal proposal : allProposals.values()) {
-            ProposalState state = proposal.getState();
-            if (state == ProposalState.PENDING || state == ProposalState.VERIFIED) {
-                epochs.add(proposal.getEpoch());
-            }
-        }
-        return epochs.size();
-    }
-
-    private java.util.Map<String, Object> buildEpochOverlayStats(long currentEpoch, long finalizedEpoch) {
-        java.util.Map<String, Object> stats = new java.util.LinkedHashMap<>();
-        stats.put("source", "compatibility-overlay");
-        stats.put("schedulerRetired", Boolean.TRUE);
-        stats.put("currentEpoch", currentEpoch);
-        stats.put("finalizedEpoch", finalizedEpoch);
-        stats.put("pendingEpochs", getPendingSubmissionEpochCount());
-        stats.put("pendingProposals", 0L);
-        stats.put("totalBatchesCreated", 0L);
-        stats.put("totalProposalsFinalized", totalFinalizedCount.get());
-        return stats;
-    }
-
-    private String buildEpochOverlaySummary(long currentEpoch, long finalizedEpoch) {
-        return String.format(
-            "EpochOverlay[current=%d, finalized=%d, activeSubmissionEpochs=%d, schedulerRetired=true]",
-            currentEpoch,
-            finalizedEpoch,
-            getPendingSubmissionEpochCount()
-        );
     }
 
     private AdaptiveReleaseGovernor.Decision evaluateAdaptiveReleaseDecision(long nowMs) {
@@ -976,7 +935,7 @@ public class ProposalQueueManagerOptimized {
         payload.put("epochsUntilFinality", queueStats.get("epochsUntilFinality"));
         payload.put("note",
             "Verified proposals move through adaptive packing, release-ready, and overflow stages. "
-                + "Epoch data remains available only as a compatibility overlay for older dashboards.");
+                + "Beacon epoch data is informational telemetry only and does not control release scheduling.");
 
         java.util.Map<String, Object> releaseStages = new java.util.LinkedHashMap<>();
         releaseStages.put("unverifiedMempoolCount", queueStats.get("pendingCount"));
@@ -1022,112 +981,7 @@ public class ProposalQueueManagerOptimized {
         throughput.put("totalRejectedCount", queueStats.get("totalRejectedCount"));
         payload.put("throughput", throughput);
 
-        java.util.Map<String, Object> epochCompatibility = new java.util.LinkedHashMap<>();
-        epochCompatibility.putAll((java.util.Map<String, Object>) queueStats.get("compatibilityEpochOverlay"));
-        epochCompatibility.put("deprecatedEndpoints", java.util.Arrays.asList("/v1/proposals/epochs", "/v1/explorer/epochs"));
-        epochCompatibility.put("contractReviewFollowUp",
-            "Legacy tier overlays remain compatibility-only. Adaptive backlog release is authoritative.");
-        payload.put("epochCompatibility", epochCompatibility);
-
         return payload;
-    }
-
-    /**
-     * Build the legacy epoch-resident proposal flow overlay for compatibility routes.
-     * This remains available for /v1/proposals/epochs while external dashboards migrate.
-     */
-    public java.util.Map<String, Object> getProposalEpochFlowStats() {
-        long currentEpoch = resolveCurrentEpoch();
-        long finalizedEpoch = resolveFinalizedEpoch();
-        long nextEpoch = Math.max(finalizedEpoch + 1, currentEpoch);
-
-        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
-        payload.put("contractVersion", "proposal.epoch-overlay.v1");
-        payload.put("generatedAtMs", System.currentTimeMillis());
-        payload.put("currentEpoch", currentEpoch);
-        payload.put("finalizedEpoch", finalizedEpoch);
-        payload.put("pendingEpochs", getPendingSubmissionEpochCount());
-        payload.put("epochsUntilFinality", currentEpoch >= 0 && finalizedEpoch >= 0 ? Math.max(0L, currentEpoch - finalizedEpoch) : -1L);
-        payload.put("source", "compatibility-epoch-overlay");
-        payload.put("deprecated", Boolean.TRUE);
-        payload.put("replacementEndpoint", "/v1/proposals/release-flow");
-        payload.put("note", "Epoch counters are derived from beacon state and proposal submission epochs. They remain available for compatibility, but the verified release scheduler is adaptive-only.");
-
-        java.util.List<java.util.Map<String, Object>> blocks = new java.util.ArrayList<>();
-        blocks.add(buildEpochFlowBlock("Finalized", "finalized", finalizedEpoch));
-        blocks.add(buildEpochFlowBlock("Next to be Finalized", "next", nextEpoch));
-        blocks.add(buildEpochFlowBlock("Current", "current", currentEpoch));
-        payload.put("blocks", blocks);
-
-        java.util.Map<String, Object> aeronLoad = new java.util.LinkedHashMap<>();
-        aeronLoad.put("priorityProposalsSent", priorityProposalsSent.get());
-        aeronLoad.put("batchedProposalsSent", batchedProposalsSent.get());
-        aeronLoad.put("backpressurePending", backpressureManager.getPendingCount());
-        aeronLoad.put("backpressureMax", backpressureManager.getMaxPendingMessages());
-        payload.put("aeronLoad", aeronLoad);
-
-        return payload;
-    }
-
-    private java.util.Map<String, Object> buildEpochFlowBlock(String label, String status, long epoch) {
-        java.util.Map<String, Object> block = new java.util.LinkedHashMap<>();
-        block.put("label", label);
-        block.put("status", status);
-        block.put("epoch", epoch);
-
-        java.util.Map<String, java.util.Map<String, Long>> byPriority = collectEpochPriorityStateCounts(epoch);
-        block.put("byPriority", byPriority);
-
-        java.util.Map<String, Object> totals = new java.util.LinkedHashMap<>();
-        totals.put("unverified", byPriority.values().stream().mapToLong(v -> v.getOrDefault("unverified", 0L)).sum());
-        totals.put("verified", byPriority.values().stream().mapToLong(v -> v.getOrDefault("verified", 0L)).sum());
-        totals.put("finalized", byPriority.values().stream().mapToLong(v -> v.getOrDefault("finalized", 0L)).sum());
-        totals.put("rejected", byPriority.values().stream().mapToLong(v -> v.getOrDefault("rejected", 0L)).sum());
-        block.put("totals", totals);
-
-        long flowToNext = ((Number) totals.get("verified")).longValue() + ((Number) totals.get("unverified")).longValue();
-        block.put("flowToNext", flowToNext);
-        return block;
-    }
-
-    private java.util.Map<String, java.util.Map<String, Long>> collectEpochPriorityStateCounts(long epoch) {
-        java.util.Map<String, java.util.Map<String, Long>> byPriority = new java.util.LinkedHashMap<>();
-        byPriority.put("standard", emptyStateMap());
-        byPriority.put("express", emptyStateMap());
-        byPriority.put("priority", emptyStateMap());
-
-        for (QueuedProposal proposal : allProposals.values()) {
-            if (proposal == null || proposal.getEpoch() != epoch) {
-                continue;
-            }
-            String tier = normalizeTierKey(proposal.getTier());
-            java.util.Map<String, Long> counters = byPriority.computeIfAbsent(tier, k -> emptyStateMap());
-            ProposalState state = proposal.getState();
-            if (state == ProposalState.PENDING) {
-                counters.put("unverified", counters.get("unverified") + 1L);
-            } else if (state == ProposalState.VERIFIED || state == ProposalState.CONFIRMED) {
-                counters.put("verified", counters.get("verified") + 1L);
-            }
-        }
-
-        for (String tier : byPriority.keySet()) {
-            long finalized = getTerminalCounter(finalizedByEpochAndTier, epoch, tier);
-            long rejected = getTerminalCounter(rejectedByEpochAndTier, epoch, tier);
-            java.util.Map<String, Long> counters = byPriority.get(tier);
-            counters.put("finalized", counters.get("finalized") + finalized);
-            counters.put("rejected", counters.get("rejected") + rejected);
-        }
-
-        return byPriority;
-    }
-
-    private java.util.Map<String, Long> emptyStateMap() {
-        java.util.Map<String, Long> map = new java.util.LinkedHashMap<>();
-        map.put("unverified", 0L);
-        map.put("verified", 0L);
-        map.put("finalized", 0L);
-        map.put("rejected", 0L);
-        return map;
     }
 
     private String normalizeTierKey(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
@@ -1831,13 +1685,12 @@ public class ProposalQueueManagerOptimized {
      * Get queue statistics.
      */
     public String getStats() {
-        return String.format("Unverified: %d, Verified Buffer: %d, Batches Ready: %d, Overflow: %d, Total: %d | Epoch Overlay: %s | Adaptive: %s | Overflow Buffer: %s",
+        return String.format("Unverified: %d, Verified Buffer: %d, Batches Ready: %d, Overflow: %d, Total: %d | Adaptive: %s | Overflow Buffer: %s",
             unverifiedQueue.size(),
             getVerifiedPackingBufferCount(),
             batchQueue.size(),
             backpressureOverflowBuffer.getPendingBatchCount(),
             allProposals.size(),
-            buildEpochOverlaySummary(resolveCurrentEpoch(), resolveFinalizedEpoch()),
             adaptivePackingBuffer.getStats(),
             backpressureOverflowBuffer.getStats());
     }
@@ -2087,6 +1940,7 @@ public class ProposalQueueManagerOptimized {
                     // This isolates whether the issue is queue mechanism vs templateId 106 encoding
                     if (batch.size() == 1) {
                         QueuedProposal proposal = batch.get(0);
+                        MutationAuditMetadata auditMetadata = refreshAuditMetadata(proposal);
                         
                         // Check proposal type: WRITE or DELETE
                         if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
@@ -2095,7 +1949,8 @@ public class ProposalQueueManagerOptimized {
                                 proposal.getProposalId(),
                                 proposal.getWalletAddress(),
                                 proposal.getPath(),
-                                proposal.getSignature()
+                                proposal.getSignature(),
+                                auditMetadata
                             )) {
                                 sent = 1;
                             }
@@ -2112,13 +1967,17 @@ public class ProposalQueueManagerOptimized {
                                 proposal.getSignature(),
                                 proposal.getBlobId(),
                                 proposal.getMimeType(),
-                                proposal.getIpfsCid()
+                                proposal.getIpfsCid(),
+                                auditMetadata
                             )) {
                                 sent = 1;
                             }
                         }
                     } else {
                         // Multi-proposal batch: use templateId 106
+                        for (QueuedProposal proposal : batch) {
+                            refreshAuditMetadata(proposal);
+                        }
                         java.util.List<QueuedProposal> hydrated = hydrateBatchMessages(batch);
                         try {
                             log.debug("🔥 CALLING appendProposalBatch on instance of: {}", 

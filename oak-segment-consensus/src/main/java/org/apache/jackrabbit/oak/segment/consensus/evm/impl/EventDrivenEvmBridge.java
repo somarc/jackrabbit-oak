@@ -21,7 +21,9 @@ import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.web3j.protocol.Web3j;
@@ -29,6 +31,8 @@ import org.web3j.protocol.core.DefaultBlockParameter;
 import org.web3j.protocol.core.DefaultBlockParameterName;
 import org.web3j.protocol.core.methods.request.EthFilter;
 import org.web3j.protocol.core.methods.response.EthLog;
+import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
+import org.web3j.protocol.core.methods.response.TransactionReceipt;
 import org.web3j.protocol.http.HttpService;
 
 import java.math.BigInteger;
@@ -165,6 +169,26 @@ public class EventDrivenEvmBridge implements EvmBridge {
 
         // In real mode, fall back to direct log query in case subscription missed event.
         return refreshProofConfirmations(fetchPaymentFromChain(proposalId));
+    }
+
+    @Override
+    @Nullable
+    public SettlementDetails getSettlementDetailsByProposalId(@NotNull String proposalId) {
+        PaymentProof proof = verifyPayment(proposalId);
+        return proof != null ? SettlementDetails.fromProof(getNetworkName(), proof) : null;
+    }
+
+    @Override
+    @Nullable
+    public SettlementDetails getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
+        PaymentProof cached = findCachedProofByTransactionHash(transactionHash);
+        if (cached != null) {
+            PaymentProof refreshed = refreshProofConfirmations(cached);
+            return SettlementDetails.fromProof(getNetworkName(), refreshed);
+        }
+
+        PaymentProof proof = fetchPaymentByTransactionHash(transactionHash);
+        return proof != null ? SettlementDetails.fromProof(getNetworkName(), proof) : null;
     }
     
     /**
@@ -530,6 +554,55 @@ public class EventDrivenEvmBridge implements EvmBridge {
             }
         } catch (Exception e) {
             log.debug("On-chain payment lookup failed for proposalId={}", proposalId, e);
+        }
+        return null;
+    }
+
+    @Nullable
+    private PaymentProof fetchPaymentByTransactionHash(@NotNull String transactionHash) {
+        if (web3j == null || transactionHash.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            resolveLatestBlockNumber();
+            EthGetTransactionReceipt receiptResponse = web3j.ethGetTransactionReceipt(transactionHash).send();
+            if (receiptResponse == null || receiptResponse.getTransactionReceipt() == null
+                    || !receiptResponse.getTransactionReceipt().isPresent()) {
+                return null;
+            }
+
+            TransactionReceipt receipt = receiptResponse.getTransactionReceipt().get();
+            if (receipt.getLogs() == null || receipt.getLogs().isEmpty()) {
+                return null;
+            }
+
+            for (org.web3j.protocol.core.methods.response.Log receiptLog : receipt.getLogs()) {
+                WriteAuthorizedEvent event = parsePaymentLog(receiptLog);
+                if (event == null) {
+                    continue;
+                }
+                processWriteAuthorizedEvent(event);
+                PaymentProof proof = payments.get(event.proposalId);
+                if (proof != null && transactionHash.equalsIgnoreCase(proof.getTransactionHash())) {
+                    return refreshProofConfirmations(proof);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("On-chain payment lookup failed for transactionHash={}", transactionHash, e);
+        }
+        return null;
+    }
+
+    @Nullable
+    private PaymentProof findCachedProofByTransactionHash(@NotNull String transactionHash) {
+        if (transactionHash.trim().isEmpty()) {
+            return null;
+        }
+        for (PaymentProof proof : payments.values()) {
+            if (proof != null && transactionHash.equalsIgnoreCase(proof.getTransactionHash())) {
+                return proof;
+            }
         }
         return null;
     }

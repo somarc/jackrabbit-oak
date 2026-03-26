@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.agrona.DirectBuffer;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
@@ -63,10 +64,38 @@ public class MessageDispatcher {
      * Callback interface for write operations.
      */
     public interface WriteCallback {
-        void applyWrite(String walletAddress, String path, String contentType,
-                        String message, String signature, String intentToken,
-                        String blobId, String mimeType, String ipfsCid, String proposalId);
-        void applyDelete(String walletAddress, String path, String signature, String proposalId);
+        default void applyWrite(String walletAddress, String path, String contentType,
+                                String message, String signature, String intentToken,
+                                String blobId, String mimeType, String ipfsCid,
+                                MutationAuditMetadata auditMetadata) {
+            applyWrite(
+                walletAddress,
+                path,
+                contentType,
+                message,
+                signature,
+                intentToken,
+                blobId,
+                mimeType,
+                ipfsCid,
+                auditMetadata != null ? auditMetadata.getProposalId() : null
+            );
+        }
+
+        default void applyWrite(String walletAddress, String path, String contentType,
+                                String message, String signature, String intentToken,
+                                String blobId, String mimeType, String ipfsCid, String proposalId) {
+            throw new UnsupportedOperationException("Write callback must implement applyWrite");
+        }
+
+        default void applyDelete(String walletAddress, String path, String signature,
+                                 MutationAuditMetadata auditMetadata) {
+            applyDelete(walletAddress, path, signature, auditMetadata != null ? auditMetadata.getProposalId() : null);
+        }
+
+        default void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            throw new UnsupportedOperationException("Write callback must implement applyDelete");
+        }
     }
     
     /**
@@ -303,6 +332,11 @@ public class MessageDispatcher {
             String mimeType = extractJsonField(json, "mimeType");
             String ipfsCid = extractJsonField(json, "ipfsCid"); // ADR 016
             String proposalId = extractJsonField(json, "proposalId");
+            MutationAuditMetadata auditMetadata = extractAuditMetadata(
+                json,
+                MutationAuditMetadata.Operation.WRITE,
+                proposalId
+            );
             Long proposalTerm = extractJsonLongField(json, "term");
 
             if (walletAddress == null || path == null) {
@@ -324,7 +358,7 @@ public class MessageDispatcher {
             log.debug("✅ Applying write: wallet={}, path={}, intentToken={}", 
                 walletAddress, path, intentToken != null ? intentToken : "none");
             writeCallback.applyWrite(walletAddress, path, contentType, message, signature, 
-                                    intentToken, blobId, mimeType, ipfsCid, proposalId);
+                                    intentToken, blobId, mimeType, ipfsCid, auditMetadata);
             
             return true;
             
@@ -355,6 +389,11 @@ public class MessageDispatcher {
             String path = extractJsonField(json, "path");
             String signature = extractJsonField(json, "signature");
             String proposalId = extractJsonField(json, "proposalId");
+            MutationAuditMetadata auditMetadata = extractAuditMetadata(
+                json,
+                MutationAuditMetadata.Operation.DELETE,
+                proposalId
+            );
             Long proposalTerm = extractJsonLongField(json, "term");
             
             if (walletAddress == null || path == null) {
@@ -373,7 +412,7 @@ public class MessageDispatcher {
             
             // Delegate to callback
             log.info("🗑️  Applying delete: wallet={}, path={}", walletAddress, path);
-            writeCallback.applyDelete(walletAddress, path, signature, proposalId);
+            writeCallback.applyDelete(walletAddress, path, signature, auditMetadata);
             
             return true;
             
@@ -434,6 +473,11 @@ public class MessageDispatcher {
                 String mimeType = extractJsonField(proposalJson, "mimeType");
                 String ipfsCid = extractJsonField(proposalJson, "ipfsCid"); // ADR 016
                 String proposalId = extractJsonField(proposalJson, "proposalId");
+                MutationAuditMetadata auditMetadata = extractAuditMetadata(
+                    proposalJson,
+                    MutationAuditMetadata.Operation.WRITE,
+                    proposalId
+                );
                 Long proposalTerm = extractJsonLongField(proposalJson, "term");
                 
                 if (walletAddress == null || path == null) {
@@ -445,8 +489,8 @@ public class MessageDispatcher {
                     continue;
                 }
                 
-                writeCallback.applyWrite(walletAddress, path, contentType, message, 
-                                        signature, intentToken, blobId, mimeType, ipfsCid, proposalId);
+                writeCallback.applyWrite(walletAddress, path, contentType, message,
+                                        signature, intentToken, blobId, mimeType, ipfsCid, auditMetadata);
                 successCount++;
             }
             
@@ -577,6 +621,31 @@ public class MessageDispatcher {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    private MutationAuditMetadata extractAuditMetadata(String json,
+                                                      MutationAuditMetadata.Operation defaultOperation,
+                                                      String fallbackProposalId) {
+        String operationValue = extractJsonField(json, "operation");
+        MutationAuditMetadata.Operation operation = defaultOperation;
+        if (operationValue != null) {
+            try {
+                operation = MutationAuditMetadata.Operation.valueOf(operationValue);
+            } catch (IllegalArgumentException e) {
+                log.debug("Ignoring unknown operation '{}' in replicated payload", operationValue);
+            }
+        }
+        String proposalId = extractJsonField(json, "proposalId");
+        return new MutationAuditMetadata(
+            operation,
+            extractJsonField(json, "transactionId"),
+            extractJsonField(json, "correlationId"),
+            proposalId != null ? proposalId : fallbackProposalId,
+            extractJsonField(json, "ethereumTxHash"),
+            extractJsonLongField(json, "confirmedBlockNumber"),
+            extractJsonLongField(json, "ethereumObservedEpoch"),
+            extractJsonLongField(json, "ethereumFinalizedEpoch")
+        );
     }
     
     /**

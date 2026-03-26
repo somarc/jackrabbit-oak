@@ -29,6 +29,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Paths;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -81,6 +82,10 @@ public class DashboardHandlerTest {
         assertTrue(json.contains("\"path\":\"/v1/config/osgi/delta\""));
         assertTrue(json.contains("\"path\":\"/v1/proposals/queue/stats\""));
         assertTrue(json.contains("\"path\":\"/v1/proposals/release-flow\""));
+        assertTrue(json.contains("\"path\":\"/v1/settlement/proposals/{proposalId}\""));
+        assertTrue(json.contains("\"path\":\"/v1/settlement/transactions/{transactionHash}\""));
+        assertFalse(json.contains("\"path\":\"/v1/proposals/epochs\""));
+        assertFalse(json.contains("\"path\":\"/v1/explorer/epochs\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/summary\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/release-flow\""));
         assertTrue(json.contains("\"path\":\"/v1/consensus/status\""));
@@ -88,6 +93,9 @@ public class DashboardHandlerTest {
         assertTrue(json.contains("\"path\":\"/v1/events/stats\""));
         assertTrue(json.contains("\"path\":\"/v1/gc/status\""));
         assertTrue(json.contains("\"path\":\"/metrics\""));
+        assertFalse(json.contains("/api/mock/advance-epoch"));
+        assertFalse(json.contains("/api/mock/set-epoch-offset"));
+        assertFalse(json.contains("/api/mock/epoch-status"));
     }
 
     @Test
@@ -284,6 +292,8 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("API Browser | Blockchain AEM Validator"));
         assertTrue(html.contains("mode-mainnet"));
         assertTrue(html.contains("MAINNET"));
+        assertFalse(html.contains("/api/mock/advance-epoch"));
+        assertFalse(html.contains("Mock Mode"));
     }
 
     private static ServerContext newContext() {

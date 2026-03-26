@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -154,6 +155,72 @@ public class ProposalQueryHandler {
     }
 
     /**
+     * Get basic chain-derived settlement details by proposal id.
+     * GET /v1/settlement/proposals/{proposalId}
+     */
+    public void handleGetSettlementByProposalId(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+
+        try {
+            String proposalId = extractPathSegment(request.getRequestURI(), 4, null);
+            if (proposalId == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID");
+                return;
+            }
+
+            if (context.evmBridge == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Settlement lookup not available");
+                return;
+            }
+
+            SettlementDetails details = context.evmBridge.getSettlementDetailsByProposalId(proposalId);
+            if (details == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Settlement details not found");
+                return;
+            }
+
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(JsonOutputUtil.toJson(toSettlementPayload("proposalId", proposalId, details)));
+        } catch (Exception e) {
+            log.error("Error getting settlement details by proposal id", e);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Get basic chain-derived settlement details by transaction hash.
+     * GET /v1/settlement/transactions/{transactionHash}
+     */
+    public void handleGetSettlementByTransactionHash(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+
+        try {
+            String transactionHash = extractPathSegment(request.getRequestURI(), 4, null);
+            if (transactionHash == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid transaction hash");
+                return;
+            }
+
+            if (context.evmBridge == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Settlement lookup not available");
+                return;
+            }
+
+            SettlementDetails details = context.evmBridge.getSettlementDetailsByTransactionHash(transactionHash);
+            if (details == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Settlement details not found");
+                return;
+            }
+
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.getWriter().write(JsonOutputUtil.toJson(toSettlementPayload("transactionHash", transactionHash, details)));
+        } catch (Exception e) {
+            log.error("Error getting settlement details by transaction hash", e);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+        }
+    }
+
+    /**
      * Get pending proposals count.
      * GET /v1/proposals/pending/count
      */
@@ -200,7 +267,7 @@ public class ProposalQueryHandler {
     }
 
     /**
-     * Get adaptive verified-release flow with compatibility epoch overlay.
+     * Get adaptive verified-release flow.
      * GET /v1/proposals/release-flow
      */
     public void handleGetProposalReleaseFlow(HttpServletResponse response) throws IOException {
@@ -219,34 +286,6 @@ public class ProposalQueryHandler {
             response.getWriter().write(JsonOutputUtil.toJson(flow));
         } catch (Exception e) {
             log.error("Error getting proposal release flow", e);
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Get compatibility epoch overlay for older dashboards.
-     * GET /v1/proposals/epochs
-     */
-    public void handleGetProposalEpochs(HttpServletResponse response) throws IOException {
-        response.setContentType("application/json");
-
-        try {
-            if (context.proposalQueueManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
-                return;
-            }
-
-            Map<String, Object> flow = new LinkedHashMap<>(context.proposalQueueManager.getProposalEpochFlowStats());
-            flow.put("contractVersion", "release-flow.v1");
-            flow.put("generatedAtMs", System.currentTimeMillis());
-            flow.put("deprecated", true);
-            flow.put("deprecatedReason",
-                "Legacy compatibility route. Use /v1/proposals/release-flow for the adaptive verified-release view.");
-            flow.put("canonicalPath", "/v1/proposals/release-flow");
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(flow));
-        } catch (Exception e) {
-            log.error("Error getting proposal epoch flow", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
         }
     }
@@ -349,6 +388,25 @@ public class ProposalQueryHandler {
 
         String segment = parts[segmentIndex];
         return segment == null || segment.trim().isEmpty() ? null : segment;
+    }
+
+    private Map<String, Object> toSettlementPayload(String lookupType, String lookupValue, SettlementDetails details) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contractVersion", "settlement.v1");
+        payload.put("lookupType", lookupType);
+        payload.put("lookupValue", lookupValue);
+        payload.put("networkName", details.getNetworkName());
+        payload.put("proposalId", details.getProposalId());
+        payload.put("transactionHash", details.getTransactionHash());
+        payload.put("blockNumber", details.getBlockNumber());
+        payload.put("fromAddress", details.getFromAddress());
+        payload.put("contractAddress", details.getContractAddress());
+        payload.put("amountWei", details.getAmountWei());
+        payload.put("proposalKind", details.getProposalKind().name());
+        payload.put("paymentToken", details.getPaymentToken().name());
+        payload.put("capabilityFlags", details.getCapabilityFlags());
+        payload.put("confirmations", details.getConfirmations());
+        return payload;
     }
 
     private String mapToOpsLifecycleState(ProposalStatus status) {

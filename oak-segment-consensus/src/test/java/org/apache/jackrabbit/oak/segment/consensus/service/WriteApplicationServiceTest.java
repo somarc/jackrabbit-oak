@@ -129,6 +129,50 @@ public class WriteApplicationServiceTest {
     }
 
     @Test
+    public void testApplyWriteWithAuditMetadataStillAppliesWhenEpochFieldsAbsent() {
+        FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        doAnswer(invocation -> {
+            Runnable callback = invocation.getArgument(0);
+            if (callback != null) {
+                callback.run();
+            }
+            return true;
+        }).when(flushService).onChangeApplied(any());
+        WriteApplicationService service = new WriteApplicationService(fileStore, nodeStore, null, flushService);
+
+        AtomicReference<String> durableProposal = new AtomicReference<>();
+        service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
+            @Override
+            public void onDurable(String proposalId, String head) {
+                durableProposal.set(proposalId);
+            }
+
+            @Override
+            public void onFailure(String proposalId, String error) {
+            }
+        });
+
+        String newHead = service.applyWriteWithAuditMetadata(
+            WALLET,
+            PATH,
+            "page",
+            "body",
+            "0xsig",
+            null,
+            null,
+            null,
+            null,
+            MutationAuditMetadata.write("tx-1", "corr-1", "proposal-audit", "0xeth", null, null, null)
+        );
+
+        assertEquals("new-head", newHead);
+        assertEquals("proposal-audit", durableProposal.get());
+        assertEquals("proposal-audit", stringProperty(contentNode(nodeStore, PATH), "oak:proposalId"));
+    }
+
+    @Test
     public void testApplyWriteStoresClientIpfsReferenceAndIntentToken() {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = new MemoryNodeStore();

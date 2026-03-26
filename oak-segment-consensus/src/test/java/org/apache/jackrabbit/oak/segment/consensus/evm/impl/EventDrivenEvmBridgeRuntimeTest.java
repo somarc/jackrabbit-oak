@@ -36,8 +36,10 @@ import org.web3j.protocol.core.Request;
 import org.web3j.protocol.core.methods.request.EthFilter;
 import org.web3j.protocol.core.methods.request.Filter;
 import org.web3j.protocol.core.methods.response.EthBlockNumber;
+import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
 import org.web3j.protocol.core.methods.response.EthLog;
 import org.web3j.protocol.core.methods.response.Log;
+import org.web3j.protocol.core.methods.response.TransactionReceipt;
 import org.web3j.protocol.core.methods.response.Web3ClientVersion;
 
 import java.lang.reflect.Field;
@@ -185,6 +187,47 @@ public class EventDrivenEvmBridgeRuntimeTest {
     }
 
     @Test
+    public void settlementDetailsByTransactionHashInRealModeFallBackToReceiptLogs() throws Exception {
+        String contractAddress = "0x1234567890abcdef1234567890abcdef12345678";
+        String proposalId = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        String payer = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        String txHash = "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        BigInteger amount = new BigInteger("1000000000000000");
+
+        Web3j web3j = mock(Web3j.class);
+        doReturn(blockNumberRequest(123456L)).when(web3j).ethBlockNumber();
+        doReturn(receiptRequest(transactionReceiptResponse(proposalPaidLog(
+            contractAddress,
+            proposalId,
+            payer,
+            amount,
+            123450L,
+            txHash
+        )))).when(web3j).ethGetTransactionReceipt(txHash);
+
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
+            "sepolia",
+            contractAddress,
+            false,
+            new OakPaymentEventParser(),
+            rpcUrl -> web3j,
+            (threadName, delayMs, reconnectTask) -> { }
+        );
+        setField(bridge, "currentBlock", 0L);
+        setField(bridge, "web3j", web3j);
+
+        org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails details =
+            bridge.getSettlementDetailsByTransactionHash(txHash);
+
+        assertNotNull(details);
+        assertEquals("sepolia", details.getNetworkName());
+        assertEquals(proposalId, details.getProposalId());
+        assertEquals(txHash, details.getTransactionHash());
+        assertEquals(123450L, details.getBlockNumber());
+        assertEquals(PaymentProof.PaymentToken.ETH, details.getPaymentToken());
+    }
+
+    @Test
     public void stopDisposesSubscriptionAndShutsDownWeb3j() throws Exception {
         Web3j web3j = mock(Web3j.class);
         Disposable disposable = mock(Disposable.class);
@@ -306,6 +349,13 @@ public class EventDrivenEvmBridgeRuntimeTest {
         return request;
     }
 
+    @SuppressWarnings("unchecked")
+    private static Request<?, EthGetTransactionReceipt> receiptRequest(EthGetTransactionReceipt response) throws Exception {
+        Request<?, EthGetTransactionReceipt> request = mock(Request.class);
+        when(request.send()).thenReturn(response);
+        return request;
+    }
+
     private static Web3ClientVersion clientVersionResponse(String value) {
         Web3ClientVersion response = new Web3ClientVersion();
         response.setResult(value);
@@ -327,6 +377,15 @@ public class EventDrivenEvmBridgeRuntimeTest {
         logObject.setTopics(log.getTopics());
         logObject.setData(log.getData());
         response.setResult(Collections.singletonList(logObject));
+        return response;
+    }
+
+    private static EthGetTransactionReceipt transactionReceiptResponse(Log log) {
+        TransactionReceipt receipt = new TransactionReceipt();
+        receipt.setLogs(Collections.singletonList(log));
+
+        EthGetTransactionReceipt response = new EthGetTransactionReceipt();
+        response.setResult(receipt);
         return response;
     }
 

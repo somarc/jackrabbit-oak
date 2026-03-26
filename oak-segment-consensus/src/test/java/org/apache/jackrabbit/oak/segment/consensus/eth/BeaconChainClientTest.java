@@ -20,6 +20,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.junit.After;
 import org.junit.Before;
@@ -36,12 +38,10 @@ import static org.junit.Assert.fail;
 public class BeaconChainClientTest {
 
     private static final String PROP_MODE = "oak.blockchain.mode";
-    private static final String PROP_MOCK_EPOCH_DURATION_SECONDS = "oak.mock.epoch.duration.seconds";
 
     @Before
     public void setUp() {
         clearProps();
-        System.setProperty(PROP_MODE, "mock");
         BlockchainConfig.reset();
     }
 
@@ -52,61 +52,60 @@ public class BeaconChainClientTest {
     }
 
     @Test
-    public void testConstructsInMockModeAndReportsHealth() {
-        BeaconChainClient client = new BeaconChainClient("ignored");
+    public void testConstructsInMockModeAndReportsSepoliaBackedHealth() {
+        BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.MOCK, 12345L);
 
         Map<String, Object> health = client.getHealthStatus();
 
         assertEquals(BlockchainConfig.Mode.MOCK, client.getNetworkMode());
-        assertTrue(client.getCachedCurrentEpoch() >= 1000L);
-        assertEquals(client.getCachedCurrentEpoch() - 2L, client.getCachedFinalizedEpoch());
+        assertEquals(12347L, client.getCachedCurrentEpoch());
+        assertEquals(12345L, client.getCachedFinalizedEpoch());
         assertTrue(client.isEpochDataFresh());
         assertEquals("MOCK", health.get("mode"));
-        assertNull(health.get("apiUrl"));
-        assertEquals(0L, ((Number) health.get("mockEpochOffset")).longValue());
-        assertEquals(300000L, ((Number) health.get("mockEpochDurationMs")).longValue());
+        assertEquals("https://sepolia.beaconcha.in/api/v1", health.get("apiUrl"));
+        assertEquals("sepolia", health.get("chainContext"));
+        assertNull(health.get("mockEpochOffset"));
+        assertNull(health.get("mockEpochDurationMs"));
     }
 
     @Test
-    public void testSetAndAdvanceMockEpochUpdateCacheImmediately() {
-        BeaconChainClient client = new BeaconChainClient("ignored");
+    public void testMockEpochControlsAreDisabled() {
+        BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.MOCK, 222L);
         long initialCurrent = client.getCachedCurrentEpoch();
         long initialFinalized = client.getCachedFinalizedEpoch();
 
-        assertTrue(client.setMockEpochOffset(42L));
-        assertEquals(42L, client.getMockEpochOffset());
-        assertEquals(initialCurrent + 42L, client.getCachedCurrentEpoch());
-        assertEquals(initialFinalized + 42L, client.getCachedFinalizedEpoch());
-
-        assertTrue(client.advanceMockEpoch(3));
-        assertEquals(45L, client.getMockEpochOffset());
-        assertEquals(initialCurrent + 45L, client.getCachedCurrentEpoch());
-        assertEquals(initialFinalized + 45L, client.getCachedFinalizedEpoch());
+        assertFalse(client.setMockEpochOffset(42L));
+        assertFalse(client.advanceMockEpoch(3));
+        assertEquals(0L, client.getMockEpochOffset());
+        assertEquals(initialCurrent, client.getCachedCurrentEpoch());
+        assertEquals(initialFinalized, client.getCachedFinalizedEpoch());
     }
 
     @Test
-    public void testMockEpochDurationPropertyIsHonoredAndInvalidValuesFallBack() {
-        System.setProperty(PROP_MOCK_EPOCH_DURATION_SECONDS, "7");
-        BlockchainConfig.reset();
-        BeaconChainClient configured = new BeaconChainClient("ignored");
-        assertEquals(7000L, ((Number) configured.getHealthStatus().get("mockEpochDurationMs")).longValue());
+    public void testUsesLatestEndpointFallbackWhenFinalizedEndpointFails() {
+        AtomicInteger fetchCount = new AtomicInteger();
+        BeaconChainClient client = new BeaconChainClient(BlockchainConfig.Mode.MOCK, endpoint -> {
+            fetchCount.incrementAndGet();
+            if (endpoint.endsWith("/epoch/finalized")) {
+                throw new IllegalStateException("forced-finalized-failure");
+            }
+            if (endpoint.endsWith("/epoch/latest")) {
+                return "{\"status\":\"OK\",\"data\":{\"epoch\":150}}";
+            }
+            throw new IllegalArgumentException("Unexpected endpoint: " + endpoint);
+        });
 
-        System.setProperty(PROP_MOCK_EPOCH_DURATION_SECONDS, "0");
-        BlockchainConfig.reset();
-        BeaconChainClient zero = new BeaconChainClient("ignored");
-        assertEquals(300000L, ((Number) zero.getHealthStatus().get("mockEpochDurationMs")).longValue());
-
-        System.setProperty(PROP_MOCK_EPOCH_DURATION_SECONDS, "bogus");
-        BlockchainConfig.reset();
-        BeaconChainClient bogus = new BeaconChainClient("ignored");
-        assertEquals(300000L, ((Number) bogus.getHealthStatus().get("mockEpochDurationMs")).longValue());
+        assertEquals(150L, client.getCachedCurrentEpoch());
+        assertEquals(148L, client.getCachedFinalizedEpoch());
+        assertEquals("/epoch/latest", client.getHealthStatus().get("lastEndpointUsed"));
+        assertEquals(2, fetchCount.get());
     }
 
     @Test
     public void testStaleEpochDataDetectedAndFreshnessCheckThrows() throws Exception {
-        BeaconChainClient client = new BeaconChainClient("ignored");
+        BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.MOCK, 200L);
 
-        setField(client, "lastUpdateTime", System.currentTimeMillis() - 61000L);
+        setField(client, "lastUpdateTime", System.currentTimeMillis() - 301000L);
 
         assertFalse(client.isEpochDataFresh());
         try {
@@ -119,7 +118,7 @@ public class BeaconChainClientTest {
 
     @Test
     public void testParseEpochFromResponseHandlesStandardAlternateAndInvalidPayloads() throws Exception {
-        BeaconChainClient client = new BeaconChainClient("ignored");
+        BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.MOCK, 99L);
         Method method = BeaconChainClient.class.getDeclaredMethod("parseEpochFromResponse", String.class);
         method.setAccessible(true);
 
@@ -131,8 +130,7 @@ public class BeaconChainClientTest {
 
     @Test
     public void testEpochDetailsAndLatestFinalizedEpochReflectCachedState() throws Exception {
-        BeaconChainClient client = new BeaconChainClient("ignored");
-        client.setMockEpochOffset(5);
+        BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.MOCK, 88L);
 
         long currentEpoch = client.getCachedCurrentEpoch();
         long finalizedEpoch = client.getCachedFinalizedEpoch();
@@ -152,7 +150,7 @@ public class BeaconChainClientTest {
 
     @Test
     public void testBackgroundPollingIsIdempotentAndStopClearsExecutor() throws Exception {
-        BeaconChainClient client = new BeaconChainClient("ignored");
+        BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.MOCK, 300L);
 
         try {
             client.startBackgroundPolling();
@@ -171,7 +169,18 @@ public class BeaconChainClientTest {
 
     private void clearProps() {
         System.clearProperty(PROP_MODE);
-        System.clearProperty(PROP_MOCK_EPOCH_DURATION_SECONDS);
+    }
+
+    private static BeaconChainClient clientWithFinalizedEpoch(BlockchainConfig.Mode mode, long finalizedEpoch) {
+        return new BeaconChainClient(mode, endpoint -> {
+            if (endpoint.endsWith("/epoch/finalized")) {
+                return "{\"status\":\"OK\",\"data\":{\"epoch\":" + finalizedEpoch + "}}";
+            }
+            if (endpoint.endsWith("/epoch/latest")) {
+                return "{\"status\":\"OK\",\"data\":{\"epoch\":" + (finalizedEpoch + 2L) + "}}";
+            }
+            throw new IllegalArgumentException("Unexpected endpoint: " + endpoint);
+        });
     }
 
     private static void setField(Object target, String fieldName, long value) throws Exception {

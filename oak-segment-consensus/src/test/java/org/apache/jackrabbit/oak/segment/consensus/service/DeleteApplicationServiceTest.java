@@ -92,6 +92,45 @@ public class DeleteApplicationServiceTest {
     }
 
     @Test
+    public void testApplyDeleteWithAuditMetadataStillAppliesWhenEpochFieldsAbsent() throws Exception {
+        FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
+        MemoryNodeStore nodeStore = seededNodeStore(EXISTING_PATH);
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        doAnswer(invocation -> {
+            Runnable callback = invocation.getArgument(0);
+            if (callback != null) {
+                callback.run();
+            }
+            return true;
+        }).when(flushService).onChangeApplied(any());
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+
+        AtomicReference<String> durableProposal = new AtomicReference<>();
+        service.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+            @Override
+            public void onDurable(String proposalId, String durableHeadValue) {
+                durableProposal.set(proposalId);
+            }
+
+            @Override
+            public void onFailure(String proposalId, String error) {
+            }
+        });
+
+        String newHead = service.applyDeleteWithAuditMetadata(
+            WALLET,
+            EXISTING_PATH,
+            "0xsig",
+            MutationAuditMetadata.delete("tx-1", "corr-1", "proposal-audit", "0xeth", null, null, null)
+        );
+
+        assertEquals("new-head", newHead);
+        assertEquals("proposal-audit", durableProposal.get());
+        assertFalse(nodeAt(nodeStore, EXISTING_PATH).exists());
+        verify(flushService).onChangeApplied(any());
+    }
+
+    @Test
     public void testApplyDeleteDeliversDurabilityCallbackWhenDeferredFlushCompletes() throws Exception {
         FileStore fileStore = fileStoreWithHeads("prev-head", "current-head");
         MemoryNodeStore nodeStore = seededNodeStore(EXISTING_PATH);

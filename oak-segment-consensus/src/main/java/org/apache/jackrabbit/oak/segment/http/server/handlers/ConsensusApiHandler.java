@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.service.DeleteApplicationService;
 import org.apache.jackrabbit.oak.segment.consensus.service.FileStoreFlushService;
 import org.apache.jackrabbit.oak.segment.consensus.service.WriteApplicationService;
@@ -299,6 +300,22 @@ public class ConsensusApiHandler implements AutoCloseable {
     public void handleGetOperationStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
         proposalQueryHandler.handleGetOperationStatus(request, response);
     }
+
+    /**
+     * Get basic settlement details by proposal id.
+     * GET /v1/settlement/proposals/{proposalId}
+     */
+    public void handleGetSettlementByProposalId(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        proposalQueryHandler.handleGetSettlementByProposalId(request, response);
+    }
+
+    /**
+     * Get basic settlement details by transaction hash.
+     * GET /v1/settlement/transactions/{transactionHash}
+     */
+    public void handleGetSettlementByTransactionHash(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        proposalQueryHandler.handleGetSettlementByTransactionHash(request, response);
+    }
     
     /**
      * Get pending proposals count.
@@ -313,19 +330,11 @@ public class ConsensusApiHandler implements AutoCloseable {
     }
 
     /**
-     * Get adaptive verified-release flow with compatibility epoch overlay.
+     * Get adaptive verified-release flow.
      * GET /v1/proposals/release-flow
      */
     public void handleGetProposalReleaseFlow(HttpServletResponse response) throws IOException {
         proposalQueryHandler.handleGetProposalReleaseFlow(response);
-    }
-
-    /**
-     * Get compatibility epoch overlay for legacy dashboards.
-     * GET /v1/proposals/epochs
-     */
-    public void handleGetProposalEpochs(HttpServletResponse response) throws IOException {
-        proposalQueryHandler.handleGetProposalEpochs(response);
     }
 
     /**
@@ -348,13 +357,31 @@ public class ConsensusApiHandler implements AutoCloseable {
                                      String message, String signature, String intentToken,
                                      String blobId, String mimeType, String ipfsCid,
                                      String proposalId) {
+        applyReplicatedWriteWithAuditMetadata(
+            walletAddress,
+            path,
+            contentType,
+            message,
+            signature,
+            intentToken,
+            blobId,
+            mimeType,
+            ipfsCid,
+            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    public void applyReplicatedWriteWithAuditMetadata(String walletAddress, String path, String contentType,
+                                                      String message, String signature, String intentToken,
+                                                      String blobId, String mimeType, String ipfsCid,
+                                                      MutationAuditMetadata auditMetadata) {
+        String proposalId = auditMetadata != null ? auditMetadata.getProposalId() : null;
         if (proposalId != null && context.aeronConsensusEngine != null && context.aeronConsensusEngine.isLeader()) {
             context.aeronConsensusEngine.sendQueueSegment(proposalId);
         }
-        // Delegate to WriteApplicationService
-        writeApplicationService.applyWrite(
+        writeApplicationService.applyWriteWithAuditMetadata(
             walletAddress, path, contentType, message, signature,
-            intentToken, blobId, mimeType, ipfsCid, proposalId
+            intentToken, blobId, mimeType, ipfsCid, auditMetadata
         );
     }
     
@@ -368,11 +395,21 @@ public class ConsensusApiHandler implements AutoCloseable {
      * Old segments remain until GC/compaction runs
      */
     public void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId) {
+        applyReplicatedDeleteWithAuditMetadata(
+            walletAddress,
+            path,
+            signature,
+            MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null)
+        );
+    }
+
+    public void applyReplicatedDeleteWithAuditMetadata(String walletAddress, String path, String signature,
+                                                       MutationAuditMetadata auditMetadata) {
+        String proposalId = auditMetadata != null ? auditMetadata.getProposalId() : null;
         if (proposalId != null && context.aeronConsensusEngine != null && context.aeronConsensusEngine.isLeader()) {
             context.aeronConsensusEngine.sendQueueSegment(proposalId);
         }
-        // Delegate to DeleteApplicationService
-        deleteApplicationService.applyDelete(walletAddress, path, signature, proposalId);
+        deleteApplicationService.applyDeleteWithAuditMetadata(walletAddress, path, signature, auditMetadata);
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -50,7 +51,38 @@ public class AeronIngressWritePayloadBuilderTest {
         assertTrue(encoded.json.contains("0xabc\\\\\\\"def"));
         assertTrue(encoded.json.contains("line1\\nline2"));
         assertTrue(encoded.json.contains("\"ipfsCid\":\"bafy123\""));
+        assertTrue(encoded.json.contains("\"operation\":\"WRITE\""));
         assertTrue(encoded.json.contains("\"proposalId\":\"proposal-1\""));
+        assertPayloadMatches(encoded);
+    }
+
+    @Test
+    public void writeProposalEncodesExplicitAuditMetadataFields() {
+        AeronEncodedMessage encoded = builder.buildWriteProposal(
+            "0xabc",
+            "/content/demo",
+            "page",
+            "body",
+            "sig",
+            Integer.valueOf(5),
+            "cid-1",
+            MutationAuditMetadata.write(
+                "tx-1",
+                "corr-1",
+                "proposal-1",
+                "0xeth",
+                Long.valueOf(42),
+                Long.valueOf(84),
+                Long.valueOf(82)
+            )
+        );
+
+        assertTrue(encoded.json.contains("\"transactionId\":\"tx-1\""));
+        assertTrue(encoded.json.contains("\"correlationId\":\"corr-1\""));
+        assertTrue(encoded.json.contains("\"ethereumTxHash\":\"0xeth\""));
+        assertTrue(encoded.json.contains("\"confirmedBlockNumber\":42"));
+        assertTrue(encoded.json.contains("\"ethereumObservedEpoch\":84"));
+        assertTrue(encoded.json.contains("\"ethereumFinalizedEpoch\":82"));
         assertPayloadMatches(encoded);
     }
 
@@ -66,7 +98,7 @@ public class AeronIngressWritePayloadBuilderTest {
             "blob-123",
             null,
             null,
-            null
+            (String) null
         );
 
         assertTrue(encoded.json.contains("\"blobId\":\"blob-123\""));
@@ -82,10 +114,11 @@ public class AeronIngressWritePayloadBuilderTest {
             "/content/delete",
             null,
             null,
-            null
+            (String) null
         );
 
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL, encoded.templateId);
+        assertTrue(encoded.json.contains("\"operation\":\"DELETE\""));
         assertTrue(encoded.json.contains("\"signature\":\"\""));
         assertFalse(encoded.json.contains("\"term\":"));
         assertFalse(encoded.json.contains("\"proposalId\":"));
@@ -111,6 +144,12 @@ public class AeronIngressWritePayloadBuilderTest {
         second.setBlobId("blob-2");
         second.setMimeType("image/png");
         second.setIpfsCid("bafy456");
+        second.setTransactionId("tx-2");
+        second.setCorrelationId("corr-2");
+        second.setConfirmedBlock(Long.valueOf(64));
+        second.setEpoch(999L);
+        second.setObservedEpoch(Long.valueOf(21));
+        second.setFinalizedEpoch(Long.valueOf(22));
 
         AeronEncodedMessage encoded =
             builder.buildWriteBatch(List.of(first, second), Integer.valueOf(11));
@@ -120,9 +159,15 @@ public class AeronIngressWritePayloadBuilderTest {
         assertTrue(encoded.json.contains("\"intentToken\":\"intent-1\""));
         assertTrue(encoded.json.contains("\"contentType\":\"page\""));
         assertTrue(encoded.json.contains("\"proposalId\":\"proposal-2\""));
+        assertTrue(encoded.json.contains("\"transactionId\":\"tx-2\""));
+        assertTrue(encoded.json.contains("\"correlationId\":\"corr-2\""));
         assertTrue(encoded.json.contains("\"blobId\":\"blob-2\""));
         assertTrue(encoded.json.contains("\"mimeType\":\"image/png\""));
         assertTrue(encoded.json.contains("\"ipfsCid\":\"bafy456\""));
+        assertTrue(encoded.json.contains("\"confirmedBlockNumber\":64"));
+        assertTrue(encoded.json.contains("\"ethereumObservedEpoch\":21"));
+        assertTrue(encoded.json.contains("\"ethereumFinalizedEpoch\":22"));
+        assertFalse(encoded.json.contains("\"ethereumObservedEpoch\":999"));
         assertTrue(encoded.json.contains("\"term\":11"));
         assertPayloadMatches(encoded);
     }

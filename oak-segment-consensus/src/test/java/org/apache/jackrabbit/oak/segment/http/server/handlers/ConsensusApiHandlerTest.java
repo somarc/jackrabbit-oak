@@ -478,22 +478,6 @@ public class ConsensusApiHandlerTest {
     }
 
     @Test
-    public void testGetProposalEpochsMarksCompatibilityRouteAsDeprecated() throws Exception {
-        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-        context.proposalQueueManager = queueManager;
-        Map<String, Object> flow = new LinkedHashMap<>();
-        flow.put("currentEpoch", 42L);
-        when(queueManager.getProposalEpochFlowStats()).thenReturn(flow);
-
-        handler.handleGetProposalEpochs(mockResponse);
-
-        verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
-        String response = responseWriter.toString();
-        assertTrue(response.contains("\"deprecated\":true"));
-        assertTrue(response.contains("\"canonicalPath\":\"/v1/proposals/release-flow\""));
-    }
-
-    @Test
     public void testGetOpsQueueSnapshotReturnsFreshPayload() throws Exception {
         ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
         context.proposalQueueManager = queueManager;

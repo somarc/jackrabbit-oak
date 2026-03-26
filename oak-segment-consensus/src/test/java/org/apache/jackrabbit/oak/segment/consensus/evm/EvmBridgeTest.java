@@ -120,6 +120,53 @@ public class EvmBridgeTest {
         assertEquals("Transaction hash should match", "0xabc123", proof2.getTransactionHash());
         assertEquals("Proposal ID should match", proposalId, proof2.getProposalId());
     }
+
+    @Test
+    public void testSettlementDetailsByProposalIdExposeBasicFields() {
+        String proposalId = "proposal-settlement";
+        String walletAddress = "0x1234567890123456789012345678901234567890";
+        bridge.registerProposalWallet(proposalId, walletAddress);
+
+        PaymentProof payment = new SimplePaymentProof(
+            "0xsettlementtx",
+            1001234,
+            walletAddress,
+            bridge.getContractAddress(),
+            proposalId,
+            "1000000000000000",
+            12
+        );
+        bridge.simulatePayment(payment);
+
+        SettlementDetails details = bridge.getSettlementDetailsByProposalId(proposalId);
+
+        assertNotNull("Settlement details should be available by proposal id", details);
+        assertEquals("sepolia", details.getNetworkName());
+        assertEquals(proposalId, details.getProposalId());
+        assertEquals("0xsettlementtx", details.getTransactionHash());
+        assertEquals(walletAddress, details.getFromAddress());
+    }
+
+    @Test
+    public void testSettlementDetailsByTransactionHashResolveFromCachedPayment() {
+        PaymentProof payment = new SimplePaymentProof(
+            "0xlookuptx",
+            1002000,
+            "0x1234567890123456789012345678901234567890",
+            bridge.getContractAddress(),
+            "proposal-lookup",
+            "2000000000000000",
+            6
+        );
+        bridge.simulatePayment(payment);
+
+        SettlementDetails details = bridge.getSettlementDetailsByTransactionHash("0xlookuptx");
+
+        assertNotNull("Settlement details should be available by transaction hash", details);
+        assertEquals("proposal-lookup", details.getProposalId());
+        assertEquals("0xlookuptx", details.getTransactionHash());
+        assertEquals(1002000, details.getBlockNumber());
+    }
     
     @Test
     public void testPaymentConfirmations() {

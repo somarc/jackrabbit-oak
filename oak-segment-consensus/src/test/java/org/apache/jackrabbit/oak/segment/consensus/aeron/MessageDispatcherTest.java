@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.agrona.DirectBuffer;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.junit.Test;
 import org.mockito.Mockito;
 
@@ -68,6 +69,44 @@ public class MessageDispatcherTest {
         assertTrue(result);
         assertEquals(1, calls.size());
         assertEquals("0xabc|/oak-chain/test|p1", calls.get(0));
+    }
+
+    @Test
+    public void testWriteProposalDispatchMapsExplicitAuditMetadata() {
+        AtomicReference<MutationAuditMetadata> captured = new AtomicReference<>();
+        MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
+            @Override
+            public void applyWrite(String walletAddress, String path, String contentType, String message,
+                                   String signature, String intentToken, String blobId, String mimeType,
+                                   String ipfsCid, MutationAuditMetadata auditMetadata) {
+                captured.set(auditMetadata);
+            }
+        });
+        dispatcher.setTermProvider(() -> 7L);
+
+        String payload = "{"
+            + "\"walletAddress\":\"0xabc\","
+            + "\"path\":\"/oak-chain/test\","
+            + "\"proposalId\":\"p1\","
+            + "\"transactionId\":\"tx-1\","
+            + "\"correlationId\":\"corr-1\","
+            + "\"ethereumTxHash\":\"0xeth\","
+            + "\"confirmedBlockNumber\":42,"
+            + "\"ethereumObservedEpoch\":84,"
+            + "\"ethereumFinalizedEpoch\":82,"
+            + "\"operation\":\"WRITE\","
+            + "\"term\":7"
+            + "}";
+
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, payload));
+        assertEquals("tx-1", captured.get().getTransactionId());
+        assertEquals("corr-1", captured.get().getCorrelationId());
+        assertEquals("p1", captured.get().getProposalId());
+        assertEquals("0xeth", captured.get().getEthereumTxHash());
+        assertEquals(Long.valueOf(42L), captured.get().getConfirmedBlockNumber());
+        assertEquals(Long.valueOf(84L), captured.get().getEthereumObservedEpoch());
+        assertEquals(Long.valueOf(82L), captured.get().getEthereumFinalizedEpoch());
+        assertEquals(MutationAuditMetadata.Operation.WRITE, captured.get().getOperation());
     }
 
     @Test
@@ -219,6 +258,36 @@ public class MessageDispatcherTest {
         assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
             "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\",\"proposalId\":\"p1\",\"term\":5}"));
         assertEquals("0xabc|/oak-chain/test|p1", deleted.get());
+    }
+
+    @Test
+    public void testDeleteProposalDispatchMapsExplicitAuditMetadata() {
+        AtomicReference<MutationAuditMetadata> captured = new AtomicReference<>();
+        MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
+            @Override
+            public void applyDelete(String walletAddress, String path, String signature,
+                                    MutationAuditMetadata auditMetadata) {
+                captured.set(auditMetadata);
+            }
+        });
+        dispatcher.setTermProvider(() -> 5L);
+
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
+            "{"
+                + "\"walletAddress\":\"0xabc\","
+                + "\"path\":\"/oak-chain/test\","
+                + "\"proposalId\":\"p1\","
+                + "\"transactionId\":\"tx-2\","
+                + "\"correlationId\":\"corr-2\","
+                + "\"ethereumObservedEpoch\":12,"
+                + "\"operation\":\"DELETE\","
+                + "\"term\":5"
+                + "}"));
+        assertEquals(MutationAuditMetadata.Operation.DELETE, captured.get().getOperation());
+        assertEquals("tx-2", captured.get().getTransactionId());
+        assertEquals("corr-2", captured.get().getCorrelationId());
+        assertEquals("p1", captured.get().getProposalId());
+        assertEquals(Long.valueOf(12L), captured.get().getEthereumObservedEpoch());
     }
 
     @Test

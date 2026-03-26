@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
+
 import java.util.List;
 
 /**
@@ -42,11 +44,28 @@ public interface RaftAppendCallback {
     }
 
     /**
+     * Append a verified write proposal with explicit audit metadata.
+     */
+    default void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                      String message, String signature, MutationAuditMetadata auditMetadata) {
+        appendProposalWithId(proposalId, walletAddress, path, contentType, message, signature);
+    }
+
+    /**
      * Try to append a verified write proposal with proposalId and report whether ingress accepted it.
      */
     default boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
                                             String message, String signature) {
         appendProposalWithId(proposalId, walletAddress, path, contentType, message, signature);
+        return true;
+    }
+
+    /**
+     * Try to append a verified write proposal with explicit audit metadata.
+     */
+    default boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                            String message, String signature, MutationAuditMetadata auditMetadata) {
+        appendProposalWithId(proposalId, walletAddress, path, contentType, message, signature, auditMetadata);
         return true;
     }
     
@@ -102,12 +121,32 @@ public interface RaftAppendCallback {
     }
 
     /**
+     * Append a verified write proposal with proposalId, binary metadata, and explicit audit metadata.
+     */
+    default void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                      String message, String signature, String blobId, String mimeType, String ipfsCid,
+                                      MutationAuditMetadata auditMetadata) {
+        appendProposalWithId(proposalId, walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid);
+    }
+
+    /**
      * Try to append a verified write proposal with proposalId, binary, and IPFS CID.
      */
     default boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
                                             String message, String signature, String blobId, String mimeType,
                                             String ipfsCid) {
         appendProposalWithId(proposalId, walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid);
+        return true;
+    }
+
+    /**
+     * Try to append a verified write proposal with explicit audit metadata.
+     */
+    default boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
+                                            String message, String signature, String blobId, String mimeType,
+                                            String ipfsCid, MutationAuditMetadata auditMetadata) {
+        appendProposalWithId(
+            proposalId, walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid, auditMetadata);
         return true;
     }
     
@@ -133,10 +172,27 @@ public interface RaftAppendCallback {
     }
 
     /**
+     * Append a verified delete proposal with explicit audit metadata.
+     */
+    default void appendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature,
+                                            MutationAuditMetadata auditMetadata) {
+        appendDeleteProposalWithId(proposalId, walletAddress, path, signature);
+    }
+
+    /**
      * Try to append a verified delete proposal with proposalId and report whether ingress accepted it.
      */
     default boolean tryAppendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
         appendDeleteProposalWithId(proposalId, walletAddress, path, signature);
+        return true;
+    }
+
+    /**
+     * Try to append a verified delete proposal with explicit audit metadata.
+     */
+    default boolean tryAppendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature,
+                                                  MutationAuditMetadata auditMetadata) {
+        appendDeleteProposalWithId(proposalId, walletAddress, path, signature, auditMetadata);
         return true;
     }
     

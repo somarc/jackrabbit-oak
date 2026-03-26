@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
+
 /**
  * Queued proposal waiting for Ethereum confirmation.
  */
@@ -46,7 +48,11 @@ public class QueuedProposal implements java.io.Serializable {
     private volatile long payloadSizeBytes = 0L;
     private volatile String payloadSha256;
     private volatile String signature;
-    private volatile long epoch; // Ethereum epoch when transaction was seen
+    private volatile long epoch; // Compatibility overlay epoch for queue/reporting surfaces
+    private volatile Long observedEpoch;
+    private volatile Long finalizedEpoch;
+    private volatile String transactionId;
+    private volatile String correlationId;
     private volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier =
         org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD; // Payment tier for priority handling
     private volatile String intentToken; // Intent token for lazy binary upload (ADR 020)
@@ -198,6 +204,38 @@ public class QueuedProposal implements java.io.Serializable {
         this.epoch = epoch;
     }
 
+    public Long getFinalizedEpoch() {
+        return finalizedEpoch;
+    }
+
+    public void setFinalizedEpoch(Long finalizedEpoch) {
+        this.finalizedEpoch = finalizedEpoch;
+    }
+
+    public Long getObservedEpoch() {
+        return observedEpoch;
+    }
+
+    public void setObservedEpoch(Long observedEpoch) {
+        this.observedEpoch = observedEpoch;
+    }
+
+    public String getTransactionId() {
+        return transactionId;
+    }
+
+    public void setTransactionId(String transactionId) {
+        this.transactionId = transactionId;
+    }
+
+    public String getCorrelationId() {
+        return correlationId;
+    }
+
+    public void setCorrelationId(String correlationId) {
+        this.correlationId = correlationId;
+    }
+
     public long getTimeoutTimestamp() {
         return timeoutTimestamp;
     }
@@ -268,6 +306,19 @@ public class QueuedProposal implements java.io.Serializable {
 
     public void setMimeType(String mimeType) {
         this.mimeType = mimeType;
+    }
+
+    public MutationAuditMetadata toAuditMetadata() {
+        return new MutationAuditMetadata(
+            type == ProposalType.DELETE ? MutationAuditMetadata.Operation.DELETE : MutationAuditMetadata.Operation.WRITE,
+            transactionId,
+            correlationId,
+            proposalId,
+            ethereumTxHash,
+            confirmedBlock,
+            observedEpoch,
+            finalizedEpoch
+        );
     }
 
     /**
