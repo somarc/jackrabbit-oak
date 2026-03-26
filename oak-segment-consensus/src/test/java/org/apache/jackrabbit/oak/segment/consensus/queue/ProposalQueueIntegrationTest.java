@@ -192,6 +192,9 @@ public class ProposalQueueIntegrationTest {
         System.clearProperty("oak.proposal.payload.spill.max.bytes");
         System.clearProperty("oak.proposal.hard.max.pending");
         System.clearProperty("oak.proposal.payload.spill.dir");
+        System.clearProperty("oak.consensus.backpressure.timeout.ms");
+        System.clearProperty("oak.consensus.backpressure.park.nanos");
+        System.clearProperty("oak.proposal.processed.retention.ms");
     }
     
     @Test
@@ -1161,6 +1164,226 @@ public class ProposalQueueIntegrationTest {
     }
 
     @Test
+    public void testRestoresProcessedProposalAwaitingDurabilityAfterRestart() throws Exception {
+        queueManager.stop();
+        bridge.stop();
+
+        System.setProperty("oak.proposal.persistence.flush.ms", "0");
+        System.setProperty("oak.proposal.persistence.flush.batch", "1");
+        System.setProperty("oak.proposal.payload.inline.max.bytes", "4");
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        Path persistenceDir = Files.createTempDirectory("proposal-restore-processed-pending");
+
+        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        firstBridge.start();
+        bridge = firstBridge;
+
+        CountDownLatch firstLatch = new CountDownLatch(1);
+        final String[] firstResolvedMessage = {null};
+        RaftAppendCallback firstCallback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                firstResolvedMessage[0] = message;
+                firstLatch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature, String blobId, String mimeType) {
+                appendProposal(walletAddress, path, contentType, message, signature);
+            }
+
+            @Override
+            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                fail("Expected write replay, not delete");
+            }
+        };
+
+        queueManager = new ProposalQueueManagerOptimized(
+            firstBridge,
+            firstCallback,
+            new BackpressureManager(),
+            beaconClient,
+            persistenceDir.toString(),
+            tuning
+        );
+        queueManager.start();
+
+        String proposalId = "restore-processed-pending-001";
+        String ethereumTxHash = "0xrestoreprocessedpending001";
+        String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/processed-pending";
+        String message = "restore processed proposal payload";
+
+        QueuedProposal proposal = queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            message,
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            null
+        );
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(500_000),
+            12351L,
+            ethereumTxHash
+        );
+
+        assertTrue("Initial processed proposal should still be sent", firstLatch.await(10, TimeUnit.SECONDS));
+        assertEquals("Initial send should resolve the original payload", message, firstResolvedMessage[0]);
+        assertTrue("Proposal should remain tracked as processed pending durability",
+            waitForCondition(() -> queueManager.getProposal(proposalId).getState() == ProposalState.PROCESSED,
+                5_000, 25));
+        assertNotNull("Processed proposal should retain payload reference until durability is terminal",
+            proposal.getPayloadRef());
+        assertTrue("Spilled payload should remain available for recovery",
+            Files.exists(persistenceDir.resolve("payloads").resolve(proposal.getPayloadRef())));
+
+        queueManager.stop();
+        firstBridge.stop();
+
+        CountDownLatch restoredLatch = new CountDownLatch(1);
+        final String[] restoredMessage = {null};
+        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+            "sepolia",
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
+            true
+        );
+        restoredBridge.start();
+        bridge = restoredBridge;
+
+        RaftAppendCallback restoredCallback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                restoredMessage[0] = message;
+                restoredLatch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature, String blobId, String mimeType) {
+                appendProposal(walletAddress, path, contentType, message, signature);
+            }
+
+            @Override
+            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                fail("Expected write replay, not delete");
+            }
+        };
+
+        queueManager = new ProposalQueueManagerOptimized(
+            restoredBridge,
+            restoredCallback,
+            new BackpressureManager(),
+            beaconClient,
+            persistenceDir.toString(),
+            tuning
+        );
+        queueManager.start();
+
+        assertTrue("Processed proposal awaiting durability should replay on restore",
+            restoredLatch.await(10, TimeUnit.SECONDS));
+        assertEquals("Recovered proposal should retain original payload", message, restoredMessage[0]);
+        assertTrue("Recovered proposal should return to processed state",
+            waitForCondition(() -> queueManager.getProposal(proposalId).getState() == ProposalState.PROCESSED,
+                5_000, 25));
+    }
+
+    @Test
+    public void testRetriesProcessedProposalLiveWhenDurabilityStalls() throws Exception {
+        queueManager.stop();
+
+        System.setProperty("oak.consensus.backpressure.timeout.ms", "50");
+        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+        raftAppendLatch = new CountDownLatch(2);
+        final AtomicInteger appendCount = new AtomicInteger();
+        final String proposalId = "processed-stall-retry-001";
+        final String walletAddress = "0x742d35cc6634c0532925a3b844bc9e7595f0beb0";
+        final String path = "/oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0/content/stall-retry";
+        final String ethereumTxHash = "0xprocessedstallretry001";
+
+        RaftAppendCallback callback = new RaftAppendCallback() {
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature) {
+                int count = appendCount.incrementAndGet();
+                if (count == 2) {
+                    queueManager.updateDurability(proposalId, DurabilityState.ACKED, "head-after-retry", null);
+                }
+                raftAppendLatch.countDown();
+            }
+
+            @Override
+            public void appendProposal(String walletAddress, String path, String contentType,
+                                       String message, String signature, String blobId, String mimeType) {
+                appendProposal(walletAddress, path, contentType, message, signature);
+            }
+
+            @Override
+            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+                fail("Expected write replay, not delete");
+            }
+        };
+
+        queueManager = new ProposalQueueManagerOptimized(
+            bridge,
+            callback,
+            new BackpressureManager(
+                ProposalQueueTuning.DEFAULT_MAX_PENDING_MESSAGES,
+                tuning.getBackpressureTimeoutMs(),
+                tuning.getBackpressureParkNanos()
+            ),
+            beaconClient,
+            null,
+            tuning
+        );
+        queueManager.start();
+
+        queueManager.queueProposal(
+            proposalId,
+            ethereumTxHash,
+            walletAddress,
+            path,
+            "page",
+            "retry me after durability stall",
+            "0xsig...",
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
+            null
+        );
+
+        bridge.simulateWriteAuthorizedEvent(
+            proposalId,
+            walletAddress,
+            "0xdef456...",
+            BigInteger.valueOf(500_000),
+            12352L,
+            ethereumTxHash
+        );
+
+        assertTrue("Proposal should be resent once durability remains pending",
+            raftAppendLatch.await(10, TimeUnit.SECONDS));
+        assertTrue("Processed proposal should be replayed at least once", appendCount.get() >= 2);
+        assertTrue("Replay should eventually reach durable ACK state",
+            waitForCondition(() -> queueManager.getProposal(proposalId).getDurabilityState() == DurabilityState.ACKED,
+                5_000, 25));
+        assertEquals("Proposal should remain tracked as processed after retry succeeds",
+            ProposalState.PROCESSED, queueManager.getProposal(proposalId).getState());
+    }
+
+    @Test
     public void testLargePayloadSpillsToDiskAndCleansUpAfterProcessing() throws Exception {
         queueManager.stop();
 
@@ -1230,10 +1453,10 @@ public class ProposalQueueIntegrationTest {
 
         assertTrue("Spilled proposal should still process", latch.await(10, TimeUnit.SECONDS));
         assertEquals("Resolved message should round-trip through spill store", message, capturedMessage[0]);
-        assertTrue("Payload spool should drain after terminal cleanup",
-            waitForCondition(() -> longStat(queueManager.getQueueStats(), "payloadSpoolBytes") == 0L, 10_000, 25));
-        assertEquals("Processed proposal should clear payload reference", null, proposal.getPayloadRef());
-        assertEquals("Processed proposal should clear inline message cache", null, proposal.getMessage());
+        assertNotNull("Processed proposal should retain payload reference until durability is terminal",
+            proposal.getPayloadRef());
+        assertTrue("Payload file should remain available for replay while durability is pending",
+            Files.exists(persistenceDir.resolve("payloads").resolve(proposal.getPayloadRef())));
         assertTrue("Disk-only payload counter should increment",
             longStat(queueManager.getQueueStats(), "payloadDiskOnlyCount") >= 1L);
         assertTrue("Payload resolve counter should increment on lazy load",

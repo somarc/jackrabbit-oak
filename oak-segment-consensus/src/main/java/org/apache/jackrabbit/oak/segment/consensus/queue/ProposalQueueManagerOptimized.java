@@ -152,7 +152,9 @@ public class ProposalQueueManagerOptimized {
     private final ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> rejectedByEpochAndTier =
         new ConcurrentHashMap<>();
     private final long processedRetentionMs;
+    private final long processedPendingRecoveryMs;
     private volatile long lastProcessedCleanup = 0L;
+    private volatile long lastProcessedRecoveryScan = 0L;
 
     // Metrics: EVM verifier timings and outcomes (for mempool bottleneck analysis)
     private final java.util.concurrent.atomic.AtomicLong verifierAttemptCount = new java.util.concurrent.atomic.AtomicLong(0);
@@ -258,6 +260,10 @@ public class ProposalQueueManagerOptimized {
         this.releaseMode = resolved.getReleaseMode();
         this.adaptiveReleaseGovernor = AdaptiveReleaseGovernor.fromTuning(resolved);
         this.processedRetentionMs = resolved.getProcessedRetentionMs();
+        this.processedPendingRecoveryMs = Math.min(
+            this.processedRetentionMs,
+            Math.max(5_000L, this.backpressureManager.getBackpressureTimeoutMs())
+        );
         this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
         this.persistenceFlushBatch = resolved.getPersistenceFlushBatch();
         this.counterRotationIntervalMs = resolved.getCounterRotationIntervalMs();
@@ -325,6 +331,7 @@ public class ProposalQueueManagerOptimized {
         } else {
             log.info("   - Counter rotation: disabled");
         }
+        log.info("   - Processed-pending recovery window: {}ms", processedPendingRecoveryMs);
     }
     
     /**
@@ -1147,6 +1154,21 @@ public class ProposalQueueManagerOptimized {
             .incrementAndGet();
     }
 
+    private void decrementTerminalCounter(
+            ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
+            long epoch,
+            String tier) {
+        ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong> byTier = store.get(epoch);
+        if (byTier == null) {
+            return;
+        }
+        java.util.concurrent.atomic.AtomicLong counter = byTier.get(tier);
+        if (counter == null) {
+            return;
+        }
+        counter.updateAndGet(current -> current > 0L ? current - 1L : 0L);
+    }
+
     private long getTerminalCounter(
             ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
             long epoch,
@@ -1169,6 +1191,21 @@ public class ProposalQueueManagerOptimized {
             incrementTerminalCounter(finalizedByEpochAndTier, epoch, tier);
         } else if (terminalState == ProposalState.REJECTED) {
             incrementTerminalCounter(rejectedByEpochAndTier, epoch, tier);
+        }
+    }
+
+    private void rollbackTerminalState(QueuedProposal proposal, ProposalState terminalState) {
+        if (proposal == null) {
+            return;
+        }
+        long epoch = proposal.getEpoch();
+        String tier = normalizeTierKey(proposal.getTier());
+        if (terminalState == ProposalState.PROCESSED) {
+            totalFinalizedCount.updateAndGet(current -> current > 0L ? current - 1L : 0L);
+            decrementTerminalCounter(finalizedByEpochAndTier, epoch, tier);
+        } else if (terminalState == ProposalState.REJECTED) {
+            totalRejectedCount.updateAndGet(current -> current > 0L ? current - 1L : 0L);
+            decrementTerminalCounter(rejectedByEpochAndTier, epoch, tier);
         }
     }
     
@@ -1318,13 +1355,19 @@ public class ProposalQueueManagerOptimized {
         long nowMs = System.currentTimeMillis();
         int restoredPending = 0;
         int restoredVerified = 0;
+        int restoredProcessedPending = 0;
         int skippedTerminal = 0;
         int skippedMissingPayload = 0;
         for (QueuedProposal proposal : proposals) {
             if (proposal == null) {
                 continue;
             }
-            if (proposal.getState() == ProposalState.PROCESSED || proposal.getState() == ProposalState.REJECTED) {
+            if (proposal.getState() == ProposalState.REJECTED) {
+                cleanupPayload(proposal);
+                skippedTerminal++;
+                continue;
+            }
+            if (proposal.getState() == ProposalState.PROCESSED && isTerminalDurability(proposal.getDurabilityState())) {
                 cleanupPayload(proposal);
                 skippedTerminal++;
                 continue;
@@ -1335,6 +1378,13 @@ public class ProposalQueueManagerOptimized {
             }
             allProposals.put(proposal.getProposalId(), proposal);
             registerProposalWalletMapping(proposal);
+
+            if (proposal.getState() == ProposalState.PROCESSED) {
+                if (recoverProcessedProposalForRetry(proposal, nowMs, "restart-restore")) {
+                    restoredProcessedPending++;
+                }
+                continue;
+            }
 
             if (proposal.getState() == ProposalState.VERIFIED) {
                 enqueueRestoredVerifiedProposal(proposal, nowMs);
@@ -1349,13 +1399,15 @@ public class ProposalQueueManagerOptimized {
             unverifiedQueue.offer(proposal);
             restoredPending++;
         }
-        if (skippedTerminal > 0 || skippedMissingPayload > 0) {
+        if (restoredProcessedPending > 0 || skippedTerminal > 0 || skippedMissingPayload > 0) {
             persistProposalsNow();
         }
-        if (restoredPending > 0 || restoredVerified > 0 || skippedTerminal > 0 || skippedMissingPayload > 0) {
-            log.info("🔁 Restored persisted proposals: pending={} verified={} releaseMode={} skippedTerminal={} skippedMissingPayload={}",
+        if (restoredPending > 0 || restoredVerified > 0 || restoredProcessedPending > 0
+            || skippedTerminal > 0 || skippedMissingPayload > 0) {
+            log.info("🔁 Restored persisted proposals: pending={} verified={} processedPending={} releaseMode={} skippedTerminal={} skippedMissingPayload={}",
                 restoredPending,
                 restoredVerified,
+                restoredProcessedPending,
                 releaseMode.configValue(),
                 skippedTerminal,
                 skippedMissingPayload);
@@ -1943,7 +1995,6 @@ public class ProposalQueueManagerOptimized {
             return;
         }
         proposal.setState(ProposalState.PROCESSED);
-        cleanupPayload(proposal);
         totalFinalizedCount.incrementAndGet();
         recordTerminalState(proposal, ProposalState.PROCESSED);
     }
@@ -1976,6 +2027,7 @@ public class ProposalQueueManagerOptimized {
             }
             
             int workCount = 0;
+            recoverStaleProcessedProposals(System.currentTimeMillis());
             
             // 🚀 RELEASE BATCHING: Process verified batches prepared by the adaptive finalizer
             // Batches are organized by wallet address for optimal segment packing
@@ -2169,12 +2221,14 @@ public class ProposalQueueManagerOptimized {
                 return false;
             }
             if (state == ProposalState.REJECTED) {
+                cleanupPayload(proposal);
                 removed[0]++;
                 return true;
             }
             DurabilityState durability = proposal.getDurabilityState();
             boolean shouldRemove = durability == DurabilityState.ACKED || durability == DurabilityState.FAILED;
             if (shouldRemove) {
+                cleanupPayload(proposal);
                 removed[0]++;
             }
             return shouldRemove;
@@ -2182,6 +2236,92 @@ public class ProposalQueueManagerOptimized {
         if (removed[0] > 0) {
             persistProposals();
         }
+    }
+
+    private void recoverStaleProcessedProposals(long nowMs) {
+        if ((nowMs - lastProcessedRecoveryScan) < 1_000L) {
+            return;
+        }
+        lastProcessedRecoveryScan = nowMs;
+
+        int recovered = 0;
+        int rejected = 0;
+        for (QueuedProposal proposal : allProposals.values()) {
+            if (proposal == null
+                || proposal.getState() != ProposalState.PROCESSED
+                || proposal.getDurabilityState() != DurabilityState.PENDING) {
+                continue;
+            }
+
+            long staleMs = nowMs - getProcessedPendingReferenceTimestamp(proposal, nowMs);
+            if (staleMs < processedPendingRecoveryMs) {
+                continue;
+            }
+
+            if (recoverProcessedProposalForRetry(proposal, nowMs, "stale-durability-pending")) {
+                recovered++;
+            } else {
+                rejected++;
+            }
+        }
+
+        if (recovered > 0 || rejected > 0) {
+            persistProposals();
+            log.warn("♻️ Processed proposal recovery sweep completed: recovered={} rejected={} windowMs={}",
+                recovered, rejected, processedPendingRecoveryMs);
+        }
+    }
+
+    private boolean recoverProcessedProposalForRetry(QueuedProposal proposal, long nowMs, String reason) {
+        if (proposal == null
+            || proposal.getState() != ProposalState.PROCESSED
+            || proposal.getDurabilityState() != DurabilityState.PENDING) {
+            return false;
+        }
+        if (!hasRestorablePayload(proposal)) {
+            transitionProposalToRejected(proposal,
+                "Cannot recover processed proposal awaiting durability; payload sidecar missing");
+            return false;
+        }
+
+        int nextRetry = proposal.incrementRetryCount();
+        if (nextRetry > maxRetryCount) {
+            transitionProposalToRejected(proposal,
+                "Exceeded max retry count (" + maxRetryCount + ") while recovering processed proposal awaiting durability");
+            return false;
+        }
+
+        rollbackTerminalState(proposal, ProposalState.PROCESSED);
+        proposal.setState(ProposalState.VERIFIED);
+        proposal.setRejectionReason(null);
+        proposal.overrideTimeoutTimestamp(nowMs + restoreTimeoutMs);
+        proposal.setDurabilityState(DurabilityState.PENDING, null, null);
+        backpressureManager.incrementAcknowledged();
+        enqueueRestoredVerifiedProposal(proposal, nowMs);
+        log.warn("♻️ Re-queued processed proposal for replay: proposalId={} reason={} retry={}/{}",
+            proposal.getProposalId(), reason, nextRetry, maxRetryCount);
+        return true;
+    }
+
+    private boolean isTerminalDurability(DurabilityState durabilityState) {
+        return durabilityState == DurabilityState.ACKED || durabilityState == DurabilityState.FAILED;
+    }
+
+    private long getProcessedPendingReferenceTimestamp(QueuedProposal proposal, long nowMs) {
+        if (proposal == null) {
+            return nowMs;
+        }
+        long since = proposal.getLastRetryTimestamp();
+        if (since <= 0L) {
+            since = proposal.getDurabilityTimestamp();
+        }
+        if (since <= 0L) {
+            since = proposal.getVerifiedTimestampMs();
+        }
+        if (since <= 0L) {
+            since = proposal.getTimestamp();
+        }
+        return since > 0L ? since : nowMs;
     }
 
     private void logRateLimitedInfo(java.util.concurrent.atomic.AtomicLong lastMs,
@@ -2234,7 +2374,7 @@ public class ProposalQueueManagerOptimized {
             
             // Process unverified proposals
             QueuedProposal proposal;
-            while ((proposal = unverifiedQueue.poll()) != null) {
+            while (running && (proposal = unverifiedQueue.poll()) != null) {
                 long attemptStartNs = System.nanoTime();
                 verifierAttemptCount.incrementAndGet();
                 try {
@@ -2276,14 +2416,18 @@ public class ProposalQueueManagerOptimized {
                         // In mock mode, this immediately returns a valid proof
                         // In real mode, this polls the blockchain for the transaction
                         verifierRequeueNoProofCount.incrementAndGet();
-                        unverifiedQueue.offer(proposal);
+                        if (running) {
+                            unverifiedQueue.offer(proposal);
+                        }
                         continue;
                     }
                     
                     if (!proof.isConfirmed(requiredConfirmations)) {
                         // Payment exists but not confirmed yet - re-queue
                         verifierRequeueUnconfirmedCount.incrementAndGet();
-                        unverifiedQueue.offer(proposal);
+                        if (running) {
+                            unverifiedQueue.offer(proposal);
+                        }
                         continue;
                     }
                     

@@ -64,6 +64,7 @@ import java.util.function.Supplier;
 public class WriteApplicationService {
     
     private static final Logger log = LoggerFactory.getLogger(WriteApplicationService.class);
+    private static final String PROPOSAL_ID_PROPERTY = "oak:proposalId";
     
     private final FileStore fileStore;
     private final Supplier<NodeStore> nodeStoreSupplier;
@@ -213,17 +214,22 @@ public class WriteApplicationService {
                 }
             }
             
-            // Enrich wallet node with metadata
-            if (walletNode != null && walletNodeName != null) {
-                enrichWalletNode(walletNode, walletNodeName, walletAddress);
-            }
-            
             // Create content node
             String contentId = pathParts[pathParts.length - 1];
+            boolean contentNodeExists = current.hasChildNode(contentId);
             NodeBuilder contentNode = current.child(contentId);
+
+            if (isDuplicateProposalReplay(contentNode, contentNodeExists, proposalId)) {
+                return acknowledgeDuplicateReplay(proposalId);
+            }
+
+            // Enrich wallet node with metadata
+            if (walletNode != null && walletNodeName != null) {
+                enrichWalletNode(walletNode, walletNodeName, walletAddress, !contentNodeExists);
+            }
             
             // Set properties
-            setContentProperties(contentNode, walletAddress, contentType, message, signature, path);
+            setContentProperties(contentNode, walletAddress, contentType, message, signature, path, proposalId);
             
             // ADR 059: Record binary storage mode (client vs validator)
             if (blobId != null && !blobId.isEmpty()) {
@@ -309,6 +315,29 @@ public class WriteApplicationService {
             fileStore.getHead().getRecordId().toString10()
         );
     }
+
+    private boolean isDuplicateProposalReplay(NodeBuilder contentNode,
+                                              boolean contentNodeExists,
+                                              @Nullable String proposalId) {
+        if (!contentNodeExists || proposalId == null || proposalId.isEmpty()) {
+            return false;
+        }
+        PropertyState existingProposalId = contentNode.getProperty(PROPOSAL_ID_PROPERTY);
+        return existingProposalId != null && proposalId.equals(existingProposalId.getValue(Type.STRING));
+    }
+
+    @NotNull
+    private String acknowledgeDuplicateReplay(@Nullable String proposalId) {
+        String currentHead = fileStore.getHead().getRecordId().toString10();
+        if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
+            durabilityCallback.onDurable(proposalId, currentHead);
+        }
+        if (headUpdateCallback != null) {
+            headUpdateCallback.updateHead(currentHead);
+        }
+        log.info("♻️ Duplicate replicated write replay acknowledged without mutating Oak: proposalId={}", proposalId);
+        return currentHead;
+    }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // Helper Methods
@@ -323,7 +352,8 @@ public class WriteApplicationService {
             String contentType,
             String message,
             String signature,
-            String path) {
+            String path,
+            @Nullable String proposalId) {
         
         contentNode.setProperty("jcr:primaryType", "nt:unstructured");
         contentNode.setProperty("contentType", contentType != null ? contentType : "page");
@@ -332,6 +362,9 @@ public class WriteApplicationService {
         contentNode.setProperty("wallet", walletAddress);
         contentNode.setProperty("signature", signature);
         contentNode.setProperty("source", "aeron-replicated");
+        if (proposalId != null && !proposalId.isEmpty()) {
+            contentNode.setProperty(PROPOSAL_ID_PROPERTY, proposalId);
+        }
 
         // ADR 059: Canonical JSON→JCR mapping (best-effort normalization)
         normalizeCanonicalPayload(contentNode, message);
@@ -575,7 +608,10 @@ public class WriteApplicationService {
     /**
      * Enrich wallet node with metadata.
      */
-    private void enrichWalletNode(NodeBuilder walletNode, String walletNodeName, String walletAddress) {
+    private void enrichWalletNode(NodeBuilder walletNode,
+                                  String walletNodeName,
+                                  String walletAddress,
+                                  boolean newContentNode) {
         try {
             boolean isNewWallet = !walletNode.hasProperty("wallet");
             
@@ -601,13 +637,14 @@ public class WriteApplicationService {
                 
                 long contentCount = contentCountProp != null ? contentCountProp.getValue(Type.LONG) : 0L;
                 long totalWrites = totalWritesProp != null ? totalWritesProp.getValue(Type.LONG) : 0L;
+                long nextContentCount = contentCount + (newContentNode ? 1L : 0L);
                 
-                walletNode.setProperty("contentCount", contentCount + 1);
+                walletNode.setProperty("contentCount", nextContentCount);
                 walletNode.setProperty("totalWrites", totalWrites + 1);
                 walletNode.setProperty("lastWrite", System.currentTimeMillis());
                 
                 log.debug("📊 Wallet node updated: {} (contentCount: {}, totalWrites: {})", 
-                    walletAddress, contentCount + 1, totalWrites + 1);
+                    walletAddress, nextContentCount, totalWrites + 1);
             }
         } catch (Exception e) {
             log.warn("⚠️  Failed to enrich wallet node metadata for {}: {}", walletAddress, e.getMessage());

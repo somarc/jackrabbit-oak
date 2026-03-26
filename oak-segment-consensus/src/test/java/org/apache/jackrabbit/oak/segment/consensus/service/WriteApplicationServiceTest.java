@@ -27,6 +27,7 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
@@ -117,6 +118,7 @@ public class WriteApplicationServiceTest {
 
         NodeState contentNode = contentNode(nodeStore, PATH);
         assertEquals("page", stringProperty(contentNode, "contentType"));
+        assertEquals("proposal-1", stringProperty(contentNode, "oak:proposalId"));
         assertEquals("0xsig", stringProperty(contentNode, "signature"));
         assertEquals("Acme", stringProperty(contentNode, "organization"));
         assertEquals("Hello", stringProperty(contentNode, "oak:title"));
@@ -222,6 +224,65 @@ public class WriteApplicationServiceTest {
         assertEquals("new-head", newHead);
         assertEquals(PATH + "|" + WALLET + "|Acme|null|image/jpeg", binaryEvent.get());
         assertEquals("deadbeef#123", stringProperty(contentNode(authoritativeStore, PATH), "jcr:data"));
+        verify(flushService).onChangeApplied(any());
+    }
+
+    @Test
+    public void testApplyWriteIsIdempotentForDuplicateProposalReplay() {
+        FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        doAnswer(invocation -> {
+            Runnable callback = invocation.getArgument(0);
+            if (callback != null) {
+                callback.run();
+            }
+            return true;
+        }).when(flushService).onChangeApplied(any());
+        WriteApplicationService service = new WriteApplicationService(fileStore, nodeStore, null, flushService);
+
+        AtomicInteger durableCount = new AtomicInteger();
+        service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
+            @Override
+            public void onDurable(String proposalId, String durableHead) {
+                durableCount.incrementAndGet();
+            }
+
+            @Override
+            public void onFailure(String proposalId, String error) {
+            }
+        });
+
+        service.applyWrite(
+            WALLET,
+            PATH,
+            "page",
+            "body",
+            "0xsig",
+            null,
+            null,
+            null,
+            null,
+            "proposal-replay");
+
+        service.applyWrite(
+            WALLET,
+            PATH,
+            "page",
+            "body",
+            "0xsig",
+            null,
+            null,
+            null,
+            null,
+            "proposal-replay");
+
+        NodeState walletNode = contentNode(nodeStore, "/oak-chain/aa/bb/cc/" + WALLET);
+        NodeState contentNode = contentNode(nodeStore, PATH);
+        assertEquals(1L, longProperty(walletNode, "contentCount"));
+        assertEquals(1L, longProperty(walletNode, "totalWrites"));
+        assertEquals("proposal-replay", stringProperty(contentNode, "oak:proposalId"));
+        assertEquals(2, durableCount.get());
         verify(flushService).onChangeApplied(any());
     }
 
