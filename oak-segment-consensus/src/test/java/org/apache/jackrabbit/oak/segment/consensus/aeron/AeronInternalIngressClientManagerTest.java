@@ -24,6 +24,7 @@ import org.junit.Test;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -32,6 +33,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class AeronInternalIngressClientManagerTest {
@@ -161,6 +163,52 @@ public class AeronInternalIngressClientManagerTest {
             assertEquals("BOUND", diagnostics.get("state"));
             assertEquals(55L, ((Number) diagnostics.get("sessionId")).longValue());
             assertEquals(1, connectCalls.get());
+        } finally {
+            manager.close();
+        }
+    }
+
+    @Test
+    public void rapidSendFailuresCollapseToSingleReconnectAndCloseStaleClientBeforeReuse() throws Exception {
+        AtomicInteger connectCalls = new AtomicInteger();
+        AtomicReference<AeronCluster> current = new AtomicReference<>();
+        AtomicBoolean initialClosed = new AtomicBoolean(false);
+        AtomicBoolean reboundObservedClosed = new AtomicBoolean(false);
+        AtomicInteger connectIndex = new AtomicInteger();
+
+        AeronCluster initial = mockBoundClient(77L, null, null);
+        doAnswer(invocation -> {
+            initialClosed.set(true);
+            return null;
+        }).when(initial).close();
+
+        AeronCluster rebound = mockBoundClient(88L, null, null);
+        AeronInternalIngressClientManager manager = newManager(
+            connectCalls,
+            current,
+            () -> {
+                if (connectIndex.getAndIncrement() == 0) {
+                    return initial;
+                }
+                reboundObservedClosed.set(initialClosed.get());
+                return rebound;
+            },
+            25L,
+            10L
+        );
+        try {
+            assertTrue(manager.ensureAvailable("initial", 250L));
+            assertEquals(initial, current.get());
+
+            manager.notifySendFailure("offer-closed");
+            manager.notifySendFailure("offer-not-connected");
+
+            assertTrue(manager.ensureAvailable("rebound", 1000L));
+            assertEquals(rebound, current.get());
+            assertEquals(2, connectCalls.get());
+            assertTrue(reboundObservedClosed.get());
+            assertEquals(88L, ((Number) manager.diagnostics().get("sessionId")).longValue());
+            verify(initial).close();
         } finally {
             manager.close();
         }

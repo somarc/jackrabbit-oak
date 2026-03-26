@@ -55,6 +55,31 @@ public class AeronClusterElectionObserverTest {
     }
 
     @Test
+    public void observeTreatsSingleNodeLeaderAsStableAcrossExtendedObservation() throws Exception {
+        AtomicLong now = new AtomicLong(0L);
+        List<String> lines = new ArrayList<>();
+        AeronClusterElectionObserver observer = new AeronClusterElectionObserver(
+            now::get,
+            millis -> now.addAndGet(millis),
+            lines::add
+        );
+
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.getLeaderMemberId()).thenReturn(0);
+        when(engine.isLeader()).thenReturn(true);
+        when(engine.getClusterSize()).thenReturn(1);
+
+        AeronClusterElectionObserver.ObservationSummary summary = observer.observe(engine, 65000);
+
+        assertEquals(0, summary.changeCount);
+        assertEquals(1, summary.uniqueLeaders);
+        assertEquals(0, summary.finalLeaderId);
+        assertEquals(1, summary.clusterSize);
+        assertTrue(lines.stream().anyMatch(line -> line.contains("65 seconds")));
+        assertTrue(lines.stream().anyMatch(line -> line.contains("Single stable leader")));
+    }
+
+    @Test
     public void observeCountsLeadershipChangesAfterInitialElection() throws Exception {
         AtomicLong now = new AtomicLong(0L);
         AeronClusterElectionObserver observer = new AeronClusterElectionObserver(
