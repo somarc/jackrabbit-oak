@@ -915,6 +915,7 @@ public class RequestRouterTest {
                 ServerContext context = newContext(nodeStore, storeDirectory);
                 AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
                 when(engine.isClusterHealthy()).thenReturn(true);
+                when(engine.isLeader()).thenReturn(true);
                 context.aeronConsensusEngine = engine;
                 ClientRegistration registration = new ClientRegistration("author-1", "http://author-1:4502", wallet);
                 context.registeredClients.put(wallet, registration);

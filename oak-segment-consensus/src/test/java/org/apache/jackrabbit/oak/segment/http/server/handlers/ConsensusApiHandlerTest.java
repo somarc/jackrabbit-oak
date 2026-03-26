@@ -24,6 +24,7 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOpt
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.Rule;
@@ -107,6 +108,13 @@ public class ConsensusApiHandlerTest {
         );
         
         handler = new ConsensusApiHandler(context);
+    }
+
+    @After
+    public void tearDown() {
+        if (handler != null) {
+            handler.close();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -575,78 +583,90 @@ public class ConsensusApiHandlerTest {
     }
 
     @Test
-    public void testApplyReplicatedWriteSendsDurabilityAfterLateEngineBinding() {
-        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
-        when(fileStore.getHead().getRecordId().toString10()).thenReturn("new-head");
+    public void testApplyReplicatedWriteSendsDurabilityAfterLateEngineBinding() throws Exception {
+        withSynchronousFlush(() -> {
+            FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+            when(fileStore.getHead().getRecordId().toString10()).thenReturn("new-head");
 
-        ServerContext lateContext = new ServerContext(
-            fileStore,
-            new MemoryNodeStore(),
-            tempFolder.getRoot().toPath(),
-            "http://localhost:8090"
-        );
-        ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
-        AeronConsensusEngine aeronEngine = mock(AeronConsensusEngine.class);
-        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            ServerContext lateContext = new ServerContext(
+                fileStore,
+                new MemoryNodeStore(),
+                tempFolder.getRoot().toPath(),
+                "http://localhost:8090"
+            );
+            ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
+            try {
+                AeronConsensusEngine aeronEngine = mock(AeronConsensusEngine.class);
+                ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
 
-        when(aeronEngine.isLeader()).thenReturn(true);
-        lateContext.setAeronConsensusEngine(aeronEngine);
-        lateHandler.refreshCallbacks();
-        lateContext.setProposalQueueManager(queueManager);
+                when(aeronEngine.isLeader()).thenReturn(true);
+                lateContext.setAeronConsensusEngine(aeronEngine);
+                lateHandler.refreshCallbacks();
+                lateContext.setProposalQueueManager(queueManager);
 
-        lateHandler.applyReplicatedWrite(
-            "0x1234567890abcdef1234567890abcdef12345678",
-            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
-            "page",
-            "{\"title\":\"Hello\"}",
-            "0xsig",
-            null,
-            null,
-            null,
-            null,
-            "proposal-1"
-        );
+                lateHandler.applyReplicatedWrite(
+                    "0x1234567890abcdef1234567890abcdef12345678",
+                    "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
+                    "page",
+                    "{\"title\":\"Hello\"}",
+                    "0xsig",
+                    null,
+                    null,
+                    null,
+                    null,
+                    "proposal-1"
+                );
 
-        verify(aeronEngine).sendQueueSegment("proposal-1");
-        verify(aeronEngine).sendSegmentPersisted("proposal-1", "new-head", true, null);
-        verify(queueManager, never()).updateDurability("proposal-1", DurabilityState.ACKED, "new-head", null);
+                verify(aeronEngine).sendQueueSegment("proposal-1");
+                verify(aeronEngine).sendSegmentPersisted("proposal-1", "new-head", true, null);
+                verify(queueManager, never()).updateDurability("proposal-1", DurabilityState.ACKED, "new-head", null);
+            } finally {
+                lateHandler.close();
+            }
+        });
     }
 
     @Test
     public void testApplyReplicatedDeleteSendsDurabilityAfterLateEngineBinding() throws Exception {
-        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
-        when(fileStore.getHead().getRecordId().toString10()).thenReturn("delete-head");
+        withSynchronousFlush(() -> {
+            FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+            when(fileStore.getHead().getRecordId().toString10()).thenReturn("delete-head");
 
-        MemoryNodeStore nodeStore = new MemoryNodeStore();
-        seedNode(nodeStore,
-            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1");
+            MemoryNodeStore nodeStore = new MemoryNodeStore();
+            seedNode(nodeStore,
+                "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1");
 
-        ServerContext lateContext = new ServerContext(
-            fileStore,
-            nodeStore,
-            tempFolder.getRoot().toPath(),
-            "http://localhost:8090"
-        );
-        ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
-        AeronConsensusEngine aeronEngine = mock(AeronConsensusEngine.class);
-        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+            ServerContext lateContext = new ServerContext(
+                fileStore,
+                nodeStore,
+                tempFolder.getRoot().toPath(),
+                "http://localhost:8090"
+            );
+            ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
+            try {
+                AeronConsensusEngine aeronEngine = mock(AeronConsensusEngine.class);
+                ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
 
-        when(aeronEngine.isLeader()).thenReturn(true);
-        lateContext.setAeronConsensusEngine(aeronEngine);
-        lateHandler.refreshCallbacks();
-        lateContext.setProposalQueueManager(queueManager);
+                when(aeronEngine.isLeader()).thenReturn(true);
+                lateContext.setAeronConsensusEngine(aeronEngine);
+                lateHandler.refreshCallbacks();
+                lateContext.setProposalQueueManager(queueManager);
 
-        lateHandler.applyReplicatedDelete(
-            "0x1234567890abcdef1234567890abcdef12345678",
-            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
-            "0xsig",
-            "proposal-delete-1"
-        );
+                lateHandler.applyReplicatedDelete(
+                    "0x1234567890abcdef1234567890abcdef12345678",
+                    "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
+                    "0xsig",
+                    "proposal-delete-1"
+                );
 
-        verify(aeronEngine).sendQueueSegment("proposal-delete-1");
-        verify(aeronEngine).sendSegmentPersisted("proposal-delete-1", "delete-head", true, null);
-        assertFalse(nodeExists(nodeStore,
-            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1"));
+                verify(aeronEngine).sendQueueSegment("proposal-delete-1");
+                verify(aeronEngine).sendSegmentPersisted("proposal-delete-1", "delete-head", true, null);
+                assertFalse(nodeExists(nodeStore,
+                    "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1"));
+            } finally {
+                lateHandler.close();
+            }
+        });
     }
 
     @Test
@@ -807,6 +827,27 @@ public class ConsensusApiHandlerTest {
         return current;
     }
 
+    private void withSynchronousFlush(ThrowingRunnable runnable) throws Exception {
+        String previousFlushMs = System.getProperty("oak.filestore.flush.ms");
+        String previousFlushBatch = System.getProperty("oak.filestore.flush.batch");
+        try {
+            restoreProperty("oak.filestore.flush.ms", "0");
+            restoreProperty("oak.filestore.flush.batch", "1");
+            runnable.run();
+        } finally {
+            restoreProperty("oak.filestore.flush.ms", previousFlushMs);
+            restoreProperty("oak.filestore.flush.batch", previousFlushBatch);
+        }
+    }
+
+    private void restoreProperty(String key, String value) {
+        if (value == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, value);
+        }
+    }
+
     private void assertJsonErrorStatus(int status) {
         verify(mockResponse).setStatus(status);
         String response = responseWriter.toString();
@@ -817,5 +858,10 @@ public class ConsensusApiHandlerTest {
         assertJsonErrorStatus(status);
         String response = responseWriter.toString();
         assertTrue("Response should contain error detail", response.contains(expectedFragment));
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 }

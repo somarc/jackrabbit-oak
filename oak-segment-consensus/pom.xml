@@ -29,6 +29,10 @@
   <description>Distributed consensus layer for Oak Segment Store - Blockchain AEM with sharded Raft clusters</description>
   <packaging>bundle</packaging>
 
+  <properties>
+    <aeron.version>1.50.4</aeron.version>
+  </properties>
+
   <build>
       <plugins>
         <plugin>
@@ -321,17 +325,17 @@
         <dependency>
             <groupId>io.aeron</groupId>
             <artifactId>aeron-cluster</artifactId>
-            <version>1.50.1</version>
+            <version>${aeron.version}</version>
         </dependency>
         <dependency>
             <groupId>io.aeron</groupId>
             <artifactId>aeron-client</artifactId>
-            <version>1.50.1</version>
+            <version>${aeron.version}</version>
         </dependency>
         <dependency>
             <groupId>io.aeron</groupId>
             <artifactId>aeron-driver</artifactId>
-            <version>1.50.1</version>
+            <version>${aeron.version}</version>
         </dependency>
 
         <!-- Test dependencies -->
