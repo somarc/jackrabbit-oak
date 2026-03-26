@@ -6,9 +6,9 @@
 
 **Current Phase**: Standalone validator build is the source of truth. Fragment-host coupling has been removed; boundary cleanup, test hardening, and chain-backed deployment paths remain active work.
 
-Experimental POC spillover such as `oak-segment-agentic` and `oak-auth-web3`
-is not part of the validator v1 delivery surface and is intentionally excluded
-from this module.
+Deferred sidecar work such as `oak-segment-agentic` and `oak-auth-web3` may
+live on separate feature branches, but it is not part of the validator v1
+delivery surface and is intentionally excluded from this module.
 
 ## Documentation
 
