@@ -16,14 +16,12 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
-import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
-import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.DashboardDataService;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
@@ -111,7 +109,7 @@ public class DashboardHandler {
         html.append(".section{margin-top:20px;}");
         html.append("</style></head><body><div class='wrap'>");
         html.append("<h1>Oak Control Plane Home</h1>");
-        html.append("<p>API-first runtime. This page is the read-only entry point for health, consensus, and OSGi-governed runtime configuration.</p>");
+        html.append("<p>API-first runtime. This page is the read-only entry point for health, consensus, and OSGi-governed runtime configuration. Browser UX belongs upstream behind the edge-owned <code>/ops/v1/*</code> contract.</p>");
         html.append("<div class='grid'>");
         html.append("<div class='card'><div class='k'>Build</div><div class='v'>").append(FormatUtils.escapeHtml(version)).append("</div></div>");
         html.append("<div class='card'><div class='k'>Role</div><div class='v'>").append(FormatUtils.escapeHtml(role)).append("</div></div>");
@@ -126,7 +124,7 @@ public class DashboardHandler {
         html.append("<div class='section'>");
         html.append("<h2>Control Plane Surfaces</h2>");
         html.append("<div class='links'>");
-        html.append("<a class='link' href='/api-browser'><strong>API Browser</strong><div class='muted'>Interactive endpoint catalog and tester.</div></a>");
+        html.append("<a class='link' href='/api-browser'><strong>Local API Browser</strong><div class='muted'>Validator-local diagnostic catalog. Upstream UX should use the edge-owned <code>/ops/v1/*</code> contract.</div></a>");
         html.append("<a class='link' href='/v1/consensus/status'><strong>/v1/consensus/status</strong><div class='muted'>Consensus status and leader context.</div></a>");
         html.append("<a class='link' href='/v1/proposals/queue/stats'><strong>/v1/proposals/queue/stats</strong><div class='muted'>Queue/finality/backpressure counters.</div></a>");
         html.append("<a class='link' href='/v1/proposals/release-flow'><strong>/v1/proposals/release-flow</strong><div class='muted'>Adaptive verified-release stages and governor state.</div></a>");
@@ -183,10 +181,14 @@ public class DashboardHandler {
 
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/summary", "Explorer summary contract", "Explorer", "explorer.v1", "/ops/v1/explorer/summary");
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/release-flow", "Explorer adaptive release flow", "Explorer", "explorer.v1", "/ops/v1/explorer/release-flow");
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail", "Explorer", "explorer.v1", "/ops/v1/explorer/proposal/{proposalId}");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail", "Explorer", "explorer.v1", "/ops/v1/explorer/proposals/{proposalId}");
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail", "Explorer", "explorer.v1", "/ops/v1/explorer/wallets/{walletAddress}");
-        addLocalUiIndexEntry(endpoints, "GET", "/explorer", "Explorer UI", "Explorer");
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/explore?path=/", "Node tree browse API", "Explorer", "/ops/v1/explorer/*");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/nav", "Cluster-aware content explorer navigation", "Explorer", "explorer.content.v1", "/ops/v1/explorer/content/nav");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/tree", "Cluster-scoped content tree browse", "Explorer", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/tree");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/node", "Cluster-scoped node detail", "Explorer", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/node");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/provenance", "Cluster-scoped provenance and authority facts", "Explorer", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/provenance");
+        addLocalUiIndexEntry(endpoints, "GET", "/explorer", "Temporary local explorer UI bridge", "Explorer");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/explore?path=/", "Legacy local node tree browse API", "Explorer", "/ops/v1/explorer/content/*");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/recent", "Recent segments", "Explorer", "/v1/ops/snapshots/storage");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/tars", "TAR file listing", "Explorer", "/v1/ops/snapshots/storage");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/blob/{blobId}", "Blob stream by blob id", "Explorer", null);
@@ -241,7 +243,7 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "GET", "/v1/binary/check-intent/{token}", "Check binary intent", "Binary", null);
         addInternalIndexEntry(endpoints, "POST", "/v1/binary/complete-upload", "Complete binary upload", "Binary", null);
 
-        addLocalUiIndexEntry(endpoints, "GET", "/api-browser", "Interactive API browser", "UI");
+        addLocalUiIndexEntry(endpoints, "GET", "/api-browser", "Validator-local diagnostic API browser", "UI");
         addLocalUiIndexEntry(endpoints, "GET", "/dashboard", "Control-plane landing page", "UI");
         addLocalUiIndexEntry(endpoints, "GET", "/", "Control-plane landing page", "UI");
 
@@ -250,6 +252,7 @@ public class DashboardHandler {
         payload.put("surfaceRole", "validator-native");
         payload.put("surfaceAuthority", "runtime-and-source");
         payload.put("preferredBrowserContract", "/ops/v1/* via edge/gateway");
+        payload.put("browserContractNotes", "Local HTML routes remain diagnostic-only; upstream UX should consume governed /ops/v1/* surfaces.");
         payload.put("upstreamAuthority", "/ops/v1/*");
         payload.put("surfaceClasses", Arrays.asList("source", "local-ui", "local-diagnostic", "internal"));
         payload.put("intendedConsumers", Arrays.asList("operators", "edge-adapters", "automation", "cli"));
@@ -269,16 +272,7 @@ public class DashboardHandler {
                                      String category,
                                      String contractVersion,
                                      String replacement) {
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("method", method);
-        item.put("path", path);
-        item.put("description", description);
-        item.put("category", category);
-        item.put("surfaceClass", "source");
-        item.put("contractVersion", contractVersion);
-        item.put("upstreamAllowed", true);
-        item.put("replacement", replacement);
-        endpoints.add(item);
+        addIndexEntry(endpoints, method, path, description, category, "source", true, contractVersion, replacement);
     }
 
     private void addLocalUiIndexEntry(List<Map<String, Object>> endpoints,
@@ -286,15 +280,7 @@ public class DashboardHandler {
                                       String path,
                                       String description,
                                       String category) {
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("method", method);
-        item.put("path", path);
-        item.put("description", description);
-        item.put("category", category);
-        item.put("surfaceClass", "local-ui");
-        item.put("upstreamAllowed", false);
-        item.put("replacement", "/ops/v1/* via edge/gateway");
-        endpoints.add(item);
+        addIndexEntry(endpoints, method, path, description, category, "local-ui", false, null, "/ops/v1/* via edge/gateway");
     }
 
     private void addLocalDiagnosticIndexEntry(List<Map<String, Object>> endpoints,
@@ -303,15 +289,7 @@ public class DashboardHandler {
                                               String description,
                                               String category,
                                               String replacement) {
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("method", method);
-        item.put("path", path);
-        item.put("description", description);
-        item.put("category", category);
-        item.put("surfaceClass", "local-diagnostic");
-        item.put("upstreamAllowed", false);
-        item.put("replacement", replacement);
-        endpoints.add(item);
+        addIndexEntry(endpoints, method, path, description, category, "local-diagnostic", false, null, replacement);
     }
 
     private void addInternalIndexEntry(List<Map<String, Object>> endpoints,
@@ -320,13 +298,28 @@ public class DashboardHandler {
                                        String description,
                                        String category,
                                        String replacement) {
+        addIndexEntry(endpoints, method, path, description, category, "internal", false, null, replacement);
+    }
+
+    private void addIndexEntry(List<Map<String, Object>> endpoints,
+                               String method,
+                               String path,
+                               String description,
+                               String category,
+                               String surfaceClass,
+                               boolean upstreamAllowed,
+                               String contractVersion,
+                               String replacement) {
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("method", method);
         item.put("path", path);
         item.put("description", description);
         item.put("category", category);
-        item.put("surfaceClass", "internal");
-        item.put("upstreamAllowed", false);
+        item.put("surfaceClass", surfaceClass);
+        item.put("upstreamAllowed", upstreamAllowed);
+        if (contractVersion != null) {
+            item.put("contractVersion", contractVersion);
+        }
         item.put("replacement", replacement);
         endpoints.add(item);
     }
@@ -414,56 +407,13 @@ public class DashboardHandler {
         return -1;
     }
 
-    private String shortName(String url) {
-        if (url == null || url.isEmpty()) {
-            return "Unknown";
-        }
-        try {
-            URL parsed = new URL(url);
-            return parsed.getHost();
-        } catch (Exception e) {
-            return url;
-        }
-    }
-    
     /**
      * Handle blockchain explorer UI - Rich Etherscan-like interface.
      * Enhanced with IPFS links, property type indicators, and better visualization.
      * Now uses external template for consistent Blockchain AEM styling.
      */
     public void handleExplorerUI(HttpServletResponse response) throws IOException {
-        response.setStatus(HttpServletResponse.SC_OK);
-        response.setContentType("text/html; charset=UTF-8");
-        
-        // Load template
-        String template = loadTemplate("/explorer-template.html");
-        
-        // Get blockchain mode
-        BlockchainConfig config = BlockchainConfig.getInstance();
-        String modeClass, modeLabel;
-        switch (config.getMode()) {
-            case MOCK:
-                modeClass = "mode-mock";
-                modeLabel = "MOCK MODE";
-                break;
-            case SEPOLIA:
-                modeClass = "mode-sepolia";
-                modeLabel = "SEPOLIA";
-                break;
-            case MAINNET:
-                modeClass = "mode-mainnet";
-                modeLabel = "MAINNET";
-                break;
-            default:
-                modeClass = "mode-mock";
-                modeLabel = "UNKNOWN";
-        }
-        
-        String html = template
-            .replace("{{MODE_CLASS}}", modeClass)
-            .replace("{{MODE_LABEL}}", modeLabel);
-        
-        response.getWriter().write(html);
+        writeModeAwareTemplate(response, "/explorer-template.html");
     }
     
     /**
@@ -471,13 +421,23 @@ public class DashboardHandler {
      * Now uses external template for consistent Blockchain AEM styling.
      */
     public void handleApiBrowserUI(HttpServletResponse response) throws IOException {
+        writeModeAwareTemplate(response, "/api-browser-template.html");
+    }
+
+    private void writeModeAwareTemplate(HttpServletResponse response, String resourcePath) throws IOException {
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType("text/html; charset=UTF-8");
-        
-        // Load template
-        String template = loadTemplate("/api-browser-template.html");
-        
-        // Get blockchain mode
+
+        String template = loadTemplate(resourcePath);
+        String[] modeTokens = resolveModeTemplateTokens();
+        String html = template
+            .replace("{{MODE_CLASS}}", modeTokens[0])
+            .replace("{{MODE_LABEL}}", modeTokens[1]);
+
+        response.getWriter().write(html);
+    }
+
+    private String[] resolveModeTemplateTokens() {
         BlockchainConfig config = BlockchainConfig.getInstance();
         String modeClass, modeLabel;
         switch (config.getMode()) {
@@ -497,12 +457,7 @@ public class DashboardHandler {
                 modeClass = "mode-mock";
                 modeLabel = "UNKNOWN";
         }
-        
-        String html = template
-            .replace("{{MODE_CLASS}}", modeClass)
-            .replace("{{MODE_LABEL}}", modeLabel);
-        
-        response.getWriter().write(html);
+        return new String[] { modeClass, modeLabel };
     }
     
     /**

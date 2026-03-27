@@ -69,6 +69,7 @@ public class DashboardHandlerTest {
         assertTrue(json.contains("\"surfaceRole\":\"validator-native\""));
         assertTrue(json.contains("\"surfaceClasses\":[\"source\",\"local-ui\",\"local-diagnostic\",\"internal\"]"));
         assertTrue(json.contains("\"preferredBrowserContract\":\"/ops/v1/* via edge/gateway\""));
+        assertTrue(json.contains("\"browserContractNotes\":\"Local HTML routes remain diagnostic-only; upstream UX should consume governed /ops/v1/* surfaces.\""));
         assertTrue(json.contains("\"count\":"));
         assertTrue(json.contains("\"path\":\"/v1/index\""));
         assertTrue(json.contains("\"path\":\"/v1/consensus/leader\""));
@@ -88,6 +89,11 @@ public class DashboardHandlerTest {
         assertFalse(json.contains("\"path\":\"/v1/explorer/epochs\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/summary\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/release-flow\""));
+        assertTrue(json.contains("\"path\":\"/v1/explorer/content/nav\""));
+        assertTrue(json.contains("\"path\":\"/v1/explorer/content/clusters/{clusterId}/tree\""));
+        assertTrue(json.contains("\"path\":\"/v1/explorer/content/clusters/{clusterId}/node\""));
+        assertTrue(json.contains("\"path\":\"/v1/explorer/content/clusters/{clusterId}/provenance\""));
+        assertTrue(json.contains("\"replacement\":\"/ops/v1/explorer/proposals/{proposalId}\""));
         assertTrue(json.contains("\"path\":\"/v1/consensus/status\""));
         assertTrue(json.contains("\"path\":\"/v1/aeron/cluster-state\""));
         assertTrue(json.contains("\"path\":\"/v1/events/stats\""));
@@ -118,7 +124,8 @@ public class DashboardHandlerTest {
         verify(response).setContentType("text/html; charset=UTF-8");
         String html = body.toString();
         assertTrue(html.contains("Oak Control Plane Home"));
-        assertTrue(html.contains("/api-browser"));
+        assertTrue(html.contains("Local API Browser"));
+        assertTrue(html.contains("/ops/v1/*"));
         assertTrue(html.contains("/v1/proposals/queue/stats"));
         assertTrue(html.contains("/v1/proposals/release-flow"));
         assertTrue(html.contains("API-first runtime"));
@@ -292,6 +299,8 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("API Browser | Blockchain AEM Validator"));
         assertTrue(html.contains("mode-mainnet"));
         assertTrue(html.contains("MAINNET"));
+        assertTrue(html.contains("Filter endpoints by path, description, or category"));
+        assertTrue(html.contains("Single-manifest endpoint catalog powered by"));
         assertFalse(html.contains("/api/mock/advance-epoch"));
         assertFalse(html.contains("Mock Mode"));
     }
