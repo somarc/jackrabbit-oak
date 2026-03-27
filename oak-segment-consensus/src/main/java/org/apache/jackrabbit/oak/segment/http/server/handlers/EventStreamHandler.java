@@ -192,6 +192,7 @@ public class EventStreamHandler {
         Set<String> types = parseSet(request.getParameter("types"));
         Set<String> wallets = parseSet(request.getParameter("wallets"));
         Set<String> organizations = parseSet(request.getParameter("organizations"));
+        String pathPrefix = request.getParameter("path");
 
         List<ContentEvent> events = broadcaster.getRecentEvents(limit * 2); // Get extra, then filter
 
@@ -201,6 +202,7 @@ public class EventStreamHandler {
             .filter(e -> types.isEmpty() || types.contains(e.getType()))
             .filter(e -> wallets.isEmpty() || wallets.contains(e.getWallet()))
             .filter(e -> organizations.isEmpty() || organizations.contains(e.getOrganization()))
+            .filter(e -> pathPrefix == null || pathPrefix.isEmpty() || (e.getPath() != null && e.getPath().startsWith(pathPrefix)))
             .limit(limit)
             .collect(Collectors.toList());
 

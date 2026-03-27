@@ -114,6 +114,21 @@ public final class ShardingRuntimeConfig {
     }
 
     @NotNull
+    public List<String> expandLocalPrefixes() {
+        if (!enabled || localRanges.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<String> prefixes = new ArrayList<>();
+        for (PrefixRange range : localRanges) {
+            for (int value = range.start; value <= range.end; value++) {
+                prefixes.add(String.format("%02x", value));
+            }
+        }
+        return Collections.unmodifiableList(prefixes);
+    }
+
+    @NotNull
     public String describeRemoteRoutes() {
         if (remoteRoutes.isEmpty()) {
             return "none";

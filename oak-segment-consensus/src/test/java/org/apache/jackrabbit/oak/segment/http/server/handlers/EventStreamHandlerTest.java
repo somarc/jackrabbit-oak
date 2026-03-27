@@ -30,6 +30,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Paths;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -81,6 +82,37 @@ public class EventStreamHandlerTest {
             assertTrue(body.toString().contains("\"hasMore\":true"));
             assertTrue(body.toString().contains("\"lastId\":\"evt-2\""));
             assertTrue(body.toString().contains("\"ipfsCid\":\"QmCid\""));
+        } finally {
+            broadcaster.shutdown();
+        }
+    }
+
+    @Test
+    public void testHandleRecentEventsAppliesPathPrefixFilter() throws Exception {
+        EventBroadcaster broadcaster = new EventBroadcaster();
+        try {
+            broadcaster.broadcast(ContentEvent.builder()
+                .id("evt-local")
+                .timestamp(100L)
+                .path("/oak-chain/00/aa")
+                .wallet("0xwallet")
+                .build());
+            broadcaster.broadcast(ContentEvent.builder()
+                .id("evt-other")
+                .timestamp(200L)
+                .path("/content/doc-2")
+                .wallet("0xwallet")
+                .build());
+
+            HttpServletRequest request = mock(HttpServletRequest.class);
+            when(request.getParameter("path")).thenReturn("/oak-chain");
+            StringWriter body = new StringWriter();
+            HttpServletResponse response = responseWithBody(body);
+
+            new EventStreamHandler(newContext(), broadcaster).handleRecentEvents(request, response);
+
+            assertTrue(body.toString().contains("\"id\":\"evt-local\""));
+            assertFalse(body.toString().contains("\"id\":\"evt-other\""));
         } finally {
             broadcaster.shutdown();
         }

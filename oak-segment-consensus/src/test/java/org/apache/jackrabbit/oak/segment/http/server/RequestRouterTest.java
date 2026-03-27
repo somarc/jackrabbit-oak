@@ -40,6 +40,7 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -791,6 +792,62 @@ public class RequestRouterTest {
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"wallet\":\"" + wallet + "\""));
                 assertTrue(body.toString().contains("\"contentCount\":2"));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testExplorerContentNavRouteReturnsClusterAwarePayload() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-explorer-content-nav");
+            try {
+                ServerContext context = newContext(new MemoryNodeStore(), storeDirectory);
+                context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/v1/explorer/content/nav");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"contractVersion\":\"explorer.content.v1\""));
+                assertTrue(body.toString().contains("\"mountedNeighbors\""));
+            } finally {
+                deleteRecursively(storeDirectory);
+            }
+        });
+    }
+
+    @Test
+    public void testExplorerContentTreeRouteFiltersToRequestedCluster() throws Exception {
+        withRoutingProperties(true, () -> {
+            Path storeDirectory = Files.createTempDirectory("router-explorer-content-tree");
+            try {
+                MemoryNodeStore nodeStore = new MemoryNodeStore();
+                NodeBuilder root = nodeStore.getRoot().builder();
+                root.child("oak-chain").child("12").child("aa").child("local-doc").setProperty("title", "local");
+                root.child("oak-chain").child("90").child("bb").child("remote-doc").setProperty("title", "remote");
+                nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+
+                ServerContext context = newContext(nodeStore, storeDirectory);
+                context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
+
+                RequestRouter router = new RequestRouter(context);
+                Request baseRequest = mock(Request.class);
+                HttpServletRequest request = request("GET", "/v1/explorer/content/clusters/local-localhost-8090/tree");
+                when(request.getParameter("path")).thenReturn("/oak-chain");
+                HttpServletResponse response = responseWithBody();
+
+                router.route(baseRequest, request, response);
+
+                verify(baseRequest).setHandled(true);
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString().contains("\"name\":\"12\""));
+                assertFalse(body.toString().contains("\"name\":\"90\""));
             } finally {
                 deleteRecursively(storeDirectory);
             }

@@ -54,7 +54,7 @@ This module is part of the **Blockchain AEM** project and is maintained as a for
 - **Epoch Tracking**: Ethereum Beacon Chain epoch integration (via `EpochListener`)
 
 ### HTTP Server & APIs
-- **Dashboard UI**: Web-based local control-plane page at `/` (cluster state, metrics, explorer)
+- **Dashboard UI**: Web-based local control-plane page at `/` for validator-local diagnostics and operator entry
 - **REST APIs**: Validator-native HTTP endpoints for cluster state, consensus status, health, and operator automation
 - **OSGi Config Surface**: Read-only introspection endpoints at `/v1/config/osgi*`
 - **Segment Serving**: HTTP endpoints for segment transfer (`/segments/{id}`, `/journal.log`)
@@ -65,7 +65,7 @@ This module is part of the **Blockchain AEM** project and is maintained as a for
 - `/v1/index` is the live route taxonomy and identifies which validator routes are governed source contracts versus local-only or internal surfaces.
 - Governed source routes now include `/v1/consensus/*`, `/v1/ops/snapshots/{health,runtime,storage,cluster,replication,queue}`, `/v1/proposals/release-flow`, `/v1/explorer/*`, `/v1/config/osgi*`, `/v1/events/{recent,stats}`, `/v1/blockchain/config`, `/v1/gc/status`, `/v1/gc/estimate`, `/v1/compaction/proposals`, and `/v1/fragmentation/*`.
 - Browser-facing product UX should sit above the validator behind an edge/gateway contract rather than coupling directly to raw validator routes.
-- Local UI routes such as `/`, `/dashboard`, and `/api-browser` are optional diagnostic/operator surfaces, not the long-term upstream browser contract.
+- Local UI routes such as `/`, `/dashboard`, `/explorer`, and `/api-browser` are optional diagnostic/operator surfaces, not the long-term upstream browser contract.
 
 **Security Note**: Validators are pure Oak (no Sling), so they don't have Sling authentication.
 
@@ -234,9 +234,19 @@ For upstream browser UX, prefer a gateway/BFF contract above the validator inste
 
 ### Dashboard & UI
 - `GET /` - Local control-plane landing page
-- `GET /explorer` - Content explorer UI
-- `GET /api-browser` - Interactive API browser
+- `GET /explorer` - Temporary validator-local explorer UI bridge
+- `GET /api-browser` - Validator-local diagnostic API browser
 - `GET /v1/index` - Live validator-native API discovery index
+
+### Explorer Source APIs
+- `GET /v1/explorer/summary` - Explorer summary contract
+- `GET /v1/explorer/proposals/{proposalId}` - Explorer proposal detail
+- `GET /v1/explorer/wallets/{walletAddress}` - Explorer wallet detail
+- `GET /v1/explorer/release-flow` - Explorer release-flow detail
+- `GET /v1/explorer/content/nav` - Cluster-aware content explorer navigation
+- `GET /v1/explorer/content/clusters/{clusterId}/tree?path=/oak-chain` - Cluster-scoped content tree browse
+- `GET /v1/explorer/content/clusters/{clusterId}/node?path=/oak-chain` - Cluster-scoped node detail
+- `GET /v1/explorer/content/clusters/{clusterId}/provenance?path=/oak-chain` - Cluster authority and provenance facts
 
 ### Consensus APIs
 - `GET /v1/consensus/leader` - Canonical leader resolution payload

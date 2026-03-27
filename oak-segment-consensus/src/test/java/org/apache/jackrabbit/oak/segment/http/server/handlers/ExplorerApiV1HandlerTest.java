@@ -25,11 +25,13 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
+import org.apache.jackrabbit.oak.segment.http.server.model.WriteMetadata;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -43,6 +45,7 @@ import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -51,6 +54,8 @@ import static org.mockito.Mockito.when;
 public class ExplorerApiV1HandlerTest {
 
     private static final String WALLET = "0x1234567890abcdef1234567890abcdef12345678";
+    private static final String LOCAL_CLUSTER_ID = "local-localhost-8090";
+    private static final String REMOTE_CLUSTER_ID = "remote-validator-2-8090";
 
     @Test
     public void testHandleSummaryIncludesClusterQueueAndIdentityDetails() throws Exception {
@@ -194,6 +199,7 @@ public class ExplorerApiV1HandlerTest {
         assertTrue(json.contains("\"contentType\":\"fragment\""));
         assertTrue(json.contains("\"totalDebt\":\"4.25\""));
         assertTrue(json.contains("\"pendingDebt\":\"2.75\""));
+        assertTrue(json.contains("\"authority\":{\"wallet\":\"" + WALLET + "\""));
     }
 
     @Test
@@ -241,6 +247,72 @@ public class ExplorerApiV1HandlerTest {
         assertTrue(json.contains("\"releaseFlow\":{\"releaseMode\":\"adaptive-active\",\"releaseStages\":{}}"));
     }
 
+    @Test
+    public void testHandleContentNavReturnsClusterAwareSections() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext(new MemoryNodeStore());
+        context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
+        handler.handleContentNav(response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"contractVersion\":\"explorer.content.v1\""));
+        assertTrue(json.contains("\"clusterId\":\"" + LOCAL_CLUSTER_ID + "\""));
+        assertTrue(json.contains("\"clusterId\":\"" + REMOTE_CLUSTER_ID + "\""));
+        assertTrue(json.contains("\"browseRoot\":\"/oak-chain\""));
+        assertTrue(json.contains("\"strategy\":\"event-invalidated\""));
+        assertTrue(json.contains("\"ttlMs\":86400000"));
+    }
+
+    @Test
+    public void testHandleContentTreeFiltersPrefixesByClusterScope() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedTreeNode(nodeStore, "/oak-chain/12/aa/local-doc");
+        seedTreeNode(nodeStore, "/oak-chain/90/bb/remote-doc");
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext(nodeStore);
+        context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
+        handler.handleContentTree(response, LOCAL_CLUSTER_ID, "/oak-chain");
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"clusterId\":\"" + LOCAL_CLUSTER_ID + "\""));
+        assertTrue(json.contains("\"name\":\"12\""));
+        assertFalse(json.contains("\"name\":\"90\""));
+    }
+
+    @Test
+    public void testHandleContentProvenanceIncludesWriteAndWalletAuthority() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedWallet(nodeStore, WALLET);
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        ServerContext context = newContext(nodeStore);
+        context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
+        context.recentWriteMetadata.put(
+            WalletPathUtil.getShardRoot(WALLET),
+            new WriteMetadata("record-1", "consensus", "http://validator-1:8090", 444L, "wallet write")
+        );
+
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
+        handler.handleContentProvenance(response, LOCAL_CLUSTER_ID, WalletPathUtil.getShardRoot(WALLET));
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json.contains("\"matchPath\":\"" + WalletPathUtil.getShardRoot(WALLET) + "\""));
+        assertTrue(json.contains("\"recordId\":\"record-1\""));
+        assertTrue(json.contains("\"wallet\":\"" + WALLET + "\""));
+        assertTrue(json.contains("\"ownership\":\"local\""));
+    }
+
     private static ServerContext newContext(MemoryNodeStore nodeStore) {
         return new ServerContext(
             mock(FileStore.class),
@@ -273,6 +345,20 @@ public class ExplorerApiV1HandlerTest {
         doc.setProperty("contentType", "fragment");
         doc.setProperty("timestamp", 300L);
         doc.setProperty("message", "hello");
+        nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+    }
+
+    private static void seedTreeNode(MemoryNodeStore nodeStore, String path) throws Exception {
+        NodeBuilder root = nodeStore.getRoot().builder();
+        NodeBuilder current = root;
+        for (String segment : path.split("/")) {
+            if (segment == null || segment.isEmpty()) {
+                continue;
+            }
+            current = current.child(segment);
+        }
+        current.setProperty("jcr:primaryType", "nt:unstructured");
+        current.setProperty("message", "seed");
         nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
     }
 }

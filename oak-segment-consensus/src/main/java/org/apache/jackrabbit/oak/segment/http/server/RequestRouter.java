@@ -427,6 +427,37 @@ public class RequestRouter implements AutoCloseable {
                 return;
             }
 
+            if ("/v1/explorer/content/nav".equals(path) && "GET".equals(method)) {
+                explorerApiV1Handler.handleContentNav(response);
+                baseRequest.setHandled(true);
+                return;
+            }
+
+            if (path.startsWith("/v1/explorer/content/clusters/") && "GET".equals(method)) {
+                String clusterPath = path.substring("/v1/explorer/content/clusters/".length());
+                int separator = clusterPath.indexOf('/');
+                if (separator > 0 && separator < clusterPath.length() - 1) {
+                    String clusterId = clusterPath.substring(0, separator);
+                    String action = clusterPath.substring(separator + 1);
+                    String requestedPath = request.getParameter("path");
+                    if ("tree".equals(action)) {
+                        explorerApiV1Handler.handleContentTree(response, clusterId, requestedPath);
+                        baseRequest.setHandled(true);
+                        return;
+                    }
+                    if ("node".equals(action)) {
+                        explorerApiV1Handler.handleContentNode(response, clusterId, requestedPath);
+                        baseRequest.setHandled(true);
+                        return;
+                    }
+                    if ("provenance".equals(action)) {
+                        explorerApiV1Handler.handleContentProvenance(response, clusterId, requestedPath);
+                        baseRequest.setHandled(true);
+                        return;
+                    }
+                }
+            }
+
             if ("/v1/propose-write".equals(path) && "POST".equals(method)) {
                 // Phase 1: Optional shard routing logging (for demonstration)
                 // Phase 2: Will actually forward requests to correct shard
