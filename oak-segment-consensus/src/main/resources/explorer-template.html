@@ -276,6 +276,8 @@
         (function () {
             var NAV_ENDPOINT = "/v1/explorer/content/nav";
             var SUMMARY_ENDPOINT = "/v1/explorer/summary";
+            // Keep the default landing node centralized because wallet content shape is still evolving.
+            var DEFAULT_GENESIS_PATH = "/oak-chain/00/00/00/0x0000000000000000000000000000000000000000/content/genesis";
             var state = {
                 nav: null,
                 summary: null,
@@ -907,7 +909,7 @@
                 window.location.hash = encodeURIComponent(path);
             }
 
-            function loadPath(path, force) {
+            function loadPath(path, force, allowReject) {
                 var cluster = currentCluster();
                 if (!cluster) {
                     return Promise.resolve();
@@ -932,6 +934,9 @@
                 }, Promise.resolve()).then(function () {
                     return ensureDetailsLoaded(cluster.clusterId, normalized, force);
                 }).catch(function (error) {
+                    if (allowReject) {
+                        throw error;
+                    }
                     state.error = error.message || "Failed explorer request";
                 }).finally(function () {
                     render();
@@ -940,11 +945,60 @@
 
             function initialPathForCluster(cluster) {
                 var hash = window.location.hash ? decodeURIComponent(window.location.hash.slice(1)) : "";
+                if (hash) {
+                    var normalized = normalizePath(hash, cluster.browseRoot);
+                    if (normalized === "/" || normalized.indexOf(cluster.browseRoot) === 0) {
+                        return normalized;
+                    }
+                }
+                return DEFAULT_GENESIS_PATH;
+            }
+
+            function loadPreferredStartPath(cluster, force) {
+                var preferred = initialPathForCluster(cluster);
+                if (preferred === cluster.browseRoot) {
+                    return loadPath(preferred, force, false);
+                }
+                return loadPath(preferred, force, true).catch(function () {
+                    return loadPath(cluster.browseRoot, force, false);
+                });
+            }
+
+            function loadExplicitPathFromHash(cluster, force) {
+                var hash = window.location.hash ? decodeURIComponent(window.location.hash.slice(1)) : "";
+                if (!hash) {
+                    return loadPreferredStartPath(cluster, force);
+                }
                 var normalized = normalizePath(hash, cluster.browseRoot);
                 if (normalized === "/" || normalized.indexOf(cluster.browseRoot) === 0) {
-                    return normalized;
+                    return loadPath(normalized, force, false);
                 }
-                return cluster.browseRoot;
+                return loadPreferredStartPath(cluster, force);
+            }
+
+            function isCurrentPathExplicit() {
+                return !!(window.location.hash && window.location.hash.length > 1);
+            }
+
+            function prefersGenesisLanding(cluster) {
+                return cluster && !isCurrentPathExplicit();
+            }
+
+            function loadClusterDefault(cluster, force) {
+                if (!cluster) {
+                    render();
+                    return;
+                }
+                if (prefersGenesisLanding(cluster)) {
+                    loadPreferredStartPath(cluster, force);
+                    return;
+                }
+                var normalized = normalizePath(state.currentPath, cluster.browseRoot);
+                if (normalized === "/" || normalized.indexOf(cluster.browseRoot) === 0) {
+                    loadPath(normalized, force, false);
+                    return;
+                }
+                loadPath(cluster.browseRoot, force, false);
             }
 
             function loadNavigation(force) {
@@ -974,7 +1028,7 @@
                         render();
                         return;
                     }
-                    return loadPath(initialPathForCluster(cluster), force);
+                    return loadExplicitPathFromHash(cluster, force);
                 }).catch(function (error) {
                     state.error = error.message || "Failed to load explorer navigation";
                     render();
@@ -1080,7 +1134,7 @@
                     state.currentTab = "properties";
                     var cluster = currentCluster();
                     if (cluster) {
-                        loadPath(cluster.browseRoot, false);
+                        loadClusterDefault(cluster, false);
                     } else {
                         render();
                     }

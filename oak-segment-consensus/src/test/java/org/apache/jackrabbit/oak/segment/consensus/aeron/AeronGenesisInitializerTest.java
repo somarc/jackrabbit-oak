@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -52,10 +53,16 @@ public class AeronGenesisInitializerTest {
         NodeState imageContent = genesis.getChildNode("do-it-live.jpeg").getChildNode("jcr:content");
         NodeState ipfs = genesis.getChildNode("ipfs");
         NodeState boldBets = genesis.getChildNode("bold-bets");
+        NodeState apiDiscovery = genesis.getChildNode("api").getChildNode("discovery");
+        NodeState troubleshooting = genesis.getChildNode("troubleshooting").getChildNode("common-issues");
 
         assertTrue(genesis.exists());
         assertEquals(Long.valueOf(123456789L), genesis.getProperty("genesisTimestamp").getValue(Type.LONG));
         assertEquals("http://leader:8090", genesis.getProperty("genesisValidator").getValue(Type.STRING));
+        assertEquals(CanonicalGenesisContent.getGenesisPath(), genesis.getProperty("canonicalGenesisPath").getValue(Type.STRING));
+        assertEquals("Live validator surface manifest", apiDiscovery.getProperty("GET_v1_index").getValue(Type.STRING));
+        assertEquals("NOT_LEADER: Resolve the leader via /v1/consensus/leader and retry against that validator.",
+            troubleshooting.getProperty("issue-not-leader").getValue(Type.STRING));
         assertNotNull(imageContent.getProperty("jcr:data").getValue(Type.BINARY));
         assertEquals(Boolean.FALSE, ipfs.getProperty("enabled").getValue(Type.BOOLEAN));
         assertEquals("Developers will choose systems with stronger guarantees over familiar platforms.",
@@ -109,12 +116,6 @@ public class AeronGenesisInitializerTest {
     }
 
     private static NodeState getGenesisNode(NodeState root) {
-        return root.getChildNode("oak-chain")
-            .getChildNode("00")
-            .getChildNode("00")
-            .getChildNode("00")
-            .getChildNode(AeronGenesisInitializer.GENESIS_ADDRESS)
-            .getChildNode("content")
-            .getChildNode("genesis");
+        return CanonicalGenesisContent.getGenesisNode(root);
     }
 }

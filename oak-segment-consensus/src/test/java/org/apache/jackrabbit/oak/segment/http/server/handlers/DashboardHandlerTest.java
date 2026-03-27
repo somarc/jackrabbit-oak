@@ -281,6 +281,7 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("SEPOLIA"));
         assertTrue(html.contains("CRX/OC Explorer"));
         assertTrue(html.contains("/v1/explorer/content/nav"));
+        assertTrue(html.contains("/oak-chain/00/00/00/0x0000000000000000000000000000000000000000/content/genesis"));
     }
 
     @Test

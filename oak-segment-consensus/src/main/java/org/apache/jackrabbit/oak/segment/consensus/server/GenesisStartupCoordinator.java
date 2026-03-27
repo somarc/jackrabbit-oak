@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -58,14 +59,7 @@ final class GenesisStartupCoordinator {
 
     private static boolean genesisExists(NodeStore nodeStore) {
         NodeState root = nodeStore.getRoot();
-        return root.getChildNode("oak-chain")
-            .getChildNode("content")
-            .getChildNode("00")
-            .getChildNode("00")
-            .getChildNode("00")
-            .getChildNode("0x0000000000000000000000000000000000000000")
-            .getChildNode("genesis")
-            .exists();
+        return CanonicalGenesisContent.getGenesisNode(root).exists();
     }
 
     private static void startStandbyServer(ValidatorBootstrap bootstrap, int standbyPort) {

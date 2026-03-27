@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 import org.apache.jackrabbit.oak.api.Blob;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -34,8 +35,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class GenesisInitializerTest {
-
-    private static final String GENESIS_ADDRESS = "0x0000000000000000000000000000000000000000";
     private static final String GENESIS_BLOB_ID = "QmYwAPJzv5CZsnAzt8auVZRnGi2C4gYQqbiZ9erjRzCQXD#1024";
 
     @Test
@@ -48,18 +47,24 @@ public class GenesisInitializerTest {
 
         NodeState genesis = getGenesisNode(nodeStore.getRoot());
         NodeState protocol = genesis.getChildNode("protocol");
-        NodeState network = genesis.getChildNode("network");
-        NodeState joinSteps = genesis.getChildNode("join").getChildNode("steps");
+        NodeState contract = genesis.getChildNode("content-contract");
+        NodeState gettingStarted = genesis.getChildNode("getting-started");
+        NodeState apiConsensus = genesis.getChildNode("api").getChildNode("consensus");
         NodeState imageContent = genesis.getChildNode("do-it-live.jpeg").getChildNode("jcr:content");
         NodeState ipfs = genesis.getChildNode("ipfs");
 
         assertTrue(genesis.exists());
-        assertEquals("DO IT LIVE!", protocol.getProperty("message").getValue(Type.STRING));
-        assertEquals("oak-blockchain-aem-poc", protocol.getProperty("chainId").getValue(Type.STRING));
-        assertEquals("http://localhost:8090", network.getProperty("genesisValidator").getValue(Type.STRING));
-        assertEquals("localhost", network.getProperty("genesisHost").getValue(Type.STRING));
-        assertEquals("BOOTSTRAP_PRIMARY_HOST=localhost", joinSteps.getChildNode("step1").getProperty("env").getValue(Type.STRING));
-        assertEquals("CONSENSUS_MODE=aeron", joinSteps.getChildNode("step4").getProperty("env").getValue(Type.STRING));
+        assertEquals("DO IT LIVE!", genesis.getProperty("message").getValue(Type.STRING));
+        assertEquals("oak-blockchain-aem", genesis.getProperty("chainId").getValue(Type.STRING));
+        assertEquals(CanonicalGenesisContent.getGenesisPath(), genesis.getProperty("canonicalGenesisPath").getValue(Type.STRING));
+        assertEquals("http://localhost:8090", protocol.getProperty("genesisValidator").getValue(Type.STRING));
+        assertEquals("localhost", protocol.getProperty("genesisHost").getValue(Type.STRING));
+        assertEquals("Below /content the shape is intentionally open and may evolve.",
+            contract.getProperty("contentShapeStatus").getValue(Type.STRING));
+        assertEquals("GET /v1/explorer/content/nav and pick a clusterId.",
+            gettingStarted.getChildNode("3-browse-genesis").getProperty("step-1").getValue(Type.STRING));
+        assertEquals("Consensus status and cluster health",
+            apiConsensus.getProperty("GET_v1_consensus_status").getValue(Type.STRING));
         assertTrue(imageContent.getProperty("jcr:data").getValue(Type.BINARY) instanceof Blob);
         assertEquals(false, ipfs.getProperty("enabled").getValue(Type.BOOLEAN));
     }
@@ -83,12 +88,12 @@ public class GenesisInitializerTest {
         initializer.initializeGenesisContent();
 
         NodeState genesis = getGenesisNode(nodeStore.getRoot());
-        NodeState network = genesis.getChildNode("network");
+        NodeState protocol = genesis.getChildNode("protocol");
         NodeState imageContent = genesis.getChildNode("do-it-live.jpeg").getChildNode("jcr:content");
         NodeState ipfs = genesis.getChildNode("ipfs");
 
-        assertEquals("https://validator.example:8090", network.getProperty("genesisValidator").getValue(Type.STRING));
-        assertEquals("validator.example", network.getProperty("genesisHost").getValue(Type.STRING));
+        assertEquals("https://validator.example:8090", protocol.getProperty("genesisValidator").getValue(Type.STRING));
+        assertEquals("validator.example", protocol.getProperty("genesisHost").getValue(Type.STRING));
         assertEquals(GENESIS_BLOB_ID, imageContent.getProperty("jcr:blobId").getValue(Type.STRING));
         assertEquals("QmYwAPJzv5CZsnAzt8auVZRnGi2C4gYQqbiZ9erjRzCQXD", ipfs.getProperty("genesisImageCid").getValue(Type.STRING));
         assertTrue(ipfs.getProperty("enabled").getValue(Type.BOOLEAN));
@@ -96,12 +101,6 @@ public class GenesisInitializerTest {
     }
 
     private static NodeState getGenesisNode(NodeState root) {
-        return root.getChildNode("oak-chain")
-            .getChildNode("content")
-            .getChildNode("00")
-            .getChildNode("00")
-            .getChildNode("00")
-            .getChildNode(GENESIS_ADDRESS)
-            .getChildNode("genesis");
+        return CanonicalGenesisContent.getGenesisNode(root);
     }
 }

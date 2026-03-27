@@ -63,11 +63,11 @@ public class GenesisStartupCoordinatorTest {
 
         when(nodeStore.getRoot()).thenReturn(root);
         when(root.getChildNode("oak-chain")
-            .getChildNode("content")
             .getChildNode("00")
             .getChildNode("00")
             .getChildNode("00")
             .getChildNode("0x0000000000000000000000000000000000000000")
+            .getChildNode("content")
             .getChildNode("genesis")
             .exists()).thenReturn(true);
         when(componentFactory.createGenesisInitializer(nodeStore, fileStore, blobStore, "http://validator-0:8090"))
@@ -95,11 +95,11 @@ public class GenesisStartupCoordinatorTest {
 
         when(nodeStore.getRoot()).thenReturn(root);
         when(root.getChildNode("oak-chain")
-            .getChildNode("content")
             .getChildNode("00")
             .getChildNode("00")
             .getChildNode("00")
             .getChildNode("0x0000000000000000000000000000000000000000")
+            .getChildNode("content")
             .getChildNode("genesis")
             .exists()).thenReturn(false);
 
