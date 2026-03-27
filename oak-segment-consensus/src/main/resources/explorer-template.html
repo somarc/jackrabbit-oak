@@ -20,713 +20,1081 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Explorer | Blockchain AEM Validator</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <style>
-        :root {
-            --bg-primary: #0a0f1a;
-            --bg-secondary: #111827;
-            --bg-card: rgba(17, 24, 39, 0.8);
-            --border-color: rgba(0, 255, 255, 0.15);
-            --border-glow: rgba(0, 255, 255, 0.3);
-            --text-primary: #f0f4f8;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
-            --accent-primary: #00ffff;
-            --accent-secondary: #22d3ee;
-            --accent-purple: #a855f7;
-            --accent-green: #10b981;
-            --accent-orange: #f59e0b;
-            --accent-pink: #ec4899;
-            --gradient-cyber: linear-gradient(135deg, #0a0f1a 0%, #1a1a2e 50%, #0a0f1a 100%);
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--gradient-cyber);
-            color: var(--text-primary);
-            min-height: 100vh;
-            line-height: 1.6;
-        }
-
-        /* Header */
-        .header {
-            background: linear-gradient(180deg, rgba(0, 255, 255, 0.08) 0%, transparent 100%);
-            border-bottom: 1px solid var(--border-color);
-            padding: 16px 32px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .header-left {
-            display: flex;
-            align-items: center;
-            gap: 24px;
-        }
-
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            text-decoration: none;
-        }
-
-        .logo-icon {
-            width: 40px;
-            height: 40px;
-            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
-        }
-
-        .logo-icon svg {
-            width: 22px;
-            height: 22px;
-            stroke: var(--bg-primary);
-            stroke-width: 2;
-            fill: none;
-        }
-
-        .logo-text {
-            font-size: 20px;
-            font-weight: 700;
-            background: linear-gradient(90deg, var(--accent-primary), var(--accent-purple));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .nav-links {
-            display: flex;
-            gap: 8px;
-        }
-
-        .nav-link {
-            padding: 8px 16px;
-            border-radius: 8px;
-            text-decoration: none;
-            color: var(--text-secondary);
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-
-        .nav-link:hover {
-            color: var(--text-primary);
-            background: rgba(0, 255, 255, 0.1);
-        }
-
-        .nav-link.active {
-            color: var(--accent-primary);
-            background: rgba(0, 255, 255, 0.15);
-        }
-
-        .header-right {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-
-        .mode-badge {
-            padding: 6px 12px;
-            border-radius: 6px;
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .mode-mock {
-            background: rgba(168, 85, 247, 0.2);
-            color: #c084fc;
-            border: 1px solid rgba(168, 85, 247, 0.3);
-        }
-
-        /* Main Content */
-        .main-container {
-            max-width: 1800px;
-            margin: 0 auto;
-            padding: 24px 32px;
-            display: grid;
-            grid-template-columns: 350px 1fr;
-            gap: 24px;
-            min-height: calc(100vh - 80px);
-        }
-
-        @media (max-width: 1200px) {
-            .main-container {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        /* Sidebar */
-        .sidebar {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-
-        /* Cards */
-        .card {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            overflow: hidden;
-        }
-
-        .card-header {
-            padding: 16px 20px;
-            border-bottom: 1px solid var(--border-color);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-weight: 600;
-            font-size: 14px;
-            color: var(--text-primary);
-        }
-
-        .card-header .icon {
-            font-size: 18px;
-        }
-
-        .card-body {
-            padding: 16px;
-        }
-
-        /* Breadcrumb */
-        .breadcrumb {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 4px;
-            padding: 12px 16px;
-            background: rgba(0, 0, 0, 0.3);
-            border-radius: 8px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 13px;
-        }
-
-        .breadcrumb a {
-            color: var(--accent-secondary);
-            text-decoration: none;
-            padding: 2px 6px;
-            border-radius: 4px;
-            transition: all 0.2s;
-        }
-
-        .breadcrumb a:hover {
-            background: rgba(0, 255, 255, 0.15);
-        }
-
-        .breadcrumb .sep {
-            color: var(--text-muted);
-        }
-
-        /* Tree */
-        .tree-container {
-            max-height: 500px;
-            overflow-y: auto;
-        }
-
-        .tree-node {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 12px;
-            margin: 4px 0;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 8px;
-            border-left: 3px solid transparent;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .tree-node:hover {
-            background: rgba(0, 255, 255, 0.08);
-            border-left-color: var(--accent-primary);
-            transform: translateX(4px);
-        }
-
-        .tree-node .icon {
-            font-size: 16px;
-        }
-
-        .tree-node .name {
-            flex: 1;
-            color: var(--accent-secondary);
-            font-weight: 500;
-            font-size: 13px;
-            font-family: 'JetBrains Mono', monospace;
-        }
-
-        .tree-node.wallet { border-left-color: var(--accent-green); }
-        .tree-node.content { border-left-color: var(--accent-orange); }
-        .tree-node.file { border-left-color: var(--accent-pink); }
-        .tree-node.shard { border-left-color: var(--accent-purple); }
-
-        /* Stats */
-        .stats-row {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        .stat-badge {
-            background: rgba(0, 0, 0, 0.3);
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 12px;
-        }
-
-        .stat-badge .label {
-            color: var(--text-muted);
-        }
-
-        .stat-badge .value {
-            color: var(--accent-secondary);
-            font-weight: 600;
-            margin-left: 6px;
-        }
-
-        /* Properties */
-        .property {
-            display: flex;
-            gap: 12px;
-            padding: 12px;
-            margin: 6px 0;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 8px;
-            border-left: 3px solid var(--border-color);
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-        }
-
-        .property:hover {
-            background: rgba(0, 255, 255, 0.05);
-        }
-
-        .prop-icon {
-            font-size: 14px;
-            min-width: 20px;
-            text-align: center;
-        }
-
-        .prop-content {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .prop-name {
-            color: var(--accent-orange);
-            font-weight: 500;
-        }
-
-        .prop-type {
-            color: var(--text-muted);
-            font-size: 10px;
-            margin-left: 8px;
-        }
-
-        .prop-value {
-            color: var(--accent-green);
-            word-break: break-all;
-            margin-top: 4px;
-        }
-
-        .property.ipfs { border-left-color: var(--accent-primary); }
-        .property.ipfs .prop-value { color: var(--accent-primary); }
-        .property.wallet { border-left-color: var(--accent-green); }
-        .property.binary { border-left-color: var(--accent-pink); }
-        .property.binary .prop-value { color: var(--accent-pink); }
-        .property.timestamp { border-left-color: var(--accent-orange); }
-
-        .property a {
-            color: inherit;
-            text-decoration: none;
-        }
-
-        .property a:hover {
-            text-decoration: underline;
-        }
-
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-muted);
-        }
-
-        .empty-state .icon {
-            font-size: 32px;
-            margin-bottom: 12px;
-            opacity: 0.5;
-        }
-
-        /* Loading */
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 40px;
-            color: var(--text-secondary);
-        }
-
-        .loading.active {
-            display: block;
-        }
-
-        .spinner {
-            display: inline-block;
-            width: 24px;
-            height: 24px;
-            border: 2px solid var(--accent-primary);
-            border-top-color: transparent;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            margin-right: 10px;
-            vertical-align: middle;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* Copy Button */
-        .copy-btn {
-            background: rgba(0, 255, 255, 0.1);
-            border: 1px solid var(--border-color);
-            color: var(--text-secondary);
-            padding: 4px 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 11px;
-            transition: all 0.2s;
-        }
-
-        .copy-btn:hover {
-            background: rgba(0, 255, 255, 0.2);
-            color: var(--text-primary);
-        }
-
-        /* Scrollbar */
         ::-webkit-scrollbar {
             width: 8px;
             height: 8px;
         }
-
         ::-webkit-scrollbar-track {
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 4px;
+            background: #f1f5f9;
         }
-
         ::-webkit-scrollbar-thumb {
-            background: rgba(0, 255, 255, 0.3);
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        .hairline-b { border-bottom: 1px solid #e2e8f0; }
+        .hairline-r { border-right: 1px solid #e2e8f0; }
+        .hairline-t { border-top: 1px solid #e2e8f0; }
+        .hairline-l { border-left: 1px solid #e2e8f0; }
+
+        .tree-row {
+            height: 24px;
+            display: flex;
+            align-items: center;
+            padding-right: 8px;
+            cursor: pointer;
+            user-select: none;
+            width: 100%;
+            white-space: nowrap;
+        }
+        .tree-row:hover {
+            background-color: #f8fafc;
+        }
+        .tree-row.selected {
+            background-color: #eff6ff;
+            color: #1d4ed8;
+        }
+
+        .prop-table th, .prop-table td {
+            border-bottom: 1px solid #f1f5f9;
+            border-right: 1px solid #f1f5f9;
+        }
+        .prop-table th:last-child, .prop-table td:last-child {
+            border-right: none;
+        }
+        .prop-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .tree-expander,
+        .path-segment,
+        .tab-button {
+            background: transparent;
+            border: 0;
+            padding: 0;
+        }
+
+        .tree-expander:focus-visible,
+        .path-segment:focus-visible,
+        .tab-button:focus-visible,
+        .toolbar-button:focus-visible,
+        .cluster-select:focus-visible {
+            outline: 2px solid #60a5fa;
+            outline-offset: 1px;
             border-radius: 4px;
         }
 
-        ::-webkit-scrollbar-thumb:hover {
-            background: rgba(0, 255, 255, 0.5);
+        .tree-label {
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
-        /* Footer */
-        .footer {
-            text-align: center;
-            padding: 20px;
-            color: var(--text-muted);
+        .tree-placeholder {
+            width: 16px;
+            height: 16px;
+            margin-right: 2px;
+            opacity: 0;
+            flex: 0 0 auto;
+        }
+
+        .cluster-select {
+            border: 1px solid #cbd5e1;
+            background: #ffffff;
+            color: #475569;
+            border-radius: 4px;
+            padding: 2px 22px 2px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            max-width: 144px;
+        }
+
+        .path-shell {
+            min-height: 30px;
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+
+        .path-segment {
+            color: #475569;
+            font: inherit;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .path-segment:hover {
+            color: #1d4ed8;
+        }
+
+        .path-segment.current {
+            color: #0f172a;
+            cursor: default;
+        }
+
+        .tab-button.active {
+            background: #ffffff;
+            border-top: 1px solid #e2e8f0;
+            border-right: 1px solid #e2e8f0;
+            border-left: 1px solid #e2e8f0;
+            border-radius: 0.5rem 0.5rem 0 0;
+            color: #1d4ed8;
+            font-weight: 500;
+            position: relative;
+            top: 1px;
+        }
+
+        .json-panel {
+            border: 1px solid #e2e8f0;
+            border-radius: 0.5rem;
+            background: #f8fafc;
+            overflow: hidden;
+        }
+
+        .json-panel pre {
+            margin: 0;
+            padding: 16px;
+            overflow: auto;
             font-size: 12px;
-            border-top: 1px solid var(--border-color);
-            margin-top: 40px;
+            line-height: 1.5;
+            color: #0f172a;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         }
 
-        .footer a {
-            color: var(--accent-secondary);
-            text-decoration: none;
+        .metric-card {
+            background: rgba(238, 242, 255, 0.55);
+            border: 1px solid #c7d2fe;
+            border-radius: 0.5rem;
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         }
     </style>
 </head>
-<body>
-    <header class="header">
-        <div class="header-left">
-            <a href="/" class="logo">
-                <div class="logo-icon">
-                    <svg viewBox="0 0 24 24">
-                        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-                    </svg>
-                </div>
-                <span class="logo-text">Blockchain AEM</span>
-            </a>
-            <nav class="nav-links">
-                <a href="/" class="nav-link">Dashboard</a>
-                <a href="/explorer" class="nav-link active">Explorer</a>
-                <a href="/api-browser" class="nav-link">API Browser</a>
-            </nav>
+<body class="h-screen w-screen bg-white text-slate-800 font-sans overflow-hidden flex flex-col text-[13px]">
+    <div class="sr-only {{MODE_CLASS}}" id="mode-indicator">{{MODE_LABEL}}</div>
+    <div class="sr-only">CRX/OC Explorer</div>
+    <!-- CRX/OC Explorer -->
+
+    <header class="h-10 bg-[#eef2f7] flex items-center justify-between px-4 hairline-b shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2 text-[#0f62fe]">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                </svg>
+                <span class="font-semibold tracking-wide text-sm">Blockchain AEM Explorer</span>
+            </div>
+            <div class="inline-flex items-center rounded-full border border-[#bcd0ff] bg-[#e8f0ff] px-3 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#4b7df0]" title="CRX/OC Explorer">
+                CRX/OC
+            </div>
         </div>
-        <div class="header-right">
-            <span class="mode-badge {{MODE_CLASS}}">{{MODE_LABEL}}</span>
+
+        <div class="flex items-center gap-4 text-slate-500 text-xs">
+            <span id="identity-label">admin@blockchain-node-01</span>
+            <div class="w-6 h-6 rounded-full bg-slate-300 flex items-center justify-center text-white font-medium">A</div>
         </div>
     </header>
 
-    <main class="main-container">
-        <aside class="sidebar">
-            <div class="card">
-                <div class="card-header">
-                    <span class="icon">🌳</span>
-                    Node Tree
-                </div>
-                <div class="card-body">
-                    <div class="breadcrumb" id="breadcrumb">
-                        <a href="#" onclick="loadNode('/'); return false;">🏠 root</a>
-                    </div>
-                    <div class="stats-row" id="node-stats" style="margin: 12px 0;"></div>
-                    <div class="tree-container" id="children">
-                        <div class="loading active" id="tree-loading">
-                            <span class="spinner"></span> Loading tree...
-                        </div>
-                    </div>
+    <div class="h-9 bg-[#fbfcfd] flex items-center justify-between px-2 hairline-b shrink-0">
+        <div class="flex items-center gap-0.5">
+            <button id="refresh-button" class="toolbar-button flex items-center gap-1.5 px-2 py-1 rounded text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+                Refresh
+            </button>
+            <div class="w-px h-4 bg-slate-300 mx-1"></div>
+            <button id="browse-root-button" class="toolbar-button flex items-center gap-1.5 px-2 py-1 rounded text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                Browse Root
+            </button>
+            <div class="w-px h-4 bg-slate-300 mx-1"></div>
+            <button id="copy-path-button" class="toolbar-button flex items-center gap-1.5 px-2 py-1 rounded text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+                Copy Path
+            </button>
+            <button id="open-path-button" class="toolbar-button flex items-center gap-1.5 px-2 py-1 rounded text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                Open Path
+            </button>
+        </div>
+
+        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-100 border border-slate-200 text-slate-600 font-medium text-xs">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            Read Only
+        </div>
+    </div>
+
+    <div class="flex-1 flex overflow-hidden">
+        <div class="w-80 bg-white hairline-r flex flex-col shrink-0">
+            <div class="p-2 hairline-b bg-slate-50 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                <span id="workspace-label">Workspace: default</span>
+                <select id="cluster-select" class="cluster-select hidden" aria-label="Cluster selector"></select>
+            </div>
+
+            <div id="tree-panel" class="flex-1 overflow-y-auto py-1 font-mono text-[12px] text-slate-700">
+                <div class="px-3 py-2 text-slate-400">Loading repository tree...</div>
+            </div>
+        </div>
+
+        <div class="flex-1 flex flex-col bg-slate-50 overflow-hidden">
+            <div class="h-10 bg-white hairline-b flex items-center px-4 shrink-0 gap-2">
+                <span class="text-slate-500 font-medium">Path:</span>
+                <div id="path-bar" class="path-shell flex-1 flex items-center bg-slate-50 border border-slate-200 rounded px-2 py-1 font-mono text-xs text-slate-700 focus-within:border-blue-400 focus-within:ring-1 focus-within:ring-blue-400 transition-all">
+                    <span class="text-slate-400">/</span>
                 </div>
             </div>
 
-            <div class="card">
-                <div class="card-header">
-                    <span class="icon">🔍</span>
-                    Quick Navigation
-                </div>
-                <div class="card-body">
-                    <div class="tree-node shard" onclick="loadNode('/oak-chain')">
-                        <span class="icon">⛓️</span>
-                        <span class="name">/oak-chain</span>
-                    </div>
-                    <div class="tree-node" onclick="loadNode('/oak-chain/00/00/00/0x0000000000000000000000000000000000000000/content/genesis')">
-                        <span class="icon">🌟</span>
-                        <span class="name">Genesis Node</span>
-                    </div>
-                </div>
-            </div>
-        </aside>
-
-        <section class="content">
-            <div class="card">
-                <div class="card-header">
-                    <span class="icon">📋</span>
+            <div class="flex items-end px-2 pt-2 bg-slate-100 hairline-b shrink-0 gap-1">
+                <button class="tab-button active px-4 py-1.5 text-slate-500 hover:text-slate-700 cursor-pointer flex items-center gap-2" data-tab="properties" type="button">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
                     Properties
-                </div>
-                <div class="card-body">
-                    <div class="loading" id="loading">
-                        <span class="spinner"></span> Loading node...
-                    </div>
-                    <div id="node-content">
-                        <div id="properties">
-                            <div class="empty-state">
-                                <div class="icon">📁</div>
-                                <div>Select a node to view properties</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                </button>
+                <button class="tab-button px-4 py-1.5 text-slate-500 hover:text-slate-700 cursor-pointer flex items-center gap-2" data-tab="access" type="button">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                    Access Control
+                </button>
+                <button class="tab-button px-4 py-1.5 text-slate-500 hover:text-slate-700 cursor-pointer flex items-center gap-2" data-tab="json" type="button">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                    JSON
+                </button>
             </div>
-        </section>
-    </main>
 
-    <footer class="footer">
-        <p>© 2025 Blockchain AEM • Powered by <a href="https://github.com/apache/jackrabbit-oak" target="_blank">Apache Jackrabbit Oak</a></p>
-    </footer>
+            <div id="tab-content" class="flex-1 overflow-y-auto p-4 flex flex-col gap-6 bg-white">
+                <div class="text-slate-400">Loading node details...</div>
+            </div>
+        </div>
+    </div>
 
     <script>
-        let currentPath = '/';
-        let nodeData = null;
+        (function () {
+            var NAV_ENDPOINT = "/v1/explorer/content/nav";
+            var SUMMARY_ENDPOINT = "/v1/explorer/summary";
+            var state = {
+                nav: null,
+                summary: null,
+                clusters: [],
+                selectedClusterId: null,
+                currentPath: null,
+                currentTab: "properties",
+                treeCache: new Map(),
+                nodeCache: new Map(),
+                provenanceCache: new Map(),
+                expanded: new Set(),
+                loadingTree: new Set(),
+                loadingNode: false,
+                error: ""
+            };
 
-        async function loadNode(path) {
-            currentPath = path;
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('node-content').style.opacity = '0.5';
-            
-            try {
-                const response = await fetch('/api/explore?path=' + encodeURIComponent(path));
-                nodeData = await response.json();
-                if (nodeData.error) {
-                    displayError(nodeData.error);
-                } else {
-                    displayNode(nodeData);
+            var treePanel = document.getElementById("tree-panel");
+            var pathBar = document.getElementById("path-bar");
+            var tabContent = document.getElementById("tab-content");
+            var clusterSelect = document.getElementById("cluster-select");
+            var workspaceLabel = document.getElementById("workspace-label");
+            var identityLabel = document.getElementById("identity-label");
+
+            function keyFor(clusterId, path) {
+                return clusterId + "::" + path;
+            }
+
+            function currentCluster() {
+                for (var i = 0; i < state.clusters.length; i++) {
+                    if (state.clusters[i].clusterId === state.selectedClusterId) {
+                        return state.clusters[i];
+                    }
                 }
-            } catch (e) {
-                displayError(e.message);
-            }
-            
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('node-content').style.opacity = '1';
-        }
-
-        function displayError(msg) {
-            document.getElementById('children').innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><div>' + msg + '</div></div>';
-            document.getElementById('properties').innerHTML = '';
-            document.getElementById('node-stats').innerHTML = '';
-        }
-
-        function displayNode(node) {
-            // Breadcrumb
-            const breadcrumb = document.getElementById('breadcrumb');
-            const parts = currentPath.split('/').filter(p => p);
-            let path = '';
-            breadcrumb.innerHTML = '<a href="#" onclick="loadNode(\'/\'); return false;">🏠 root</a>';
-            parts.forEach((part, idx) => {
-                path += '/' + part;
-                const icon = getNodeIcon(part);
-                breadcrumb.innerHTML += '<span class="sep">/</span><a href="#" onclick="loadNode(\'' + path + '\'); return false;">' + icon + ' ' + part + '</a>';
-            });
-
-            // Node stats
-            const stats = document.getElementById('node-stats');
-            const childCount = node.children ? node.children.length : 0;
-            const propCount = node.properties ? Object.keys(node.properties).length : 0;
-            stats.innerHTML = '<div class="stat-badge"><span class="label">Children:</span><span class="value">' + childCount + '</span></div>';
-            stats.innerHTML += '<div class="stat-badge"><span class="label">Properties:</span><span class="value">' + propCount + '</span></div>';
-            if (node.properties && node.properties['jcr:primaryType']) {
-                stats.innerHTML += '<div class="stat-badge"><span class="label">Type:</span><span class="value">' + node.properties['jcr:primaryType'] + '</span></div>';
+                return null;
             }
 
-            // Children
-            const children = document.getElementById('children');
-            children.innerHTML = '';
-            if (node.children && node.children.length > 0) {
-                node.children.sort().forEach(child => {
-                    const div = document.createElement('div');
-                    const nodeClass = getNodeClass(child);
-                    div.className = 'tree-node ' + nodeClass;
-                    const icon = getNodeIcon(child);
-                    div.innerHTML = '<span class="icon">' + icon + '</span><span class="name">' + child + '</span>';
-                    div.onclick = () => loadNode(currentPath === '/' ? '/' + child : currentPath + '/' + child);
-                    children.appendChild(div);
-                });
-            } else {
-                children.innerHTML = '<div class="empty-state"><div class="icon">📭</div><div>No child nodes</div></div>';
-            }
-
-            // Properties
-            const props = document.getElementById('properties');
-            props.innerHTML = '';
-            if (node.properties && Object.keys(node.properties).length > 0) {
-                Object.entries(node.properties).sort((a,b) => a[0].localeCompare(b[0])).forEach(([key, value]) => {
-                    const div = document.createElement('div');
-                    const propClass = getPropClass(key, value);
-                    const propIcon = getPropIcon(key, value);
-                    div.className = 'property ' + propClass;
-                    const valueHtml = formatPropValue(key, value, node.properties);
-                    div.innerHTML = '<span class="prop-icon">' + propIcon + '</span>' +
-                        '<div class="prop-content"><span class="prop-name">' + key + '</span>' +
-                        '<span class="prop-type">' + getPropType(value) + '</span><br>' +
-                        '<span class="prop-value">' + valueHtml + '</span></div>';
-                    props.appendChild(div);
-                });
-            } else {
-                props.innerHTML = '<div class="empty-state"><div class="icon">📋</div><div>No properties</div></div>';
-            }
-        }
-
-        function getNodeIcon(name) {
-            if (name.startsWith('0x')) return '👛';
-            if (name === 'oak-chain') return '⛓️';
-            if (name === 'content') return '📄';
-            if (name.startsWith('file-')) return '🖼️';
-            if (name.startsWith('page-')) return '📝';
-            if (name === 'ethereum' || name === 'epoch') return '💎';
-            if (name === 'genesis') return '🌟';
-            if (name === 'ipfs') return '🌐';
-            if (name.match(/^[0-9a-f]{2}$/)) return '📂';
-            return '📁';
-        }
-
-        function getNodeClass(name) {
-            if (name.startsWith('0x')) return 'wallet';
-            if (name === 'content') return 'content';
-            if (name.startsWith('file-')) return 'file';
-            if (name.match(/^[0-9a-f]{2}$/)) return 'shard';
-            return '';
-        }
-
-        function getPropClass(key, value) {
-            if (key === 'ipfsCid' || key === 'ipfsGateway' || (value && value.toString().startsWith('ipfs://'))) return 'ipfs';
-            if (key === 'wallet' || key.includes('address') || key.includes('Address')) return 'wallet';
-            if (key === 'jcr:data' || key === 'jcr:blobId') return 'binary';
-            if (key === 'timestamp' || key.includes('time') || key.includes('Time')) return 'timestamp';
-            return '';
-        }
-
-        function getPropIcon(key, value) {
-            if (key === 'ipfsCid' || key === 'ipfsGateway') return '🌐';
-            if (key === 'wallet' || key.includes('address')) return '👛';
-            if (key === 'jcr:data' || key === 'jcr:blobId') return '📦';
-            if (key === 'timestamp') return '🕐';
-            if (key === 'signature') return '✍️';
-            if (key === 'jcr:mimeType') return '🏷️';
-            if (key === 'jcr:primaryType') return '📋';
-            return '📌';
-        }
-
-        function getPropType(value) {
-            if (value === null || value === undefined) return 'null';
-            if (typeof value === 'number') return Number.isInteger(value) ? 'Long' : 'Double';
-            if (typeof value === 'boolean') return 'Boolean';
-            if (Array.isArray(value)) return 'Array[' + value.length + ']';
-            if (typeof value === 'string' && value.startsWith('[Binary:')) return 'Binary';
-            return 'String';
-        }
-
-        function formatPropValue(key, value, props = {}) {
-            if (value === null || value === undefined) return '<em>null</em>';
-            
-            // IPFS links
-            if (key === 'ipfsCid' && value) {
-                const gatewayUrl = props.ipfsGateway || ('ipfs://' + value);
-                return '<a href="' + gatewayUrl + '" target="_blank">' + value + '</a>';
-            }
-            if (key === 'ipfsGateway' && value) {
-                return '<a href="' + value + '" target="_blank">' + value + '</a>';
-            }
-            
-            // Timestamps
-            if (key === 'timestamp' && typeof value === 'number' && value > 1000000000000) {
-                return value + ' <span style="color: var(--text-muted)">(' + new Date(value).toLocaleString() + ')</span>';
-            }
-            
-            // Wallet addresses
-            if (key === 'wallet' && value && value.startsWith('0x')) {
-                return '<a href="https://sepolia.etherscan.io/address/' + value + '" target="_blank">' + value + '</a>';
-            }
-            
-            // Binary
-            if (typeof value === 'string' && value.startsWith('[Binary:')) {
+            function normalizePath(path, fallback) {
+                var value = typeof path === "string" ? path.trim() : "";
+                if (!value) {
+                    return fallback || "/";
+                }
+                if (value.charAt(0) !== "/") {
+                    value = "/" + value;
+                }
+                if (value.length > 1 && value.charAt(value.length - 1) === "/") {
+                    value = value.slice(0, -1);
+                }
                 return value;
             }
-            
-            // Long strings
-            if (typeof value === 'string' && value.length > 100) {
-                return escapeHtml(value.substring(0, 100)) + '... <button class="copy-btn" onclick="copyToClipboard(\'' + escapeHtml(value.replace(/'/g, "\\'")) + '\')">Copy</button>';
+
+            function escapeHtml(value) {
+                return String(value == null ? "" : value)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
             }
-            
-            return escapeHtml(String(value));
-        }
 
-        function escapeHtml(str) {
-            if (!str) return '';
-            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        }
+            function requestJson(url) {
+                return fetch(url, { credentials: "same-origin" }).then(function (response) {
+                    return response.text().then(function (body) {
+                        var payload = {};
+                        if (body) {
+                            try {
+                                payload = JSON.parse(body);
+                            } catch (error) {
+                                if (!response.ok) {
+                                    throw new Error(body);
+                                }
+                                throw error;
+                            }
+                        }
+                        if (!response.ok) {
+                            var message = payload && payload.error ? payload.error : (payload && payload.message ? payload.message : "Request failed");
+                            throw new Error(message);
+                        }
+                        return payload;
+                    });
+                });
+            }
 
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                // Could show toast notification
-            });
-        }
+            function treeEndpoint(clusterId, path) {
+                return "/v1/explorer/content/clusters/" + encodeURIComponent(clusterId) + "/tree?path=" + encodeURIComponent(path);
+            }
 
-        // Load root on page load
-        loadNode('/');
+            function nodeEndpoint(clusterId, path) {
+                return "/v1/explorer/content/clusters/" + encodeURIComponent(clusterId) + "/node?path=" + encodeURIComponent(path);
+            }
+
+            function provenanceEndpoint(clusterId, path) {
+                return "/v1/explorer/content/clusters/" + encodeURIComponent(clusterId) + "/provenance?path=" + encodeURIComponent(path);
+            }
+
+            function resolveIdentityLabel() {
+                var host = window.location.hostname;
+                if (!host || host === "localhost" || host === "127.0.0.1") {
+                    host = "blockchain-node-01";
+                }
+                identityLabel.textContent = "admin@" + host;
+            }
+
+            function renderClusterSelector() {
+                if (!state.clusters.length) {
+                    clusterSelect.classList.add("hidden");
+                    return;
+                }
+                clusterSelect.innerHTML = state.clusters.map(function (cluster) {
+                    return "<option value=\"" + escapeHtml(cluster.clusterId) + "\">" + escapeHtml(cluster.scope === "remote" ? cluster.displayName : "default") + "</option>";
+                }).join("");
+                clusterSelect.value = state.selectedClusterId || state.clusters[0].clusterId;
+                if (state.clusters.length > 1) {
+                    clusterSelect.classList.remove("hidden");
+                } else {
+                    clusterSelect.classList.add("hidden");
+                }
+            }
+
+            function renderWorkspaceLabel() {
+                var cluster = currentCluster();
+                if (!cluster) {
+                    workspaceLabel.textContent = "Workspace: default";
+                    return;
+                }
+                workspaceLabel.textContent = cluster.scope === "remote"
+                    ? "Workspace: " + cluster.displayName.toLowerCase()
+                    : "Workspace: default";
+            }
+
+            function iconChevron(expanded, tone) {
+                if (expanded) {
+                    return "<svg class=\"w-4 h-4 " + tone + " mr-0.5\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><polyline points=\"6 9 12 15 18 9\"></polyline></svg>";
+                }
+                return "<svg class=\"w-4 h-4 " + tone + " mr-0.5\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><polyline points=\"9 18 15 12 9 6\"></polyline></svg>";
+            }
+
+            function iconHome() {
+                return "<svg class=\"w-4 h-4 text-blue-500 mr-1.5\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\"></path></svg>";
+            }
+
+            function iconDatabase() {
+                return "<svg class=\"w-4 h-4 text-slate-700 mr-1.5\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\"></ellipse><path d=\"M3 5V19A9 3 0 0 0 21 19V5\"></path><path d=\"M3 12A9 3 0 0 0 21 12\"></path></svg>";
+            }
+
+            function iconFolder() {
+                return "<svg class=\"w-4 h-4 text-amber-500 mr-1.5\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"currentColor\" stroke=\"none\" aria-hidden=\"true\"><path d=\"M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-1.2-1.8A2 2 0 0 0 7.55 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"></path></svg>";
+            }
+
+            function iconWallet() {
+                return "<svg class=\"w-4 h-4 text-slate-500 mr-1.5\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\"></rect><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\"></line></svg>";
+            }
+
+            function iconLeaf(selected) {
+                var color = selected ? "text-blue-600" : "text-slate-400";
+                return "<svg class=\"w-4 h-4 " + color + " mr-1.5\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z\"></path><polyline points=\"3.27 6.96 12 12.01 20.73 6.96\"></polyline><line x1=\"12\" y1=\"22.08\" x2=\"12\" y2=\"12\"></line></svg>";
+            }
+
+            function classifyNode(node, path) {
+                if (path === "/") {
+                    return "root";
+                }
+                if (path === "/oak-chain") {
+                    return "cluster";
+                }
+                if (node && node.name === "wallet") {
+                    return "wallet";
+                }
+                if (node && node.hasChildren) {
+                    return "folder";
+                }
+                return "leaf";
+            }
+
+            function iconForNode(node, path, selected) {
+                var kind = classifyNode(node, path);
+                if (kind === "root") {
+                    return iconHome();
+                }
+                if (kind === "cluster") {
+                    return iconDatabase();
+                }
+                if (kind === "wallet") {
+                    return iconWallet();
+                }
+                if (kind === "folder") {
+                    return iconFolder();
+                }
+                return iconLeaf(selected);
+            }
+
+            function ensureExpanded(clusterId, path) {
+                state.expanded.add(keyFor(clusterId, path));
+            }
+
+            function isExpanded(clusterId, path) {
+                return state.expanded.has(keyFor(clusterId, path));
+            }
+
+            function getTree(clusterId, path) {
+                return state.treeCache.get(keyFor(clusterId, path));
+            }
+
+            function setTree(clusterId, path, payload) {
+                state.treeCache.set(keyFor(clusterId, path), payload);
+            }
+
+            function sortChildren(children) {
+                return (children || []).slice().sort(function (a, b) {
+                    var aFolder = a && a.hasChildren ? 0 : 1;
+                    var bFolder = b && b.hasChildren ? 0 : 1;
+                    if (aFolder !== bFolder) {
+                        return aFolder - bFolder;
+                    }
+                    return String(a.name).localeCompare(String(b.name));
+                });
+            }
+
+            function inferTreeLabel(path) {
+                if (path === "/") {
+                    return "/";
+                }
+                var parts = path.split("/");
+                return parts[parts.length - 1] || "/";
+            }
+
+            function renderTreeRow(clusterId, path, node, depth, selected, expanded) {
+                var hasChildren = path === "/" ? true : !!(node && node.hasChildren);
+                var tone = selected ? "text-blue-500" : (expanded ? "text-slate-600" : "text-slate-400");
+                var paddingLeft = (depth * 16) + 4;
+                var label = node && node.name ? node.name : inferTreeLabel(path);
+                var expander = hasChildren
+                    ? "<button class=\"tree-expander flex items-center\" type=\"button\" data-action=\"toggle\" data-path=\"" + escapeHtml(path) + "\" aria-label=\"" + (expanded ? "Collapse" : "Expand") + "\">" + iconChevron(expanded, tone) + "</button>"
+                    : "<span class=\"tree-placeholder\"></span>";
+                return ""
+                    + "<div class=\"tree-row " + (selected ? "selected" : "") + "\" style=\"padding-left:" + paddingLeft + "px\" data-action=\"select\" data-path=\"" + escapeHtml(path) + "\">"
+                    + expander
+                    + iconForNode(node, path, selected)
+                    + "<span class=\"tree-label " + (path === "/oak-chain" ? "font-semibold text-slate-800" : "") + "\">" + escapeHtml(label) + "</span>"
+                    + "</div>";
+            }
+
+            function renderTreeBranch(clusterId, path, depth) {
+                var tree = getTree(clusterId, path);
+                if (!tree) {
+                    return "";
+                }
+                var selected = state.currentPath === path;
+                var html = renderTreeRow(clusterId, path, tree.node, depth, selected, isExpanded(clusterId, path));
+                if (!isExpanded(clusterId, path)) {
+                    return html;
+                }
+                var children = sortChildren(tree.children);
+                if (!children.length) {
+                    return html;
+                }
+                for (var i = 0; i < children.length; i++) {
+                    var child = children[i];
+                    html += renderTreeLeaf(clusterId, child.path, child, depth + 1);
+                }
+                return html;
+            }
+
+            function renderTreeLeaf(clusterId, path, node, depth) {
+                var selected = state.currentPath === path;
+                var expanded = isExpanded(clusterId, path);
+                var html = renderTreeRow(clusterId, path, node, depth, selected, expanded);
+                if (node && node.hasChildren && expanded) {
+                    var childTree = getTree(clusterId, path);
+                    if (childTree) {
+                        var children = sortChildren(childTree.children);
+                        for (var i = 0; i < children.length; i++) {
+                            html += renderTreeLeaf(clusterId, children[i].path, children[i], depth + 1);
+                        }
+                    } else {
+                        html += "<div class=\"px-6 py-1 text-slate-400\" style=\"padding-left:" + (((depth + 1) * 16) + 4) + "px\">Loading...</div>";
+                    }
+                }
+                return html;
+            }
+
+            function renderTree() {
+                var cluster = currentCluster();
+                if (!cluster) {
+                    treePanel.innerHTML = "<div class=\"px-3 py-2 text-slate-400\">No explorer clusters available.</div>";
+                    return;
+                }
+                var html = renderTreeRow(cluster.clusterId, "/", { name: "/" }, 0, state.currentPath === "/", true);
+                if (isExpanded(cluster.clusterId, "/")) {
+                    var clusterTree = getTree(cluster.clusterId, cluster.browseRoot);
+                    if (clusterTree) {
+                        html += renderTreeBranch(cluster.clusterId, cluster.browseRoot, 0);
+                    } else {
+                        html += "<div class=\"px-3 py-2 text-slate-400\">Loading repository tree...</div>";
+                    }
+                }
+                treePanel.innerHTML = html;
+            }
+
+            function renderPathBar() {
+                if (!state.currentPath) {
+                    pathBar.innerHTML = "<span class=\"text-slate-400\">/</span>";
+                    return;
+                }
+                var segments = state.currentPath.split("/").filter(Boolean);
+                if (!segments.length) {
+                    pathBar.innerHTML = "<span class=\"text-slate-400\">/</span>";
+                    return;
+                }
+                var html = "";
+                var current = "";
+                for (var i = 0; i < segments.length; i++) {
+                    current += "/" + segments[i];
+                    html += "<span class=\"text-slate-400\">/</span>";
+                    if (i === segments.length - 1) {
+                        html += "<span class=\"path-segment current text-slate-900 w-full outline-none bg-transparent\">" + escapeHtml(segments[i]) + "</span>";
+                    } else {
+                        html += "<button class=\"path-segment text-slate-600\" type=\"button\" data-path=\"" + escapeHtml(current) + "\">" + escapeHtml(segments[i]) + "</button>";
+                    }
+                }
+                pathBar.innerHTML = html;
+            }
+
+            function renderTabs() {
+                var buttons = document.querySelectorAll(".tab-button");
+                for (var i = 0; i < buttons.length; i++) {
+                    var button = buttons[i];
+                    button.classList.toggle("active", button.getAttribute("data-tab") === state.currentTab);
+                }
+            }
+
+            function formatType(type, multiValued) {
+                var label = String(type || "").toLowerCase().replace(/_/g, " ");
+                if (label === "name") {
+                    label = "name";
+                }
+                label = label.replace(/\b\w/g, function (ch) { return ch.toUpperCase(); });
+                return multiValued ? label + "[]" : label;
+            }
+
+            function propertyWeight(name) {
+                if (name === "jcr:primaryType") {
+                    return 0;
+                }
+                if (name.indexOf("jcr:") === 0) {
+                    return 1;
+                }
+                return 2;
+            }
+
+            function sortedProperties(properties) {
+                return (properties || []).slice().sort(function (a, b) {
+                    var weight = propertyWeight(a.name) - propertyWeight(b.name);
+                    if (weight !== 0) {
+                        return weight;
+                    }
+                    return String(a.name).localeCompare(String(b.name));
+                });
+            }
+
+            function renderPropertyValue(property) {
+                if (property.multiValued) {
+                    var values = property.values || [];
+                    if (!values.length) {
+                        return "<span class=\"text-slate-400\">[]</span>";
+                    }
+                    return values.map(function (value) {
+                        return "<div class=\"font-mono text-xs text-slate-800 break-all\">" + escapeHtml(value) + "</div>";
+                    }).join("");
+                }
+                var value = property.value == null ? "" : String(property.value);
+                var looksLikePath = value.charAt(0) === "/";
+                if (looksLikePath) {
+                    return "<button class=\"font-mono text-xs text-blue-600 cursor-pointer hover:underline break-all text-left\" type=\"button\" data-open-path=\"" + escapeHtml(value) + "\">" + escapeHtml(value) + "</button>";
+                }
+                return "<div class=\"font-mono text-xs text-slate-800 break-all\">" + escapeHtml(value) + "</div>";
+            }
+
+            function propertyIcon(name) {
+                if (name.indexOf("jcr:") === 0) {
+                    return "<svg class=\"text-slate-400\" xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"10\"></circle></svg>";
+                }
+                return "<svg class=\"text-blue-400\" xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" ry=\"2\"></rect></svg>";
+            }
+
+            function statusTone(status) {
+                if (status === "AUTHORITATIVE" || status === "FINALIZED" || status === "HEALTHY") {
+                    return {
+                        dot: "bg-emerald-500",
+                        text: "text-emerald-700"
+                    };
+                }
+                if (status === "READ ONLY" || status === "DEGRADED") {
+                    return {
+                        dot: "bg-amber-500",
+                        text: "text-amber-700"
+                    };
+                }
+                return {
+                    dot: "bg-slate-400",
+                    text: "text-slate-700"
+                };
+            }
+
+            function buildProvenanceModel(cluster, nodePayload, provenancePayload) {
+                var summary = state.summary || {};
+                var contentFacts = provenancePayload && provenancePayload.contentFacts ? provenancePayload.contentFacts : {};
+                var writeMetadata = provenancePayload && provenancePayload.writeMetadata ? provenancePayload.writeMetadata : null;
+                var walletAuthority = provenancePayload && provenancePayload.walletAuthority ? provenancePayload.walletAuthority : null;
+                var clusterStatus = summary.cluster && summary.cluster.clusterState ? String(summary.cluster.clusterState) : null;
+                var finalityStatus = contentFacts.authoritative ? "AUTHORITATIVE" : (contentFacts.readOnly ? "READ ONLY" : (clusterStatus || "OBSERVED"));
+                var epoch = summary.cluster && summary.cluster.currentEpoch != null
+                    ? summary.cluster.currentEpoch
+                    : (summary.queue && summary.queue.compact && summary.queue.compact.currentEpoch != null ? summary.queue.compact.currentEpoch : "--");
+                var authorityGroup = walletAuthority && walletAuthority.wallet
+                    ? walletAuthority.wallet + " (" + walletAuthority.ownership + ")"
+                    : (cluster ? cluster.displayName : "--");
+                var validatorSignature = writeMetadata && writeMetadata.recordId
+                    ? writeMetadata.recordId
+                    : (writeMetadata && writeMetadata.validator ? writeMetadata.validator : "No write metadata for this path");
+                var verificationStrategy = cluster && cluster.readOnly
+                    ? "Read-only mount over HTTP segment transfer"
+                    : "Authoritative local read via Aeron consensus";
+                return {
+                    finalityStatus: finalityStatus,
+                    epoch: epoch,
+                    authorityGroup: authorityGroup,
+                    validatorSignature: validatorSignature,
+                    verificationStrategy: verificationStrategy,
+                    writeMessage: writeMetadata && writeMetadata.message ? writeMetadata.message : "",
+                    matchedPath: writeMetadata && writeMetadata.matchPath ? writeMetadata.matchPath : "",
+                    nodeType: nodePayload && nodePayload.node ? nodePayload.node.primaryType : ""
+                };
+            }
+
+            function renderPropertiesTab(cluster, nodePayload, provenancePayload) {
+                if (!nodePayload || !nodePayload.node) {
+                    return "<div class=\"text-slate-400\">Select a repository path to inspect its properties.</div>";
+                }
+                var properties = sortedProperties(nodePayload.properties);
+                var typeBadge = nodePayload.node.primaryType || "nt:unstructured";
+                var provenance = buildProvenanceModel(cluster, nodePayload, provenancePayload);
+                var tone = statusTone(provenance.finalityStatus);
+                var propertyRows = properties.map(function (property) {
+                    return ""
+                        + "<tr class=\"hover:bg-slate-50\">"
+                        + "<td class=\"py-1.5 px-3 font-medium text-slate-700 flex items-center gap-2\">" + propertyIcon(property.name) + escapeHtml(property.name) + "</td>"
+                        + "<td class=\"py-1.5 px-3 text-slate-500 font-mono text-xs\">" + escapeHtml(formatType(property.type, property.multiValued)) + "</td>"
+                        + "<td class=\"py-1.5 px-3\">" + renderPropertyValue(property) + "</td>"
+                        + "</tr>";
+                }).join("");
+                if (!propertyRows) {
+                    propertyRows = "<tr><td colspan=\"3\" class=\"py-6 px-3 text-center text-slate-400\">This node has no exposed properties.</td></tr>";
+                }
+                return ""
+                    + "<div>"
+                    + "<div class=\"flex items-center justify-between mb-2\">"
+                    + "<h2 class=\"text-sm font-semibold text-slate-800 flex items-center gap-2\">"
+                    + "<svg class=\"text-blue-500\" xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z\"></path><polyline points=\"3.27 6.96 12 12.01 20.73 6.96\"></polyline><line x1=\"12\" y1=\"22.08\" x2=\"12\" y2=\"12\"></line></svg>"
+                    + "Node Properties"
+                    + "</h2>"
+                    + "<div class=\"flex items-center gap-2\">"
+                    + "<div class=\"px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-500 font-mono text-[11px]\">" + escapeHtml(typeBadge) + "</div>"
+                    + "</div>"
+                    + "</div>"
+                    + "<div class=\"border border-slate-200 rounded shadow-sm overflow-hidden\">"
+                    + "<table class=\"w-full text-left border-collapse prop-table bg-white\">"
+                    + "<thead><tr class=\"bg-slate-50\"><th class=\"py-2 px-3 font-medium text-slate-500 w-1/4\">Name</th><th class=\"py-2 px-3 font-medium text-slate-500 w-[15%]\">Type</th><th class=\"py-2 px-3 font-medium text-slate-500\">Value</th></tr></thead>"
+                    + "<tbody class=\"text-[13px]\">" + propertyRows + "</tbody>"
+                    + "</table>"
+                    + "</div>"
+                    + "</div>"
+                    + "<div class=\"mt-2\">"
+                    + "<h2 class=\"text-sm font-semibold text-slate-800 flex items-center gap-2 mb-2\">"
+                    + "<svg class=\"text-indigo-500\" xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z\"></path></svg>"
+                    + "Consensus Provenance"
+                    + "</h2>"
+                    + "<div class=\"bg-indigo-50/50 border border-indigo-100 rounded shadow-sm p-4\">"
+                    + "<div class=\"grid grid-cols-2 gap-x-8 gap-y-4\">"
+                    + "<div><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Finality Status</div><div class=\"flex items-center gap-2\"><div class=\"w-2 h-2 rounded-full " + tone.dot + "\"></div><span class=\"font-mono text-sm " + tone.text + " font-medium\">" + escapeHtml(provenance.finalityStatus) + "</span></div></div>"
+                    + "<div><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Epoch</div><div class=\"font-mono text-sm text-slate-800\">" + escapeHtml(provenance.epoch) + "</div></div>"
+                    + "<div class=\"col-span-2\"><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Authority Group</div><div class=\"font-mono text-sm text-slate-800 flex items-center gap-2\"><svg class=\"text-slate-400\" xmlns=\"http://www.w3.org/2000/svg\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\"></rect><path d=\"M7 11V7a5 5 0 0 1 10 0v4\"></path></svg>" + escapeHtml(provenance.authorityGroup) + "</div></div>"
+                    + "<div class=\"col-span-2\"><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Validator Signature</div><div class=\"font-mono text-xs text-slate-600 bg-white p-2 border border-indigo-100 rounded break-all\">" + escapeHtml(provenance.validatorSignature) + "</div></div>"
+                    + "<div class=\"col-span-2\"><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Verification Strategy</div><div class=\"font-mono text-sm text-slate-700\">" + escapeHtml(provenance.verificationStrategy) + "</div></div>"
+                    + (provenance.matchedPath ? "<div class=\"col-span-2\"><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Matched Path</div><div class=\"font-mono text-xs text-slate-600 bg-white p-2 border border-indigo-100 rounded break-all\">" + escapeHtml(provenance.matchedPath) + "</div></div>" : "")
+                    + (provenance.writeMessage ? "<div class=\"col-span-2\"><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Write Note</div><div class=\"font-mono text-sm text-slate-700\">" + escapeHtml(provenance.writeMessage) + "</div></div>" : "")
+                    + "</div>"
+                    + "</div>"
+                    + "</div>";
+            }
+
+            function renderAccessTab(cluster, nodePayload, provenancePayload) {
+                if (!cluster || !nodePayload) {
+                    return "<div class=\"text-slate-400\">No authority details available.</div>";
+                }
+                var authority = nodePayload.authority || {};
+                var walletAuthority = provenancePayload && provenancePayload.walletAuthority ? provenancePayload.walletAuthority : {};
+                var writeMetadata = provenancePayload && provenancePayload.writeMetadata ? provenancePayload.writeMetadata : {};
+                var facts = provenancePayload && provenancePayload.contentFacts ? provenancePayload.contentFacts : {};
+                return ""
+                    + "<div class=\"metric-card p-4\">"
+                    + "<h2 class=\"text-sm font-semibold text-slate-800 flex items-center gap-2 mb-4\">"
+                    + "<svg class=\"text-indigo-500\" xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z\"></path></svg>"
+                    + "Authority and Access Surface"
+                    + "</h2>"
+                    + "<div class=\"grid grid-cols-2 gap-4\">"
+                    + "<div><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Scope</div><div class=\"mono text-sm text-slate-800\">" + escapeHtml(authority.scope || cluster.scope || "--") + "</div></div>"
+                    + "<div><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Read Only</div><div class=\"mono text-sm text-slate-800\">" + escapeHtml(String(authority.readOnly != null ? authority.readOnly : cluster.readOnly)) + "</div></div>"
+                    + "<div><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Owned Prefixes</div><div class=\"mono text-sm text-slate-800 break-all\">" + escapeHtml(authority.ownedPrefixes || cluster.ownedPrefixes || "--") + "</div></div>"
+                    + "<div><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Browse Root</div><div class=\"mono text-sm text-slate-800 break-all\">" + escapeHtml(authority.browseRoot || cluster.browseRoot || "/") + "</div></div>"
+                    + "<div class=\"col-span-2\"><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Wallet Authority</div><div class=\"mono text-sm text-slate-800 break-all\">" + escapeHtml(walletAuthority.wallet ? (walletAuthority.wallet + " (" + walletAuthority.ownership + ")") : "No wallet authority attached to this node") + "</div></div>"
+                    + (walletAuthority.redirectUrl ? "<div class=\"col-span-2\"><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Redirect URL</div><div class=\"mono text-xs text-slate-600 bg-white p-2 border border-indigo-100 rounded break-all\">" + escapeHtml(walletAuthority.redirectUrl) + "</div></div>" : "")
+                    + (writeMetadata.recordId ? "<div class=\"col-span-2\"><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Write Record</div><div class=\"mono text-xs text-slate-600 bg-white p-2 border border-indigo-100 rounded break-all\">" + escapeHtml(writeMetadata.recordId) + "</div></div>" : "")
+                    + "<div><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Property Count</div><div class=\"mono text-sm text-slate-800\">" + escapeHtml(facts.propertyCount != null ? facts.propertyCount : "--") + "</div></div>"
+                    + "<div><div class=\"text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1\">Child Count</div><div class=\"mono text-sm text-slate-800\">" + escapeHtml(facts.childCount != null ? facts.childCount : "--") + "</div></div>"
+                    + "</div>"
+                    + "</div>";
+            }
+
+            function renderJsonTab(cluster, nodePayload, provenancePayload) {
+                var bundle = {
+                    cluster: cluster || null,
+                    node: nodePayload || null,
+                    provenance: provenancePayload || null,
+                    summary: state.summary || null
+                };
+                return "<div class=\"json-panel\"><pre>" + escapeHtml(JSON.stringify(bundle, null, 2)) + "</pre></div>";
+            }
+
+            function renderContent() {
+                var cluster = currentCluster();
+                var nodePayload = cluster && state.currentPath ? state.nodeCache.get(keyFor(cluster.clusterId, state.currentPath)) : null;
+                var provenancePayload = cluster && state.currentPath ? state.provenanceCache.get(keyFor(cluster.clusterId, state.currentPath)) : null;
+                var html = "";
+                if (state.error) {
+                    html += "<div class=\"px-3 py-2 rounded border border-rose-200 bg-rose-50 text-rose-700\">" + escapeHtml(state.error) + "</div>";
+                }
+                if (state.loadingNode && !nodePayload) {
+                    html += "<div class=\"text-slate-400\">Loading node details...</div>";
+                    tabContent.innerHTML = html;
+                    return;
+                }
+                if (state.currentTab === "properties") {
+                    html += renderPropertiesTab(cluster, nodePayload, provenancePayload);
+                } else if (state.currentTab === "access") {
+                    html += renderAccessTab(cluster, nodePayload, provenancePayload);
+                } else {
+                    html += renderJsonTab(cluster, nodePayload, provenancePayload);
+                }
+                tabContent.innerHTML = html;
+            }
+
+            function render() {
+                renderWorkspaceLabel();
+                renderClusterSelector();
+                renderTree();
+                renderPathBar();
+                renderTabs();
+                renderContent();
+            }
+
+            function clearClusterCaches(clusterId) {
+                [state.treeCache, state.nodeCache, state.provenanceCache].forEach(function (map) {
+                    Array.from(map.keys()).forEach(function (key) {
+                        if (key.indexOf(clusterId + "::") === 0) {
+                            map.delete(key);
+                        }
+                    });
+                });
+                Array.from(state.expanded).forEach(function (key) {
+                    if (key.indexOf(clusterId + "::") === 0) {
+                        state.expanded.delete(key);
+                    }
+                });
+            }
+
+            function ensureTreeLoaded(clusterId, path, force) {
+                var cacheKey = keyFor(clusterId, path);
+                if (!force && state.treeCache.has(cacheKey)) {
+                    return Promise.resolve(state.treeCache.get(cacheKey));
+                }
+                state.loadingTree.add(cacheKey);
+                return requestJson(treeEndpoint(clusterId, path)).then(function (payload) {
+                    state.treeCache.set(cacheKey, payload);
+                    return payload;
+                }).finally(function () {
+                    state.loadingTree.delete(cacheKey);
+                });
+            }
+
+            function ensureDetailsLoaded(clusterId, path, force) {
+                var nodeKey = keyFor(clusterId, path);
+                if (!force && state.nodeCache.has(nodeKey) && state.provenanceCache.has(nodeKey)) {
+                    return Promise.resolve();
+                }
+                state.loadingNode = true;
+                return Promise.all([
+                    requestJson(nodeEndpoint(clusterId, path)).then(function (payload) {
+                        state.nodeCache.set(nodeKey, payload);
+                    }),
+                    requestJson(provenanceEndpoint(clusterId, path)).then(function (payload) {
+                        state.provenanceCache.set(nodeKey, payload);
+                    })
+                ]).finally(function () {
+                    state.loadingNode = false;
+                });
+            }
+
+            function ancestorPaths(cluster, path) {
+                var ancestors = [];
+                var normalized = normalizePath(path, cluster.browseRoot);
+                var current = cluster.browseRoot;
+                ancestors.push(current);
+                if (normalized === current) {
+                    return ancestors;
+                }
+                var suffix = normalized.slice(current.length);
+                var segments = suffix.split("/").filter(Boolean);
+                for (var i = 0; i < segments.length - 1; i++) {
+                    current += "/" + segments[i];
+                    ancestors.push(current);
+                }
+                return ancestors;
+            }
+
+            function syncHash(path) {
+                if (!path) {
+                    return;
+                }
+                window.location.hash = encodeURIComponent(path);
+            }
+
+            function loadPath(path, force) {
+                var cluster = currentCluster();
+                if (!cluster) {
+                    return Promise.resolve();
+                }
+                var normalized = normalizePath(path, cluster.browseRoot);
+                if (normalized === "/") {
+                    normalized = cluster.browseRoot;
+                }
+                state.currentPath = normalized;
+                state.error = "";
+                syncHash(normalized);
+                ensureExpanded(cluster.clusterId, "/");
+                var ancestors = ancestorPaths(cluster, normalized);
+                ancestors.forEach(function (ancestor) {
+                    ensureExpanded(cluster.clusterId, ancestor);
+                });
+                render();
+                return ancestors.reduce(function (chain, ancestor) {
+                    return chain.then(function () {
+                        return ensureTreeLoaded(cluster.clusterId, ancestor, force);
+                    });
+                }, Promise.resolve()).then(function () {
+                    return ensureDetailsLoaded(cluster.clusterId, normalized, force);
+                }).catch(function (error) {
+                    state.error = error.message || "Failed explorer request";
+                }).finally(function () {
+                    render();
+                });
+            }
+
+            function initialPathForCluster(cluster) {
+                var hash = window.location.hash ? decodeURIComponent(window.location.hash.slice(1)) : "";
+                var normalized = normalizePath(hash, cluster.browseRoot);
+                if (normalized === "/" || normalized.indexOf(cluster.browseRoot) === 0) {
+                    return normalized;
+                }
+                return cluster.browseRoot;
+            }
+
+            function loadNavigation(force) {
+                return requestJson(NAV_ENDPOINT).then(function (payload) {
+                    state.nav = payload;
+                    var clusters = [];
+                    if (payload.localCluster) {
+                        clusters.push(payload.localCluster);
+                    }
+                    if (payload.mountedNeighbors && payload.mountedNeighbors.length) {
+                        clusters = clusters.concat(payload.mountedNeighbors);
+                    }
+                    state.clusters = clusters;
+                    if (!state.selectedClusterId || !clusters.some(function (cluster) { return cluster.clusterId === state.selectedClusterId; })) {
+                        state.selectedClusterId = clusters.length ? clusters[0].clusterId : null;
+                    }
+                    if (force && state.selectedClusterId) {
+                        clearClusterCaches(state.selectedClusterId);
+                    }
+                    return requestJson(SUMMARY_ENDPOINT).catch(function () {
+                        return null;
+                    });
+                }).then(function (summaryPayload) {
+                    state.summary = summaryPayload;
+                    var cluster = currentCluster();
+                    if (!cluster) {
+                        render();
+                        return;
+                    }
+                    return loadPath(initialPathForCluster(cluster), force);
+                }).catch(function (error) {
+                    state.error = error.message || "Failed to load explorer navigation";
+                    render();
+                });
+            }
+
+            function handleTreeClick(event) {
+                var toggle = event.target.closest("[data-action='toggle']");
+                if (toggle) {
+                    event.stopPropagation();
+                    var path = toggle.getAttribute("data-path");
+                    var cluster = currentCluster();
+                    if (!cluster || !path) {
+                        return;
+                    }
+                    var expandedKey = keyFor(cluster.clusterId, path);
+                    if (state.expanded.has(expandedKey)) {
+                        state.expanded.delete(expandedKey);
+                        render();
+                        return;
+                    }
+                    state.expanded.add(expandedKey);
+                    render();
+                    ensureTreeLoaded(cluster.clusterId, path, false).catch(function (error) {
+                        state.error = error.message || "Failed to expand node";
+                    }).finally(render);
+                    return;
+                }
+
+                var row = event.target.closest("[data-action='select']");
+                if (row) {
+                    var path = row.getAttribute("data-path");
+                    if (path === "/") {
+                        var cluster = currentCluster();
+                        if (cluster) {
+                            path = cluster.browseRoot;
+                        }
+                    }
+                    loadPath(path, false);
+                }
+            }
+
+            function handleTabClick(event) {
+                var button = event.target.closest(".tab-button");
+                if (!button) {
+                    return;
+                }
+                state.currentTab = button.getAttribute("data-tab");
+                render();
+            }
+
+            function handlePathClick(event) {
+                var button = event.target.closest("[data-path]");
+                if (!button || button.classList.contains("current")) {
+                    return;
+                }
+                loadPath(button.getAttribute("data-path"), false);
+            }
+
+            function handleTabContentClick(event) {
+                var pathButton = event.target.closest("[data-open-path]");
+                if (pathButton) {
+                    loadPath(pathButton.getAttribute("data-open-path"), false);
+                }
+            }
+
+            function copyCurrentPath() {
+                if (!state.currentPath) {
+                    return;
+                }
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(state.currentPath).catch(function () {
+                        window.prompt("Copy repository path", state.currentPath);
+                    });
+                    return;
+                }
+                window.prompt("Copy repository path", state.currentPath);
+            }
+
+            function promptForPath() {
+                var cluster = currentCluster();
+                var seed = state.currentPath || (cluster ? cluster.browseRoot : "/oak-chain");
+                var nextPath = window.prompt("Open repository path", seed);
+                if (nextPath != null) {
+                    loadPath(nextPath, false);
+                }
+            }
+
+            function bindEvents() {
+                document.getElementById("refresh-button").addEventListener("click", function () {
+                    loadNavigation(true);
+                });
+                document.getElementById("browse-root-button").addEventListener("click", function () {
+                    var cluster = currentCluster();
+                    if (cluster) {
+                        loadPath(cluster.browseRoot, false);
+                    }
+                });
+                document.getElementById("copy-path-button").addEventListener("click", copyCurrentPath);
+                document.getElementById("open-path-button").addEventListener("click", promptForPath);
+                clusterSelect.addEventListener("change", function () {
+                    state.selectedClusterId = clusterSelect.value;
+                    state.currentTab = "properties";
+                    var cluster = currentCluster();
+                    if (cluster) {
+                        loadPath(cluster.browseRoot, false);
+                    } else {
+                        render();
+                    }
+                });
+                treePanel.addEventListener("click", handleTreeClick);
+                document.querySelector(".flex.items-end.px-2.pt-2.bg-slate-100").addEventListener("click", handleTabClick);
+                pathBar.addEventListener("click", handlePathClick);
+                tabContent.addEventListener("click", handleTabContentClick);
+            }
+
+            resolveIdentityLabel();
+            bindEvents();
+            loadNavigation(false);
+        })();
     </script>
 </body>
 </html>

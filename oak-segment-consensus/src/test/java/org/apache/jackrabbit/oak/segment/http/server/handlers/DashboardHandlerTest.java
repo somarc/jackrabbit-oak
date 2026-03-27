@@ -279,6 +279,8 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("Explorer | Blockchain AEM Validator"));
         assertTrue(html.contains("mode-sepolia"));
         assertTrue(html.contains("SEPOLIA"));
+        assertTrue(html.contains("CRX/OC Explorer"));
+        assertTrue(html.contains("/v1/explorer/content/nav"));
     }
 
     @Test
