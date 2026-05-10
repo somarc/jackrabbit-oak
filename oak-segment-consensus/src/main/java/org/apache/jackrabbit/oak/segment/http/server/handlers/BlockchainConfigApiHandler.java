@@ -24,7 +24,7 @@ import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -60,7 +60,7 @@ public class BlockchainConfigApiHandler {
         json.put("network", getNetworkName(config.getMode()));
         json.put("chainId", getChainId(config.getMode()));
         json.put("contractAddress", config.getContractAddress());
-        json.put("rpcUrl", config.getRpcUrl() != null ? config.getRpcUrl() : "");
+        json.put("rpcConfigured", config.getRpcUrl() != null && !config.getRpcUrl().trim().isEmpty());
         json.put("requiresMetaMask", config.getMode() != BlockchainConfig.Mode.MOCK);
         json.put("useTestnet", config.getMode() == BlockchainConfig.Mode.SEPOLIA);
         json.put("displayName", getDisplayName(config.getMode()));

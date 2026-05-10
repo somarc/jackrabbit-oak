@@ -16,7 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.sse;
 
-import javax.servlet.AsyncContext;
+import jakarta.servlet.AsyncContext;
 import java.io.PrintWriter;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;

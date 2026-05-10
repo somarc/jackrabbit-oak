@@ -26,7 +26,7 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.junit.Test;
 import io.prometheus.client.exporter.common.TextFormat;
 
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;

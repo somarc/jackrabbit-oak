@@ -25,9 +25,9 @@ import org.apache.jackrabbit.oak.segment.http.server.sse.SSEClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.servlet.AsyncContext;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.AsyncContext;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.Arrays;
@@ -148,27 +148,27 @@ public class EventStreamHandler {
         }
 
         // Set up cleanup on disconnect
-        asyncContext.addListener(new javax.servlet.AsyncListener() {
+        asyncContext.addListener(new jakarta.servlet.AsyncListener() {
             @Override
-            public void onComplete(javax.servlet.AsyncEvent event) {
+            public void onComplete(jakarta.servlet.AsyncEvent event) {
                 broadcaster.removeClient(client);
                 log.info("📡 SSE client disconnected (complete): {}", request.getRemoteAddr());
             }
 
             @Override
-            public void onTimeout(javax.servlet.AsyncEvent event) {
+            public void onTimeout(jakarta.servlet.AsyncEvent event) {
                 broadcaster.removeClient(client);
                 log.info("📡 SSE client disconnected (timeout): {}", request.getRemoteAddr());
             }
 
             @Override
-            public void onError(javax.servlet.AsyncEvent event) {
+            public void onError(jakarta.servlet.AsyncEvent event) {
                 broadcaster.removeClient(client);
                 log.info("📡 SSE client disconnected (error): {}", request.getRemoteAddr());
             }
 
             @Override
-            public void onStartAsync(javax.servlet.AsyncEvent event) {
+            public void onStartAsync(jakarta.servlet.AsyncEvent event) {
                 // Not used
             }
         });

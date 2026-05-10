@@ -22,12 +22,11 @@ import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
-import org.eclipse.jetty.server.Request;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -135,12 +134,11 @@ public class RequestRouter implements AutoCloseable {
     /**
      * Route a request to the appropriate handler based on path and method.
      * 
-     * @param baseRequest Jetty base request
      * @param request HTTP servlet request
      * @param response HTTP servlet response
      * @throws IOException if an I/O error occurs
      */
-    public void route(Request baseRequest, HttpServletRequest request, HttpServletResponse response) throws IOException {
+    public void route(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getRequestURI();
         String method = request.getMethod();
         
@@ -149,43 +147,36 @@ public class RequestRouter implements AutoCloseable {
             // Skip rate limiting for health checks
             if ("/health".equals(path) && "GET".equals(method)) {
                 healthHandler.handleHealth(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/health/local".equals(path) && "GET".equals(method)) {
                 healthHandler.handleLocalHealth(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/health/deep".equals(path) && "GET".equals(method)) {
                 healthHandler.handleDeepHealth(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/health/cluster".equals(path) && "GET".equals(method)) {
                 healthHandler.handleClusterHealth(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/ops/snapshots/health".equals(path) && "GET".equals(method)) {
                 healthHandler.handleGetOpsHealthSnapshot(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/ops/snapshots/runtime".equals(path) && "GET".equals(method)) {
                 healthHandler.handleGetOpsRuntimeSnapshot(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/ops/snapshots/storage".equals(path) && "GET".equals(method)) {
                 healthHandler.handleGetOpsStorageSnapshot(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -193,14 +184,12 @@ public class RequestRouter implements AutoCloseable {
             // not public API traffic, so they must bypass public rate limiting.
             if (!isRateLimitExempt(path, method) && !rateLimiter.allowRequest(request, response)) {
                 rateLimiter.sendRateLimitResponse(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Validate authentication for all other endpoints (if auth is enabled)
             // If auth is disabled (no token configured), this allows all requests (POC mode)
             if (!authValidator.validateRequest(request, response)) {
-                baseRequest.setHandled(true);
                 return; // Response already sent by validateRequest
             }
             
@@ -208,7 +197,6 @@ public class RequestRouter implements AutoCloseable {
             if ("/".equals(path) || "/dashboard".equals(path)) {
                 if ("GET".equals(method)) {
                     dashboardHandler.handleDashboard(response);
-                    baseRequest.setHandled(true);
                     return;
                 }
             }
@@ -219,62 +207,52 @@ public class RequestRouter implements AutoCloseable {
                     HttpServletResponse.SC_GONE,
                     "Browser UI routes are disabled. Use validator-native API surface (/v1/index) or an external gateway/UI. Set -Doak.http.browser.ui.enabled=true to enable."
                 );
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/explorer".equals(path) && "GET".equals(method)) {
                 dashboardHandler.handleExplorerUI(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/api-browser".equals(path) && "GET".equals(method)) {
                 dashboardHandler.handleApiBrowserUI(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/index".equals(path) && "GET".equals(method)) {
                 dashboardHandler.handleApiIndex(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/config/osgi".equals(path) && "GET".equals(method)) {
                 osgiConfigApiHandler.handleEffectiveConfig(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/config/osgi/schema".equals(path) && "GET".equals(method)) {
                 osgiConfigApiHandler.handleConfigSchema(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/config/osgi/sources".equals(path) && "GET".equals(method)) {
                 osgiConfigApiHandler.handleConfigSources(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/config/osgi/coverage".equals(path) && "GET".equals(method)) {
                 osgiConfigApiHandler.handleCoverage(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/config/osgi/delta".equals(path) && "GET".equals(method)) {
                 osgiConfigApiHandler.handleDelta(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // File serving
             if ("/journal.log".equals(path) && "GET".equals(method)) {
                 fileHandler.handleFile(request, response, "journal.log", "text/plain");
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -286,13 +264,11 @@ public class RequestRouter implements AutoCloseable {
                 } else {
                     ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Method not allowed");
                 }
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/gc.log".equals(path) && "GET".equals(method)) {
                 fileHandler.handleFile(request, response, "gc.log", "text/plain");
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -306,7 +282,6 @@ public class RequestRouter implements AutoCloseable {
                 } else {
                     ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Method not allowed");
                 }
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -314,19 +289,16 @@ public class RequestRouter implements AutoCloseable {
             if ("/api/explore".equals(path) && "GET".equals(method)) {
                 String nodePath = request.getParameter("path");
                 explorerApiHandler.handleExploreNode(response, nodePath != null ? nodePath : "/");
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/api/segments/recent".equals(path) && "GET".equals(method)) {
                 explorerApiHandler.handleRecentSegments(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/api/segments/tars".equals(path) && "GET".equals(method)) {
                 explorerApiHandler.handleTarFiles(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -334,29 +306,24 @@ public class RequestRouter implements AutoCloseable {
             if (path.startsWith("/api/blob/") && "GET".equals(method)) {
                 String blobId = path.substring("/api/blob/".length());
                 explorerApiHandler.handleBlobStream(request, response, blobId);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // CID API (Oak blob ID ↔ IPFS CID mapping)
             if ("/api/cid/stats".equals(path) && "GET".equals(method)) {
                 cidApiHandler.handleStats(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             if (path.startsWith("/api/cid/gateway/") && "GET".equals(method)) {
                 cidApiHandler.handleGatewayRedirect(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             if (path.startsWith("/api/cid/reverse/") && "GET".equals(method)) {
                 cidApiHandler.handleReverseLookup(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             if (path.startsWith("/api/cid/") && "GET".equals(method)) {
                 cidApiHandler.handleGetCid(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -365,71 +332,60 @@ public class RequestRouter implements AutoCloseable {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             if ("/v1/ops/events/stream".equals(path) && "GET".equals(method)) {
                 eventStreamHandler.handleOpsEventStream(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/events/stream".equals(path) && "GET".equals(method)) {
                 eventStreamHandler.handleEventStream(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/events/recent".equals(path) && "GET".equals(method)) {
                 eventStreamHandler.handleRecentEvents(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/events/stats".equals(path) && "GET".equals(method)) {
                 eventStreamHandler.handleStats(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Metrics
             if ("/api/metrics".equals(path) && "GET".equals(method)) {
                 metricsHandler.handleMetrics(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/metrics".equals(path) && "GET".equals(method)) {
                 metricsHandler.handlePrometheusMetrics(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Consensus API
             if ("/v1/explorer/summary".equals(path) && "GET".equals(method)) {
                 explorerApiV1Handler.handleSummary(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/explorer/release-flow".equals(path) && "GET".equals(method)) {
                 explorerApiV1Handler.handleReleaseFlow(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if (path.startsWith("/v1/explorer/proposals/") && "GET".equals(method)) {
                 String proposalId = path.substring("/v1/explorer/proposals/".length());
                 explorerApiV1Handler.handleProposalById(response, proposalId);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if (path.startsWith("/v1/explorer/wallets/") && "GET".equals(method)) {
                 String walletAddress = path.substring("/v1/explorer/wallets/".length());
                 explorerApiV1Handler.handleWalletByAddress(response, walletAddress);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/explorer/content/nav".equals(path) && "GET".equals(method)) {
                 explorerApiV1Handler.handleContentNav(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
@@ -442,17 +398,14 @@ public class RequestRouter implements AutoCloseable {
                     String requestedPath = request.getParameter("path");
                     if ("tree".equals(action)) {
                         explorerApiV1Handler.handleContentTree(response, clusterId, requestedPath);
-                        baseRequest.setHandled(true);
                         return;
                     }
                     if ("node".equals(action)) {
                         explorerApiV1Handler.handleContentNode(response, clusterId, requestedPath);
-                        baseRequest.setHandled(true);
                         return;
                     }
                     if ("provenance".equals(action)) {
                         explorerApiV1Handler.handleContentProvenance(response, clusterId, requestedPath);
-                        baseRequest.setHandled(true);
                         return;
                     }
                 }
@@ -480,33 +433,28 @@ public class RequestRouter implements AutoCloseable {
                     }
                 }
                 consensusApiHandler.handleProposeWrite(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Delete Proposal API
             if ("/v1/propose-delete".equals(path) && "POST".equals(method)) {
                 consensusApiHandler.handleDeleteProposal(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Binary Upload API (ADR 020 - Lazy upload on confirmation)
             if ("/v1/binary/declare-intent".equals(path) && "POST".equals(method)) {
                 binaryUploadHandler.handleDeclareIntent(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if (path.startsWith("/v1/binary/check-intent/") && "GET".equals(method)) {
                 binaryUploadHandler.handleCheckIntent(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/binary/complete-upload".equals(path) && "POST".equals(method)) {
                 binaryUploadHandler.handleCompleteUpload(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -515,19 +463,16 @@ public class RequestRouter implements AutoCloseable {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             if ("/api/mock/advance-epoch".equals(path) && "POST".equals(method)) {
                 handleMockAdvanceEpoch(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/api/mock/set-epoch-offset".equals(path) && "POST".equals(method)) {
                 handleMockSetEpochOffset(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/api/mock/epoch-status".equals(path) && "GET".equals(method)) {
                 handleMockEpochStatus(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -576,222 +521,187 @@ public class RequestRouter implements AutoCloseable {
                 
                 json.append("\n}\n");
                 response.getWriter().write(json.toString());
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/consensus/status".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGetConsensusStatus(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/consensus/leader".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGetConsensusLeader(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Query APIs
             if ("/v1/wallets/stats".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleWalletStats(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/wallets/content".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleWalletContent(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Follower HEAD update endpoint (used by leader to broadcast HEAD to followers)
             if ("/v1/follower/head-update".equals(path) && "POST".equals(method)) {
                 leaderConsensusHandler.handleFollowerHeadUpdate(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // GC Cost Estimation
             if ("/v1/gc/estimate".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGCCostEstimate(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Proposal Queue Status
             if (path.startsWith("/v1/ops/operations/") && "GET".equals(method)) {
                 consensusApiHandler.handleGetOperationStatus(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/ops/snapshots/queue".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGetOpsQueueSnapshot(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if (path.startsWith("/v1/settlement/proposals/") && "GET".equals(method)) {
                 consensusApiHandler.handleGetSettlementByProposalId(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if (path.startsWith("/v1/settlement/transactions/") && "GET".equals(method)) {
                 consensusApiHandler.handleGetSettlementByTransactionHash(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/ops/snapshots/cluster".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleGetOpsClusterSnapshot(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/ops/snapshots/replication".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleGetOpsReplicationSnapshot(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if (path.startsWith("/v1/proposals/") && path.endsWith("/status") && "GET".equals(method)) {
                 consensusApiHandler.handleGetProposalStatus(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/proposals/pending/count".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGetPendingCount(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/proposals/queue/stats".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGetQueueStats(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/proposals/release-flow".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleGetProposalReleaseFlow(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Registration
             if ("/v1/register-client".equals(path) && ("POST".equals(method) || "PUT".equals(method))) {
                 registrationHandler.handleClientRegistration(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Peer discovery
             if ("/v1/peers".equals(path) && "GET".equals(method)) {
                 peerDiscoveryHandler.handlePeerList(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/ngrok-url".equals(path) && "GET".equals(method)) {
                 peerDiscoveryHandler.handleNgrokUrl(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Blockchain configuration endpoint
             if ("/v1/blockchain/config".equals(path) && "GET".equals(method)) {
                 new BlockchainConfigApiHandler(context).handle(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Aeron Cluster-specific endpoints
             if ("/v1/aeron/cluster-state".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleClusterState(response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/aeron/validator-identities".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleValidatorIdentities(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/aeron/raft-metrics".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleRaftMetrics(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/aeron/node-status".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleNodeStatus(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/aeron/leadership-history".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleLeadershipHistory(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // ✅ ADR 025: Replication lag monitoring endpoint
             if ("/v1/aeron/replication-lag".equals(path) && "GET".equals(method)) {
                 aeronApiHandler.handleReplicationLag(response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             // Fragmentation & GC Metrics API
             if ("/v1/fragmentation/metrics".equals(path) && "GET".equals(method)) {
                 fragmentationApiHandler.handleGetAllMetrics(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if (path != null && path.startsWith("/v1/fragmentation/metrics/") && "GET".equals(method)) {
                 String walletAddress = path.substring("/v1/fragmentation/metrics/".length());
                 fragmentationApiHandler.handleGetEntityMetrics(request, response, walletAddress);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/fragmentation/top".equals(path) && "GET".equals(method)) {
                 fragmentationApiHandler.handleGetTopFragmented(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/gc/status".equals(path) && "GET".equals(method)) {
                 fragmentationApiHandler.handleGetGcStatus(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/compaction/proposals".equals(path) && "GET".equals(method)) {
                 fragmentationApiHandler.handleGetCompactionProposals(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/propose-gc".equals(path) && "POST".equals(method)) {
                 fragmentationApiHandler.handleProposeGC(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
             if ("/v1/gc/execute".equals(path) && "POST".equals(method)) {
                 fragmentationApiHandler.handleExecuteGC(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
 
             if ("/v1/gc/vote".equals(path) && "POST".equals(method)) {
                 fragmentationApiHandler.handleVoteGC(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -804,22 +714,18 @@ public class RequestRouter implements AutoCloseable {
                 if (remaining.contains("/pay") && "POST".equals(method)) {
                     String walletAddress = remaining.substring(0, remaining.indexOf("/pay"));
                     fragmentationApiHandler.handlePayGCDebt(request, response, walletAddress);
-                    baseRequest.setHandled(true);
                     return;
                 } else if (remaining.contains("/set-limit") && "POST".equals(method)) {
                     String walletAddress = remaining.substring(0, remaining.indexOf("/set-limit"));
                     fragmentationApiHandler.handleSetDebtLimit(request, response, walletAddress);
-                    baseRequest.setHandled(true);
                     return;
                 } else if (remaining.contains("/execute-pending") && "POST".equals(method)) {
                     String walletAddress = remaining.substring(0, remaining.indexOf("/execute-pending"));
                     fragmentationApiHandler.handleExecutePendingDebt(request, response, walletAddress);
-                    baseRequest.setHandled(true);
                     return;
                 } else if ("GET".equals(method) && !remaining.contains("/")) {
                     // GET /v1/gc/account/{walletAddress}
                     fragmentationApiHandler.handleGetGCAccount(request, response, remaining);
-                    baseRequest.setHandled(true);
                     return;
                 }
             }
@@ -827,7 +733,6 @@ public class RequestRouter implements AutoCloseable {
             // Manual GC trigger endpoint (for testing)
             if ("/v1/gc/trigger".equals(path) && "POST".equals(method)) {
                 fragmentationApiHandler.handleTriggerGC(request, response);
-                baseRequest.setHandled(true);
                 return;
             }
             
@@ -851,7 +756,6 @@ public class RequestRouter implements AutoCloseable {
             } else {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
             }
-            baseRequest.setHandled(true);
             
         } catch (Exception e) {
             log.error("Error routing request: " + path, e);
@@ -860,7 +764,6 @@ public class RequestRouter implements AutoCloseable {
             } else {
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
             }
-            baseRequest.setHandled(true);
         }
     }
 
@@ -969,8 +872,8 @@ public class RequestRouter implements AutoCloseable {
      *
      * <p>POST /api/mock/advance-epoch?epochs=N now returns 410 Gone.</p>
      */
-    private void handleMockAdvanceEpoch(javax.servlet.http.HttpServletRequest request, 
-                                        javax.servlet.http.HttpServletResponse response) throws java.io.IOException {
+    private void handleMockAdvanceEpoch(jakarta.servlet.http.HttpServletRequest request, 
+                                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         ApiErrorUtil.sendJsonError(
             response,
             HttpServletResponse.SC_GONE,
@@ -983,8 +886,8 @@ public class RequestRouter implements AutoCloseable {
      *
      * <p>POST /api/mock/set-epoch-offset?offset=N now returns 410 Gone.</p>
      */
-    private void handleMockSetEpochOffset(javax.servlet.http.HttpServletRequest request, 
-                                          javax.servlet.http.HttpServletResponse response) throws java.io.IOException {
+    private void handleMockSetEpochOffset(jakarta.servlet.http.HttpServletRequest request, 
+                                          jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         ApiErrorUtil.sendJsonError(
             response,
             HttpServletResponse.SC_GONE,
@@ -995,8 +898,8 @@ public class RequestRouter implements AutoCloseable {
     /**
      * Sepolia-backed epoch status view retained for compatibility in mock mode.
      */
-    private void handleMockEpochStatus(javax.servlet.http.HttpServletRequest request, 
-                                       javax.servlet.http.HttpServletResponse response) throws java.io.IOException {
+    private void handleMockEpochStatus(jakarta.servlet.http.HttpServletRequest request, 
+                                       jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
         org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig config = 
             org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
         

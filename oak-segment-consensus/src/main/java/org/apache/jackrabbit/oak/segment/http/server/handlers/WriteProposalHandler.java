@@ -30,8 +30,8 @@ import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUti
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -105,8 +105,8 @@ public class WriteProposalHandler {
                 log.debug("📦 Processing MULTIPART form data upload");
 
                 // Parse multipart request
-                java.util.Collection<javax.servlet.http.Part> parts = request.getParts();
-                for (javax.servlet.http.Part part : parts) {
+                java.util.Collection<jakarta.servlet.http.Part> parts = request.getParts();
+                for (jakarta.servlet.http.Part part : parts) {
                     String partName = part.getName();
 
                     if (part.getSubmittedFileName() != null) {

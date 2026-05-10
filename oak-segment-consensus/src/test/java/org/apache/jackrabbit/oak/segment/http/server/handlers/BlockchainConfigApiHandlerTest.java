@@ -24,7 +24,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Paths;
@@ -77,7 +77,8 @@ public class BlockchainConfigApiHandlerTest {
         String json = body.toString();
         assertTrue(json.contains("\"mode\":\"sepolia\""));
         assertTrue(json.contains("\"chainId\":11155111"));
-        assertTrue(json.contains("\"rpcUrl\":\"https://example.invalid/rpc\""));
+        assertTrue(json.contains("\"rpcConfigured\":true"));
+        assertTrue(!json.contains("https://example.invalid/rpc"));
         assertTrue(json.contains("\"validatorUrl\":\"http://validator-1:8090\""));
         assertTrue(json.contains("\"configSource\":"));
         assertTrue(json.contains("\"gasModel\":"));

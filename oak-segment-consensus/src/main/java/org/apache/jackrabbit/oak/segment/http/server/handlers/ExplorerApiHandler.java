@@ -26,7 +26,7 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -271,7 +271,7 @@ public class ExplorerApiHandler {
      * @param response HTTP response
      * @param blobId Oak blob ID (e.g., ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442)
      */
-    public void handleBlobStream(javax.servlet.http.HttpServletRequest request, 
+    public void handleBlobStream(jakarta.servlet.http.HttpServletRequest request, 
                                   HttpServletResponse response, 
                                   String blobId) throws IOException {
         org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = blobStoreSupplier.get();

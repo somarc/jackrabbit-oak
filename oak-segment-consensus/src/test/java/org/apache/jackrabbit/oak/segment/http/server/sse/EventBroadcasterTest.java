@@ -18,7 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.sse;
 
 import org.junit.Test;
 
-import javax.servlet.AsyncContext;
+import jakarta.servlet.AsyncContext;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Collections;

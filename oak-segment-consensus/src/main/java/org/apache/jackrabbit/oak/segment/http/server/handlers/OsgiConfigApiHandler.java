@@ -27,7 +27,7 @@ import org.apache.jackrabbit.oak.segment.http.server.RateLimiterTuningIntrospect
 import org.apache.jackrabbit.oak.segment.http.server.TlsConfiguration;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;

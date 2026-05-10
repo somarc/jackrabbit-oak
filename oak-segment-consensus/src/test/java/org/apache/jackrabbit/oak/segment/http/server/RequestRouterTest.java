@@ -54,14 +54,13 @@ import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
-import org.eclipse.jetty.server.Request;
 import org.junit.Test;
 
-import javax.servlet.AsyncContext;
-import javax.servlet.ServletOutputStream;
-import javax.servlet.WriteListener;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.AsyncContext;
+import jakarta.servlet.ServletOutputStream;
+import jakarta.servlet.WriteListener;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintWriter;
@@ -132,13 +131,11 @@ public class RequestRouterTest {
         withRoutingProperties(false, () -> {
             ServerContext context = newContext();
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/api-browser");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_GONE);
             assertTrue(body.toString().contains("Browser UI routes are disabled"));
         });
@@ -148,13 +145,11 @@ public class RequestRouterTest {
     public void testOsgiConfigRouteReturnsEffectiveConfig() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/config/osgi");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"config.osgi.v1\""));
         });
@@ -164,13 +159,11 @@ public class RequestRouterTest {
     public void testOsgiConfigDeltaRouteReturnsDeltaPayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/config/osgi/delta");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"config.osgi.delta.v1\""));
         });
@@ -180,13 +173,11 @@ public class RequestRouterTest {
     public void testOsgiConfigSchemaRouteReturnsSchemaPayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/config/osgi/schema");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"config.osgi.schema.v1\""));
         });
@@ -196,13 +187,11 @@ public class RequestRouterTest {
     public void testOsgiConfigSourcesRouteReturnsSourcesPayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/config/osgi/sources");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"config.osgi.sources.v1\""));
         });
@@ -212,13 +201,11 @@ public class RequestRouterTest {
     public void testOsgiConfigCoverageRouteReturnsCoveragePayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/config/osgi/coverage");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"config.osgi.coverage.v1\""));
         });
@@ -235,13 +222,11 @@ public class RequestRouterTest {
             when(context.aeronConsensusEngine.getCurrentTerm()).thenReturn(4);
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/consensus/leader");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"consensus.leader.v1\""));
             assertTrue(body.toString().contains("\"currentLeader\":\"http://localhost:8090\""));
@@ -252,13 +237,11 @@ public class RequestRouterTest {
     public void testDashboardRouteRendersLandingPage() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/dashboard");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("Oak Control Plane Home"));
         });
@@ -268,13 +251,11 @@ public class RequestRouterTest {
     public void testExplorerRouteRendersExplorerUiWhenBrowserEnabled() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/explorer");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("Explorer | Blockchain AEM Validator"));
         });
@@ -284,13 +265,11 @@ public class RequestRouterTest {
     public void testApiBrowserRouteRendersBrowserUiWhenEnabled() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/api-browser");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("API Browser | Blockchain AEM Validator"));
         });
@@ -300,13 +279,11 @@ public class RequestRouterTest {
     public void testApiIndexRouteReturnsIndexPayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/index");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"index.v1\""));
         });
@@ -335,13 +312,11 @@ public class RequestRouterTest {
             when(context.aeronConsensusEngine.getReplicationLagStatus()).thenReturn(Collections.singletonMap("healthy", true));
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/ops/snapshots/runtime");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"ops.runtime.v1\""));
         });
@@ -355,13 +330,11 @@ public class RequestRouterTest {
             tracker.recordWrite("0xabc", "data00001a.tar", 2048L);
             context.fragmentationTracker = tracker;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/fragmentation/metrics");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"walletAddress\":\"0xabc\""));
             assertTrue(body.toString().contains("\"totalEntities\":1"));
@@ -377,13 +350,11 @@ public class RequestRouterTest {
             accountManager.convertAllPendingToExecuted();
             context.gcAccountManager = accountManager;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/gc/account/0xwallet");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"walletAddress\":\"0xwallet\""));
             assertTrue(body.toString().contains("\"executedDebt\":\"0.50\""));
@@ -399,15 +370,13 @@ public class RequestRouterTest {
             accountManager.convertAllPendingToExecuted();
             context.gcAccountManager = accountManager;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/v1/gc/account/0xwallet/pay");
             when(request.getParameter("amount")).thenReturn("0.25");
             when(request.getParameter("txHash")).thenReturn("0xtx");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"amountPaid\":\"0.25\""));
             assertTrue(body.toString().contains("\"remainingDebt\":\"0.25\""));
@@ -420,14 +389,12 @@ public class RequestRouterTest {
             ServerContext context = newContext();
             context.gcAccountManager = new GCAccountManager();
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/v1/gc/account/0xwallet/set-limit");
             when(request.getParameter("limit")).thenReturn("12.5");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"debtLimit\":\"12.5\""));
         });
@@ -441,13 +408,11 @@ public class RequestRouterTest {
             accountManager.addDebt("0xwallet", "/oak-chain/demo", 5L);
             context.gcAccountManager = accountManager;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/v1/gc/account/0xwallet/execute-pending");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"converted\":\"0.50\""));
             assertTrue(body.toString().contains("\"executedDebt\":\"0.50\""));
@@ -460,13 +425,11 @@ public class RequestRouterTest {
             ServerContext context = newContext();
             context.fragmentationTracker = new FragmentationTracker();
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/fragmentation/metrics/0xmissing");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
             assertTrue(body.toString().contains("No metrics found for wallet: 0xmissing"));
         });
@@ -480,13 +443,11 @@ public class RequestRouterTest {
             accountManager.getAccount("0xblocked").totalDebt = new BigDecimal("120.00");
             context.gcAccountManager = accountManager;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/v1/gc/trigger");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"entitiesBlocked\":1"));
             assertTrue(body.toString().contains("\"blockedWallets\":[\"0xblocked\"]"));
@@ -508,13 +469,11 @@ public class RequestRouterTest {
             when(engine.getCurrentLeader()).thenReturn("http://validator-2:8090");
             context.aeronConsensusEngine = engine;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/health/cluster");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"status\":\"UP\""));
             assertTrue(body.toString().contains("\"reachableCount\":2"));
@@ -535,13 +494,11 @@ public class RequestRouterTest {
             when(engine.getCurrentLeader()).thenReturn("http://validator-2:8090");
             context.aeronConsensusEngine = engine;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/ops/snapshots/health");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
             assertTrue(body.toString().contains("\"hit\":false"));
@@ -555,13 +512,11 @@ public class RequestRouterTest {
             context.selfUrl = "http://validator-2:8090";
             context.aeronConsensusEngine = baseEngine();
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/aeron/cluster-state");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"clusterId\":\"oak-consensus-cluster\""));
             assertTrue(body.toString().contains("\"walletAddress\":\"0x2222222222222222222222222222222222222222\""));
@@ -607,13 +562,11 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/explorer/summary");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"explorer.v1\""));
             assertTrue(body.toString().contains("\"routingDebt\":4"));
@@ -632,13 +585,11 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/explorer/release-flow");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"releaseFlow\":{\"releaseMode\":\"adaptive-active\"}"));
         });
@@ -655,13 +606,11 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/proposals/release-flow");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"release-flow.v1\""));
             assertTrue(body.toString().contains("\"releaseMode\":\"adaptive-active\""));
@@ -689,13 +638,11 @@ public class RequestRouterTest {
             context.evmBridge = evmBridge;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/settlement/proposals/proposal-123");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"settlement.v1\""));
             assertTrue(body.toString().contains("\"proposalId\":\"proposal-123\""));
@@ -724,13 +671,11 @@ public class RequestRouterTest {
             context.evmBridge = evmBridge;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/settlement/transactions/0xtx999");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"lookupType\":\"transactionHash\""));
             assertTrue(body.toString().contains("\"proposalKind\":\"DELETE\""));
@@ -759,13 +704,11 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/explorer/proposals/proposal-1");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"proposalId\":\"proposal-1\""));
             assertTrue(body.toString().contains("\"state\":\"CONFIRMED\""));
@@ -782,13 +725,11 @@ public class RequestRouterTest {
                 seedWallet(nodeStore, wallet);
                 ServerContext context = newContext(nodeStore, storeDirectory);
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/v1/explorer/wallets/" + wallet);
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"wallet\":\"" + wallet + "\""));
                 assertTrue(body.toString().contains("\"contentCount\":2"));
@@ -806,13 +747,11 @@ public class RequestRouterTest {
                 ServerContext context = newContext(new MemoryNodeStore(), storeDirectory);
                 context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/v1/explorer/content/nav");
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"contractVersion\":\"explorer.content.v1\""));
                 assertTrue(body.toString().contains("\"mountedNeighbors\""));
@@ -837,14 +776,12 @@ public class RequestRouterTest {
                 context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
 
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/v1/explorer/content/clusters/local-localhost-8090/tree");
                 when(request.getParameter("path")).thenReturn("/oak-chain");
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"name\":\"12\""));
                 assertFalse(body.toString().contains("\"name\":\"90\""));
@@ -867,14 +804,12 @@ public class RequestRouterTest {
                 nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
                 ServerContext context = newContext(nodeStore, storeDirectory);
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/api/explore");
                 when(request.getParameter("path")).thenReturn("/content/doc");
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"path\":\"/content/doc\""));
                 assertTrue(body.toString().contains("\"children\":[\"child-a\"]"));
@@ -895,13 +830,11 @@ public class RequestRouterTest {
                 ));
                 ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/api/segments/recent");
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"id\":\"seg-002\""));
                 assertTrue(body.toString().contains("\"id\":\"seg-001\""));
@@ -925,13 +858,11 @@ public class RequestRouterTest {
 
                 ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/api/segments/tars");
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"name\":\"data00000a.tar\""));
                 assertTrue(body.toString().contains("\"name\":\"data00001a.tar\""));
@@ -951,14 +882,12 @@ public class RequestRouterTest {
                 seedWallet(nodeStore, wallet);
                 ServerContext context = newContext(nodeStore, storeDirectory);
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/v1/wallets/stats");
                 when(request.getParameter("wallet")).thenReturn(wallet);
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 assertTrue(body.toString().contains("\"wallet\":\"" + wallet + "\""));
                 assertTrue(body.toString().contains("\"contentCount\":2"));
             } finally {
@@ -977,14 +906,12 @@ public class RequestRouterTest {
                 seedWallet(nodeStore, wallet);
                 ServerContext context = newContext(nodeStore, storeDirectory);
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/v1/wallets/content");
                 when(request.getParameter("wallet")).thenReturn(wallet);
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 assertTrue(body.toString().contains("\"content\":["));
                 assertTrue(body.toString().contains("\"name\":\"doc-1\""));
                 assertTrue(body.toString().contains("\"message\":\"hello\""));
@@ -1001,13 +928,11 @@ public class RequestRouterTest {
             context.selfUrl = "http://validator-1:8090";
             context.registeredValidators.put("validator-2", new ValidatorRegistration("validator-2", "http://validator-2:8090"));
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/peers");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"validatorUrl\":\"http://validator-1:8090\""));
             assertTrue(body.toString().contains("\"validatorUrl\":\"http://validator-2:8090\""));
@@ -1019,16 +944,14 @@ public class RequestRouterTest {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/v1/register-client");
             when(request.getParameter("walletAddress")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
             when(request.getParameter("clientId")).thenReturn("author-1");
             when(request.getParameter("clientUrl")).thenReturn("http://author-1:4502");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"walletAddress\":\"0x1234567890abcdef1234567890abcdef12345678\""));
             assertTrue(context.registeredClients.containsKey("0x1234567890abcdef1234567890abcdef12345678"));
@@ -1054,7 +977,6 @@ public class RequestRouterTest {
                 context.registeredClients.put("author-1", registration);
                 context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("POST", "/v1/propose-delete");
                 when(request.getParameter("walletAddress")).thenReturn(wallet);
                 when(request.getParameter("signature")).thenReturn("0xabcdef12");
@@ -1064,9 +986,8 @@ public class RequestRouterTest {
                     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
                 assertTrue(body.toString().contains(
                     "\"proposalId\":\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""));
@@ -1090,13 +1011,11 @@ public class RequestRouterTest {
                     "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
                 );
                 try (RequestRouter router = new RequestRouter(context)) {
-                    Request baseRequest = mock(Request.class);
                     HttpServletRequest request = request("GET", "/api/cid/stats");
                     HttpServletResponse response = responseWithBody();
 
-                    router.route(baseRequest, request, response);
+                    router.route(request, response);
 
-                    verify(baseRequest).setHandled(true);
                     verify(response).setStatus(HttpServletResponse.SC_OK);
                     assertTrue(body.toString().contains("\"totalMappings\":1"));
                     assertTrue(body.toString().contains("\"currentSize\":1"));
@@ -1119,7 +1038,6 @@ public class RequestRouterTest {
                     "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
                 );
                 try (RequestRouter router = new RequestRouter(context)) {
-                    Request baseRequest = mock(Request.class);
                     HttpServletRequest request = request(
                         "GET",
                         "/api/cid/gateway/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
@@ -1129,9 +1047,8 @@ public class RequestRouterTest {
                     );
                     HttpServletResponse response = responseWithBody();
 
-                    router.route(baseRequest, request, response);
+                    router.route(request, response);
 
-                    verify(baseRequest).setHandled(true);
                     verify(response).sendRedirect("https://ipfs.io/ipfs/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
                 }
             } finally {
@@ -1152,7 +1069,6 @@ public class RequestRouterTest {
                     "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
                 );
                 try (RequestRouter router = new RequestRouter(context)) {
-                    Request baseRequest = mock(Request.class);
                     HttpServletRequest request = request(
                         "GET",
                         "/api/cid/ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216"
@@ -1162,9 +1078,8 @@ public class RequestRouterTest {
                     );
                     HttpServletResponse response = responseWithBody();
 
-                    router.route(baseRequest, request, response);
+                    router.route(request, response);
 
-                    verify(baseRequest).setHandled(true);
                     verify(response).setStatus(HttpServletResponse.SC_OK);
                     assertTrue(body.toString().contains("\"ipfsCid\":\"Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3\""));
                 }
@@ -1186,14 +1101,12 @@ public class RequestRouterTest {
                     "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
                 );
                 try (RequestRouter router = new RequestRouter(context)) {
-                    Request baseRequest = mock(Request.class);
                     HttpServletRequest request = request("GET", "/api/cid/reverse/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
                     when(request.getPathInfo()).thenReturn("/api/cid/reverse/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
                     HttpServletResponse response = responseWithBody();
 
-                    router.route(baseRequest, request, response);
+                    router.route(request, response);
 
-                    verify(baseRequest).setHandled(true);
                     verify(response).setStatus(HttpServletResponse.SC_OK);
                     assertTrue(body.toString().contains("\"oakBlobId\":\"ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442\""));
                 }
@@ -1207,16 +1120,14 @@ public class RequestRouterTest {
     public void testBinaryDeclareIntentRouteReturnsIntentToken() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/v1/binary/declare-intent");
             when(request.getParameter("walletAddress")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
             when(request.getParameter("filesize")).thenReturn("123");
             when(request.getParameter("mimeType")).thenReturn("image/png");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"intentToken\":\"intent-"));
         });
@@ -1229,13 +1140,11 @@ public class RequestRouterTest {
             UploadSession session = router.getBinaryUploadHandler().getSessionManager()
                 .createSession("0x1234567890abcdef1234567890abcdef12345678", 123L, "image/png", null);
             router.getBinaryUploadHandler().getSessionManager().markReadyForUpload(session.getIntentToken(), 17L);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/binary/check-intent/" + session.getIntentToken());
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"status\":\"READY_FOR_UPLOAD\""));
             assertTrue(body.toString().contains("\"epochNumber\":17"));
@@ -1249,16 +1158,14 @@ public class RequestRouterTest {
             String wallet = "0x1234567890abcdef1234567890abcdef12345678";
             UploadSession session = router.getBinaryUploadHandler().getSessionManager()
                 .createSession(wallet, 456L, "application/pdf", null);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/v1/binary/complete-upload");
             when(request.getParameter("intentToken")).thenReturn(session.getIntentToken());
             when(request.getParameter("cid")).thenReturn("Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
             when(request.getParameter("walletAddress")).thenReturn(wallet);
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"status\":\"complete\""));
         });
@@ -1275,7 +1182,6 @@ public class RequestRouterTest {
                 .wallet("0xwallet")
                 .organization("acme")
                 .build());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/events/stream");
             AsyncContext asyncContext = mock(AsyncContext.class);
             when(request.startAsync()).thenReturn(asyncContext);
@@ -1285,9 +1191,8 @@ public class RequestRouterTest {
             when(request.getParameter("path")).thenReturn("/content");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setContentType("text/event-stream");
             assertTrue(body.toString().contains(": connected to oak-chain event stream"));
             assertTrue(body.toString().contains("id: evt-1"));
@@ -1305,16 +1210,14 @@ public class RequestRouterTest {
                 .timestamp(100L)
                 .message("leader switched")
                 .build());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/ops/events/stream");
             AsyncContext asyncContext = mock(AsyncContext.class);
             when(request.startAsync()).thenReturn(asyncContext);
             when(request.getHeader("Last-Event-ID")).thenReturn("9");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setContentType("text/event-stream");
             assertTrue(body.toString().contains("event: cluster.leader.changed"));
             assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
@@ -1331,16 +1234,14 @@ public class RequestRouterTest {
             when(engine.pullSegmentsForHead("abc:r1", "http://localhost:8090")).thenReturn(4);
             context.aeronConsensusEngine = engine;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/v1/follower/head-update");
             when(request.getReader()).thenReturn(new java.io.BufferedReader(
                 new java.io.StringReader("{\"head\":\"abc:r1\",\"epoch\":\"12\",\"leaderUrl\":\"http://localhost:8090\"}")
             ));
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"success\":true"));
             assertTrue(body.toString().contains("\"segmentCount\":4"));
@@ -1356,15 +1257,13 @@ public class RequestRouterTest {
                 Files.write(storeDirectory.resolve("journal.log"), payload);
                 ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/journal.log");
                 RecordingServletOutputStream output = new RecordingServletOutputStream();
                 HttpServletResponse response = mock(HttpServletResponse.class);
                 when(response.getOutputStream()).thenReturn(output);
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 verify(response).setContentType("text/plain");
                 assertArrayEquals(payload, output.toByteArray());
@@ -1383,13 +1282,11 @@ public class RequestRouterTest {
                 Files.write(storeDirectory.resolve("manifest"), payload);
                 ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
                 RequestRouter router = new RequestRouter(context);
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("HEAD", "/manifest");
                 HttpServletResponse response = mock(HttpServletResponse.class);
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 verify(response).setContentType("text/plain");
                 verify(response).setContentLengthLong(payload.length);
@@ -1403,13 +1300,11 @@ public class RequestRouterTest {
     public void testManifestRouteRejectsUnsupportedMethod() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/manifest");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_METHOD_NOT_ALLOWED);
             assertTrue(body.toString().contains("Method not allowed"));
         });
@@ -1419,13 +1314,11 @@ public class RequestRouterTest {
     public void testSegmentRouteRejectsInvalidUuid() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/segments/not-a-uuid");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
             assertTrue(body.toString().contains("Invalid segment UUID"));
         });
@@ -1437,13 +1330,11 @@ public class RequestRouterTest {
             ServerContext context = newContext();
             context.selfUrl = "https://public.ngrok.app";
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/ngrok-url");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("https://public.ngrok.app"));
         });
@@ -1456,13 +1347,11 @@ public class RequestRouterTest {
             context.selfUrl = "http://validator-2:8090";
             context.aeronConsensusEngine = baseEngine();
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/aeron/validator-identities");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"totalValidators\":1"));
             assertTrue(body.toString().contains("\"knownWallets\":1"));
@@ -1480,13 +1369,11 @@ public class RequestRouterTest {
             when(engine.getReplicationLagStatus()).thenReturn(lagStatus);
             context.aeronConsensusEngine = engine;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/aeron/replication-lag");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"replicationLag\":4"));
             assertTrue(body.toString().contains("\"healthy\":true"));
@@ -1500,13 +1387,11 @@ public class RequestRouterTest {
             context.selfUrl = "http://validator-2:8090";
             context.aeronConsensusEngine = baseEngine();
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/ops/snapshots/cluster");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
             assertTrue(body.toString().contains("\"clusterId\":\"oak-consensus-cluster\""));
@@ -1526,13 +1411,11 @@ public class RequestRouterTest {
             when(engine.getCurrentEthereumEpoch()).thenReturn(1024);
             context.aeronConsensusEngine = engine;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/consensus/status");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"consensusType\":\"aeron-cluster\""));
             assertTrue(body.toString().contains("\"currentEpoch\":12"));
@@ -1547,13 +1430,11 @@ public class RequestRouterTest {
             try {
                 System.setProperty(AuthTokenValidator.TOKEN_PROPERTY_NAME, "secret-token");
                 RequestRouter router = new RequestRouter(newContext());
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/dashboard");
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                 assertTrue(body.toString().contains("Missing Authorization header"));
             } finally {
@@ -1584,17 +1465,13 @@ public class RequestRouterTest {
 
             RequestRouter router = new RequestRouter(newContext());
 
-            Request firstBaseRequest = mock(Request.class);
             HttpServletResponse firstResponse = responseWithBody();
-            router.route(firstBaseRequest, request("GET", "/v1/config/osgi"), firstResponse);
-            verify(firstBaseRequest).setHandled(true);
+            router.route(request("GET", "/v1/config/osgi"), firstResponse);
             verify(firstResponse).setStatus(HttpServletResponse.SC_OK);
 
-            Request secondBaseRequest = mock(Request.class);
             HttpServletResponse secondResponse = responseWithBody();
-            router.route(secondBaseRequest, request("GET", "/v1/config/osgi"), secondResponse);
+            router.route(request("GET", "/v1/config/osgi"), secondResponse);
 
-            verify(secondBaseRequest).setHandled(true);
             verify(secondResponse).setStatus(429);
             assertTrue(body.toString().contains("rate_limit_exceeded"));
         } finally {
@@ -1628,22 +1505,16 @@ public class RequestRouterTest {
 
                 RequestRouter router = new RequestRouter(newContext(mock(NodeStore.class), storeDirectory));
 
-                Request firstBaseRequest = mock(Request.class);
                 HttpServletResponse firstResponse = responseWithBody();
-                router.route(firstBaseRequest, request("GET", "/v1/config/osgi"), firstResponse);
-                verify(firstBaseRequest).setHandled(true);
+                router.route(request("GET", "/v1/config/osgi"), firstResponse);
                 verify(firstResponse).setStatus(HttpServletResponse.SC_OK);
 
-                Request manifestBaseRequest = mock(Request.class);
                 HttpServletResponse manifestResponse = responseWithBody();
-                router.route(manifestBaseRequest, request("HEAD", "/manifest"), manifestResponse);
-                verify(manifestBaseRequest).setHandled(true);
+                router.route(request("HEAD", "/manifest"), manifestResponse);
                 verify(manifestResponse).setStatus(HttpServletResponse.SC_OK);
 
-                Request journalBaseRequest = mock(Request.class);
                 HttpServletResponse journalResponse = responseWithBody();
-                router.route(journalBaseRequest, request("GET", "/journal.log"), journalResponse);
-                verify(journalBaseRequest).setHandled(true);
+                router.route(request("GET", "/journal.log"), journalResponse);
                 verify(journalResponse).setStatus(HttpServletResponse.SC_OK);
             } finally {
                 deleteRecursively(storeDirectory);
@@ -1668,13 +1539,11 @@ public class RequestRouterTest {
             when(engine.getLastCommittedEpoch()).thenReturn(11);
             context.aeronConsensusEngine = engine;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/head");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"latestHead\": \"latest-aeron-head\""));
             assertTrue(body.toString().contains("\"committedHead\": \"committed-aeron-head\""));
@@ -1694,13 +1563,11 @@ public class RequestRouterTest {
             when(engine.getLastCommittedEpoch()).thenReturn(-1);
             context.aeronConsensusEngine = engine;
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/head");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"latestHead\": \"fallback-file-head\""));
             assertTrue(body.toString().contains("\"committedHead\": \"fallback-file-head\""));
@@ -1732,13 +1599,11 @@ public class RequestRouterTest {
             context.aeronConsensusEngine = engine;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/api/metrics");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"status\":\"UP\""));
             assertTrue(body.toString().contains("\"replicationLag\":2"));
@@ -1749,13 +1614,11 @@ public class RequestRouterTest {
     public void testPrometheusMetricsRouteExportsTextMetrics() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/metrics");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("oak_active_connections"));
         });
@@ -1771,15 +1634,13 @@ public class RequestRouterTest {
             context.blobStore = blobStore;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/api/blob/ed06f9cb-demo");
             RecordingServletOutputStream output = new RecordingServletOutputStream();
             HttpServletResponse response = mock(HttpServletResponse.class);
             when(response.getOutputStream()).thenReturn(output);
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             verify(response).setHeader("X-Blob-Id", "ed06f9cb-demo");
             assertArrayEquals(payload, output.toByteArray());
@@ -1790,13 +1651,11 @@ public class RequestRouterTest {
     public void testRecentEventsRouteReturnsEmptyPayloadWhenNoEventsBroadcast() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/events/recent");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             assertTrue(body.toString().contains("\"events\":[]"));
             assertTrue(body.toString().contains("\"count\":0"));
         });
@@ -1806,13 +1665,11 @@ public class RequestRouterTest {
     public void testEventStatsRouteReturnsEmptyStatsPayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/events/stats");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             assertTrue(body.toString().contains("\"connectedClients\":0"));
             assertTrue(body.toString().contains("\"eventBufferSize\":0"));
             assertTrue(body.toString().contains("\"totalEventsBroadcast\":0"));
@@ -1823,13 +1680,11 @@ public class RequestRouterTest {
     public void testHealthRouteReturnsUpPayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/health");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"status\":\"UP\""));
         });
@@ -1839,13 +1694,11 @@ public class RequestRouterTest {
     public void testLocalHealthRouteReturnsLocalPayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/health/local");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"scope\":\"local\""));
         });
@@ -1859,13 +1712,11 @@ public class RequestRouterTest {
             BlockchainConfig.reset();
             withRoutingProperties(true, () -> {
                 RequestRouter router = new RequestRouter(newContext());
-                Request baseRequest = mock(Request.class);
                 HttpServletRequest request = request("GET", "/v1/blockchain/config");
                 HttpServletResponse response = responseWithBody();
 
-                router.route(baseRequest, request, response);
+                router.route(request, response);
 
-                verify(baseRequest).setHandled(true);
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"mode\":\"mock\""));
                 assertTrue(body.toString().contains("\"validatorUrl\":\"http://localhost:8090\""));
@@ -1880,13 +1731,11 @@ public class RequestRouterTest {
     public void testExplorerEpochsRouteReturnsNotFound() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/explorer/epochs");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
             assertTrue(body.toString().contains("\"error\":\"Not found\""));
         });
@@ -1901,13 +1750,11 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/proposals/pending/count");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"pendingCount\":7"));
         });
@@ -1925,13 +1772,11 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/proposals/queue/stats");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"pendingCount\":3"));
             assertTrue(body.toString().contains("\"oldestAgeMs\":55"));
@@ -1942,13 +1787,11 @@ public class RequestRouterTest {
     public void testProposalEpochsRouteReturnsNotFound() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/proposals/epochs");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
             assertTrue(body.toString().contains("\"error\":\"Not found\""));
         });
@@ -1965,13 +1808,11 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/ops/snapshots/queue");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
             assertTrue(body.toString().contains("\"pendingCount\":7"));
@@ -1990,13 +1831,11 @@ public class RequestRouterTest {
             context.aeronConsensusEngine = engine;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/ops/snapshots/replication");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"contractVersion\":\"ops.v1\""));
             assertTrue(body.toString().contains("\"replicationLag\":4"));
@@ -2017,13 +1856,11 @@ public class RequestRouterTest {
             context.aeronConsensusEngine = engine;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/aeron/raft-metrics");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"currentTerm\":8"));
             assertTrue(body.toString().contains("\"ethereumEpoch\":34"));
@@ -2041,14 +1878,12 @@ public class RequestRouterTest {
             context.aeronConsensusEngine = engine;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/aeron/node-status");
             when(request.getParameter("nodeId")).thenReturn("1");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"nodeId\":1"));
             assertTrue(body.toString().contains("\"role\":\"LEADER\""));
@@ -2073,14 +1908,12 @@ public class RequestRouterTest {
             context.aeronConsensusEngine = engine;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/v1/aeron/leadership-history");
             when(request.getParameter("limit")).thenReturn("500");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"limit\":100"));
             assertTrue(body.toString().contains("\"memberUrl\":\"http://validator-2:8090\""));
@@ -2101,13 +1934,11 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("GET", "/api/mock/epoch-status");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             assertTrue(body.toString().contains("\"mode\":\"MOCK\""));
             assertTrue(body.toString().contains("\"currentEpoch\":1042"));
             assertTrue(body.toString().contains("\"chainContext\":\"Sepolia\""));
@@ -2125,14 +1956,12 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/api/mock/advance-epoch");
             when(request.getParameter("epochs")).thenReturn("3");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_GONE);
             verifyNoInteractions(beaconClient);
             assertTrue(body.toString().contains("Synthetic mock epoch control was removed by ADR 080"));
@@ -2149,14 +1978,12 @@ public class RequestRouterTest {
             context.proposalQueueManager = queueManager;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/api/mock/set-epoch-offset");
             when(request.getParameter("offset")).thenReturn("42");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(response).setStatus(HttpServletResponse.SC_GONE);
             verifyNoInteractions(beaconClient);
             assertTrue(body.toString().contains("Synthetic mock epoch control was removed by ADR 080"));
@@ -2172,15 +1999,13 @@ public class RequestRouterTest {
             context.shardRouter = shardRouter;
 
             RequestRouter router = new RequestRouter(context);
-            Request baseRequest = mock(Request.class);
             HttpServletRequest request = request("POST", "/v1/propose-write");
             when(request.getParameter("walletAddress")).thenReturn(null);
             when(request.getParameter("wallet")).thenReturn("0xwallet");
             HttpServletResponse response = responseWithBody();
 
-            router.route(baseRequest, request, response);
+            router.route(request, response);
 
-            verify(baseRequest).setHandled(true);
             verify(shardRouter).routeRequest("0xwallet");
         });
     }

@@ -23,7 +23,7 @@ import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
 
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Paths;

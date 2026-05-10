@@ -58,6 +58,7 @@ This module is part of the **Blockchain AEM** project and is maintained as a for
 - **REST APIs**: Validator-native HTTP endpoints for cluster state, consensus status, health, and operator automation
 - **OSGi Config Surface**: Read-only introspection endpoints at `/v1/config/osgi*`
 - **Segment Serving**: HTTP endpoints for segment transfer (`/segments/{id}`, `/journal.log`)
+- **Modern container surface**: Jetty 12 + Jakarta Servlet 6 with a servlet-backed adapter for the validator-native route surface
 
 ### API Contract Boundaries
 
@@ -82,6 +83,14 @@ This module is part of the **Blockchain AEM** project and is maintained as a for
   - Token-based authentication (configure token)
   - Network security (firewall, VPN, private networks)
   - Reverse proxy authentication
+
+### Jetty 12 Migration Notes
+
+- The embedded validator HTTP runtime now targets Jetty `12.0.34`.
+- Servlet APIs have moved from `javax.servlet.*` to `jakarta.servlet.*`.
+- The old Jetty 9 handler pattern (`AbstractHandler` + `Request.setHandled(...)`) has been replaced with a Jetty EE10 servlet adapter so validator-native routes can keep their existing request/response contract.
+- `/v1/blockchain/config` reports whether RPC is configured (`rpcConfigured`) rather than echoing the raw provider URL.
+- Targeted migration verification currently covers `RequestRouterTest` and `BlockchainConfigApiHandlerTest`.
 
 ### Segment Replication
 - **HTTP Segment Transfer**: Segments replicated via HTTP GET requests (read-only mounts)

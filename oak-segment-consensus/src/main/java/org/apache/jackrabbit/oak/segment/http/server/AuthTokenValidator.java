@@ -20,8 +20,8 @@ import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueReso
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import java.io.IOException;
 

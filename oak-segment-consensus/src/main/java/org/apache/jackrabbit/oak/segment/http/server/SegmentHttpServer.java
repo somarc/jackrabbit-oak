@@ -21,17 +21,18 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
-import org.eclipse.jetty.server.Request;
+import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee10.servlet.ServletHolder;
 import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.server.handler.AbstractHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.prometheus.client.hotspot.DefaultExports;
 
-import javax.servlet.ServletException;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.MultipartConfigElement;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -115,7 +116,7 @@ public class SegmentHttpServer {
         
         // Create server - TLS will be configured in start() if enabled
         this.server = new Server();
-        this.server.setHandler(new SegmentStoreHandler());
+        this.server.setHandler(createServerHandler());
         
         // Configure connectors based on TLS settings
         try {
@@ -164,6 +165,21 @@ public class SegmentHttpServer {
         this.peerUrlResolver = null;
         this.peerJsonHttpClient = null;
         this.peerAnnouncementClient = null;
+    }
+
+    private ServletContextHandler createServerHandler() {
+        ServletContextHandler servletContextHandler = new ServletContextHandler();
+        servletContextHandler.setContextPath("/");
+
+        ServletHolder servletHolder = new ServletHolder(new SegmentStoreServlet());
+        servletHolder.getRegistration().setMultipartConfig(new MultipartConfigElement(
+            System.getProperty("java.io.tmpdir"),
+            100L * 1024 * 1024,
+            200L * 1024 * 1024,
+            1024 * 1024
+        ));
+        servletContextHandler.addServlet(servletHolder, "/*");
+        return servletContextHandler;
     }
     
     /**
@@ -377,55 +393,27 @@ public class SegmentHttpServer {
      * 
      * Supports multipart/form-data for binary uploads (up to 100MB per file, 200MB total).
      */
-    private class SegmentStoreHandler extends AbstractHandler {
-        
-        // Multipart config for file uploads: 100MB max file, 200MB max request, 1MB threshold
-        private final javax.servlet.MultipartConfigElement multipartConfig = 
-            new javax.servlet.MultipartConfigElement(
-                System.getProperty("java.io.tmpdir"),  // temp dir
-                100 * 1024 * 1024,  // maxFileSize: 100MB
-                200 * 1024 * 1024,  // maxRequestSize: 200MB
-                1024 * 1024         // fileSizeThreshold: 1MB (files larger go to disk)
-            );
-        
+    private class SegmentStoreServlet extends HttpServlet {
+
         @Override
-        public void handle(String target, Request baseRequest, HttpServletRequest request,
-                          HttpServletResponse response) throws IOException, ServletException {
-            
-            String path = request.getPathInfo();
+        protected void service(HttpServletRequest request, HttpServletResponse response) throws IOException {
+            String path = request.getRequestURI();
             String method = request.getMethod();
-            
-            // Enable multipart parsing for POST requests with multipart content
-            String contentType = request.getContentType();
-            if ("POST".equals(method) && contentType != null && 
-                contentType.toLowerCase().startsWith("multipart/")) {
-                // Set multipart config on the request for Jetty to parse multipart data
-                request.setAttribute("org.eclipse.jetty.multipartConfig", multipartConfig);
-            }
-            
+
             log.debug("HTTP {} {}", method, path);
-            
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // CORS Headers - Permissive for local development and demos
-            // NOTE: Wallet-based auth happens at proposal level (signature verification),
-            // not at CORS level. Wildcard CORS is intentional for API accessibility.
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
             response.setHeader("Access-Control-Allow-Origin", "*");
             response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
             response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
             response.setHeader("Access-Control-Max-Age", "3600");
-            
-            // Handle preflight OPTIONS requests
+
             if ("OPTIONS".equals(method)) {
                 response.setStatus(HttpServletResponse.SC_OK);
-                baseRequest.setHandled(true);
                 return;
             }
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            
+
             try {
-                // Delegate to RequestRouter
-                router.route(baseRequest, request, response);
+                router.route(request, response);
             } catch (Exception e) {
                 log.error("Error handling request {} {}", method, path, e);
                 if (!response.isCommitted()) {

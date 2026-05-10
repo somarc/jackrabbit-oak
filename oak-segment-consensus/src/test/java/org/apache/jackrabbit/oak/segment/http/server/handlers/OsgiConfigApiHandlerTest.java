@@ -19,7 +19,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.junit.After;
 import org.junit.Test;
 
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 
