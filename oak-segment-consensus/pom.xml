@@ -188,6 +188,34 @@
             <artifactId>oak-blob-cloud-ipfs</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <!-- Azure segment persistence: TAR segments in Azure Blob Storage (ADR 082, ADR 089) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-segment-azure</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- AWS segment persistence: TAR segments in S3, journal/lock in DynamoDB (ADR 089) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-segment-aws</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Azure BlobStore for enterprise binary persistence (ADR 082) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-blob-cloud-azure</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- S3 BlobStore for enterprise binary persistence (ADR 089) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-blob-cloud</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         
         <!-- DataStoreBlobStore wrapper for converting DataStore to BlobStore -->
         <dependency>

@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 import java.io.File;
 import java.io.IOException;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.junit.After;
 import org.junit.Rule;
@@ -37,6 +38,7 @@ import static org.mockito.Mockito.when;
 
 public class BlobStoreStartupCoordinatorTest {
 
+    // Property keys that StorageBackendConfig reads (via backward-compat alias)
     private static final String PROP_BLOBSTORE_TYPE = "blobstore.type";
     private static final String PROP_IPFS_API_ENDPOINT = "ipfs.api.endpoint";
 
@@ -49,28 +51,35 @@ public class BlobStoreStartupCoordinatorTest {
     public void tearDown() {
         System.clearProperty(PROP_BLOBSTORE_TYPE);
         System.clearProperty(PROP_IPFS_API_ENDPOINT);
+        System.clearProperty("oak.blob.backend");
     }
 
     @Test
-    public void testInitializeRejectsMissingBlobStoreType() throws Exception {
-        try {
-            coordinator.initialize(tempFolder.getRoot(), mock(GlobalStoreServerComponentFactory.class));
-            fail("Expected IOException");
-        } catch (IOException e) {
-            assertEquals("blobstore.type is not configured", e.getMessage());
-        }
-    }
-
-    @Test
-    public void testInitializeRejectsUnsupportedBlobStoreType() throws Exception {
+    public void testInvalidBlobBackendRejectedAtConfigLoad() {
         System.setProperty(PROP_BLOBSTORE_TYPE, "file");
 
         try {
-            coordinator.initialize(tempFolder.getRoot(), mock(GlobalStoreServerComponentFactory.class));
-            fail("Expected IOException");
-        } catch (IOException e) {
-            assertTrue(e.getMessage().contains("Invalid blobstore.type"));
+            StorageBackendConfig.load();
+            fail("Expected IllegalStateException for unknown blob backend");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage().contains("file"));
         }
+    }
+
+    @Test
+    public void testInitializeDefaultsToIpfsWhenNoBackendConfigured() throws Exception {
+        // No blobstore.type or oak.blob.backend set — default is ipfs
+        GlobalStoreServerComponentFactory componentFactory = mock(GlobalStoreServerComponentFactory.class);
+        BlobStore blobStore = mock(BlobStore.class);
+        File storeDir = tempFolder.newFolder("segmentstore");
+        when(componentFactory.createIpfsBlobStore(anyString(), any(File.class))).thenReturn(blobStore);
+
+        StorageBackendConfig config = StorageBackendConfig.load();
+        BlobStoreStartupCoordinator.StartupResult result =
+            coordinator.initialize(storeDir, config, componentFactory);
+
+        assertEquals("ipfs", result.getBlobStoreType());
+        assertSame(blobStore, result.getBlobStore());
     }
 
     @Test
@@ -83,7 +92,9 @@ public class BlobStoreStartupCoordinatorTest {
         File storeDir = tempFolder.newFolder("segmentstore");
         when(componentFactory.createIpfsBlobStore("/ip4/10.0.0.7/tcp/5001", storeDir)).thenReturn(blobStore);
 
-        BlobStoreStartupCoordinator.StartupResult result = coordinator.initialize(storeDir, componentFactory);
+        StorageBackendConfig config = StorageBackendConfig.load();
+        BlobStoreStartupCoordinator.StartupResult result =
+            coordinator.initialize(storeDir, config, componentFactory);
 
         assertEquals("ipfs", result.getBlobStoreType());
         assertSame(blobStore, result.getBlobStore());
@@ -98,11 +109,12 @@ public class BlobStoreStartupCoordinatorTest {
         GlobalStoreServerComponentFactory componentFactory = mock(GlobalStoreServerComponentFactory.class);
         when(componentFactory.createIpfsBlobStore(anyString(), any(File.class))).thenThrow(cause);
 
+        StorageBackendConfig config = StorageBackendConfig.load();
         try {
-            coordinator.initialize(tempFolder.newFolder("segmentstore-failing"), componentFactory);
+            coordinator.initialize(tempFolder.newFolder("segmentstore-failing"), config, componentFactory);
             fail("Expected IOException");
         } catch (IOException e) {
-            assertEquals("IPFS BlobStore initialization failed", e.getMessage());
+            assertTrue(e.getMessage().startsWith("IPFS BlobStore initialization failed"));
             assertSame(cause, e.getCause());
         }
     }

@@ -26,6 +26,7 @@ import java.util.function.Supplier;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
+import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
@@ -53,12 +54,15 @@ final class ServerInfrastructureInitializer {
                                     AeronClusterConfig aeronConfig,
                                     GlobalStoreServerComponentFactory componentFactory)
             throws IOException, InvalidFileStoreVersionException {
+        StorageBackendConfig storageConfig = StorageBackendConfig.load();
+        log.info("Storage: segment={}, blob={}", storageConfig.getSegmentBackend(), storageConfig.getBlobBackend());
+
         BlobStoreStartupCoordinator.StartupResult blobStoreStartup =
-            blobStoreStartupCoordinator.initialize(storeDir, componentFactory);
+            blobStoreStartupCoordinator.initialize(storeDir, storageConfig, componentFactory);
         BlobStore blobStore = blobStoreStartup.getBlobStore();
         String blobStoreType = blobStoreStartup.getBlobStoreType();
 
-        ServerStorageRuntime storageRuntime = componentFactory.createStorageRuntime(storeDir, blobStore);
+        ServerStorageRuntime storageRuntime = StorageBackendFactory.createStorageRuntime(storeDir, blobStore, storageConfig);
         FileStore fileStore = storageRuntime.getFileStore();
         NodeStore authoritativeNodeStore = storageRuntime.getAuthoritativeNodeStore();
         NodeStore readViewNodeStore = storageRuntime.getReadViewNodeStore();
