@@ -175,6 +175,8 @@
         .mono {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         }
+
+{{SHARED_HEADER_STYLES}}
     </style>
 </head>
 <body class="h-screen w-screen bg-white text-slate-800 font-sans overflow-hidden flex flex-col text-[13px]">
@@ -182,26 +184,7 @@
     <div class="sr-only">CRX/OC Explorer</div>
     <!-- CRX/OC Explorer -->
 
-    <header class="h-10 bg-[#eef2f7] flex items-center justify-between px-4 hairline-b shrink-0">
-        <div class="flex items-center gap-3">
-            <div class="flex items-center gap-2 text-[#0f62fe]">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
-                </svg>
-                <span class="font-semibold tracking-wide text-sm">Blockchain AEM Explorer</span>
-            </div>
-            <div class="inline-flex items-center rounded-full border border-[#bcd0ff] bg-[#e8f0ff] px-3 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#4b7df0]" title="CRX/OC Explorer">
-                CRX/OC
-            </div>
-        </div>
-
-        <div class="flex items-center gap-4 text-slate-500 text-xs">
-            <span id="identity-label">admin@blockchain-node-01</span>
-            <div class="w-6 h-6 rounded-full bg-slate-300 flex items-center justify-center text-white font-medium">A</div>
-        </div>
-    </header>
+{{SHARED_HEADER}}
 
     <div class="h-9 bg-[#fbfcfd] flex items-center justify-between px-2 hairline-b shrink-0">
         <div class="flex items-center gap-0.5">
@@ -299,7 +282,6 @@
             var tabContent = document.getElementById("tab-content");
             var clusterSelect = document.getElementById("cluster-select");
             var workspaceLabel = document.getElementById("workspace-label");
-            var identityLabel = document.getElementById("identity-label");
 
             function keyFor(clusterId, path) {
                 return clusterId + "::" + path;
@@ -370,14 +352,6 @@
 
             function provenanceEndpoint(clusterId, path) {
                 return "/v1/explorer/content/clusters/" + encodeURIComponent(clusterId) + "/provenance?path=" + encodeURIComponent(path);
-            }
-
-            function resolveIdentityLabel() {
-                var host = window.location.hostname;
-                if (!host || host === "localhost" || host === "127.0.0.1") {
-                    host = "blockchain-node-01";
-                }
-                identityLabel.textContent = "admin@" + host;
             }
 
             function renderClusterSelector() {
@@ -1145,7 +1119,6 @@
                 tabContent.addEventListener("click", handleTabContentClick);
             }
 
-            resolveIdentityLabel();
             bindEvents();
             loadNavigation(false);
         })();

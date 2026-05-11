@@ -24,7 +24,7 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.After;
 import org.junit.Test;
 
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Paths;
@@ -106,29 +106,21 @@ public class DashboardHandlerTest {
 
     @Test
     public void testHandleDashboardRendersApiFirstLanding() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = mock(HttpServletResponse.class);
-        when(response.getWriter()).thenReturn(new PrintWriter(body));
+        String html = renderDashboard(new DashboardHandler(newContext()));
 
-        ServerContext context = new ServerContext(
-            mock(FileStore.class),
-            mock(NodeStore.class),
-            Paths.get("/tmp/store"),
-            "http://localhost:8090"
-        );
-        DashboardHandler handler = new DashboardHandler(context);
-
-        handler.handleDashboard(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        verify(response).setContentType("text/html; charset=UTF-8");
-        String html = body.toString();
         assertTrue(html.contains("Oak Control Plane Home"));
+        assertTrue(html.contains("CRX/OC"));
         assertTrue(html.contains("Local API Browser"));
+        assertTrue(html.contains("Reachable"));
+        assertTrue(html.contains("Quorum"));
+        assertTrue(html.contains("/v1/index"));
         assertTrue(html.contains("/ops/v1/*"));
         assertTrue(html.contains("/v1/proposals/queue/stats"));
         assertTrue(html.contains("/v1/proposals/release-flow"));
         assertTrue(html.contains("API-first runtime"));
+        assertSharedHeader(html, "/", "Dashboard");
+        assertFalse(html.contains("{{SHARED_HEADER}}"));
+        assertFalse(html.contains("{{SHARED_HEADER_STYLES}}"));
     }
 
     @Test
@@ -159,7 +151,9 @@ public class DashboardHandlerTest {
         handler.handleDashboard(response);
 
         String html = body.toString();
-        assertTrue(html.contains("<div class='k'>Leader</div><div class='v'>0</div>"));
+        assertTrue(html.contains("<div class=\"k\">Leader</div><div class=\"v\">0</div>"));
+        assertTrue(html.contains("<div class=\"k\">Reachable</div><div class=\"v\">3/3</div>"));
+        assertTrue(html.contains("<div class=\"k\">Quorum</div><div class=\"v\">YES (2)</div>"));
     }
 
     @Test
@@ -191,11 +185,13 @@ public class DashboardHandlerTest {
         handler.handleDashboard(response);
 
         String html = body.toString();
-        assertTrue(html.contains("<div class='k'>Role</div><div class='v'>FOLLOWER</div>"));
-        assertTrue(html.contains("<div class='k'>Node</div><div class='v'>2</div>"));
-        assertTrue(html.contains("<div class='k'>Leader</div><div class='v'>3</div>"));
-        assertTrue(html.contains("<div class='k'>Term</div><div class='v'>9</div>"));
-        assertTrue(html.contains("<div class='k'>Members</div><div class='v'>4</div>"));
+        assertTrue(html.contains("<div class=\"k\">Role</div><div class=\"v\">FOLLOWER</div>"));
+        assertTrue(html.contains("<div class=\"k\">Node</div><div class=\"v\">2</div>"));
+        assertTrue(html.contains("<div class=\"k\">Leader</div><div class=\"v\">3</div>"));
+        assertTrue(html.contains("<div class=\"k\">Term</div><div class=\"v\">9</div>"));
+        assertTrue(html.contains("<div class=\"k\">Members</div><div class=\"v\">4</div>"));
+        assertTrue(html.contains("<div class=\"k\">Reachable</div><div class=\"v\">4/4</div>"));
+        assertTrue(html.contains("<div class=\"k\">Quorum</div><div class=\"v\">YES (3)</div>"));
     }
 
     @Test
@@ -230,9 +226,11 @@ public class DashboardHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_OK);
         String html = body.toString();
-        assertTrue(html.contains("<div class='k'>Role</div><div class='v'>UNKNOWN</div>"));
-        assertTrue(html.contains("<div class='k'>Node</div><div class='v'>UNKNOWN</div>"));
-        assertTrue(html.contains("<div class='k'>Leader</div><div class='v'>UNKNOWN</div>"));
+        assertTrue(html.contains("<div class=\"k\">Role</div><div class=\"v\">UNKNOWN</div>"));
+        assertTrue(html.contains("<div class=\"k\">Node</div><div class=\"v\">UNKNOWN</div>"));
+        assertTrue(html.contains("<div class=\"k\">Leader</div><div class=\"v\">UNKNOWN</div>"));
+        assertTrue(html.contains("<div class=\"k\">Reachable</div><div class=\"v\">UNKNOWN</div>"));
+        assertTrue(html.contains("<div class=\"k\">Quorum</div><div class=\"v\">UNKNOWN</div>"));
     }
 
     @Test
@@ -256,9 +254,9 @@ public class DashboardHandlerTest {
         handler.handleDashboard(response);
 
         String html = body.toString();
-        assertTrue(html.contains("<div class='k'>Leader</div><div class='v'>1</div>"));
-        assertTrue(html.contains("<div class='k'>Term</div><div class='v'>7</div>"));
-        assertTrue(html.contains("<div class='k'>Members</div><div class='v'>5</div>"));
+        assertTrue(html.contains("<div class=\"k\">Leader</div><div class=\"v\">1</div>"));
+        assertTrue(html.contains("<div class=\"k\">Term</div><div class=\"v\">7</div>"));
+        assertTrue(html.contains("<div class=\"k\">Members</div><div class=\"v\">5</div>"));
     }
 
     @Test
@@ -282,6 +280,9 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("CRX/OC Explorer"));
         assertTrue(html.contains("/v1/explorer/content/nav"));
         assertTrue(html.contains("/oak-chain/00/00/00/0x0000000000000000000000000000000000000000/content/genesis"));
+        assertSharedHeader(html, "/explorer", "CRX/OC");
+        assertFalse(html.contains("{{SHARED_HEADER}}"));
+        assertFalse(html.contains("{{SHARED_HEADER_STYLES}}"));
     }
 
     @Test
@@ -302,10 +303,62 @@ public class DashboardHandlerTest {
         assertTrue(html.contains("API Browser | Blockchain AEM Validator"));
         assertTrue(html.contains("mode-mainnet"));
         assertTrue(html.contains("MAINNET"));
+        assertTrue(html.contains("CRX/OC"));
         assertTrue(html.contains("Filter endpoints by path, description, or category"));
         assertTrue(html.contains("Single-manifest endpoint catalog powered by"));
         assertFalse(html.contains("/api/mock/advance-epoch"));
         assertFalse(html.contains("Mock Mode"));
+        assertSharedHeader(html, "/api-browser", "API Browser");
+        assertFalse(html.contains("{{SHARED_HEADER}}"));
+        assertFalse(html.contains("{{SHARED_HEADER_STYLES}}"));
+    }
+
+    @Test
+    public void testSharedHeaderRendersConsistentBrandAcrossAllSurfaces() throws Exception {
+        DashboardHandler handler = new DashboardHandler(newContext());
+
+        assertSharedHeader(renderDashboard(handler), "/", "Dashboard");
+        assertSharedHeader(renderExplorer(handler), "/explorer", "CRX/OC");
+        assertSharedHeader(renderApiBrowser(handler), "/api-browser", "API Browser");
+    }
+
+    private static String renderDashboard(DashboardHandler handler) throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+        handler.handleDashboard(response);
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("text/html; charset=UTF-8");
+        return body.toString();
+    }
+
+    private static String renderExplorer(DashboardHandler handler) throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+        handler.handleExplorerUI(response);
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("text/html; charset=UTF-8");
+        return body.toString();
+    }
+
+    private static String renderApiBrowser(DashboardHandler handler) throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+        handler.handleApiBrowserUI(response);
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("text/html; charset=UTF-8");
+        return body.toString();
+    }
+
+    private static void assertSharedHeader(String html, String activeHref, String activeLabel) {
+        assertTrue(html.contains("<span class=\"brand-title\">Blockchain AEM</span>"));
+        assertTrue(html.contains("href=\"/\""));
+        assertTrue(html.contains("href=\"/explorer\""));
+        assertTrue(html.contains("href=\"/api-browser\""));
+        assertTrue(html.contains(">" + activeLabel + "</a>"));
+        assertTrue(html.contains("href=\"" + activeHref + "\" class=\"nav-link active\" aria-current=\"page\">" + activeLabel + "</a>"));
     }
 
     private static ServerContext newContext() {

@@ -116,139 +116,7 @@
             border: 0;
         }
 
-        .topbar {
-            position: sticky;
-            top: 0;
-            z-index: 20;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 18px 28px;
-            backdrop-filter: blur(24px);
-            background: rgba(6, 9, 20, 0.78);
-            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-        }
-
-        .topbar-left,
-        .topbar-right {
-            display: flex;
-            align-items: center;
-            gap: 18px;
-            min-width: 0;
-        }
-
-        .brand {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            text-decoration: none;
-        }
-
-        .brand-mark {
-            width: 42px;
-            height: 42px;
-            border-radius: 14px;
-            display: grid;
-            place-items: center;
-            background: linear-gradient(135deg, rgba(34, 211, 238, 0.96), rgba(96, 165, 250, 0.86));
-            box-shadow: 0 14px 32px rgba(6, 182, 212, 0.28);
-        }
-
-        .brand-mark svg {
-            width: 22px;
-            height: 22px;
-            stroke: #03111a;
-            stroke-width: 2;
-            fill: none;
-        }
-
-        .brand-copy {
-            min-width: 0;
-        }
-
-        .brand-title {
-            display: block;
-            font-size: 19px;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-        }
-
-        .brand-subtitle {
-            display: block;
-            color: var(--text-muted);
-            font-size: 12px;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        .nav-links {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-
-        .nav-link {
-            padding: 10px 14px;
-            border-radius: 12px;
-            color: var(--text-secondary);
-            text-decoration: none;
-            transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
-        }
-
-        .nav-link:hover {
-            color: var(--text-primary);
-            background: rgba(34, 211, 238, 0.08);
-            transform: translateY(-1px);
-        }
-
-        .nav-link.active {
-            color: var(--accent-cyan);
-            background: rgba(34, 211, 238, 0.12);
-            box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.18);
-        }
-
-        .surface-pill,
-        .mode-badge {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 34px;
-            padding: 0 12px;
-            border-radius: 999px;
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        .surface-pill {
-            color: var(--text-secondary);
-            background: rgba(148, 163, 184, 0.08);
-            border: 1px solid rgba(148, 163, 184, 0.12);
-        }
-
-        .mode-badge {
-            border: 1px solid transparent;
-        }
-
-        .mode-mock {
-            color: var(--accent-purple);
-            background: rgba(192, 132, 252, 0.12);
-            border-color: rgba(192, 132, 252, 0.2);
-        }
-
-        .mode-sepolia {
-            color: var(--accent-amber);
-            background: rgba(245, 158, 11, 0.12);
-            border-color: rgba(245, 158, 11, 0.22);
-        }
-
-        .mode-mainnet {
-            color: var(--accent-green);
-            background: rgba(52, 211, 153, 0.12);
-            border-color: rgba(52, 211, 153, 0.2);
-        }
+{{SHARED_HEADER_STYLES}}
 
         .shell {
             display: grid;
@@ -961,21 +829,9 @@
         }
 
         @media (max-width: 920px) {
-            .topbar,
             .shell {
                 padding-left: 18px;
                 padding-right: 18px;
-            }
-
-            .topbar {
-                flex-direction: column;
-                align-items: stretch;
-            }
-
-            .topbar-left,
-            .topbar-right {
-                justify-content: space-between;
-                flex-wrap: wrap;
             }
 
             .hero-metrics,
@@ -1012,30 +868,7 @@
     </style>
 </head>
 <body>
-    <header class="topbar">
-        <div class="topbar-left">
-            <a href="/" class="brand">
-                <div class="brand-mark">
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-                    </svg>
-                </div>
-                <div class="brand-copy">
-                    <span class="brand-title">Blockchain AEM</span>
-                    <span class="brand-subtitle">Validator-native diagnostics</span>
-                </div>
-            </a>
-            <nav class="nav-links" aria-label="Primary">
-                <a href="/" class="nav-link">Dashboard</a>
-                <a href="/explorer" class="nav-link">Explorer</a>
-                <a href="/api-browser" class="nav-link active" aria-current="page">API Browser</a>
-            </nav>
-        </div>
-        <div class="topbar-right">
-            <span class="surface-pill">Local Surface</span>
-            <span class="mode-badge {{MODE_CLASS}}">{{MODE_LABEL}}</span>
-        </div>
-    </header>
+{{SHARED_HEADER}}
 
     <main class="shell">
         <aside class="panel sidebar">

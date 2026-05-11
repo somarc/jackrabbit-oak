@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Oak Segment Consensus Control Plane</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #0b1020;
+            color: #e5e7eb;
+        }
+
+        .wrap {
+            max-width: 1080px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        h1 {
+            margin: 0 0 8px 0;
+            font-size: 30px;
+        }
+
+        h2 {
+            margin: 0 0 10px 0;
+            font-size: 18px;
+        }
+
+        p {
+            color: #9ca3af;
+        }
+
+        a {
+            color: #93c5fd;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin: 18px 0;
+        }
+
+        .card {
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .k {
+            color: #9ca3af;
+            font-size: 12px;
+        }
+
+        .v {
+            margin-top: 4px;
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 10px;
+            margin: 16px 0;
+        }
+
+        .link {
+            display: block;
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 10px;
+            padding: 10px 12px;
+        }
+
+        .muted {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        .warn {
+            margin-top: 16px;
+            padding: 10px 12px;
+            border-left: 3px solid #f59e0b;
+            background: #111827;
+            border-radius: 8px;
+        }
+
+        .tip {
+            margin-top: 16px;
+            padding: 12px 14px;
+            border-left: 3px solid #38bdf8;
+            background: #111827;
+            border-radius: 8px;
+        }
+
+        .section {
+            margin-top: 20px;
+        }
+
+        .section-intro {
+            margin: 0 0 8px 0;
+            color: #94a3b8;
+            font-size: 13px;
+        }
+
+{{SHARED_HEADER_STYLES}}
+
+        @media (max-width: 860px) {
+            .wrap {
+                padding: 18px;
+            }
+        }
+    </style>
+</head>
+<body>
+{{SHARED_HEADER}}
+<div class="wrap">
+    <h1>Oak Control Plane Home</h1>
+    <p>API-first runtime. The retained validator-local UX planes are Oak Control Plane Home, CRX/OC, and API Browser. Everything else should prefer governed <code>/v1/*</code> contracts today and the edge-owned <code>/ops/v1/*</code> contract upstream.</p>
+    <div class="grid">
+        <div class="card"><div class="k">Build</div><div class="v">{{VERSION}}</div></div>
+        <div class="card"><div class="k">Role</div><div class="v">{{ROLE}}</div></div>
+        <div class="card"><div class="k">Node</div><div class="v">{{NODE_ID}}</div></div>
+        <div class="card"><div class="k">Leader</div><div class="v">{{LEADER_NODE}}</div></div>
+        <div class="card"><div class="k">Term</div><div class="v">{{TERM}}</div></div>
+        <div class="card"><div class="k">Members</div><div class="v">{{MEMBERS}}</div></div>
+        <div class="card"><div class="k">Reachable</div><div class="v">{{REACHABLE}}</div></div>
+        <div class="card"><div class="k">Quorum</div><div class="v">{{QUORUM}}</div></div>
+        <div class="card"><div class="k">Uptime</div><div class="v">{{UPTIME}}</div></div>
+        <div class="card"><div class="k">Updated</div><div class="v">{{UPDATED_AT}}</div></div>
+    </div>
+    <div class="tip"><strong>OSGi workflow:</strong> start with <code>/v1/config/osgi</code> for effective values, then <code>/v1/config/osgi/sources</code> for provenance, <code>/v1/config/osgi/schema</code> for metadata, and <code>/v1/config/osgi/delta</code> or <code>/v1/config/osgi/coverage</code> for drift and gaps.</div>
+
+    <div class="section">
+        <h2>Retained Local UX Planes</h2>
+        <p class="section-intro">Only three validator-local browser planes remain on purpose: this home page, CRX/OC for repository drill-down, and API Browser for manifest-backed route inspection.</p>
+        <div class="links">
+            <a class="link" href="/dashboard"><strong>Oak Control Plane Home</strong><div class="muted">Read-only runtime landing page for cluster posture, safety notes, and entry into the other local planes.</div></a>
+            <a class="link" href="/explorer"><strong>CRX/OC</strong><div class="muted">Read-only JCR and TarMK drill-down rooted at genesis and the wallet namespace contract.</div></a>
+            <a class="link" href="/api-browser"><strong>Local API Browser</strong><div class="muted">Validator-local diagnostic catalog backed by the live <code>/v1/index</code> manifest.</div></a>
+{{EXTERNAL_DASHBOARD_LINK}}
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Governed Source Contracts</h2>
+        <p class="section-intro">Health, events, snapshots, and explorer authority should stay API and CLI first. These are the validator-native contracts the local planes read from.</p>
+        <div class="links">
+            <a class="link" href="/v1/index"><strong>/v1/index</strong><div class="muted">Single manifest for route discovery, surface class, and upstream replacement guidance.</div></a>
+            <a class="link" href="/v1/consensus/status"><strong>/v1/consensus/status</strong><div class="muted">Consensus status and leader context.</div></a>
+            <a class="link" href="/v1/proposals/queue/stats"><strong>/v1/proposals/queue/stats</strong><div class="muted">Queue/finality/backpressure counters.</div></a>
+            <a class="link" href="/v1/proposals/release-flow"><strong>/v1/proposals/release-flow</strong><div class="muted">Adaptive verified-release stages and governor state.</div></a>
+            <a class="link" href="/v1/events/recent?limit=50"><strong>/v1/events/recent?limit=50</strong><div class="muted">Recent content and consensus events for operator replay and feed consumers.</div></a>
+            <a class="link" href="/v1/ops/snapshots/runtime"><strong>/v1/ops/snapshots/runtime</strong><div class="muted">Runtime snapshot for automation, dashboards, and support tooling.</div></a>
+            <a class="link" href="/v1/config/osgi"><strong>/v1/config/osgi</strong><div class="muted">Effective OSGi tuning values.</div></a>
+            <a class="link" href="/v1/config/osgi/schema"><strong>/v1/config/osgi/schema</strong><div class="muted">Knob metadata: types, defaults, reload mode, and risk.</div></a>
+            <a class="link" href="/v1/config/osgi/sources"><strong>/v1/config/osgi/sources</strong><div class="muted">Where each effective config group came from.</div></a>
+            <a class="link" href="/v1/config/osgi/coverage"><strong>/v1/config/osgi/coverage</strong><div class="muted">Read-only config coverage and gaps.</div></a>
+            <a class="link" href="/v1/config/osgi/delta"><strong>/v1/config/osgi/delta</strong><div class="muted">Current values vs defaults.</div></a>
+            <a class="link" href="/v1/explorer/summary"><strong>/v1/explorer/summary</strong><div class="muted">Explorer contract for external blockscan UI.</div></a>
+            <a class="link" href="/v1/explorer/content/nav"><strong>/v1/explorer/content/nav</strong><div class="muted">CRX/OC topology and namespace entry contract.</div></a>
+            <a class="link" href="/health"><strong>/health</strong><div class="muted">Shallow health.</div></a>
+            <a class="link" href="/health/deep"><strong>/health/deep</strong><div class="muted">Deep dependency health.</div></a>
+        </div>
+    </div>
+
+    <div class="tip"><strong>Surface posture:</strong> No additional validator-local HTML planes are required right now. Streams, snapshots, and automation should stay API and CLI first via <code>/v1/index</code>, <code>/v1/events/*</code>, and <code>/v1/ops/snapshots/*</code>.</div>
+    <div class="warn"><strong>Safety:</strong> This page is read-only. Use signed API/CLI flows for mutating operations.</div>
+</div>
+</body>
+</html>

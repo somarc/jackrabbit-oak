@@ -22,7 +22,7 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.DashboardDataService;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -60,9 +60,6 @@ public class DashboardHandler {
      * the API browser, health endpoints, and external dashboard.</p>
      */
     public void handleDashboard(HttpServletResponse response) throws IOException {
-        response.setStatus(HttpServletResponse.SC_OK);
-        response.setContentType("text/html; charset=UTF-8");
-        final String appName = "Oak Segment Consensus";
         final String version = DashboardHandler.class.getPackage() != null
                 && DashboardHandler.class.getPackage().getImplementationVersion() != null
                 ? DashboardHandler.class.getPackage().getImplementationVersion()
@@ -92,58 +89,37 @@ public class DashboardHandler {
         final int membersValue = asInt(clusterState.get("memberCount"),
             asInt(clusterState.get("clusterMemberCount"), 0));
         final String members = String.valueOf(membersValue);
-
-        StringBuilder html = new StringBuilder();
-        html.append("<!doctype html><html><head><meta charset='utf-8'>");
-        html.append("<meta name='viewport' content='width=device-width, initial-scale=1'>");
-        html.append("<title>").append(FormatUtils.escapeHtml(appName)).append(" Control Plane</title>");
-        html.append("<style>");
-        html.append("body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0b1020;color:#e5e7eb;margin:0;padding:24px;}");
-        html.append(".wrap{max-width:960px;margin:0 auto;}h1{margin:0 0 8px 0;font-size:30px;}p{color:#9ca3af;}a{color:#93c5fd;text-decoration:none;}a:hover{text-decoration:underline;}");
-        html.append(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:18px 0;}");
-        html.append(".card{background:#111827;border:1px solid #1f2937;border-radius:10px;padding:12px;} .k{color:#9ca3af;font-size:12px;} .v{font-size:20px;font-weight:700;margin-top:4px;}");
-        html.append(".links{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin:16px 0;}");
-        html.append(".link{background:#111827;border:1px solid #1f2937;border-radius:10px;padding:10px 12px;display:block;}");
-        html.append(".muted{font-size:12px;color:#94a3b8;} .warn{margin-top:16px;padding:10px 12px;border-left:3px solid #f59e0b;background:#111827;border-radius:8px;}");
-        html.append(".tip{margin-top:16px;padding:12px 14px;border-left:3px solid #38bdf8;background:#111827;border-radius:8px;}");
-        html.append(".section{margin-top:20px;}");
-        html.append("</style></head><body><div class='wrap'>");
-        html.append("<h1>Oak Control Plane Home</h1>");
-        html.append("<p>API-first runtime. This page is the read-only entry point for health, consensus, and OSGi-governed runtime configuration. Browser UX belongs upstream behind the edge-owned <code>/ops/v1/*</code> contract.</p>");
-        html.append("<div class='grid'>");
-        html.append("<div class='card'><div class='k'>Build</div><div class='v'>").append(FormatUtils.escapeHtml(version)).append("</div></div>");
-        html.append("<div class='card'><div class='k'>Role</div><div class='v'>").append(FormatUtils.escapeHtml(role)).append("</div></div>");
-        html.append("<div class='card'><div class='k'>Node</div><div class='v'>").append(FormatUtils.escapeHtml(nodeId)).append("</div></div>");
-        html.append("<div class='card'><div class='k'>Leader</div><div class='v'>").append(FormatUtils.escapeHtml(leaderNode)).append("</div></div>");
-        html.append("<div class='card'><div class='k'>Term</div><div class='v'>").append(FormatUtils.escapeHtml(term)).append("</div></div>");
-        html.append("<div class='card'><div class='k'>Members</div><div class='v'>").append(FormatUtils.escapeHtml(members)).append("</div></div>");
-        html.append("<div class='card'><div class='k'>Uptime</div><div class='v'>").append(FormatUtils.escapeHtml(uptime)).append("</div></div>");
-        html.append("<div class='card'><div class='k'>Updated</div><div class='v'>").append(FormatUtils.escapeHtml(now)).append("</div></div>");
-        html.append("</div>");
-        html.append("<div class='tip'><strong>OSGi workflow:</strong> start with <code>/v1/config/osgi</code> for effective values, then <code>/v1/config/osgi/sources</code> for provenance, <code>/v1/config/osgi/schema</code> for metadata, and <code>/v1/config/osgi/delta</code> or <code>/v1/config/osgi/coverage</code> for drift and gaps.</div>");
-        html.append("<div class='section'>");
-        html.append("<h2>Control Plane Surfaces</h2>");
-        html.append("<div class='links'>");
-        html.append("<a class='link' href='/api-browser'><strong>Local API Browser</strong><div class='muted'>Validator-local diagnostic catalog. Upstream UX should use the edge-owned <code>/ops/v1/*</code> contract.</div></a>");
-        html.append("<a class='link' href='/v1/consensus/status'><strong>/v1/consensus/status</strong><div class='muted'>Consensus status and leader context.</div></a>");
-        html.append("<a class='link' href='/v1/proposals/queue/stats'><strong>/v1/proposals/queue/stats</strong><div class='muted'>Queue/finality/backpressure counters.</div></a>");
-        html.append("<a class='link' href='/v1/proposals/release-flow'><strong>/v1/proposals/release-flow</strong><div class='muted'>Adaptive verified-release stages and governor state.</div></a>");
-        html.append("<a class='link' href='/v1/config/osgi'><strong>/v1/config/osgi</strong><div class='muted'>Effective OSGi tuning values.</div></a>");
-        html.append("<a class='link' href='/v1/config/osgi/schema'><strong>/v1/config/osgi/schema</strong><div class='muted'>Knob metadata: types, defaults, reload mode, and risk.</div></a>");
-        html.append("<a class='link' href='/v1/config/osgi/sources'><strong>/v1/config/osgi/sources</strong><div class='muted'>Where each effective config group came from.</div></a>");
-        html.append("<a class='link' href='/v1/config/osgi/coverage'><strong>/v1/config/osgi/coverage</strong><div class='muted'>Read-only config coverage and gaps.</div></a>");
-        html.append("<a class='link' href='/v1/config/osgi/delta'><strong>/v1/config/osgi/delta</strong><div class='muted'>Current values vs defaults.</div></a>");
-        html.append("<a class='link' href='/v1/explorer/summary'><strong>/v1/explorer/summary</strong><div class='muted'>Explorer contract for external blockscan UI.</div></a>");
-        html.append("<a class='link' href='/health'><strong>/health</strong><div class='muted'>Shallow health.</div></a>");
-        html.append("<a class='link' href='/health/deep'><strong>/health/deep</strong><div class='muted'>Deep dependency health.</div></a>");
-        if (externalDashboardUrl != null && !externalDashboardUrl.trim().isEmpty()) {
-            html.append("<a class='link' href='").append(FormatUtils.escapeHtml(externalDashboardUrl)).append("'><strong>External Ops Dashboard</strong><div class='muted'>Configured via -Doak.dashboard.external.url.</div></a>");
-        }
-        html.append("</div>");
-        html.append("</div>");
-        html.append("<div class='warn'><strong>Safety:</strong> This page is read-only. Use signed API/CLI flows for mutating operations.</div>");
-        html.append("</div></body></html>");
-        response.getWriter().write(html.toString());
+        final Map<String, Object> quorumState = asMap(clusterState.get("quorum"));
+        final Map<String, Object> consensusState = asMap(clusterState.get("consensus"));
+        final int reachableValue = asInt(clusterState.get("reachableCount"),
+            asInt(consensusState.get("reachableValidators"), -1));
+        final String reachable = reachableValue >= 0 && membersValue > 0
+            ? reachableValue + "/" + membersValue
+            : reachableValue >= 0 ? String.valueOf(reachableValue) : "UNKNOWN";
+        final int quorumRequired = asInt(quorumState.get("required"), membersValue > 0 ? (membersValue / 2) + 1 : -1);
+        final boolean quorumKnown = quorumRequired > 0 && reachableValue >= 0;
+        final boolean hasQuorum = quorumKnown
+            ? reachableValue >= quorumRequired
+            : Boolean.TRUE.equals(quorumState.get("hasQuorum"));
+        final String quorum = quorumKnown
+            ? (hasQuorum ? "YES" : "NO") + " (" + quorumRequired + ")"
+            : "UNKNOWN";
+        final String[] modeTokens = resolveModeTemplateTokens();
+        final String modeClass = modeTokens[0];
+        final String modeLabel = modeTokens[1];
+        Map<String, String> tokens = buildSharedTemplateTokens("dashboard", modeClass, modeLabel);
+        tokens.put("{{VERSION}}", FormatUtils.escapeHtml(version));
+        tokens.put("{{ROLE}}", FormatUtils.escapeHtml(role));
+        tokens.put("{{NODE_ID}}", FormatUtils.escapeHtml(nodeId));
+        tokens.put("{{LEADER_NODE}}", FormatUtils.escapeHtml(leaderNode));
+        tokens.put("{{TERM}}", FormatUtils.escapeHtml(term));
+        tokens.put("{{MEMBERS}}", FormatUtils.escapeHtml(members));
+        tokens.put("{{REACHABLE}}", FormatUtils.escapeHtml(reachable));
+        tokens.put("{{QUORUM}}", FormatUtils.escapeHtml(quorum));
+        tokens.put("{{UPTIME}}", FormatUtils.escapeHtml(uptime));
+        tokens.put("{{UPDATED_AT}}", FormatUtils.escapeHtml(now));
+        tokens.put("{{EXTERNAL_DASHBOARD_LINK}}", buildExternalDashboardLink(externalDashboardUrl));
+        writeResolvedTemplate(response, "/dashboard-template.html", tokens);
     }
 
     /**
@@ -179,22 +155,22 @@ public class DashboardHandler {
         addSourceIndexEntry(endpoints, "GET", "/v1/settlement/transactions/{transactionHash}", "Basic settlement details by transaction hash", "Settlement", "settlement.v1", "/ops/v1/settlement/transactions/{transactionHash}");
         addInternalIndexEntry(endpoints, "GET", "/v1/head", "Head status", "Consensus", null);
 
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/summary", "Explorer summary contract", "Explorer", "explorer.v1", "/ops/v1/explorer/summary");
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/release-flow", "Explorer adaptive release flow", "Explorer", "explorer.v1", "/ops/v1/explorer/release-flow");
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail", "Explorer", "explorer.v1", "/ops/v1/explorer/proposals/{proposalId}");
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail", "Explorer", "explorer.v1", "/ops/v1/explorer/wallets/{walletAddress}");
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/nav", "Cluster-aware content explorer navigation", "Explorer", "explorer.content.v1", "/ops/v1/explorer/content/nav");
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/tree", "Cluster-scoped content tree browse", "Explorer", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/tree");
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/node", "Cluster-scoped node detail", "Explorer", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/node");
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/provenance", "Cluster-scoped provenance and authority facts", "Explorer", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/provenance");
-        addLocalUiIndexEntry(endpoints, "GET", "/explorer", "Temporary local explorer UI bridge", "Explorer");
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/explore?path=/", "Legacy local node tree browse API", "Explorer", "/ops/v1/explorer/content/*");
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/recent", "Recent segments", "Explorer", "/v1/ops/snapshots/storage");
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/tars", "TAR file listing", "Explorer", "/v1/ops/snapshots/storage");
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/blob/{blobId}", "Blob stream by blob id", "Explorer", null);
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/{oakBlobId}", "CID mapping by Oak blob id", "Explorer", null);
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/stats", "CID mapping stats", "Explorer", null);
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/reverse/{cid}", "Reverse CID lookup", "Explorer", null);
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/summary", "Explorer summary contract", "CRX/OC", "explorer.v1", "/ops/v1/explorer/summary");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/release-flow", "Explorer adaptive release flow", "CRX/OC", "explorer.v1", "/ops/v1/explorer/release-flow");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail", "CRX/OC", "explorer.v1", "/ops/v1/explorer/proposals/{proposalId}");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail", "CRX/OC", "explorer.v1", "/ops/v1/explorer/wallets/{walletAddress}");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/nav", "CRX/OC cluster-aware content navigation", "CRX/OC", "explorer.content.v1", "/ops/v1/explorer/content/nav");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/tree", "CRX/OC cluster-scoped content tree browse", "CRX/OC", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/tree");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/node", "CRX/OC cluster-scoped node detail", "CRX/OC", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/node");
+        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/provenance", "CRX/OC cluster-scoped provenance and authority facts", "CRX/OC", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/provenance");
+        addLocalUiIndexEntry(endpoints, "GET", "/explorer", "Validator-local CRX/OC read-only content explorer", "CRX/OC");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/explore?path=/", "Legacy CRX/OC local node tree browse API", "CRX/OC", "/ops/v1/explorer/content/*");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/recent", "Recent segments", "CRX/OC", "/v1/ops/snapshots/storage");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/tars", "TAR file listing", "CRX/OC", "/v1/ops/snapshots/storage");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/blob/{blobId}", "Blob stream by blob id", "CRX/OC", null);
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/{oakBlobId}", "CID mapping by Oak blob id", "CRX/OC", null);
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/stats", "CID mapping stats", "CRX/OC", null);
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/reverse/{cid}", "Reverse CID lookup", "CRX/OC", null);
 
         addInternalIndexEntry(endpoints, "GET", "/v1/wallets/stats", "Wallet usage and counts", "Wallets", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/wallets/content?wallet=0x...", "Wallet content query", "Wallets", null);
@@ -372,6 +348,14 @@ public class DashboardHandler {
         return value != null ? value.toString() : fallback;
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asMap(Object value) {
+        if (value instanceof Map) {
+            return (Map<String, Object>) value;
+        }
+        return Collections.emptyMap();
+    }
+
     private int resolveLeaderNodeId(Map<String, Object> clusterState, String role, int nodeId) {
         int leaderNode = asInt(clusterState.get("leaderNodeId"),
             asInt(clusterState.get("leaderMemberId"), -1));
@@ -413,7 +397,7 @@ public class DashboardHandler {
      * Now uses external template for consistent Blockchain AEM styling.
      */
     public void handleExplorerUI(HttpServletResponse response) throws IOException {
-        writeModeAwareTemplate(response, "/explorer-template.html");
+        writeModeAwareTemplate(response, "/explorer-template.html", "explorer");
     }
     
     /**
@@ -421,20 +405,63 @@ public class DashboardHandler {
      * Now uses external template for consistent Blockchain AEM styling.
      */
     public void handleApiBrowserUI(HttpServletResponse response) throws IOException {
-        writeModeAwareTemplate(response, "/api-browser-template.html");
+        writeModeAwareTemplate(response, "/api-browser-template.html", "api-browser");
     }
 
-    private void writeModeAwareTemplate(HttpServletResponse response, String resourcePath) throws IOException {
+    private void writeModeAwareTemplate(HttpServletResponse response, String resourcePath, String activeNav) throws IOException {
+        String[] modeTokens = resolveModeTemplateTokens();
+        Map<String, String> tokens = buildSharedTemplateTokens(activeNav, modeTokens[0], modeTokens[1]);
+        writeResolvedTemplate(response, resourcePath, tokens);
+    }
+
+    private void writeResolvedTemplate(HttpServletResponse response, String resourcePath, Map<String, String> tokens) throws IOException {
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType("text/html; charset=UTF-8");
 
         String template = loadTemplate(resourcePath);
-        String[] modeTokens = resolveModeTemplateTokens();
-        String html = template
-            .replace("{{MODE_CLASS}}", modeTokens[0])
-            .replace("{{MODE_LABEL}}", modeTokens[1]);
-
+        String html = applyTemplateTokens(template, tokens);
         response.getWriter().write(html);
+    }
+
+    private Map<String, String> buildSharedTemplateTokens(String activeNav, String modeClass, String modeLabel) throws IOException {
+        Map<String, String> tokens = new LinkedHashMap<>();
+        tokens.put("{{MODE_CLASS}}", modeClass);
+        tokens.put("{{MODE_LABEL}}", modeLabel);
+        tokens.put("{{SHARED_HEADER_STYLES}}", loadTemplate("/shared-header.css"));
+        tokens.put("{{SHARED_HEADER}}", buildSharedHeader(activeNav, modeClass, modeLabel));
+        return tokens;
+    }
+
+    private String buildSharedHeader(String activeNav, String modeClass, String modeLabel) throws IOException {
+        boolean dashboardActive = "dashboard".equals(activeNav);
+        boolean explorerActive = "explorer".equals(activeNav);
+        boolean apiBrowserActive = "api-browser".equals(activeNav);
+
+        return loadTemplate("/shared-header.html")
+            .replace("{{NAV_DASHBOARD_CLASS}}", dashboardActive ? "nav-link active" : "nav-link")
+            .replace("{{NAV_DASHBOARD_CURRENT}}", dashboardActive ? "aria-current=\"page\"" : "")
+            .replace("{{NAV_EXPLORER_CLASS}}", explorerActive ? "nav-link active" : "nav-link")
+            .replace("{{NAV_EXPLORER_CURRENT}}", explorerActive ? "aria-current=\"page\"" : "")
+            .replace("{{NAV_API_BROWSER_CLASS}}", apiBrowserActive ? "nav-link active" : "nav-link")
+            .replace("{{NAV_API_BROWSER_CURRENT}}", apiBrowserActive ? "aria-current=\"page\"" : "")
+            .replace("{{MODE_CLASS}}", modeClass)
+            .replace("{{MODE_LABEL}}", modeLabel);
+    }
+
+    private String buildExternalDashboardLink(String externalDashboardUrl) {
+        if (externalDashboardUrl == null || externalDashboardUrl.trim().isEmpty()) {
+            return "";
+        }
+        return "<a class=\"link\" href=\"" + FormatUtils.escapeHtml(externalDashboardUrl)
+            + "\"><strong>External Ops Dashboard</strong><div class=\"muted\">Optional upstream operator surface configured via <code>-Doak.dashboard.external.url</code>.</div></a>";
+    }
+
+    private String applyTemplateTokens(String template, Map<String, String> tokens) {
+        String resolved = template;
+        for (Map.Entry<String, String> entry : tokens.entrySet()) {
+            resolved = resolved.replace(entry.getKey(), entry.getValue());
+        }
+        return resolved;
     }
 
     private String[] resolveModeTemplateTokens() {
