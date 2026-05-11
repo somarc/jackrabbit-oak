@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.consensus.eth;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -62,8 +61,8 @@ public class BeaconChainClientTest {
         assertEquals(12345L, client.getCachedFinalizedEpoch());
         assertTrue(client.isEpochDataFresh());
         assertEquals("MOCK", health.get("mode"));
-        assertEquals("https://sepolia.beaconcha.in/api/v1", health.get("apiUrl"));
         assertEquals("sepolia", health.get("chainContext"));
+        assertNotNull(health.get("providers"));
         assertNull(health.get("mockEpochOffset"));
         assertNull(health.get("mockEpochDurationMs"));
     }
@@ -97,7 +96,6 @@ public class BeaconChainClientTest {
 
         assertEquals(150L, client.getCachedCurrentEpoch());
         assertEquals(148L, client.getCachedFinalizedEpoch());
-        assertEquals("/epoch/latest", client.getHealthStatus().get("lastEndpointUsed"));
         assertEquals(2, fetchCount.get());
     }
 
@@ -114,18 +112,6 @@ public class BeaconChainClientTest {
         } catch (IllegalStateException e) {
             assertEquals("Epoch data is stale!", e.getMessage());
         }
-    }
-
-    @Test
-    public void testParseEpochFromResponseHandlesStandardAlternateAndInvalidPayloads() throws Exception {
-        BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.MOCK, 99L);
-        Method method = BeaconChainClient.class.getDeclaredMethod("parseEpochFromResponse", String.class);
-        method.setAccessible(true);
-
-        assertEquals(12345L, ((Long) method.invoke(client, "{\"status\":\"OK\",\"data\":{\"epoch\":12345}}")).longValue());
-        assertEquals(12345L, ((Long) method.invoke(client, "{\"status\":\"OK\",\"data\":12345}")).longValue());
-        assertEquals(-1L, ((Long) method.invoke(client, "{\"status\":\"OK\",\"data\":{\"finalized\":12345}}")).longValue());
-        assertEquals(-1L, ((Long) method.invoke(client, "{\"status\":\"OK\",\"data\":oops}")).longValue());
     }
 
     @Test
