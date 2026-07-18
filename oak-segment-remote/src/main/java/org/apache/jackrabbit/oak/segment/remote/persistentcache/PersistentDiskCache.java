@@ -18,12 +18,14 @@
 package org.apache.jackrabbit.oak.segment.remote.persistentcache;
 
 import java.io.UncheckedIOException;
+import java.nio.file.DirectoryIteratorException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.NoSuchFileException;
-import org.apache.commons.io.FileUtils;
 import org.apache.jackrabbit.oak.commons.Buffer;
 import org.apache.jackrabbit.oak.commons.time.Stopwatch;
 import org.apache.jackrabbit.oak.segment.spi.persistence.persistentcache.AbstractPersistentCache;
 import org.apache.jackrabbit.oak.segment.spi.persistence.persistentcache.SegmentCacheStats;
+import org.apache.jackrabbit.oak.spi.toggle.FeatureToggle;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,7 +58,29 @@ public class PersistentDiskCache extends AbstractPersistentCache {
     public static final int DEFAULT_MAX_CACHE_SIZE_MB = 512;
     public static final String NAME = "Segment Disk Cache";
     public static final long DEFAULT_TEMP_FILES_CLEANUP_WAIT_TIME_MS = 60000;
-    private static final String TEMP_FILE_SUFFIX = ".part";
+    static final String TEMP_FILE_SUFFIX = ".part";
+
+    /**
+     * Name of the feature toggle that controls the OAK-12212 fix, see
+     * {@link #FT_OAK_12212_SKIP_MISSING_FILE_CHECK}.
+     */
+    public static final String FT_OAK_12212 = "FT_OAK-12212";
+
+    /**
+     * Kill switch for the OAK-12212 fix in {@link #writeSegment}.
+     * <p>
+     * When {@code false} (default), {@code writeSegment} skips the on-disk
+     * write and the corresponding {@code cacheSize} increment if the segment
+     * is already present on disk. Segments are immutable, so a redundant
+     * write would only produce identical bytes — but every such call used to
+     * increment {@code cacheSize} while {@code Files.move} silently replaced
+     * the file on POSIX systems, causing the in-memory counter to drift far
+     * above the actual cache directory size and above {@code maxCacheSizeBytes}.
+     * <p>
+     * Set to {@code true} via the {@link FeatureToggle} registered with the
+     * Whiteboard to revert to the pre-fix behaviour.
+     */
+    public static final AtomicBoolean FT_OAK_12212_SKIP_MISSING_FILE_CHECK = new AtomicBoolean(false);
 
     private final File directory;
     private final long maxCacheSizeBytes;
@@ -69,6 +93,8 @@ public class PersistentDiskCache extends AbstractPersistentCache {
     final AtomicBoolean cleanupInProgress = new AtomicBoolean(false);
 
     final AtomicLong evictionCount = new AtomicLong();
+
+    final AtomicLong elementCount = new AtomicLong();
 
     public PersistentDiskCache(File directory, int cacheMaxSizeMB, DiskCacheIOMonitor diskCacheIOMonitor) {
         this(directory, cacheMaxSizeMB, diskCacheIOMonitor, DEFAULT_TEMP_FILES_CLEANUP_WAIT_TIME_MS);
@@ -83,12 +109,35 @@ public class PersistentDiskCache extends AbstractPersistentCache {
             directory.mkdirs();
         }
 
+        long totalSize = 0;
+        long count = 0;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(
+                directory.toPath(),
+                path -> !path.getFileName().toString().endsWith(TEMP_FILE_SUFFIX))) {
+            for (Path path : stream) {
+                BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+                if (attrs.isRegularFile()) {
+                    totalSize += attrs.size();
+                    count++;
+                }
+            }
+            cacheSize.set(totalSize);
+            elementCount.set(count);
+            if (totalSize > maxCacheSizeBytes) {
+                logger.info("Cache directory {} contains {} MB on startup, exceeding the {} MB limit; eviction will trigger on the next write",
+                        directory, totalSize / (1024L * 1024L), cacheMaxSizeMB);
+            }
+        } catch (IOException | DirectoryIteratorException e) {
+            logger.warn("Failed to initialize cache size counters from directory {}", directory, e);
+        }
+
         segmentCacheStats = new SegmentCacheStats(
                 NAME,
                 () -> maxCacheSizeBytes,
-                () -> Long.valueOf(directory.listFiles().length),
-                () -> FileUtils.sizeOfDirectory(directory),
-                () -> evictionCount.get());
+                elementCount::get,
+                cacheSize::get,
+                evictionCount::get,
+                () -> discardCount.get());
     }
 
     @Override
@@ -148,17 +197,28 @@ public class PersistentDiskCache extends AbstractPersistentCache {
         Runnable task = () -> {
             if (writesPending.add(segmentId)) {
                 try {
-                    int fileSize;
-                    try (FileChannel channel = new FileOutputStream(tempSegmentFile).getChannel()) {
-                        fileSize = bufferCopy.write(channel);
+                    // OAK-12212: skip the on-disk write and the cacheSize
+                    // increment when the segment is already on disk. Segments
+                    // are immutable, so a redundant write would only rewrite
+                    // identical bytes; the pre-fix behaviour still incremented
+                    // cacheSize on every such call while Files.move silently
+                    // replaced the file on POSIX systems, leaking phantom
+                    // bytes into the in-memory counter on every redundant
+                    // write. Guarded by FT_OAK-12212 (disabled = active fix).
+                    if (FT_OAK_12212_SKIP_MISSING_FILE_CHECK.get() || !segmentFile.exists()) {
+                        int fileSize;
+                        try (FileChannel channel = new FileOutputStream(tempSegmentFile).getChannel()) {
+                            fileSize = bufferCopy.write(channel);
+                        }
+                        try {
+                            Files.move(tempSegmentFile.toPath(), segmentFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+                        } catch (AtomicMoveNotSupportedException e) {
+                            Files.move(tempSegmentFile.toPath(), segmentFile.toPath());
+                        }
+                        long cacheSizeAfter = cacheSize.addAndGet(fileSize);
+                        elementCount.incrementAndGet();
+                        diskCacheIOMonitor.updateCacheSize(cacheSizeAfter, fileSize);
                     }
-                    try {
-                        Files.move(tempSegmentFile.toPath(), segmentFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
-                    } catch (AtomicMoveNotSupportedException e) {
-                        Files.move(tempSegmentFile.toPath(), segmentFile.toPath());
-                    }
-                    long cacheSizeAfter = cacheSize.addAndGet(fileSize);
-                    diskCacheIOMonitor.updateCacheSize(cacheSizeAfter, fileSize);
                 } catch (Exception e) {
                     logger.error("Error writing segment {} to cache", segmentId, e);
                     try {
@@ -216,6 +276,9 @@ public class PersistentDiskCache extends AbstractPersistentCache {
                         long cacheSizeAfter = cacheSize.addAndGet(-length);
                         diskCacheIOMonitor.updateCacheSize(cacheSizeAfter, -length);
                         segment.delete();
+                        if (!segmentCacheEntry.isTempFile()) {
+                            elementCount.decrementAndGet();
+                        }
                         evictionCount.incrementAndGet();
                     } else {
                         breaker.stop();

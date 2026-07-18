@@ -47,9 +47,9 @@ import java.util.function.Function;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.concurrent.BasicThreadFactory;
-import org.apache.jackrabbit.core.data.DataIdentifier;
-import org.apache.jackrabbit.core.data.DataRecord;
-import org.apache.jackrabbit.core.data.DataStoreException;
+import org.apache.jackrabbit.oak.spi.blob.data.DataIdentifier;
+import org.apache.jackrabbit.oak.spi.blob.data.DataRecord;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
 import org.apache.jackrabbit.oak.commons.PropertiesUtil;
 import org.apache.jackrabbit.oak.commons.collections.IteratorUtils;
 import org.apache.jackrabbit.oak.commons.collections.MapUtils;
@@ -63,8 +63,8 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.jackrabbit.guava.common.cache.Cache;
-import org.apache.jackrabbit.guava.common.cache.CacheBuilder;
+import org.apache.jackrabbit.oak.cache.api.Cache;
+import org.apache.jackrabbit.oak.cache.api.CacheBuilder;
 import software.amazon.awssdk.awscore.AwsRequestOverrideConfiguration;
 import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
@@ -133,6 +133,7 @@ public class S3Backend extends AbstractSharedBackend {
     private static final int MAX_ALLOWABLE_UPLOAD_URIS = 10000; // AWS limitation
 
     private S3Client s3Client;
+    private S3Client s3PresignClient;
     private S3AsyncClient s3AsyncClient;
 
     // needed only in case of transfer acceleration is enabled for presigned URIs
@@ -286,8 +287,10 @@ public class S3Backend extends AbstractSharedBackend {
     }
 
     void setBinaryTransferAccelerationEnabled(final boolean enabled) {
+        closePresignClient();
         if (!enabled) {
-            s3PresignService = Utils.createPresigner(s3Client, properties);
+            s3PresignClient = s3Client;
+            s3PresignService = Utils.createPresigner(s3Client, properties, false);
             return;
         }
 
@@ -295,13 +298,22 @@ public class S3Backend extends AbstractSharedBackend {
                 b -> b.bucket(bucket).build());
 
         if (Objects.equals(BucketAccelerateStatus.ENABLED, accelerateConfig.status())) {
-            s3PresignService = Utils.createPresigner(Utils.openService(properties, true), properties);
+            s3PresignClient = Utils.openService(properties, true);
+            s3PresignService = Utils.createPresigner(s3PresignClient, properties, true);
             LOG.info("S3 Transfer Acceleration enabled for presigned URIs.");
         } else {
             LOG.warn("S3 Transfer Acceleration is not enabled on the bucket {}. Will create normal, non-accelerated presigned URIs. To enable set {}",
                     bucket, S3Constants.PRESIGNED_URI_ENABLE_ACCELERATION);
-            s3PresignService = Utils.createPresigner(s3Client, properties);
+            s3PresignClient = s3Client;
+            s3PresignService = Utils.createPresigner(s3Client, properties, false);
         }
+    }
+
+    private void closePresignClient() {
+        if (s3PresignClient != null && s3PresignClient != s3Client) {
+            s3PresignClient.close();
+        }
+        s3PresignClient = null;
     }
 
     /**
@@ -481,6 +493,7 @@ public class S3Backend extends AbstractSharedBackend {
             if (s3PresignService != null) {
                 s3PresignService.close();
             }
+            closePresignClient();
             s3Client.close();
         }
         LOG.info("S3Backend closed.");
@@ -812,10 +825,10 @@ public class S3Backend extends AbstractSharedBackend {
         // max size 0 or smaller is used to turn off the cache
         if (maxSize > 0) {
             LOG.info("presigned GET URI cache enabled, maxSize = {} items, expiry = {} seconds", maxSize, httpDownloadURIExpirySeconds / 2);
-            httpDownloadURICache = CacheBuilder.newBuilder()
+            httpDownloadURICache = CacheBuilder.<DataIdentifier, URI>newBuilder()
                     .maximumSize(maxSize)
                     // cache for half the expiry time of the URIs before giving out new ones
-                    .expireAfterWrite(httpDownloadURIExpirySeconds / 2, TimeUnit.SECONDS)
+                    .expireAfterWrite(Duration.ofSeconds(httpDownloadURIExpirySeconds / 2))
                     .build();
         } else {
             LOG.info("presigned GET URI cache disabled");

@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.plugins.document.cache;
 
+import org.apache.jackrabbit.oak.cache.AbstractCacheStats;
 import org.apache.jackrabbit.oak.plugins.document.Document;
 import org.apache.jackrabbit.oak.plugins.document.DocumentStore;
 import org.apache.jackrabbit.oak.plugins.document.NodeDocument;
@@ -28,6 +29,10 @@ import org.junit.Test;
 import static java.util.Collections.singleton;
 import static org.apache.jackrabbit.oak.plugins.document.DocumentNodeStoreBuilder.newDocumentNodeStoreBuilder;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class NodeDocumentCacheTest {
 
@@ -65,7 +70,65 @@ public class NodeDocumentCacheTest {
         // cache. the cache must not accept this outdated document.
         cache.putNonConflictingDocs(queryTracker, singleton(current));
 
-        assertEquals(updated.getModCount(), cache.get(ID, () -> updated).getModCount());
+        assertEquals(updated.getModCount(), cache.get(ID, k -> updated).getModCount());
+    }
+
+    @Test
+    public void getWithCallableLoadsDocumentOnMiss() throws Exception {
+        NodeDocument doc = createDocument(1L);
+        NodeDocument loaded = cache.get(ID, k -> doc);
+        assertEquals(doc.getModCount(), loaded.getModCount());
+    }
+
+    @Test
+    public void getWithFunctionReturnsCachedDocumentOnHit() {
+        NodeDocument doc = createDocument(1L);
+        cache.put(doc);
+        // loader should not be called since doc is already cached
+        NodeDocument loaded = cache.get(ID, k -> {
+            throw new RuntimeException("loader must not be called on cache hit");
+        });
+        assertEquals(doc.getModCount(), loaded.getModCount());
+    }
+
+    @Test
+    public void getWithFunctionPropagatesRuntimeException() {
+        RuntimeException failure = new RuntimeException("simulated load failure");
+        try {
+            cache.get(ID, k -> { throw failure; });
+            fail("expected RuntimeException");
+        } catch (RuntimeException e) {
+            assertEquals(failure, e);
+        }
+    }
+
+    @Test
+    public void getIfPresentReturnsNullForUncachedKey() {
+        assertNull(cache.getIfPresent("not-cached"));
+    }
+
+    @Test
+    public void putAndGetIfPresentReturnsDocument() {
+        NodeDocument doc = createDocument(5L);
+        cache.put(doc);
+        NodeDocument result = cache.getIfPresent(ID);
+        assertNotNull(result);
+        assertEquals(doc.getModCount(), result.getModCount());
+    }
+
+    @Test
+    public void invalidateRemovesDocumentFromCache() {
+        NodeDocument doc = createDocument(1L);
+        cache.put(doc);
+        cache.invalidate(ID);
+        assertNull(cache.getIfPresent(ID));
+    }
+
+    @Test
+    public void getCacheStatsReturnsNonEmptyIterable() {
+        Iterable<AbstractCacheStats> statsIterable = cache.getCacheStats();
+        assertNotNull(statsIterable);
+        assertTrue(statsIterable.iterator().hasNext());
     }
 
     private NodeDocument createDocument(long modCount) {

@@ -139,6 +139,30 @@ public interface FulltextIndexConstants {
 
     String PROP_WEIGHT = "weight";
 
+    /**
+     * JSON string property on a property definition for Most Common Values (MCV) statistics.
+     * Format: {@code {"common":{"value1": pct1, "value2": pct2}}}
+     * where each value is the percentage of index entries matching that property value
+     * (e.g. {@code 33.33} means 33.33 %; {@code 0.5} means half a percent).
+     * Used for cost estimation when the query restricts a property to a specific value.
+     * If the value is present in "common", the percentage is multiplied by the live
+     * document count to estimate the number of matching entries; otherwise falls back
+     * to {@link #PROP_WEIGHT}.
+     */
+    String PROP_STATS = "stats";
+
+    /**
+     * Weight used for cost estimation of "is null" property restrictions.
+     * Falls back to {@link #PROP_WEIGHT} if not set.
+     */
+    String PROP_WEIGHT_NULL = "weightNull";
+
+    /**
+     * Weight used for cost estimation of "is not null" property restrictions.
+     * Falls back to {@link #PROP_WEIGHT} if not set.
+     */
+    String PROP_WEIGHT_NOT_NULL = "weightNotNull";
+
     String PROP_DYNAMIC_BOOST = "dynamicBoost";
 
     float DYNAMIC_BOOST_WEIGHT = 0.0001f;
@@ -256,6 +280,18 @@ public interface FulltextIndexConstants {
      * Set to -1 to disable the length check entirely
      */
     String MAX_TAG_LENGTH = "maxTagLength";
+
+    /**
+     * Maximum number of similarity tags to index per document.
+     * Set to -1 to disable the limit
+     */
+    String MAX_SIMILARITY_TAGS_COUNT = "maxSimilarityTagsCount";
+
+    /**
+     * Maximum number of dynamic boost tags to index per document. The top N tags by confidence are indexed.
+     * Set to -1 to disable the limit
+     */
+    String MAX_DYNAMIC_BOOST_COUNT = "maxDynamicBoostCount";
 
     /**
      * whether use this property values for suggestions

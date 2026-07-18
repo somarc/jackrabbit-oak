@@ -20,14 +20,15 @@ package org.apache.jackrabbit.oak.blob.cloud.s3;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 
 import javax.net.ssl.HttpsURLConnection;
 
-import org.apache.jackrabbit.core.data.DataIdentifier;
-import org.apache.jackrabbit.core.data.DataRecord;
-import org.apache.jackrabbit.core.data.DataStore;
-import org.apache.jackrabbit.core.data.DataStoreException;
+import org.apache.jackrabbit.oak.spi.blob.data.DataIdentifier;
+import org.apache.jackrabbit.oak.spi.blob.data.DataRecord;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStore;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.directaccess.AbstractDataRecordAccessProviderIT;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.directaccess.ConfigurableDataRecordAccessProvider;
 import org.junit.BeforeClass;
@@ -80,6 +81,11 @@ public class S3DataRecordAccessProviderIT extends AbstractDataRecordAccessProvid
 
     @Override
     protected HttpsURLConnection getHttpsConnection(long length, URI uri) throws IOException {
-        return S3DataStoreUtils.getHttpsConnection(length, uri);
+        throw new UnsupportedOperationException("Upload is handled by doHttpsUpload; see S3DataStoreUtils.doHttpUpload");
+    }
+
+    @Override
+    protected void doHttpsUpload(InputStream in, long contentLength, URI uri) throws IOException {
+        S3DataStoreUtils.doHttpUpload(in, contentLength, uri);
     }
 }
