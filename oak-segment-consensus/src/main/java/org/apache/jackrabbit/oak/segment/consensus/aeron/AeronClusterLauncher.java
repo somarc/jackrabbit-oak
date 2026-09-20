@@ -25,6 +25,7 @@ import io.aeron.cluster.service.ClusteredServiceContainer;
 import io.aeron.driver.exceptions.ActiveDriverException;
 import io.aeron.exceptions.DriverTimeoutException;
 import io.aeron.driver.MediaDriver;
+import io.aeron.driver.Configuration;
 import io.aeron.driver.ThreadingMode;
 import org.agrona.ErrorHandler;
 import org.agrona.IoUtil;
@@ -60,7 +61,7 @@ public class AeronClusterLauncher {
     private static final int DEFAULT_CLUSTER_TERM_LENGTH_BYTES = 128 * 1024 * 1024; // 128MB
     private static final int DEFAULT_PUBLICATION_TERM_BUFFER_LENGTH_BYTES = 64 * 1024 * 1024; // 64MB
     private static final int DEFAULT_DRIVER_TIMEOUT_MS = 60000;
-    private static final int DEFAULT_SOCKET_BUFFER_BYTES = 16 * 1024;
+    private static final int DEFAULT_SOCKET_SNDBUF_BYTES = 16 * 1024;
     private static final String SOCKET_SNDBUF_PROPERTY = "aeron.socket.so_sndbuf";
     private static final String SOCKET_RCVBUF_PROPERTY = "aeron.socket.so_rcvbuf";
     private static final String MEDIA_DRIVER_TIMEOUT_MS_PROPERTY = "oak.cluster.media.driver.timeout.ms";
@@ -250,11 +251,10 @@ public class AeronClusterLauncher {
         // - Sparse files reduce disk I/O for better performance
         // - Shared threading mode balances latency and resource usage
         // - Error handler provides graceful shutdown on FATAL errors
-        // Socket buffer sizes (configurable via system properties)
-        // Default: 16KB for Mac/Darwin (Aeron best practices)
-        // Can be overridden: -Daeron.socket.so_sndbuf=32768 -Daeron.socket.so_rcvbuf=32768
-        int socketSndbufLength = getPositiveIntProperty(SOCKET_SNDBUF_PROPERTY, DEFAULT_SOCKET_BUFFER_BYTES);
-        int socketRcvbufLength = getPositiveIntProperty(SOCKET_RCVBUF_PROPERTY, DEFAULT_SOCKET_BUFFER_BYTES);
+        // The receive buffer must accommodate Aeron's configured initial window.
+        // Explicit socket overrides remain subject to Aeron's validation.
+        int socketSndbufLength = getPositiveIntProperty(SOCKET_SNDBUF_PROPERTY, DEFAULT_SOCKET_SNDBUF_BYTES);
+        int socketRcvbufLength = resolveSocketReceiveBufferLength();
         int publicationTermBufferLength = getPositiveIntProperty(
             PUBLICATION_TERM_BUFFER_LENGTH_PROPERTY,
             DEFAULT_PUBLICATION_TERM_BUFFER_LENGTH_BYTES
@@ -495,6 +495,10 @@ public class AeronClusterLauncher {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    static int resolveSocketReceiveBufferLength() {
+        return getPositiveIntProperty(SOCKET_RCVBUF_PROPERTY, Configuration.initialWindowLength());
     }
 
     private static int getPositiveIntProperty(String key, int defaultValue) {

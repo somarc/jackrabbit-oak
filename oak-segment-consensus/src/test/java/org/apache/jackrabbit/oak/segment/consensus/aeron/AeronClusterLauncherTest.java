@@ -23,6 +23,7 @@ import io.aeron.cluster.ConsensusModule;
 import io.aeron.cluster.service.ClusteredService;
 import io.aeron.cluster.service.ClusteredServiceContainer;
 import io.aeron.driver.MediaDriver;
+import io.aeron.driver.Configuration;
 import io.aeron.driver.exceptions.ActiveDriverException;
 import io.aeron.exceptions.DriverTimeoutException;
 import org.junit.After;
@@ -60,6 +61,31 @@ public class AeronClusterLauncherTest {
     public void clearProperties() {
         System.clearProperty("oak.cluster.environment");
         System.clearProperty("oak.cluster.session.timeout.minutes");
+        System.clearProperty("aeron.socket.so_sndbuf");
+        System.clearProperty("aeron.socket.so_rcvbuf");
+        System.clearProperty("aeron.rcv.initial.window.length");
+    }
+
+    @Test
+    public void defaultReceiveBufferMatchesInitialWindow() {
+        System.clearProperty("aeron.socket.so_rcvbuf");
+        assertEquals(Configuration.initialWindowLength(), AeronClusterLauncher.resolveSocketReceiveBufferLength());
+    }
+
+    @Test
+    public void configuredInitialWindowDeterminesDefaultReceiveBuffer() {
+        System.clearProperty("aeron.socket.so_rcvbuf");
+        System.setProperty("aeron.rcv.initial.window.length", "16384");
+        assertEquals(16384, AeronClusterLauncher.resolveSocketReceiveBufferLength());
+    }
+
+    @Test
+    public void explicitReceiveBufferIsNotSilentlyChanged() {
+        System.setProperty("aeron.socket.so_rcvbuf", "262144");
+        assertEquals(262144, AeronClusterLauncher.resolveSocketReceiveBufferLength());
+
+        System.setProperty("aeron.socket.so_rcvbuf", "16384");
+        assertEquals(16384, AeronClusterLauncher.resolveSocketReceiveBufferLength());
     }
 
     @Test

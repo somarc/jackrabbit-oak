@@ -57,6 +57,11 @@ final class AeronClusterLaunchCoordinator {
         try {
             launcher.launch();
         } catch (Exception e) {
+            try {
+                launcher.shutdown();
+            } catch (Exception cleanupError) {
+                e.addSuppressed(cleanupError);
+            }
             throw new IOException("Failed to launch Aeron Cluster", e);
         }
 

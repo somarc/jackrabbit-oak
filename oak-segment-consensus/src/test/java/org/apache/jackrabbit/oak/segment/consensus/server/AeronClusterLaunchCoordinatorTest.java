@@ -26,6 +26,8 @@ import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -81,5 +83,27 @@ public class AeronClusterLaunchCoordinatorTest {
         } catch (IOException e) {
             assertSame(IllegalStateException.class, e.getCause().getClass());
         }
+        verify(launcher).shutdown();
+    }
+
+    @Test
+    public void cleanupFailureDoesNotHideLaunchFailure() throws Exception {
+        AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
+        IllegalStateException launchFailure = new IllegalStateException("launch");
+        IllegalStateException cleanupFailure = new IllegalStateException("cleanup");
+        doThrow(launchFailure).when(launcher).launch();
+        doThrow(cleanupFailure).when(launcher).shutdown();
+        AeronClusterLaunchCoordinator coordinator = new AeronClusterLaunchCoordinator(
+            (nodeId, hostnames, baseDir, clusteredService) -> launcher,
+            mock(FatalMediaDriverExitHandler.class)
+        );
+
+        IOException error = assertThrows(IOException.class, () -> coordinator.launch(
+            0, Arrays.asList("node-a"), new File("target"), mock(AeronConsensusEngine.class)));
+
+        assertSame(launchFailure, error.getCause());
+        assertEquals(1, launchFailure.getSuppressed().length);
+        assertSame(cleanupFailure, launchFailure.getSuppressed()[0]);
+        verify(launcher).shutdown();
     }
 }

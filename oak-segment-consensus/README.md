@@ -95,6 +95,12 @@ opt-in setting applies to every Jetty network connector; when absent, the
 existing wildcard-bind behavior is unchanged. A loopback bind is useful for
 isolated local validation but is not a substitute for production authentication.
 
+The Aeron receive-buffer default follows `aeron.rcv.initial.window.length`.
+If overriding `aeron.socket.so_rcvbuf`, keep it at least as large as that window;
+inconsistent explicit values are rejected rather than silently clamped. The
+companion Mac profile explicitly sets both to 16 KiB. No global kernel tuning
+is required for the bounded validation profile.
+
 ### Validator-native interfaces
 
 - `GET /v1/index`: discover the current route contract.

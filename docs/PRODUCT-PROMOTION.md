@@ -110,6 +110,15 @@ successful HTTP response are not evidence by themselves.
 | Bounded three-validator candidate validation | Additional three-node topology and read-only cross-cluster checks approved; awaiting corrected package |
 | Fault, destructive, cloud, and chain-backed campaigns | Not run; not claimed |
 
+The initial disposable runtime attempt failed before Aeron startup: the direct
+launcher selected a 16 KiB receive buffer against Aeron's 128 KiB initial window.
+No writes were submitted, and the existing cluster remained unchanged. The
+candidate now derives its receive default from the configured Aeron window and
+cleans up a launcher whose initialization throws. Explicit overrides remain
+validated by Aeron. Regression tests cover the defaults/overrides and preservation
+of the original failure if cleanup also throws. The failed run's stores and logs
+are retained; a retry uses a different disposable directory and the same deadline.
+
 The first reactor run stopped in inherited `ForkJoinUtilsTest` with a one-worker
 common pool created by a two-CPU JVM cap. Its parallel-stream/latch fixture expects
 at least nine worker-processed items, but that setup processed eight. No test
