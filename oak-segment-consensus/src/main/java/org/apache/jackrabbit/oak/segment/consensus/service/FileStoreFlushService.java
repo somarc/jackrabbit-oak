@@ -18,6 +18,8 @@ package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import java.io.IOException;
 import java.util.Queue;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ScheduledExecutorService;
@@ -50,7 +52,7 @@ public final class FileStoreFlushService implements AutoCloseable {
     private final AtomicBoolean flushInProgress = new AtomicBoolean(false);
     private final Object flushLock = new Object();
     private final Queue<Runnable> pendingFlushCallbacks = new ConcurrentLinkedQueue<>();
-    private volatile boolean dirty = false;
+    private static final Runnable NO_CALLBACK = () -> { };
     private final ScheduledExecutorService scheduler;
 
     public FileStoreFlushService(FileStore fileStore) {
@@ -83,11 +85,8 @@ public final class FileStoreFlushService implements AutoCloseable {
     }
 
     public boolean onChangeApplied(Runnable onFlushed) {
-        if (onFlushed != null) {
-            pendingFlushCallbacks.offer(onFlushed);
-        }
+        pendingFlushCallbacks.offer(onFlushed != null ? onFlushed : NO_CALLBACK);
         pendingChanges.incrementAndGet();
-        dirty = true;
         if (!isAsyncEnabled()) {
             return flushIfDirty();
         }
@@ -102,33 +101,29 @@ public final class FileStoreFlushService implements AutoCloseable {
     }
 
     private boolean flushIfDirty() {
-        if (!dirty) {
-            return false;
-        }
-        if (!flushInProgress.compareAndSet(false, true)) {
-            return false;
-        }
-        try {
-            if (!dirty) {
-                return false;
+        boolean flushed = false;
+        do {
+            if (pendingChanges.get() == 0 || !flushInProgress.compareAndSet(false, true)) {
+                return flushed;
             }
-            long pendingBefore = pendingChanges.get();
-            boolean flushed = flushNow();
-            if (!flushed) {
-                return false;
+            List<Runnable> flushedCallbacks = new ArrayList<>();
+            try {
+                long pendingBefore = pendingChanges.get();
+                if (pendingBefore == 0 || !flushNow()) {
+                    return flushed;
+                }
+                pendingChanges.addAndGet(-pendingBefore);
+                // New registrations during this flush belong to the next durable cohort.
+                for (long i = 0; i < pendingBefore; i++) {
+                    flushedCallbacks.add(pendingFlushCallbacks.remove());
+                }
+            } finally {
+                flushInProgress.set(false);
             }
-            long remaining = pendingChanges.addAndGet(-pendingBefore);
-            if (remaining <= 0) {
-                pendingChanges.set(0);
-                dirty = false;
-            } else {
-                dirty = true;
-            }
-            runPendingFlushCallbacks();
-            return true;
-        } finally {
-            flushInProgress.set(false);
-        }
+            runPendingFlushCallbacks(flushedCallbacks);
+            flushed = true;
+        } while (!isAsyncEnabled() && pendingChanges.get() > 0);
+        return flushed;
     }
 
     private boolean flushNow() {
@@ -143,9 +138,8 @@ public final class FileStoreFlushService implements AutoCloseable {
         }
     }
 
-    private void runPendingFlushCallbacks() {
-        Runnable callback;
-        while ((callback = pendingFlushCallbacks.poll()) != null) {
+    private void runPendingFlushCallbacks(List<Runnable> callbacks) {
+        for (Runnable callback : callbacks) {
             try {
                 callback.run();
             } catch (RuntimeException e) {

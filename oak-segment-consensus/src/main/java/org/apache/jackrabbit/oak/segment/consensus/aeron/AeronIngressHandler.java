@@ -18,8 +18,10 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import io.aeron.cluster.service.ClientSession;
 import io.aeron.cluster.service.Cluster;
+import io.aeron.cluster.service.ClusterTerminationException;
 import io.aeron.logbuffer.Header;
 import org.agrona.DirectBuffer;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Reference;
@@ -30,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 /**
  * Handles Aeron ingress messages and delegates to the MessageDispatcher.
@@ -45,7 +48,8 @@ public class AeronIngressHandler {
     private final AeronMessageCodec codec;
     private final MessageDispatcher dispatcher;
     private Runnable heartbeatCallback;
-    private Consumer<String> genesisCallback;
+    private BiConsumer<Long, String> genesisCallback;
+    private volatile Throwable applicationFailure;
 
     @Activate
     public AeronIngressHandler(@Reference AeronMessageCodec codec,
@@ -59,6 +63,10 @@ public class AeronIngressHandler {
     }
 
     public void setGenesisCallback(Consumer<String> genesisCallback) {
+        this.genesisCallback = genesisCallback == null ? null : (timestamp, payload) -> genesisCallback.accept(payload);
+    }
+
+    public void setTimedGenesisCallback(BiConsumer<Long, String> genesisCallback) {
         this.genesisCallback = genesisCallback;
     }
 
@@ -69,6 +77,9 @@ public class AeronIngressHandler {
                                  int length,
                                  Header header,
                                  Cluster cluster) {
+        if (hasApplicationFailure()) {
+            throw termination(applicationFailure);
+        }
         if (heartbeatCallback != null) {
             heartbeatCallback.run();
         }
@@ -87,8 +98,16 @@ public class AeronIngressHandler {
 
             if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
                 log.info("🎬 GENESIS proposal received via Aeron - creating genesis on this node");
-                if (genesisCallback != null) {
-                    genesisCallback.accept(readGenesisProposal(buffer, offset, length, headerInfo.blockLength));
+                try {
+                    if (genesisCallback == null) {
+                        throw new IllegalStateException("Genesis callback unavailable");
+                    }
+                    genesisCallback.accept(timestamp, readGenesisProposal(buffer, offset, length, headerInfo.blockLength));
+                } catch (MutationRejectedException e) {
+                    log.warn("Rejected malformed genesis trigger: {}", e.getMessage());
+                    return false;
+                } catch (RuntimeException e) {
+                    throw new MessageDispatcher.ReplicatedApplyException("Failed to apply committed genesis", e);
                 }
                 log.info("✅ Genesis creation complete on this node");
                 return true;
@@ -104,10 +123,24 @@ public class AeronIngressHandler {
                 logDispatchFailure(headerInfo.templateId);
             }
             return success;
+        } catch (MessageDispatcher.ReplicatedApplyException e) {
+            applicationFailure = e;
+            log.error("Committed application failed; this member is quarantined until restart and repair", e);
+            throw termination(e);
         } catch (Exception e) {
             log.error("❌ Failed to process replicated message", e);
             return false;
         }
+    }
+
+    public boolean hasApplicationFailure() {
+        return applicationFailure != null;
+    }
+
+    private static ClusterTerminationException termination(Throwable cause) {
+        ClusterTerminationException termination = new ClusterTerminationException(false);
+        termination.initCause(cause);
+        return termination;
     }
 
     private void logDispatchFailure(int templateId) {

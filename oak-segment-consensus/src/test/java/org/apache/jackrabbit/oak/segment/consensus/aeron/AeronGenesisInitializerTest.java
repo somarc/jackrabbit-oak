@@ -25,6 +25,7 @@ import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,6 +33,7 @@ import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class AeronGenesisInitializerTest {
@@ -43,11 +45,10 @@ public class AeronGenesisInitializerTest {
         when(fileStore.getHead().getRecordId().toString10()).thenReturn("head-1");
 
         AeronGenesisInitializer initializer = new AeronGenesisInitializer(fileStore, nodeStore, null);
-        String proposalJson = AeronGenesisInitializer.GenesisProposal
-            .create(123456789L, "http://leader:8090")
-            .toJson();
+        AeronGenesisInitializer.GenesisProposal proposal = AeronGenesisInitializer.GenesisProposal
+            .create(123456789L, "http://leader:8090");
 
-        initializer.initializeGenesisContent(proposalJson);
+        initializer.initializeGenesisContent(proposal);
 
         NodeState genesis = getGenesisNode(nodeStore.getRoot());
         NodeState imageContent = genesis.getChildNode("do-it-live.jpeg").getChildNode("jcr:content");
@@ -64,13 +65,13 @@ public class AeronGenesisInitializerTest {
         assertEquals("NOT_LEADER: Resolve the leader via /v1/consensus/leader and retry against that validator.",
             troubleshooting.getProperty("issue-not-leader").getValue(Type.STRING));
         assertNotNull(imageContent.getProperty("jcr:data").getValue(Type.BINARY));
-        assertEquals(Boolean.FALSE, ipfs.getProperty("enabled").getValue(Type.BOOLEAN));
+        assertFalse(ipfs.hasProperty("enabled"));
         assertEquals("Developers will choose systems with stronger guarantees over familiar platforms.",
             boldBets.getProperty("bet-5").getValue(Type.STRING));
     }
 
     @Test
-    public void initializeGenesisContentStoresBlobMetadataWhenBlobStoreIsConfigured() throws Exception {
+    public void initializeGenesisContentDoesNotPersistBackendSpecificBlobMetadata() throws Exception {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         BlobStore blobStore = mock(BlobStore.class);
@@ -79,17 +80,19 @@ public class AeronGenesisInitializerTest {
 
         AeronGenesisInitializer initializer = new AeronGenesisInitializer(fileStore, nodeStore, blobStore);
         initializer.initializeGenesisContent(
-            AeronGenesisInitializer.GenesisProposal.create(42L, "https://validator.example:8090").toJson()
+            AeronGenesisInitializer.GenesisProposal.create(42L, "https://validator.example:8090")
         );
 
         NodeState genesis = getGenesisNode(nodeStore.getRoot());
         NodeState imageContent = genesis.getChildNode("do-it-live.jpeg").getChildNode("jcr:content");
         NodeState ipfs = genesis.getChildNode("ipfs");
 
-        assertEquals("QmDeterministicGenesis#1024", imageContent.getProperty("jcr:blobId").getValue(Type.STRING));
-        assertEquals("QmDeterministicGenesis", ipfs.getProperty("genesisImageCid").getValue(Type.STRING));
-        assertEquals(Boolean.TRUE, ipfs.getProperty("enabled").getValue(Type.BOOLEAN));
-        verify(blobStore, times(1)).writeBlob(any());
+        assertFalse(imageContent.hasProperty("jcr:blobId"));
+        assertEquals(imageContent.getProperty("sha256").getValue(Type.STRING),
+            ipfs.getProperty("genesisImageSha256").getValue(Type.STRING));
+        assertFalse(ipfs.hasProperty("enabled"));
+        verifyNoInteractions(blobStore);
+        verify(fileStore).flush();
     }
 
     @Test
@@ -102,17 +105,18 @@ public class AeronGenesisInitializerTest {
 
         AeronGenesisInitializer initializer = new AeronGenesisInitializer(fileStore, nodeStore, blobStore);
         initializer.initializeGenesisContent(
-            AeronGenesisInitializer.GenesisProposal.create(10L, "http://leader-0:8090").toJson()
+            AeronGenesisInitializer.GenesisProposal.create(10L, "http://leader-0:8090")
         );
         initializer.initializeGenesisContent(
-            AeronGenesisInitializer.GenesisProposal.create(20L, "http://leader-1:8090").toJson()
+            AeronGenesisInitializer.GenesisProposal.create(20L, "http://leader-1:8090")
         );
 
         NodeState genesis = getGenesisNode(nodeStore.getRoot());
 
         assertEquals(Long.valueOf(10L), genesis.getProperty("genesisTimestamp").getValue(Type.LONG));
         assertEquals("http://leader-0:8090", genesis.getProperty("genesisValidator").getValue(Type.STRING));
-        verify(blobStore, times(1)).writeBlob(any());
+        verifyNoInteractions(blobStore);
+        verify(fileStore, times(1)).flush();
     }
 
     private static NodeState getGenesisNode(NodeState root) {

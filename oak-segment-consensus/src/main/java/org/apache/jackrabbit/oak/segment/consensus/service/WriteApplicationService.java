@@ -24,6 +24,8 @@ import org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
@@ -196,10 +198,13 @@ public class WriteApplicationService {
         String proposalId = auditMetadata != null ? auditMetadata.getProposalId() : null;
         
         try {
+            CanonicalGenesisContent.requireMutable(walletAddress, path);
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
                      walletAddress, path, intentToken, blobId, ipfsCid);
             NodeStore nodeStore = requireNodeStore();
             BlobStore blobStore = blobStoreSupplier.get();
+            long appliedAt = auditMetadata != null && auditMetadata.getAppliedAt() != null
+                ? auditMetadata.getAppliedAt() : System.currentTimeMillis();
             
             // Get current HEAD for logging
             String previousHead = fileStore.getHead().getRecordId().toString();
@@ -209,12 +214,12 @@ public class WriteApplicationService {
             String[] pathParts = path.split("/");
             if (pathParts.length < 4) {
                 log.error("❌ Invalid path format: {} (expected: /oak-chain/{shard}/content/...)", path);
-                throw new IllegalArgumentException("Invalid path format: " + path);
+                throw new MutationRejectedException("Invalid path format: " + path);
             }
             
             // Security check: signature must not be null
             if (signature == null) {
-                throw new IllegalStateException(
+                throw new MutationRejectedException(
                     "SECURITY VIOLATION: Signature is null in replicated write. " +
                     "This indicates Aeron message corruption or validation bypass. " +
                     "Path: " + path + ", Wallet: " + walletAddress
@@ -252,11 +257,11 @@ public class WriteApplicationService {
 
             // Enrich wallet node with metadata
             if (walletNode != null && walletNodeName != null) {
-                enrichWalletNode(walletNode, walletNodeName, walletAddress, !contentNodeExists);
+                enrichWalletNode(walletNode, walletNodeName, walletAddress, !contentNodeExists, appliedAt);
             }
             
             // Set properties
-            setContentProperties(contentNode, walletAddress, contentType, message, signature, path, proposalId);
+            setContentProperties(contentNode, walletAddress, contentType, message, signature, path, proposalId, appliedAt);
             
             // ADR 059: Record binary storage mode (client vs validator)
             if (blobId != null && !blobId.isEmpty()) {
@@ -329,6 +334,9 @@ public class WriteApplicationService {
                 durabilityCallback.onFailure(proposalId, e.getMessage());
             }
             log.error("❌ Failed to apply replicated write", e);
+            if (e instanceof MutationRejectedException) {
+                throw new MutationRejectedException("Failed to apply replicated write", e);
+            }
             throw new RuntimeException("Failed to apply replicated write", e);
         }
     }
@@ -337,10 +345,8 @@ public class WriteApplicationService {
         if (durabilityCallback == null || proposalId == null || proposalId.isEmpty()) {
             return null;
         }
-        return () -> durabilityCallback.onDurable(
-            proposalId,
-            fileStore.getHead().getRecordId().toString10()
-        );
+        String appliedHead = fileStore.getHead().getRecordId().toString10();
+        return () -> durabilityCallback.onDurable(proposalId, appliedHead);
     }
 
     private boolean isDuplicateProposalReplay(NodeBuilder contentNode,
@@ -356,9 +362,7 @@ public class WriteApplicationService {
     @NotNull
     private String acknowledgeDuplicateReplay(@Nullable String proposalId) {
         String currentHead = fileStore.getHead().getRecordId().toString10();
-        if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
-            durabilityCallback.onDurable(proposalId, currentHead);
-        }
+        flushService.onChangeApplied(buildDurabilityCallback(proposalId));
         if (headUpdateCallback != null) {
             headUpdateCallback.updateHead(currentHead);
         }
@@ -380,12 +384,13 @@ public class WriteApplicationService {
             String message,
             String signature,
             String path,
-            @Nullable String proposalId) {
+            @Nullable String proposalId,
+            long appliedAt) {
         
         contentNode.setProperty("jcr:primaryType", "nt:unstructured");
         contentNode.setProperty("contentType", contentType != null ? contentType : "page");
         contentNode.setProperty("message", message != null ? message : "");
-        contentNode.setProperty("timestamp", System.currentTimeMillis());
+        contentNode.setProperty("timestamp", appliedAt);
         contentNode.setProperty("wallet", walletAddress);
         contentNode.setProperty("signature", signature);
         contentNode.setProperty("source", "aeron-replicated");
@@ -638,7 +643,8 @@ public class WriteApplicationService {
     private void enrichWalletNode(NodeBuilder walletNode,
                                   String walletNodeName,
                                   String walletAddress,
-                                  boolean newContentNode) {
+                                  boolean newContentNode,
+                                  long appliedAt) {
         try {
             boolean isNewWallet = !walletNode.hasProperty("wallet");
             
@@ -647,14 +653,14 @@ public class WriteApplicationService {
                 
                 walletNode.setProperty("jcr:primaryType", "nt:unstructured");
                 walletNode.setProperty("wallet", walletAddress);
-                walletNode.setProperty("walletCreated", System.currentTimeMillis());
+                walletNode.setProperty("walletCreated", appliedAt);
                 walletNode.setProperty("nodeType", "wallet-root");
                 walletNode.setProperty("description", "Wallet-scoped content root for " + walletAddress);
                 
                 // First write creates the wallet node and its initial content entry.
                 walletNode.setProperty("contentCount", 1L);
                 walletNode.setProperty("totalWrites", 1L);
-                walletNode.setProperty("lastWrite", System.currentTimeMillis());
+                walletNode.setProperty("lastWrite", appliedAt);
                 
                 log.debug("✅ Wallet node metadata initialized: {}", walletAddress);
             } else {
@@ -668,13 +674,13 @@ public class WriteApplicationService {
                 
                 walletNode.setProperty("contentCount", nextContentCount);
                 walletNode.setProperty("totalWrites", totalWrites + 1);
-                walletNode.setProperty("lastWrite", System.currentTimeMillis());
+                walletNode.setProperty("lastWrite", appliedAt);
                 
                 log.debug("📊 Wallet node updated: {} (contentCount: {}, totalWrites: {})", 
                     walletAddress, nextContentCount, totalWrites + 1);
             }
         } catch (Exception e) {
-            log.warn("⚠️  Failed to enrich wallet node metadata for {}: {}", walletAddress, e.getMessage());
+            throw new IllegalStateException("Failed to apply wallet metadata", e);
         }
     }
     

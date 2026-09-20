@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
@@ -118,6 +120,12 @@ public class RegistrationHandler {
                 log.warn("🚫 Registration rejected: Invalid Ethereum address format: {}", walletAddress);
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, 
                     "Invalid Ethereum address format. Must be 0x followed by 40 hex characters (e.g., 0x1234...abcd).");
+                return;
+            }
+
+            if (CanonicalGenesisContent.isReservedMutation(walletAddress, null)) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,
+                    "genesis_namespace_reserved", "The zero wallet cannot register as an ordinary client.");
                 return;
             }
 

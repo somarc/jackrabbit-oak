@@ -41,6 +41,7 @@ public final class MutationAuditMetadata {
     private final Long confirmedBlockNumber;
     private final Long ethereumObservedEpoch;
     private final Long ethereumFinalizedEpoch;
+    private final Long appliedAt;
 
     public MutationAuditMetadata(@NotNull Operation operation,
                                  @Nullable String transactionId,
@@ -50,6 +51,13 @@ public final class MutationAuditMetadata {
                                  @Nullable Long confirmedBlockNumber,
                                  @Nullable Long ethereumObservedEpoch,
                                  @Nullable Long ethereumFinalizedEpoch) {
+        this(operation, transactionId, correlationId, proposalId, ethereumTxHash,
+            confirmedBlockNumber, ethereumObservedEpoch, ethereumFinalizedEpoch, null);
+    }
+
+    private MutationAuditMetadata(Operation operation, String transactionId, String correlationId,
+                                  String proposalId, String ethereumTxHash, Long confirmedBlockNumber,
+                                  Long ethereumObservedEpoch, Long ethereumFinalizedEpoch, Long appliedAt) {
         this.operation = Objects.requireNonNull(operation, "operation");
         this.transactionId = normalize(transactionId);
         this.correlationId = normalize(correlationId);
@@ -58,6 +66,7 @@ public final class MutationAuditMetadata {
         this.confirmedBlockNumber = confirmedBlockNumber;
         this.ethereumObservedEpoch = ethereumObservedEpoch;
         this.ethereumFinalizedEpoch = ethereumFinalizedEpoch;
+        this.appliedAt = appliedAt;
     }
 
     @NotNull
@@ -140,6 +149,21 @@ public final class MutationAuditMetadata {
         return ethereumFinalizedEpoch;
     }
 
+    /** Aeron's committed command timestamp, never a client-supplied JSON field. */
+    @Nullable
+    public Long getAppliedAt() {
+        return appliedAt;
+    }
+
+    @NotNull
+    public MutationAuditMetadata withAppliedAt(long timestamp) {
+        if (timestamp < 0) {
+            throw new IllegalArgumentException("Negative cluster timestamp");
+        }
+        return new MutationAuditMetadata(operation, transactionId, correlationId, proposalId,
+            ethereumTxHash, confirmedBlockNumber, ethereumObservedEpoch, ethereumFinalizedEpoch, timestamp);
+    }
+
     @NotNull
     public MutationAuditMetadata withOperation(@NotNull Operation nextOperation) {
         if (operation == nextOperation) {
@@ -153,7 +177,8 @@ public final class MutationAuditMetadata {
             ethereumTxHash,
             confirmedBlockNumber,
             ethereumObservedEpoch,
-            ethereumFinalizedEpoch
+            ethereumFinalizedEpoch,
+            appliedAt
         );
     }
 

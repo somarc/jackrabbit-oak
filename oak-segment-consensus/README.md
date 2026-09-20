@@ -15,6 +15,7 @@ delivery surface and is intentionally excluded from this module.
 Canonical module docs live in the **Blockchain-AEM** docs project:
 
 - [Module documentation home](../../Blockchain-AEM/implementation/oak-segment-consensus/README.md)
+- [Genesis v2 and replicated write-safety contract](docs/GENESIS-AND-WRITE-SAFETY.md)
 
 This README stays code-centric. Quick start, configuration, IPFS, delete/GC,
 API, testing, troubleshooting, and integration docs now live in that doc tree.

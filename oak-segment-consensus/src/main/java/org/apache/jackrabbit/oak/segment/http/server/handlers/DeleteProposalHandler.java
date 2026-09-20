@@ -24,6 +24,7 @@ import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityE
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
@@ -124,6 +125,12 @@ public class DeleteProposalHandler {
                 return;
             }
             String normalizedWallet = walletValidation.getNormalizedValue();
+
+            if (CanonicalGenesisContent.isReservedMutation(normalizedWallet, contentPath)) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,
+                    "genesis_namespace_reserved", "Ordinary deletes cannot remove the genesis namespace or its ancestors.");
+                return;
+            }
 
             if (!ShardWriteAuthorityEnforcer.allowLocalWrite(
                 context,

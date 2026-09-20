@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
@@ -175,6 +176,12 @@ public class WriteProposalHandler {
                 return;
             }
             String normalizedWallet = walletValidation.getNormalizedValue();
+
+            if (CanonicalGenesisContent.isReservedMutation(normalizedWallet, null)) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,
+                    "genesis_namespace_reserved", "The zero-wallet namespace is reserved for canonical genesis.");
+                return;
+            }
 
             if (!ShardWriteAuthorityEnforcer.allowLocalWrite(
                 context,

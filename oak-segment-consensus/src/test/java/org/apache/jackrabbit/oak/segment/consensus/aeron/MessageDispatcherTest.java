@@ -35,6 +35,18 @@ import static org.mockito.Mockito.when;
 public class MessageDispatcherTest {
 
     @Test
+    public void applicationExceptionsPropagateForWritesDeletesAndBatches() {
+        MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() { });
+        String proposal = "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\"}";
+        assertThrows(MessageDispatcher.ReplicatedApplyException.class,
+            () -> dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, proposal));
+        assertThrows(MessageDispatcher.ReplicatedApplyException.class,
+            () -> dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL, proposal));
+        assertThrows(MessageDispatcher.ReplicatedApplyException.class,
+            () -> dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, "{\"batch\":[" + proposal + "]}"));
+    }
+
+    @Test
     public void testDispatchRejectsShortMessage() {
         MessageDispatcher dispatcher = new MessageDispatcher();
         DirectBuffer buffer = bufferFor(buildMessageBytes(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, ""));
@@ -161,8 +173,9 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher();
         dispatcher.setTermProvider(() -> 1L);
 
-        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL,
-            "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\",\"term\":1}"));
+        assertThrows(MessageDispatcher.ReplicatedApplyException.class,
+            () -> dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL,
+                "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\",\"term\":1}"));
     }
 
     @Test
@@ -223,8 +236,9 @@ public class MessageDispatcherTest {
     public void testWriteBatchRejectsInvalidFormatAndMissingCallback() {
         MessageDispatcher dispatcher = new MessageDispatcher();
 
-        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH,
-            "{\"batch\":[{\"walletAddress\":\"0x1\",\"path\":\"/ok\"}]}"));
+        assertThrows(MessageDispatcher.ReplicatedApplyException.class,
+            () -> dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH,
+                "{\"batch\":[{\"walletAddress\":\"0x1\",\"path\":\"/ok\"}]}"));
         dispatcher.setCallbacks(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
@@ -295,8 +309,9 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher();
         dispatcher.setTermProvider(() -> 5L);
 
-        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
-            "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\",\"term\":5}"));
+        assertThrows(MessageDispatcher.ReplicatedApplyException.class,
+            () -> dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
+                "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\",\"term\":5}"));
 
         dispatcher.setCallbacks(new MessageDispatcher.WriteCallback() {
             @Override

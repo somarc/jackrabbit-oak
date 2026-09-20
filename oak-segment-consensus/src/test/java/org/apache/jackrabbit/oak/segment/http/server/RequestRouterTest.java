@@ -97,6 +97,21 @@ import static org.mockito.Mockito.when;
 public class RequestRouterTest {
 
     @Test
+    public void testQuarantinedMemberDoesNotServeRepositoryContent() throws Exception {
+        withRoutingProperties(false, () -> {
+            ServerContext context = newContext();
+            context.aeronConsensusEngine = mock(AeronConsensusEngine.class);
+            when(context.aeronConsensusEngine.hasApplicationFailure()).thenReturn(true);
+            try (RequestRouter router = new RequestRouter(context)) {
+                HttpServletResponse response = responseWithBody();
+                router.route(request("GET", "/api/explore"), response);
+                verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                assertTrue(body.toString().contains("replicated_apply_failed"));
+            }
+        });
+    }
+
+    @Test
     public void testCloseShutsDownOwnedServices() throws Exception {
         withRoutingProperties(true, () -> {
             Path storeDirectory = Files.createTempDirectory("router-close-owned-services");

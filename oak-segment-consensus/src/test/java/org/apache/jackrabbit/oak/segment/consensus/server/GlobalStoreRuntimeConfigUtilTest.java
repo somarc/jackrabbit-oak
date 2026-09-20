@@ -22,12 +22,58 @@ import org.junit.Test;
 
 import java.lang.reflect.Proxy;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.SortedSet;
+import java.util.TreeSet;
+import org.apache.jackrabbit.oak.api.Type;
+import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
+import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
+import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertThrows;
 
 public class GlobalStoreRuntimeConfigUtilTest {
+
+    @Test
+    public void allThreeLocalPerspectivesHaveTheSameIdentityAndGenesis() throws Exception {
+        int[] ports = {8090, 8092, 8094};
+        String expectedDigest = null;
+        for (int self : ports) {
+            System.setProperty("consensus.self.url", "http://localhost:" + self);
+            List<String> peers = new ArrayList<>();
+            for (int peer : ports) {
+                if (peer != self) {
+                    peers.add("http://127.0.0.1:" + peer);
+                }
+            }
+            System.setProperty("consensus.peers", String.join(",", peers));
+            SortedSet<String> members = new TreeSet<>(GlobalStoreRuntimeConfigUtil.resolvePeerUrls(null));
+            members.add(GlobalStoreRuntimeConfigUtil.resolveSelfUrl(self, null));
+            assertEquals(new TreeSet<>(List.of("http://127.0.0.1:8090", "http://127.0.0.1:8092", "http://127.0.0.1:8094")), members);
+            MemoryNodeStore store = new MemoryNodeStore();
+            NodeBuilder root = store.getRoot().builder();
+            new CanonicalGenesisContent(store, null).populate(root, 123L, members.first());
+            store.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+            String digest = CanonicalGenesisContent.getGenesisNode(store.getRoot()).getProperty("integrityDigest").getValue(Type.STRING);
+            if (expectedDigest == null) {
+                expectedDigest = digest;
+            }
+            assertEquals(expectedDigest, digest);
+        }
+    }
+
+    @Test
+    public void configuredIdentityIsLexicalAndDoesNotDependOnDns() {
+        assertEquals("https://does-not-resolve.invalid:8443/base", ServerNetworkUtil.canonicalHttpUrl(" HTTPS://DOES-NOT-RESOLVE.INVALID:8443/base "));
+        assertEquals("http://127.0.0.1:8090", ServerNetworkUtil.canonicalHttpUrl("http://[::1]:8090/"));
+        assertThrows(IllegalArgumentException.class, () -> ServerNetworkUtil.canonicalHttpUrl("not-a-url"));
+        assertThrows(IllegalArgumentException.class, () -> ServerNetworkUtil.canonicalHttpUrl("http://host:8090/?value=1"));
+    }
 
     @After
     public void tearDown() {

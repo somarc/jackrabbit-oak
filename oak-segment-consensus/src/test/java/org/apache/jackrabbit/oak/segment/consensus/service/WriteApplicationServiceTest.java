@@ -327,7 +327,7 @@ public class WriteApplicationServiceTest {
         assertEquals(1L, longProperty(walletNode, "totalWrites"));
         assertEquals("proposal-replay", stringProperty(contentNode, "oak:proposalId"));
         assertEquals(2, durableCount.get());
-        verify(flushService).onChangeApplied(any());
+        verify(flushService, org.mockito.Mockito.times(2)).onChangeApplied(any());
     }
 
     @Test

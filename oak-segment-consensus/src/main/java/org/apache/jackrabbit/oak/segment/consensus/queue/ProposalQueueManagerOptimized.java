@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+
 import org.agrona.concurrent.Agent;
 import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
@@ -1501,6 +1503,7 @@ public class ProposalQueueManagerOptimized {
             String blobId,
             String mimeType,
             String ipfsCid) {
+        CanonicalGenesisContent.requireMutable(walletAddress, path);
         enforceAdmissionCapacity();
         long pendingCount = getPendingCount();
         long now = System.currentTimeMillis();
@@ -1582,6 +1585,7 @@ public class ProposalQueueManagerOptimized {
             String path,
             String signature,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+        CanonicalGenesisContent.requireMutable(walletAddress, path);
         enforceAdmissionCapacity();
         long currentEpoch = resolveCurrentEpoch();
         

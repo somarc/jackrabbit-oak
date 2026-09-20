@@ -16,6 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import org.apache.jackrabbit.oak.api.Type;
+import org.apache.jackrabbit.oak.spi.state.NodeState;
+
 import io.aeron.Image;
 import io.aeron.cluster.service.Cluster;
 import io.aeron.cluster.service.ClientSession;
@@ -365,7 +368,7 @@ public class AeronConsensusEngineTest {
     }
 
     @Test
-    public void onStartRestoresSnapshotAndUpdatesEpochWhenHeadMatches() {
+    public void onStartRestoresSnapshotAndUpdatesEpochWhenHeadMatches() throws Exception {
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         when(fileStore.getHead().getRecordId().toString()).thenReturn("head-1");
         SnapshotService snapshotService = mock(SnapshotService.class);
@@ -378,7 +381,9 @@ public class AeronConsensusEngineTest {
         when(cluster.idleStrategy()).thenReturn(idleStrategy);
         when(snapshotService.restoreSnapshot(snapshotImage, idleStrategy)).thenReturn(snapshotState);
 
-        AeronConsensusEngine engine = createEngine(fileStore, snapshotService);
+        MemoryNodeStore restoredStore = new MemoryNodeStore();
+        seedGenesis(restoredStore);
+        AeronConsensusEngine engine = createEngine(fileStore, snapshotService, new AeronBackgroundCoordinator(), restoredStore);
 
         engine.onStart(cluster, snapshotImage);
 
@@ -388,7 +393,7 @@ public class AeronConsensusEngineTest {
     }
 
     @Test
-    public void onStartWithSnapshotAndNoStateStartsFresh() {
+    public void onStartWithSnapshotAndNoGenesisFailsClosed() {
         SnapshotService snapshotService = mock(SnapshotService.class);
         Image snapshotImage = mock(Image.class);
         IdleStrategy idleStrategy = mock(IdleStrategy.class);
@@ -397,11 +402,15 @@ public class AeronConsensusEngineTest {
         when(cluster.idleStrategy()).thenReturn(idleStrategy);
         when(snapshotService.restoreSnapshot(snapshotImage, idleStrategy)).thenReturn(null);
 
-        AeronConsensusEngine engine = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), snapshotService);
+        AeronConsensusEngine engine = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), snapshotService,
+            new AeronBackgroundCoordinator(), new MemoryNodeStore());
 
-        engine.onStart(cluster, snapshotImage);
+        RuntimeException error = org.junit.Assert.assertThrows(RuntimeException.class, () -> engine.onStart(cluster, snapshotImage));
+        assertTrue(error.getMessage().contains("Snapshot load failed"));
 
         assertEquals(0, engine.getCurrentEpoch());
+        assertFalse(engine.isClusterHealthy());
+        assertEquals("canonical_genesis_not_verified", engine.getUnhealthyReason());
     }
 
     @Test
@@ -547,7 +556,9 @@ public class AeronConsensusEngineTest {
 
     @Test
     public void createGenesisViaConsensusOffersGenesisProposal() throws Exception {
-        AeronConsensusEngine engine = createEngine();
+        RecordingTaskScheduler scheduler = new RecordingTaskScheduler();
+        AeronConsensusEngine engine = createEngine(mockFileStore, null,
+            new AeronBackgroundCoordinator(scheduler, 1L, 1L, 1L), new MemoryNodeStore());
         io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
 
         Method method = AeronConsensusEngine.class.getDeclaredMethod("createGenesisViaConsensus");
@@ -556,8 +567,33 @@ public class AeronConsensusEngineTest {
 
         CapturedOffer offer = captureOffer(client);
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, offer.templateId);
-        assertTrue(offer.json.contains("\"genesisValidator\":\"http://self:8080\""));
-        assertTrue(offer.json.contains("\"timestamp\":"));
+        assertEquals("{\"command\":\"CREATE_GENESIS\"}", offer.json);
+        assertEquals("genesis-retry", scheduler.tasks.get(0).name);
+    }
+
+    @Test
+    public void genesisTriggerUsesAeronTimeAndConfiguredBootstrapMember() throws Exception {
+        MemoryNodeStore store = new MemoryNodeStore();
+        AeronConsensusEngine engine = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), null,
+            new AeronBackgroundCoordinator(new RecordingTaskScheduler(), 1L, 1L, 1L), store,
+            List.of("http://aaa-seed:8090"));
+        engine.setNodeIdMapping(Map.of(0, "http://unrelated:8092"));
+        String[] triggers = {"{}", "{\"command\":\"CREATE_GENESIS\",\"timestamp\":1,\"genesisValidator\":\"http://forged\"}",
+            "{\"command\":\"CREATE_GENESIS\"}"};
+        for (int i = 0; i < triggers.length; i++) {
+            byte[] json = triggers[i].getBytes(StandardCharsets.UTF_8);
+            org.agrona.concurrent.UnsafeBuffer buffer = new org.agrona.concurrent.UnsafeBuffer(
+                new byte[SimpleMessageHeader.ENCODED_LENGTH + json.length]);
+            SimpleMessageHeader.encode(buffer, 0, json.length, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL);
+            buffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, json);
+            engine.onSessionMessage(mock(ClientSession.class), 123456789L, buffer, 0, buffer.capacity(), mock(Header.class));
+            assertFalse(engine.hasApplicationFailure());
+            assertEquals(i == 2, org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent
+                .getGenesisNode(store.getRoot()).exists());
+        }
+        NodeState genesis = org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent.getGenesisNode(store.getRoot());
+        assertEquals(Long.valueOf(123456789L), genesis.getProperty("genesisTimestamp").getValue(Type.LONG));
+        assertEquals("http://aaa-seed:8090", genesis.getProperty("genesisValidator").getValue(Type.STRING));
     }
 
     @Test
@@ -1092,13 +1128,8 @@ public class AeronConsensusEngineTest {
 
     private static void seedGenesis(MemoryNodeStore nodeStore) throws Exception {
         NodeBuilder root = nodeStore.getRoot().builder();
-        root.child("oak-chain")
-            .child("00")
-            .child("00")
-            .child("00")
-            .child("0x0000000000000000000000000000000000000000")
-            .child("content")
-            .child("genesis");
+        new org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent(nodeStore, null)
+            .populate(root, 42L, "http://self:8080");
         nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
     }
 

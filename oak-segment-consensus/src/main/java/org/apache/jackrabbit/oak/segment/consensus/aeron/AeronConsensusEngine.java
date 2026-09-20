@@ -25,6 +25,7 @@ import io.aeron.logbuffer.Header;
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.IdleStrategy;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.config.ConsensusSafety;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
@@ -268,7 +269,8 @@ public class AeronConsensusEngine implements ClusteredService {
     
     private final AeronMessageCodec messageCodec = AeronEngineComponentFactory.createMessageCodec();
     private final AeronEgressHandler egressHandler = AeronEngineComponentFactory.createEgressHandler();
-    private AeronIngressHandler ingressHandler;
+    private volatile AeronIngressHandler ingressHandler;
+    private volatile boolean genesisVerified;
     private AeronSessionManager sessionManager;
     private AeronHealthService healthService = AeronEngineComponentFactory.createHealthService();
     private AeronLeaderTracker leaderTracker;
@@ -385,7 +387,7 @@ public class AeronConsensusEngine implements ClusteredService {
                         // Track metrics after successful write
                         trackWriteMetrics();
                     } else {
-                        log.error("❌ Write callback not set - cannot apply replicated write");
+                        throw new IllegalStateException("Replicated write callback unavailable");
                     }
                 }
                 
@@ -399,12 +401,12 @@ public class AeronConsensusEngine implements ClusteredService {
                         // Track metrics after successful delete
                         trackWriteMetrics();
                     } else {
-                        log.error("❌ Write callback not set - cannot apply replicated delete");
+                        throw new IllegalStateException("Replicated delete callback unavailable");
                     }
                 }
             }
         );
-        this.messageDispatcher.setTermProvider(this::getCurrentTerm);
+        // Aeron's committed log, not a locally synthesized HTTP term, is authoritative at apply.
 
         this.messageDispatcher.setDurabilityCallback(new MessageDispatcher.DurabilityCallback() {
             @Override
@@ -700,6 +702,9 @@ public class AeronConsensusEngine implements ClusteredService {
     
     @Override
     public void onStart(Cluster cluster, Image snapshotImage) {
+        if (!ConsensusSafety.isEnabled()) {
+            throw new IllegalStateException("Genesis v2 requires oak.consensus.safety.enabled=true on every member");
+        }
         log.info("Aeron Cluster service starting - Dir: {}, Role: {}, Snapshot: {}", 
             cluster.context().clusterDir(), cluster.role(), snapshotImage != null ? "present" : "none");
         
@@ -718,6 +723,11 @@ public class AeronConsensusEngine implements ClusteredService {
             log.debug("Followers will receive genesis via Aeron replication (no manual sync needed)");
         }
         
+        genesisVerified = genesisInitializer.verifyExistingGenesis();
+        if (snapshotImage != null && !genesisVerified) {
+            throw new IllegalStateException("Snapshot is missing verified canonical genesis; restore rather than mint a new identity");
+        }
+
         // Map Aeron Cluster role to our ValidatorRole
         updateRoleFromCluster(cluster.role());
         
@@ -760,8 +770,7 @@ public class AeronConsensusEngine implements ClusteredService {
             );
 
             if (snapshotState == null) {
-                log.warn("Snapshot image present but no snapshot data found - starting fresh");
-                return;
+                throw new IllegalStateException("Snapshot image contains no usable state");
             }
 
             log.info(
@@ -845,52 +854,15 @@ public class AeronConsensusEngine implements ClusteredService {
     @Override
     public void onSessionMessage(ClientSession session, long timestamp, DirectBuffer buffer, 
                                  int offset, int length, Header header) {
-        // ✈️ AERON NATIVE: Handle replicated write proposals
-        // This callback is invoked on ALL nodes after Aeron replicates the message via Raft
-        // Deterministic state machine: ALL nodes process messages in same order
-        if (ingressHandler != null) {
-            ingressHandler.handleMessage(session, timestamp, buffer, offset, length, header, cluster);
-        } else {
-            markHeartbeat();
-            log.debug("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}",
-                session.id(), length, cluster != null ? cluster.role() : "UNKNOWN", timestamp);
-            if (length < SimpleMessageHeader.ENCODED_LENGTH) {
-                log.warn("⚠️  Message too short: {} (minimum {} bytes for SBE header)",
-                    length, SimpleMessageHeader.ENCODED_LENGTH);
-                return;
-            }
-            try {
-                SimpleMessageHeader.HeaderInfo headerInfo = SimpleMessageHeader.decode(buffer, offset);
-                if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
-                    log.info("🎬 GENESIS proposal received via Aeron - creating genesis on this node");
-                    applyGenesisCreation(readGenesisProposal(buffer, offset, length, headerInfo.blockLength));
-                    log.info("✅ Genesis creation complete on this node");
-                    return;
-                }
-                if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT) {
-                    log.debug("📸 Snapshot message received in onSessionMessage (handled separately)");
-                    return;
-                }
-                boolean success = messageDispatcher.dispatch(timestamp, buffer, offset, length);
-                if (!success) {
-                    log.warn("⚠️  MessageDispatcher failed to process message (templateId: {})",
-                        headerInfo.templateId);
-                }
-            } catch (Exception e) {
-                log.error("❌ Failed to process replicated message", e);
-            }
+        if (ingressHandler == null) {
+            ingressHandler = AeronEngineComponentFactory.createIngressHandler(
+                messageCodec, messageDispatcher, this::markHeartbeat, this::applyGenesisCreation);
         }
+        ingressHandler.handleMessage(session, timestamp, buffer, offset, length, header, cluster);
     }
 
-    private String readGenesisProposal(DirectBuffer buffer, int offset, int length, int blockLength) {
-        int payloadOffset = offset + SimpleMessageHeader.ENCODED_LENGTH;
-        int payloadLength = Math.max(0, Math.min(blockLength, length - SimpleMessageHeader.ENCODED_LENGTH));
-        if (payloadLength == 0) {
-            return "{}";
-        }
-        byte[] payload = new byte[payloadLength];
-        buffer.getBytes(payloadOffset, payload);
-        return new String(payload, java.nio.charset.StandardCharsets.UTF_8).trim();
+    public boolean hasApplicationFailure() {
+        return ingressHandler != null && ingressHandler.hasApplicationFailure();
     }
     
     
@@ -1972,7 +1944,7 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return true if cluster can accept proposals, false otherwise
      */
     public boolean isClusterHealthy() {
-        return healthService.isClusterHealthy(
+        return !hasApplicationFailure() && genesisVerified && healthService.isClusterHealthy(
             cluster,
             this::hasQuorum,
             () -> internalClusterClient
@@ -1987,6 +1959,12 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return Human-readable reason, or null if healthy
      */
     public String getUnhealthyReason() {
+        if (hasApplicationFailure()) {
+            return "replicated_apply_failed: member quarantined until restart and repair";
+        }
+        if (!genesisVerified) {
+            return "canonical_genesis_not_verified";
+        }
         return healthService.getUnhealthyReason(
             cluster,
             this::hasQuorum,
@@ -2645,19 +2623,22 @@ public class AeronConsensusEngine implements ClusteredService {
      * This ensures all validators have identical segment history from the start.
      */
     private void createGenesisViaConsensus() {
-        log.info("📡 Sending GENESIS proposal through Aeron consensus...");
-        
-        // Ensure internal cluster client exists
-        ensureInternalClusterClient();
-        
-        if (internalClusterClient == null) {
-            log.error("❌ Cannot send genesis proposal - internal cluster client not available");
+        createGenesisViaConsensus(0);
+    }
+
+    private void createGenesisViaConsensus(int attempt) {
+        if (genesisVerified || hasApplicationFailure() || !isLeader()) {
             return;
         }
-        
+        log.info("📡 Sending GENESIS proposal through Aeron consensus...");
         try {
+            ensureInternalClusterClient();
+            if (internalClusterClient == null) {
+                log.warn("Cannot send genesis trigger yet - internal cluster client unavailable");
+                return;
+            }
             AeronGenesisInitializer.GenesisProposal proposal =
-                AeronGenesisInitializer.GenesisProposal.create(System.currentTimeMillis(), selfUrl);
+                AeronGenesisInitializer.GenesisProposal.create(0L, null);
             String json = proposal.toJson();
             byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             
@@ -2686,20 +2667,28 @@ public class AeronConsensusEngine implements ClusteredService {
                 false
             );
             if (sent) {
-                log.info("✅ GENESIS proposal sent through Aeron - validator={}, timestamp={}",
-                    proposal.getGenesisValidatorUrl(), proposal.getTimestamp());
+                log.info("GENESIS trigger sent; creation time and bootstrap identity are assigned at replicated apply");
             }
             
         } catch (Exception e) {
             log.error("❌ Failed to send genesis proposal", e);
+        } finally {
+            if (!genesisVerified && !hasApplicationFailure() && isLeader() && attempt < 30) {
+                backgroundCoordinator.schedule("genesis-retry", 1000L, () -> createGenesisViaConsensus(attempt + 1));
+            }
         }
     }
     
     /**
      * Apply a replicated genesis proposal on all nodes.
      */
-    private void applyGenesisCreation(String genesisProposalJson) {
-        genesisInitializer.initializeGenesisContent(genesisProposalJson);
+    private void applyGenesisCreation(long timestamp, String genesisProposalJson) {
+        AeronGenesisInitializer.GenesisProposal.validateTrigger(genesisProposalJson);
+        java.util.SortedSet<String> configuredMembers = new java.util.TreeSet<>(peerUrls);
+        configuredMembers.add(selfUrl);
+        String bootstrapValidator = configuredMembers.first();
+        genesisInitializer.initializeGenesisContent(AeronGenesisInitializer.GenesisProposal.create(timestamp, bootstrapValidator));
+        genesisVerified = genesisInitializer.verifyExistingGenesis();
     }
     
     /**

@@ -24,15 +24,23 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import io.aeron.cluster.service.ClientSession;
 import io.aeron.cluster.service.Cluster;
+import io.aeron.cluster.service.ClusterTerminationException;
 import io.aeron.logbuffer.Header;
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
+import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.service.WriteApplicationService;
+import org.apache.jackrabbit.oak.segment.consensus.service.DeleteApplicationService;
+import org.apache.jackrabbit.oak.segment.consensus.service.FileStoreFlushService;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
+import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.junit.Before;
 import org.junit.Test;
 
 import static io.aeron.cluster.service.Cluster.Role.LEADER;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -115,6 +123,7 @@ public class AeronIngressHandlerTest {
     public void handleMessageAcceptsGenesisAndSnapshotWithoutDispatcher() {
         String payload = "{\"command\":\"CREATE_GENESIS\",\"timestamp\":7,\"genesisValidator\":\"http://leader:8090\"}";
         buffer = bufferWithPayload(payload);
+        handler.setGenesisCallback(ignored -> { });
         when(codec.decodeHeader(buffer, 0))
             .thenReturn(new SimpleMessageHeader.HeaderInfo(payload.getBytes(StandardCharsets.UTF_8).length,
                 SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1))
@@ -184,6 +193,79 @@ public class AeronIngressHandlerTest {
         boolean result = handler.handleMessage(session, 123L, buffer, 0, 16, header, cluster);
 
         assertFalse(result);
+        assertFalse(handler.hasApplicationFailure());
+    }
+
+    @Test
+    public void applicationFailureQuarantinesMemberAndPreventsLaterDispatch() {
+        when(codec.decodeHeader(buffer, 0))
+            .thenReturn(new SimpleMessageHeader.HeaderInfo(0, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, 1, 1));
+        when(dispatcher.dispatch(123L, buffer, 0, 16))
+            .thenThrow(new MessageDispatcher.ReplicatedApplyException("merge failed", new IllegalStateException("disk")));
+        ClusterTerminationException error = assertThrows(ClusterTerminationException.class,
+            () -> handler.handleMessage(session, 123L, buffer, 0, 16, header, cluster));
+        assertFalse(error.isExpected());
+        assertTrue(handler.hasApplicationFailure());
+        assertThrows(ClusterTerminationException.class,
+            () -> handler.handleMessage(session, 124L, buffer, 0, 16, header, cluster));
+        verify(dispatcher, never()).dispatch(124L, buffer, 0, 16);
+    }
+
+    @Test
+    public void genesisApplicationFailureQuarantinesMember() {
+        String payload = "{}";
+        buffer = bufferWithPayload(payload);
+        when(codec.decodeHeader(buffer, 0))
+            .thenReturn(new SimpleMessageHeader.HeaderInfo(2, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1));
+        handler.setGenesisCallback(ignored -> { throw new IllegalStateException("cannot merge genesis"); });
+        assertThrows(ClusterTerminationException.class,
+            () -> handler.handleMessage(session, 123L, buffer, 0, 10, header, cluster));
+        assertTrue(handler.hasApplicationFailure());
+    }
+
+    @Test
+    public void missingGenesisCallbackCannotReportSuccess() {
+        buffer = bufferWithPayload("{}");
+        when(codec.decodeHeader(buffer, 0))
+            .thenReturn(new SimpleMessageHeader.HeaderInfo(2, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1));
+        assertThrows(ClusterTerminationException.class,
+            () -> handler.handleMessage(session, 123L, buffer, 0, 10, header, cluster));
+        assertTrue(handler.hasApplicationFailure());
+    }
+
+    @Test
+    public void deterministicCommandRejectionsDoNotQuarantineTheMember() {
+        MemoryNodeStore store = new MemoryNodeStore();
+        FileStore fileStore = mock(FileStore.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
+        FileStoreFlushService flush = mock(FileStoreFlushService.class);
+        WriteApplicationService writes = new WriteApplicationService(fileStore, store, null, flush);
+        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, store, flush);
+        MessageDispatcher realDispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
+            public void applyWrite(String wallet, String path, String type, String message, String signature,
+                                   String intent, String blob, String mime, String cid, MutationAuditMetadata metadata) {
+                writes.applyWriteWithAuditMetadata(wallet, path, type, message, signature, intent, blob, mime, cid, metadata);
+            }
+            public void applyDelete(String wallet, String path, String signature, MutationAuditMetadata metadata) {
+                deletes.applyDeleteWithAuditMetadata(wallet, path, signature, metadata);
+            }
+        });
+        AeronIngressHandler realHandler = new AeronIngressHandler(new AeronMessageCodec(), realDispatcher);
+        String[] payloads = {
+            "{\"walletAddress\":\"0xabc\",\"path\":\"invalid\",\"signature\":\"0xsig\"}",
+            "{\"walletAddress\":\"0xabc\",\"path\":\"/ordinary/content/node\"}",
+            "{\"walletAddress\":\"0x0000000000000000000000000000000000000000\",\"path\":\"/oak-chain\",\"signature\":\"0xsig\"}"
+        };
+        for (int template : new int[] {SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL}) {
+            for (String payload : payloads) {
+                byte[] json = payload.getBytes(StandardCharsets.UTF_8);
+                UnsafeBuffer encoded = new UnsafeBuffer(new byte[SimpleMessageHeader.ENCODED_LENGTH + json.length]);
+                SimpleMessageHeader.encode(encoded, 0, json.length, template);
+                encoded.putBytes(SimpleMessageHeader.ENCODED_LENGTH, json);
+                assertFalse(realHandler.handleMessage(session, 123L, encoded, 0, encoded.capacity(), header, cluster));
+                assertFalse(realHandler.hasApplicationFailure());
+            }
+        }
+        assertFalse(store.getRoot().hasChildNode("oak-chain"));
     }
 
     private static AtomicLong atomicLongField(Object target, String name) throws Exception {

@@ -192,6 +192,12 @@ public class RequestRouter implements AutoCloseable {
             if (!authValidator.validateRequest(request, response)) {
                 return; // Response already sent by validateRequest
             }
+
+            if (context.aeronConsensusEngine != null && context.aeronConsensusEngine.hasApplicationFailure()) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    "replicated_apply_failed", "This member is quarantined pending restart and repair.");
+                return;
+            }
             
             // Dashboard and UI
             if ("/".equals(path) || "/dashboard".equals(path)) {

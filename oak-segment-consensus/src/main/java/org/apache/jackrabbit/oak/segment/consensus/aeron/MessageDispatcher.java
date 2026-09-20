@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.agrona.DirectBuffer;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
@@ -59,6 +60,14 @@ import java.util.function.LongSupplier;
 public class MessageDispatcher {
     
     private static final Logger log = LoggerFactory.getLogger(MessageDispatcher.class);
+
+    static final class ReplicatedApplyException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        ReplicatedApplyException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
     
     /**
      * Callback interface for write operations.
@@ -250,13 +259,13 @@ public class MessageDispatcher {
             
             switch (header.templateId) {
                 case SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL:
-                    return handleWriteProposal(buffer, payloadOffset, header.blockLength);
+                    return handleWriteProposal(timestamp, buffer, payloadOffset, header.blockLength);
                     
                 case SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL:
-                    return handleDeleteProposal(buffer, payloadOffset, header.blockLength);
+                    return handleDeleteProposal(timestamp, buffer, payloadOffset, header.blockLength);
                     
                 case SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH:
-                    return handleWriteBatch(buffer, payloadOffset, header.blockLength);
+                    return handleWriteBatch(timestamp, buffer, payloadOffset, header.blockLength);
                     
                 case SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL:
                     return handleGCProposal(buffer, payloadOffset, header.blockLength);
@@ -299,6 +308,8 @@ public class MessageDispatcher {
                     return false;
             }
             
+        } catch (ReplicatedApplyException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Failed to dispatch message", e);
             return false;
@@ -312,7 +323,7 @@ public class MessageDispatcher {
      * @param payloadOffset offset to JSON payload (after SBE header)
      * @param payloadLength length of JSON payload
      */
-    private boolean handleWriteProposal(DirectBuffer buffer, int payloadOffset, int payloadLength) {
+    private boolean handleWriteProposal(long timestamp, DirectBuffer buffer, int payloadOffset, int payloadLength) {
         try {
             // Extract JSON payload
             byte[] jsonBytes = new byte[payloadLength];
@@ -336,7 +347,7 @@ public class MessageDispatcher {
                 json,
                 MutationAuditMetadata.Operation.WRITE,
                 proposalId
-            );
+            ).withAppliedAt(timestamp);
             Long proposalTerm = extractJsonLongField(json, "term");
 
             if (walletAddress == null || path == null) {
@@ -350,18 +361,28 @@ public class MessageDispatcher {
             }
             
             if (writeCallback == null) {
-                log.error("❌ Write callback not set - cannot apply write");
-                return false;
+                throw new ReplicatedApplyException("Write callback unavailable", null);
             }
             
             // Delegate to callback
             log.debug("✅ Applying write: wallet={}, path={}, intentToken={}", 
                 walletAddress, path, intentToken != null ? intentToken : "none");
-            writeCallback.applyWrite(walletAddress, path, contentType, message, signature, 
-                                    intentToken, blobId, mimeType, ipfsCid, auditMetadata);
+            try {
+                writeCallback.applyWrite(walletAddress, path, contentType, message, signature,
+                    intentToken, blobId, mimeType, ipfsCid, auditMetadata);
+            } catch (MutationRejectedException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw new ReplicatedApplyException("Failed to apply committed write", e);
+            }
             
             return true;
             
+        } catch (MutationRejectedException e) {
+            log.warn("Rejected replicated write before mutation: {}", e.getMessage());
+            return false;
+        } catch (ReplicatedApplyException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Failed to handle write proposal", e);
             return false;
@@ -375,7 +396,7 @@ public class MessageDispatcher {
      * @param payloadOffset offset to JSON payload (after SBE header)
      * @param payloadLength length of JSON payload
      */
-    private boolean handleDeleteProposal(DirectBuffer buffer, int payloadOffset, int payloadLength) {
+    private boolean handleDeleteProposal(long timestamp, DirectBuffer buffer, int payloadOffset, int payloadLength) {
         try {
             // Extract JSON payload
             byte[] jsonBytes = new byte[payloadLength];
@@ -393,7 +414,7 @@ public class MessageDispatcher {
                 json,
                 MutationAuditMetadata.Operation.DELETE,
                 proposalId
-            );
+            ).withAppliedAt(timestamp);
             Long proposalTerm = extractJsonLongField(json, "term");
             
             if (walletAddress == null || path == null) {
@@ -406,16 +427,26 @@ public class MessageDispatcher {
             }
             
             if (writeCallback == null) {
-                log.error("❌ Write callback not set - cannot apply delete");
-                return false;
+                throw new ReplicatedApplyException("Delete callback unavailable", null);
             }
             
             // Delegate to callback
             log.info("🗑️  Applying delete: wallet={}, path={}", walletAddress, path);
-            writeCallback.applyDelete(walletAddress, path, signature, auditMetadata);
+            try {
+                writeCallback.applyDelete(walletAddress, path, signature, auditMetadata);
+            } catch (MutationRejectedException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw new ReplicatedApplyException("Failed to apply committed delete", e);
+            }
             
             return true;
             
+        } catch (MutationRejectedException e) {
+            log.warn("Rejected replicated delete before mutation: {}", e.getMessage());
+            return false;
+        } catch (ReplicatedApplyException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Failed to handle delete proposal", e);
             return false;
@@ -430,7 +461,7 @@ public class MessageDispatcher {
      * @param payloadLength length of JSON payload
      * @return number of proposals successfully processed
      */
-    private boolean handleWriteBatch(DirectBuffer buffer, int payloadOffset, int payloadLength) {
+    private boolean handleWriteBatch(long timestamp, DirectBuffer buffer, int payloadOffset, int payloadLength) {
         try {
             // Extract JSON payload
             byte[] jsonBytes = new byte[payloadLength];
@@ -440,8 +471,7 @@ public class MessageDispatcher {
             log.debug("📦 Processing write batch: {} bytes", payloadLength);
             
             if (writeCallback == null) {
-                log.error("❌ Write callback not set - cannot apply batch");
-                return false;
+                throw new ReplicatedApplyException("Batch callback unavailable", null);
             }
             
             // Parse batch JSON: {"batch":[{...},{...}]}
@@ -477,7 +507,7 @@ public class MessageDispatcher {
                     proposalJson,
                     MutationAuditMetadata.Operation.WRITE,
                     proposalId
-                );
+                ).withAppliedAt(timestamp);
                 Long proposalTerm = extractJsonLongField(proposalJson, "term");
                 
                 if (walletAddress == null || path == null) {
@@ -489,8 +519,15 @@ public class MessageDispatcher {
                     continue;
                 }
                 
-                writeCallback.applyWrite(walletAddress, path, contentType, message,
-                                        signature, intentToken, blobId, mimeType, ipfsCid, auditMetadata);
+                try {
+                    writeCallback.applyWrite(walletAddress, path, contentType, message,
+                        signature, intentToken, blobId, mimeType, ipfsCid, auditMetadata);
+                } catch (MutationRejectedException e) {
+                    log.warn("Rejected batch member before mutation: {}", e.getMessage());
+                    continue;
+                } catch (RuntimeException e) {
+                    throw new ReplicatedApplyException("Failed to apply committed batch", e);
+                }
                 successCount++;
             }
             
@@ -498,6 +535,8 @@ public class MessageDispatcher {
             lastBatchSize = successCount;
             return successCount > 0;
             
+        } catch (ReplicatedApplyException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Failed to handle write batch", e);
             return false;

@@ -26,16 +26,18 @@ import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class GenesisInitializerTest {
-    private static final String GENESIS_BLOB_ID = "QmYwAPJzv5CZsnAzt8auVZRnGi2C4gYQqbiZ9erjRzCQXD#1024";
+    private static final String IMAGE_SHA256 = "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442";
 
     @Test
     public void testInitializeGenesisCreatesShardedContentWithDefaultNetworkInfo() throws Exception {
@@ -66,16 +68,16 @@ public class GenesisInitializerTest {
         assertEquals("Consensus status and cluster health",
             apiConsensus.getProperty("GET_v1_consensus_status").getValue(Type.STRING));
         assertTrue(imageContent.getProperty("jcr:data").getValue(Type.BINARY) instanceof Blob);
-        assertEquals(false, ipfs.getProperty("enabled").getValue(Type.BOOLEAN));
+        assertFalse(ipfs.hasProperty("enabled"));
+        assertEquals(IMAGE_SHA256, ipfs.getProperty("genesisImageSha256").getValue(Type.STRING));
     }
 
     @Test
-    public void testInitializeGenesisUsesBlobStoreAndSkipsRecreatingExistingGenesis() throws Exception {
+    public void testInitializeGenesisUsesNativeBlobAndVerifiesExistingGenesis() throws Exception {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         BlobStore blobStore = mock(BlobStore.class);
         when(fileStore.getHead().getRecordId().toString10()).thenReturn("head-10");
-        when(blobStore.writeBlob(any())).thenReturn(GENESIS_BLOB_ID);
 
         GenesisInitializer initializer = new GenesisInitializer(
             nodeStore,
@@ -94,10 +96,12 @@ public class GenesisInitializerTest {
 
         assertEquals("https://validator.example:8090", protocol.getProperty("genesisValidator").getValue(Type.STRING));
         assertEquals("validator.example", protocol.getProperty("genesisHost").getValue(Type.STRING));
-        assertEquals(GENESIS_BLOB_ID, imageContent.getProperty("jcr:blobId").getValue(Type.STRING));
-        assertEquals("QmYwAPJzv5CZsnAzt8auVZRnGi2C4gYQqbiZ9erjRzCQXD", ipfs.getProperty("genesisImageCid").getValue(Type.STRING));
-        assertTrue(ipfs.getProperty("enabled").getValue(Type.BOOLEAN));
-        verify(blobStore, times(1)).writeBlob(any());
+        assertFalse(imageContent.hasProperty("jcr:blobId"));
+        assertEquals(IMAGE_SHA256, imageContent.getProperty("sha256").getValue(Type.STRING));
+        assertEquals(IMAGE_SHA256, ipfs.getProperty("genesisImageSha256").getValue(Type.STRING));
+        assertFalse(ipfs.hasProperty("enabled"));
+        verifyNoInteractions(blobStore);
+        verify(fileStore, times(1)).flush();
     }
 
     private static NodeState getGenesisNode(NodeState root) {

@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSession;
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager;
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadStatus;
@@ -101,6 +103,11 @@ public class BinaryUploadHandler {
                 return;
             }
             
+            if (CanonicalGenesisContent.isReservedMutation(walletAddress, null)) {
+                sendError(response, 403, "GENESIS_NAMESPACE_RESERVED");
+                return;
+            }
+
             // Validate wallet format
             if (!walletAddress.matches("^0x[a-fA-F0-9]{40}$")) {
                 sendError(response, 400, "Invalid wallet address format");
@@ -215,6 +222,11 @@ public class BinaryUploadHandler {
                 return;
             }
             
+            if (CanonicalGenesisContent.isReservedMutation(walletAddress, null)) {
+                sendError(response, 403, "GENESIS_NAMESPACE_RESERVED");
+                return;
+            }
+
             // Validate wallet matches
             if (!session.getWalletAddress().equals(walletAddress)) {
                 sendError(response, 403, "Wallet address mismatch");

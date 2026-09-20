@@ -28,7 +28,6 @@ import org.slf4j.LoggerFactory;
 
 final class GenesisStartupCoordinator {
 
-    private static final long GENESIS_FALLBACK_SIZE_THRESHOLD_BYTES = 1024L * 1024L;
     private static final Logger log = LoggerFactory.getLogger(GenesisStartupCoordinator.class);
 
     void initialize(StartupContext context) {
@@ -53,7 +52,7 @@ final class GenesisStartupCoordinator {
                 log.info("   ⏭️  Skipping genesis initialization at startup");
             }
         } catch (Exception e) {
-            fallbackToStoreSizeHeuristic(context);
+            throw new IllegalStateException("Cannot verify canonical genesis at startup", e);
         }
     }
 
@@ -73,22 +72,6 @@ final class GenesisStartupCoordinator {
         } catch (Exception e) {
             log.warn("⚠️  Failed to start StandbyServerSync: {}", e.getMessage());
             log.warn("   Other validators will not be able to bootstrap from this node");
-        }
-    }
-
-    private void fallbackToStoreSizeHeuristic(StartupContext context) {
-        try {
-            long storeSize = context.fileStore.size();
-            if (storeSize > GENESIS_FALLBACK_SIZE_THRESHOLD_BYTES) {
-                log.info("   ℹ️  Store has data ({} MB) - verifying genesis...", storeSize / (1024 * 1024));
-                context.componentFactory
-                    .createGenesisInitializer(context.nodeStore, context.fileStore, context.blobStore, context.selfUrl)
-                    .initializeGenesisContent();
-            } else {
-                log.info("   ⏭️  Store is empty or minimal - skipping genesis (will be created by consensus)");
-            }
-        } catch (Exception ignored) {
-            log.warn("   ⚠️  Could not check store state, skipping genesis init (will be created by consensus)");
         }
     }
 

@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
+
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
@@ -389,7 +391,8 @@ public class ProposalQueueIntegrationTest {
             @Override
             public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path,
                                                    String contentType, String message, String signature,
-                                                   String blobId, String mimeType, String ipfsCid) {
+                                                   String blobId, String mimeType, String ipfsCid,
+                                                   MutationAuditMetadata auditMetadata) {
                 if (!allowIngress.get()) {
                     rejectedOnce.countDown();
                     return false;
@@ -465,7 +468,8 @@ public class ProposalQueueIntegrationTest {
             @Override
             public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path,
                                                    String contentType, String message, String signature,
-                                                   String blobId, String mimeType, String ipfsCid) {
+                                                   String blobId, String mimeType, String ipfsCid,
+                                                   MutationAuditMetadata auditMetadata) {
                 attempts.incrementAndGet();
                 if (!allowIngress.get()) {
                     rejectedOnce.countDown();

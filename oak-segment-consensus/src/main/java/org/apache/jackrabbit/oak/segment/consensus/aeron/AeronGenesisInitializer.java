@@ -17,6 +17,9 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+import org.apache.jackrabbit.oak.commons.json.JsopReader;
+import org.apache.jackrabbit.oak.commons.json.JsopTokenizer;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
@@ -42,16 +45,13 @@ final class AeronGenesisInitializer {
         this.canonicalGenesisContent = new CanonicalGenesisContent(nodeStore, blobStore);
     }
 
-    void initializeGenesisContent(String proposalJson) {
-        initializeGenesisContent(GenesisProposal.fromJson(proposalJson));
-    }
-
     void initializeGenesisContent(GenesisProposal proposal) {
         log.info("Creating deterministic genesis from replicated proposal: validator={}, timestamp={}",
             proposal.getGenesisValidatorUrl(), proposal.getTimestamp());
 
         try {
             if (canonicalGenesisContent.exists()) {
+                canonicalGenesisContent.verifyExisting();
                 log.info("Canonical genesis already exists - skipping duplicate genesis application");
                 return;
             }
@@ -59,13 +59,24 @@ final class AeronGenesisInitializer {
             NodeBuilder rootBuilder = nodeStore.getRoot().builder();
             canonicalGenesisContent.populate(rootBuilder, proposal.getTimestamp(), proposal.getGenesisValidatorUrl());
             nodeStore.merge(rootBuilder, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+            fileStore.flush();
+            canonicalGenesisContent.verifyExisting();
 
             String newHead = fileStore.getHead().getRecordId().toString10();
             log.info("Genesis committed deterministically - validator={}, timestamp={}, head={}",
                 proposal.getGenesisValidatorUrl(), proposal.getTimestamp(), newHead);
         } catch (Exception e) {
             log.error("Exception during genesis creation", e);
+            throw new IllegalStateException("Canonical genesis application failed", e);
         }
+    }
+
+    boolean verifyExistingGenesis() {
+        if (!canonicalGenesisContent.exists()) {
+            return false;
+        }
+        canonicalGenesisContent.verifyExisting();
+        return true;
     }
 
     static final class GenesisProposal {
@@ -85,11 +96,22 @@ final class AeronGenesisInitializer {
             return new GenesisProposal(normalizedTimestamp, normalizedValidator);
         }
 
-        static GenesisProposal fromJson(String json) {
-            String source = json != null ? json.trim() : "";
-            long timestamp = extractLongField(source, "timestamp");
-            String genesisValidator = extractJsonField(source, "genesisValidator");
-            return create(timestamp, genesisValidator);
+        static void validateTrigger(String json) {
+            try {
+                JsopTokenizer reader = new JsopTokenizer(json);
+                reader.read('{');
+                if (!"command".equals(reader.readString())) {
+                    throw new IllegalArgumentException("Expected command");
+                }
+                reader.read(':');
+                if (!"CREATE_GENESIS".equals(reader.readString())) {
+                    throw new IllegalArgumentException("Expected CREATE_GENESIS");
+                }
+                reader.read('}');
+                reader.read(JsopReader.END);
+            } catch (RuntimeException e) {
+                throw new MutationRejectedException("Genesis requires a parameter-free CREATE_GENESIS trigger", e);
+            }
         }
 
         long getTimestamp() {
@@ -101,61 +123,7 @@ final class AeronGenesisInitializer {
         }
 
         String toJson() {
-            return "{\"command\":\"CREATE_GENESIS\",\"timestamp\":" + timestamp
-                + ",\"genesisValidator\":\"" + escapeJson(genesisValidatorUrl) + "\"}";
-        }
-
-        private static long extractLongField(String json, String field) {
-            String marker = "\"" + field + "\":";
-            int start = json.indexOf(marker);
-            if (start < 0) {
-                return 0L;
-            }
-            int valueStart = start + marker.length();
-            int valueEnd = valueStart;
-            while (valueEnd < json.length() && Character.isDigit(json.charAt(valueEnd))) {
-                valueEnd++;
-            }
-            if (valueEnd == valueStart) {
-                return 0L;
-            }
-            try {
-                return Long.parseLong(json.substring(valueStart, valueEnd));
-            } catch (NumberFormatException e) {
-                return 0L;
-            }
-        }
-
-        private static String extractJsonField(String json, String field) {
-            String marker = "\"" + field + "\":\"";
-            int start = json.indexOf(marker);
-            if (start < 0) {
-                return null;
-            }
-            int valueStart = start + marker.length();
-            StringBuilder value = new StringBuilder();
-            boolean escaping = false;
-            for (int i = valueStart; i < json.length(); i++) {
-                char ch = json.charAt(i);
-                if (escaping) {
-                    value.append(ch);
-                    escaping = false;
-                } else if (ch == '\\') {
-                    escaping = true;
-                } else if (ch == '"') {
-                    return value.toString();
-                } else {
-                    value.append(ch);
-                }
-            }
-            return null;
-        }
-
-        private static String escapeJson(String input) {
-            if (input == null) {
-                return "";
-            }
-            return input.replace("\\", "\\\\").replace("\"", "\\\"");
+            return "{\"command\":\"CREATE_GENESIS\"}";
         }
     }
 }

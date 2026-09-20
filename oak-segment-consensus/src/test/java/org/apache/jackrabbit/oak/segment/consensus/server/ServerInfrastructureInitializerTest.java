@@ -34,10 +34,12 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.After;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.mockito.ArgumentCaptor;
+import org.mockito.MockedStatic;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -49,6 +51,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -58,9 +61,16 @@ public class ServerInfrastructureInitializerTest {
 
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
+    private MockedStatic<StorageBackendFactory> storageFactory;
+
+    @Before
+    public void stubCurrentStorageFactoryBoundary() {
+        storageFactory = mockStatic(StorageBackendFactory.class);
+    }
 
     @After
     public void tearDown() {
+        storageFactory.close();
         System.clearProperty("blobstore.type");
         System.clearProperty("gc.usdc.per.mb");
     }
@@ -188,7 +198,9 @@ public class ServerInfrastructureInitializerTest {
         when(recordId.toString()).thenReturn("record-1");
         when(fileStore.getHead().getRecordId()).thenReturn(recordId);
         when(factory.createIpfsBlobStore(anyString(), eq(tempFolder.getRoot()))).thenReturn(blobStore);
-        when(factory.createStorageRuntime(tempFolder.getRoot(), blobStore)).thenReturn(new ServerStorageRuntime(fileStore, nodeStore));
+        storageFactory.when(() -> StorageBackendFactory.createStorageRuntime(eq(tempFolder.getRoot()), eq(blobStore),
+            any(org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig.class)))
+            .thenReturn(new ServerStorageRuntime(fileStore, nodeStore));
         when(factory.extractTarFiles(fileStore)).thenReturn(tarFiles);
         when(factory.createGCCostEstimator(eq(fileStore), eq(tarFiles), any(BigDecimal.class))).thenReturn(gcCostEstimator);
         when(factory.createHttpServer(tempFolder.getRoot(), 8090, fileStore, nodeStore)).thenReturn(httpServer);

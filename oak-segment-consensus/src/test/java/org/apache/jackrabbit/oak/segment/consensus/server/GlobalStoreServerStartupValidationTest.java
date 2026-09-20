@@ -28,6 +28,7 @@ import java.nio.file.Path;
 
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -52,10 +53,11 @@ public class GlobalStoreServerStartupValidationTest {
         System.setProperty(PROP_BLOBSTORE_TYPE, "file");
         Path storeDir = tempFolder.getRoot().toPath().resolve("segmentstore-missing");
 
-        IOException error = expectIoFailure(newServer(storeDir));
+        IllegalStateException error = assertThrows(IllegalStateException.class, () -> newServer(storeDir).start());
 
         assertTrue(Files.isDirectory(storeDir));
-        assertTrue(error.getMessage().contains("Invalid blobstore.type"));
+        assertTrue(error.getMessage().contains("Unknown oak.blob.backend value: \"file\""));
+        assertTrue(error.getMessage().contains("Use ipfs, azure, or aws."));
     }
 
     @Test

@@ -18,6 +18,8 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.net.URI;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +29,39 @@ final class ServerNetworkUtil {
     private static final Logger log = LoggerFactory.getLogger(ServerNetworkUtil.class);
 
     private ServerNetworkUtil() {
+    }
+
+    /** Canonical configured identity without DNS, which belongs to the transport layer. */
+    static String canonicalHttpUrl(String url) {
+        try {
+            URI uri = URI.create(url.trim());
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (scheme == null || host == null || uri.getRawUserInfo() != null
+                || uri.getRawQuery() != null || uri.getRawFragment() != null) {
+                throw new IllegalArgumentException();
+            }
+            scheme = scheme.toLowerCase(Locale.ROOT);
+            if (!"http".equals(scheme) && !"https".equals(scheme)) {
+                throw new IllegalArgumentException();
+            }
+            host = host.toLowerCase(Locale.ROOT);
+            if (host.startsWith("[") && host.endsWith("]")) {
+                host = host.substring(1, host.length() - 1);
+            }
+            if ("localhost".equals(host) || "::1".equals(host) || "0:0:0:0:0:0:0:1".equals(host)) {
+                host = "127.0.0.1";
+            } else if (host.contains(":")) {
+                host = "[" + host + "]";
+            }
+            String path = uri.getRawPath();
+            if (path == null || "/".equals(path)) {
+                path = "";
+            }
+            return scheme + "://" + host + (uri.getPort() == -1 ? "" : ":" + uri.getPort()) + path;
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("Consensus endpoints must be absolute HTTP(S) URLs without credentials, query, or fragment");
+        }
     }
 
     /**

@@ -173,6 +173,10 @@ public class DeleteApplicationServiceTest {
         FileStore fileStore = fileStoreWithHeads("prev-head", "current-head");
         MemoryNodeStore nodeStore = seededNodeStore(EXISTING_PATH);
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        doAnswer(invocation -> {
+            ((Runnable) invocation.getArgument(0)).run();
+            return true;
+        }).when(flushService).onChangeApplied(any());
         DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
@@ -194,6 +198,7 @@ public class DeleteApplicationServiceTest {
         assertNull(newHead);
         assertEquals("proposal-missing-branch", durableProposal.get());
         assertEquals("current-head", durableHead.get());
+        verify(flushService).onChangeApplied(any());
     }
 
     @Test
@@ -201,6 +206,10 @@ public class DeleteApplicationServiceTest {
         FileStore fileStore = fileStoreWithHeads("prev-head", "current-head");
         MemoryNodeStore nodeStore = seededNodeStore("/oak-chain/aa/bb/cc/" + WALLET + "/Acme/content");
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        doAnswer(invocation -> {
+            ((Runnable) invocation.getArgument(0)).run();
+            return true;
+        }).when(flushService).onChangeApplied(any());
         DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
@@ -222,6 +231,7 @@ public class DeleteApplicationServiceTest {
         assertNull(newHead);
         assertEquals("proposal-missing-target", durableProposal.get());
         assertEquals("current-head", durableHead.get());
+        verify(flushService).onChangeApplied(any());
     }
 
     @Test

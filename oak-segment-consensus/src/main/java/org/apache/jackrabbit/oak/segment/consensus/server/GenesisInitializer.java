@@ -58,6 +58,8 @@ final class GenesisInitializer {
             NodeBuilder rootBuilder = nodeStore.getRoot().builder();
             canonicalGenesisContent.populate(rootBuilder, System.currentTimeMillis(), genesisValidatorUrl);
             nodeStore.merge(rootBuilder, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+            fileStore.flush();
+            canonicalGenesisContent.verifyExisting();
 
             log.info("   ✅ Canonical genesis created");
             logGenesisHead();

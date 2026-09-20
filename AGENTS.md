@@ -220,12 +220,18 @@ via the Apache RAT plugin. Use this exact header:
 ## Git Workflow
 
 - **Main branch:** `trunk` (not master/main). Never commit directly to trunk
-- **Issue tracker:** Apache Jira, project key `OAK` (e.g., OAK-12345)
+- **Issue tracker:** Apache contributions use Jira, project key `OAK` (e.g.,
+  OAK-12345). Somarc-only downstream work does not require an Apache Jira issue
 - **Branch naming:** `issue/OAK-<issue_number>` (e.g., `issue/OAK-12345`). If no Jira
   issue is specified, ask the user what the branch name should be
-- **Commit message format:** Start with Jira issue key: `OAK-XXXXX: Description of change`
+- **Commit message format:** When an OAK issue exists or the work is intended for
+  Apache, start with its Jira issue key: `OAK-XXXXX: Description of change`.
+  For Somarc-only downstream work without an OAK issue, use a concise descriptive
+  message (e.g., `Harden genesis v2 and three-node write safety`); do not invent a
+  Jira reference
 - **PR target:** PRs should target `trunk`
-- All changes must be committed to the issue branch, never directly to trunk
+- All changes must be committed to the agreed topic or issue branch, never directly
+  to trunk
 - **Code review:** After pushing changes, remind the user to request a review from
   committers who have previously contributed to the affected modules
 

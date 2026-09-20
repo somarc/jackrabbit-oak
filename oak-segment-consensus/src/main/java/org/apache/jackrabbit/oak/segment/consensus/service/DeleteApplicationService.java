@@ -18,6 +18,8 @@ package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import org.apache.jackrabbit.oak.api.CommitFailedException;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -143,18 +145,23 @@ public class DeleteApplicationService {
         String proposalId = auditMetadata != null ? auditMetadata.getProposalId() : null;
         
         try {
+            CanonicalGenesisContent.requireMutable(walletAddress, path);
             log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
             NodeStore nodeStore = requireNodeStore();
             
             // Get current HEAD for logging
             String previousHead = fileStore.getHead().getRecordId().toString();
             log.debug("📍 Previous HEAD: {}", truncate(previousHead, 20));
+
+            if (signature == null) {
+                throw new MutationRejectedException("Missing signature in replicated delete");
+            }
             
             // Validate path format
             String[] pathParts = path.split("/");
             if (pathParts.length < 2) {
                 log.error("❌ Invalid path format: {} (expected: /oak-chain/...)", path);
-                throw new IllegalArgumentException("Invalid path format: " + path);
+                throw new MutationRejectedException("Invalid path format: " + path);
             }
             
             // Build node structure and navigate to target
@@ -177,10 +184,7 @@ public class DeleteApplicationService {
             if (!pathExists) {
                 log.warn("⚠️  Delete skipped - path doesn't exist: {}", path);
                 // Not an error - idempotent delete (already gone)
-                if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
-                    String head = fileStore.getHead().getRecordId().toString10();
-                    durabilityCallback.onDurable(proposalId, head);
-                }
+                flushService.onChangeApplied(buildDurabilityCallback(proposalId));
                 return null;
             }
             
@@ -192,10 +196,7 @@ public class DeleteApplicationService {
             } else {
                 log.warn("⚠️  Target node doesn't exist: {} (idempotent delete)", targetNodeName);
                 // Not an error - already deleted
-                if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
-                    String head = fileStore.getHead().getRecordId().toString10();
-                    durabilityCallback.onDurable(proposalId, head);
-                }
+                flushService.onChangeApplied(buildDurabilityCallback(proposalId));
                 return null;
             }
             
@@ -236,6 +237,9 @@ public class DeleteApplicationService {
                 durabilityCallback.onFailure(proposalId, e.getMessage());
             }
             log.error("❌ Failed to apply replicated delete", e);
+            if (e instanceof MutationRejectedException) {
+                throw new MutationRejectedException("Failed to apply replicated delete", e);
+            }
             throw new RuntimeException("Failed to apply replicated delete", e);
         }
     }
@@ -244,10 +248,8 @@ public class DeleteApplicationService {
         if (durabilityCallback == null || proposalId == null || proposalId.isEmpty()) {
             return null;
         }
-        return () -> durabilityCallback.onDurable(
-            proposalId,
-            fileStore.getHead().getRecordId().toString10()
-        );
+        String appliedHead = fileStore.getHead().getRecordId().toString10();
+        return () -> durabilityCallback.onDurable(proposalId, appliedHead);
     }
 
     @NotNull

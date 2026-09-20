@@ -21,10 +21,13 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -92,6 +95,31 @@ public class FileStoreFlushServiceTest {
 
             assertTrue(callbackRan.get());
             verify(fileStore).flush();
+        }));
+    }
+
+    @Test
+    public void callbackRegisteredDuringFlushWaitsForNextSuccessfulFlush() throws Exception {
+        withProperty("oak.filestore.flush.ms", "0", () -> withProperty("oak.filestore.flush.batch", "1", () -> {
+            FileStore fileStore = mock(FileStore.class);
+            AtomicInteger first = new AtomicInteger();
+            AtomicInteger second = new AtomicInteger();
+            AtomicInteger flushes = new AtomicInteger();
+            AtomicBoolean inject = new AtomicBoolean(true);
+            try (FileStoreFlushService service = new FileStoreFlushService(fileStore)) {
+                doAnswer(invocation -> {
+                    flushes.incrementAndGet();
+                    if (inject.getAndSet(false)) {
+                        assertFalse(service.onChangeApplied(second::incrementAndGet));
+                    }
+                    assertEquals(0, second.get());
+                    return null;
+                }).when(fileStore).flush();
+                assertTrue(service.onChangeApplied(first::incrementAndGet));
+                assertEquals(1, first.get());
+                assertEquals(1, second.get());
+                assertEquals(2, flushes.get());
+            }
         }));
     }
 

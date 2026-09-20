@@ -43,13 +43,13 @@ final class GlobalStoreRuntimeConfigUtil {
 
     static String resolveSelfUrl(int port, AeronClusterConfig config) {
         if (config != null && config.selfUrl() != null && !config.selfUrl().trim().isEmpty()) {
-            return config.selfUrl().trim();
+            return ServerNetworkUtil.canonicalHttpUrl(config.selfUrl());
         }
         String configured = RuntimeConfigValueResolver.readString("consensus.self.url", null);
         if (configured != null && !configured.trim().isEmpty()) {
-            return configured.trim();
+            return ServerNetworkUtil.canonicalHttpUrl(configured);
         }
-        return ServerNetworkUtil.resolveUrlToIP("http://localhost:" + port);
+        return ServerNetworkUtil.canonicalHttpUrl("http://localhost:" + port);
     }
 
     static List<String> resolvePeerUrls(AeronClusterConfig config) {
@@ -57,14 +57,20 @@ final class GlobalStoreRuntimeConfigUtil {
             List<String> peerUrls = new ArrayList<>();
             for (String peerUrl : config.peerUrls()) {
                 if (peerUrl != null && !peerUrl.trim().isEmpty()) {
-                    peerUrls.add(peerUrl.trim());
+                    peerUrls.add(ServerNetworkUtil.canonicalHttpUrl(peerUrl));
                 }
             }
             if (!peerUrls.isEmpty()) {
                 return peerUrls;
             }
         }
-        return ServerNetworkUtil.parsePeerUrls(RuntimeConfigValueResolver.readString("consensus.peers", ""));
+        List<String> peers = new ArrayList<>();
+        for (String peer : RuntimeConfigValueResolver.readString("consensus.peers", "").split(",")) {
+            if (!peer.trim().isEmpty()) {
+                peers.add(ServerNetworkUtil.canonicalHttpUrl(peer));
+            }
+        }
+        return peers;
     }
 
     static String resolveBeaconApiUrl(AeronClusterConfig config) {
