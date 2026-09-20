@@ -17,10 +17,11 @@
 package org.apache.jackrabbit.oak.plugins.index.elastic;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.CountRequest;
 import co.elastic.clients.elasticsearch.core.CountResponse;
-import org.apache.jackrabbit.guava.common.cache.LoadingCache;
+import org.apache.jackrabbit.oak.cache.api.LoadingCache;
 import org.apache.jackrabbit.oak.stats.Clock;
 import org.junit.After;
 import org.junit.Before;
@@ -66,6 +67,7 @@ public class ElasticIndexStatisticsTest {
     @After
     public void releaseMocks() throws Exception {
         closeable.close();
+        ElasticIndexStatistics.FT_OAK_12248_ENABLE.set(false);
     }
 
     @Test
@@ -141,5 +143,46 @@ public class ElasticIndexStatisticsTest {
         // call again with a different query
         assertEquals(5000, indexStatistics.getDocCountFor(Query.of(qf -> qf.matchAll(mf -> mf.boost(100F)))));
         verify(elasticClientMock, times(5)).count(any(CountRequest.class));
+    }
+
+    @Test
+    public void numDocsReturnsZeroOn404WithToggleEnabled() throws Exception {
+        ElasticIndexStatistics.FT_OAK_12248_ENABLE.set(true);
+        LoadingCache<ElasticIndexStatistics.StatsRequestDescriptor, Integer> cache =
+                ElasticIndexStatistics.setupCountCache(100, 10 * 60, 60, null);
+        ElasticIndexStatistics stats =
+                new ElasticIndexStatistics(elasticConnectionMock, indexDefinitionMock, cache, null);
+
+        ElasticsearchException notFound = mock(ElasticsearchException.class);
+        when(notFound.status()).thenReturn(404);
+        when(elasticClientMock.count(any(CountRequest.class))).thenThrow(notFound);
+
+        assertEquals(0, stats.numDocs());
+        verify(elasticClientMock).count(any(CountRequest.class));
+    }
+
+    @Test
+    public void numDocsRecoverAfterCacheExpiry() throws Exception {
+        ElasticIndexStatistics.FT_OAK_12248_ENABLE.set(true);
+        Clock.Virtual clock = new Clock.Virtual();
+        LoadingCache<ElasticIndexStatistics.StatsRequestDescriptor, Integer> cache =
+                ElasticIndexStatistics.setupCountCache(100, 10 * 60, 60, clock);
+        ElasticIndexStatistics stats =
+                new ElasticIndexStatistics(elasticConnectionMock, indexDefinitionMock, cache, null);
+
+        ElasticsearchException notFound = mock(ElasticsearchException.class);
+        when(notFound.status()).thenReturn(404);
+        CountResponse countResponse = mock(CountResponse.class);
+        when(countResponse.count()).thenReturn(5L);
+        when(elasticClientMock.count(any(CountRequest.class)))
+                .thenThrow(notFound)
+                .thenReturn(countResponse);
+
+        assertEquals(0, stats.numDocs());
+
+        clock.waitFor(Duration.ofMinutes(11));
+
+        assertEquals(5, stats.numDocs());
+        verify(elasticClientMock, times(2)).count(any(CountRequest.class));
     }
 }

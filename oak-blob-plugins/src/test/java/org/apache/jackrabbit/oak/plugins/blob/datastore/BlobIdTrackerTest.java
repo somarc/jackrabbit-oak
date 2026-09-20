@@ -31,8 +31,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.jackrabbit.core.data.DataRecord;
-import org.apache.jackrabbit.core.data.DataStoreException;
+import org.apache.jackrabbit.oak.spi.blob.data.DataRecord;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
 import org.apache.jackrabbit.oak.commons.FileIOUtils;
 import org.apache.jackrabbit.oak.commons.collections.IteratorUtils;
 import org.apache.jackrabbit.oak.commons.concurrent.ExecutorCloser;
@@ -227,6 +227,19 @@ public class BlobIdTrackerTest {
         } finally {
             //reset the skip tracker system prop
         }
+    }
+
+    @Test
+    public void zeroSnapshotIntervalBuildsNoOpTracker() throws Exception {
+        LOG.info("In zeroSnapshotIntervalBuildsNoOpTracker");
+
+        BlobIdTracker noOpTracker = BlobIdTracker.build(root.getAbsolutePath(), repoId + "-noop", 0, dataStore);
+        closer.register(noOpTracker);
+
+        noOpTracker.add("id1");
+        noOpTracker.add(java.util.Collections.singletonList("id2").iterator());
+
+        assertTrue("No-op tracker must return empty iterator from get()", !noOpTracker.get().hasNext());
     }
 
     @Test
