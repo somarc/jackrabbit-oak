@@ -17,5 +17,6 @@ oak-segment-consensus/META-INF/MANIFEST.MF
 .DS_Store
 # Built artifacts (JARs should not be committed)
 *.jar
-!**/src/**/*.jardocs/
+!**/src/**/*.jar
 .claude/settings.local.json
+pom.xml.versionsBackup
