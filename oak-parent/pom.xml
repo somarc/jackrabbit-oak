@@ -41,7 +41,7 @@
     <minimalMavenBuildVersion>3.6.1</minimalMavenBuildVersion><!-- due to https://issues.apache.org/jira/browse/MNG-6059 -->
     <test.opts.memory>-Xmx512m</test.opts.memory>
     <test.opts>${test.opts.coverage} ${test.opts.memory} -XX:+HeapDumpOnOutOfMemoryError -Dupdate.limit=100 -Djava.awt.headless=true</test.opts>
-    <skip.deployment>false</skip.deployment>
+    <skip.deployment>true</skip.deployment>
     <skip.coverage>true</skip.coverage>
     <minimum.line.coverage>0.0</minimum.line.coverage>
     <minimum.branch.coverage>0.0</minimum.branch.coverage>
@@ -98,6 +98,9 @@
     <sonar.coverage.jacoco.xmlReportPaths>${maven.multiModuleProjectDirectory}/target/site/jacoco-aggregate/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
     <sonar.organization>apache</sonar.organization>
     <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+    <oak.upstream.revision>9595d3fde56a1e8e6f75afafc487bde947659bdd</oak.upstream.revision>
+    <oak.source.revision>unrecorded</oak.source.revision>
+    <oak.source.dirty>unknown</oak.source.dirty>
   </properties>
 
   <issueManagement>
@@ -484,31 +487,6 @@
             <goals>
               <goal>check</goal>
             </goals>
-          </execution>
-        </executions>
-      </plugin>
-      <!-- Override Apache parent's enforce-java-version to add upper bound for AEM compatibility -->
-      <plugin>
-        <artifactId>maven-enforcer-plugin</artifactId>
-        <executions>
-          <execution>
-            <id>enforce-java-version</id>
-            <goals>
-              <goal>enforce</goal>
-            </goals>
-            <configuration>
-              <rules>
-                <requireJavaVersion>
-                  <!-- AEM requires JDK 11-21; JDK 22+ breaks Mockito/ByteBuddy -->
-                  <version>[11,21.9999]</version>
-                  <message>
-AEM requires JDK 11-21.
-JDK 22+ breaks Mockito/ByteBuddy agent attachment and is not supported by AEM.
-Please use JDK 21 or earlier. Current JDK: ${java.version}
-                  </message>
-                </requireJavaVersion>
-              </rules>
-            </configuration>
           </execution>
         </executions>
       </plugin>

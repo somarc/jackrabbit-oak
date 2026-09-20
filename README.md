@@ -1,105 +1,83 @@
-[![ASF Jira](https://img.shields.io/badge/ASF%20JIRA-OAK-orange)](https://issues.apache.org/jira/projects/OAK/summary)
-[![Maven Central](https://img.shields.io/maven-central/v/org.apache.jackrabbit/oak-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/org.apache.jackrabbit/oak-core)
-[![Build](https://github.com/apache/jackrabbit-oak/actions/workflows/build.yml/badge.svg)](https://github.com/apache/jackrabbit-oak/actions/workflows/build.yml)
-[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=org.apache.jackrabbit%3Ajackrabbit-oak&metric=bugs)](https://sonarcloud.io/summary/new_code?id=org.apache.jackrabbit%3Ajackrabbit-oak)
-[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=org.apache.jackrabbit%3Ajackrabbit-oak&metric=code_smells)](https://sonarcloud.io/summary/new_code?id=org.apache.jackrabbit%3Ajackrabbit-oak)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=org.apache.jackrabbit%3Ajackrabbit-oak&metric=coverage)](https://sonarcloud.io/summary/new_code?id=org.apache.jackrabbit%3Ajackrabbit-oak)
+Oak Segment Consensus
+=====================
 
-Jackrabbit Oak - the next generation content repository
-=======================================================
+**Somarc's independently maintained Oak Chain runtime, based on
+[Apache Jackrabbit Oak](https://github.com/apache/jackrabbit-oak).**
 
-Jackrabbit Oak is a scalable, high-performance hierarchical content
-repository designed for use as the foundation of modern world-class
-web sites and other demanding content applications.
+This repository is a permanent downstream product, not a staging branch for an
+Apache contribution. Apache remains the authority for inherited Oak platform
+behavior; Somarc owns the validator, its Oak integration, validation, and releases.
+We continue to integrate Apache development through reviewed, ancestry-preserving
+merges into the Somarc product line.
 
-The Oak effort is a part of the Apache Jackrabbit project.
-Apache Jackrabbit is a project of the Apache Software Foundation.
+## Product scope
 
-**Branch Note:** This `feature/blockchain-aem-poc` branch includes experimental
-consensus-based distributed Oak repository features. See `oak-segment-consensus/`
-for implementation details.
+- [`oak-segment-consensus`](oak-segment-consensus/README.md): a standalone validator
+  that orders repository commands through Aeron Cluster and applies them to local
+  Oak Segment/TAR stores.
+- [`oak-blob-cloud-ipfs`](oak-blob-cloud-ipfs/README.md): the optional IPFS-backed
+  binary storage integration.
+- Required Segment Tar, build, and packaging adaptations, kept explicit and small.
 
-Getting Started 
----------------
+The product's permanent status is separate from capability maturity. Local
+mock-mode validation does not prove chain-backed payments, production security,
+cloud recovery, or every failure/recovery scenario. Logical repository equality
+is the convergence invariant; physical RecordIds and TAR files need not match.
 
-To get started with Oak, build the latest sources with
-Maven 3 and Java 17 (or higher) like this:
+The canonical product branch is Somarc `trunk`. `feature/*` and `fix/*` branches
+return to that branch, while `sync/apache-*` branches carry reviewed upstream
+updates. The original `feature/blockchain-aem-poc` is historical development
+lineage, not a second product mainline. The initial promotion is recorded in the
+[promotion record](docs/PRODUCT-PROMOTION.md).
 
-    mvn clean install
+## Build and validate
 
-To enable all integration tests, including the JCR TCK, use:
+Use Maven 3.6.1+ and a JDK capable of building the Java 17 target. Product CI checks
+JDK 17 and 21. From the repository root:
 
-    mvn clean install -PintegrationTesting
+```sh
+mvn -B -ntp -pl oak-segment-consensus -am verify -DskipITs
+```
 
-Before committing changes or submitting a patch, please make sure that
-the above integration testing build passes without errors. If you like,
-you can enable integration tests by default by setting the
-`OAK_INTEGRATION_TESTING` environment variable.
+This runs unit tests, builds both fork modules and their Oak dependencies, and
+checks bundle baselines and licenses. It is not a live three-validator campaign.
+Use the package/verify lifecycle: `oak-shaded-guava` creates its relocated artifact
+during packaging, so a clean reactor cannot be validated by `compile` alone.
 
-MongoDB integration
--------------------
+The standalone runtime is built at
+`oak-segment-consensus/target/oak-segment-consensus.jar`. Both fork-owned modules
+use the distinct `2.7.0-somarc-SNAPSHOT` development version; inherited Oak modules
+retain the pinned Apache `2.7-SNAPSHOT` baseline. No release is implied. Maven
+deployment is disabled by default, and CI neither publishes packages nor deploys
+validators. See the [release boundary](docs/FORK-MAIN-CONTRACT.md#release-contract).
 
-Parts of the Oak build expects a MongoDB instance to be available for
-testing. By default a MongoDB instance running on localhost is expected,
-and the relevant tests are simply skipped if such an instance is not found.
-You can also configure the build to use custom MongoDB settings with the
-following properties (shown with their default values):
+## Contracts and contribution
 
-    -Dmongo.host=127.0.0.1
-    -Dmongo.port=27017
-    -Dmongo.db=MongoMKDB
-    -Dmongo.db2=MongoMKDB2
+- [Product governance and scope](docs/FORK-MAIN-CONTRACT.md)
+- [Upstream integration runbook](docs/FORK-UPSTREAM-SYNC-RUNBOOK.md)
+- [Genesis v2 and replicated write safety](oak-segment-consensus/docs/GENESIS-AND-WRITE-SAFETY.md)
+- [Contributing to the Somarc product](CONTRIBUTING.md)
+- [Inherited Apache Oak documentation](https://jackrabbit.apache.org/oak/docs/)
 
-Note that the configured test databases will be *dropped* by the test cases.
+Do not use a fork-sync operation that discards downstream commits. Apache intake
+is a compatibility change with its own validation, not a reset to Apache's tree.
 
-Components
-----------
+## Apache foundation and license
 
-The build consists of the following main components:
+Apache Jackrabbit Oak is a scalable, high-performance hierarchical content
+repository developed by the Apache Jackrabbit project. This Somarc distribution
+is not an official Apache release and does not imply Apache endorsement.
 
-  - oak-parent           - parent POM
-  - oak-doc              - Oak documentation
-  - oak-commons          - shared utility code
-  - [oak-core][1]        - Oak repository API and implementation
-  - oak-jcr              - JCR binding for the Oak repository
-  - oak-sling            - integration with Apache Sling
-  - oak-http             - HTTP binding for Oak
-  - oak-lucene           - Lucene-based query index
-  - oak-run              - runnable jar packaging
-  - oak-pojosr           - integration with PojoSR
-  - oak-segment-tar      - TarMK API and implementation
-  - oak-segment-consensus - Distributed consensus layer (Aeron Cluster + Raft)
-  - oak-upgrade          - tooling for upgrading Jackrabbit repositories to Oak
-  - oak-it               - integration tests
-    - oak-it/osgi        - integration tests for OSGi
-  - [oak-exercise][2]    - Oak training material
-
-  [1]: oak-api/README.md
-  [2]: oak-exercise/README.md
-
-Archive
--------
-
-The following components have been moved to the Jackrabbit Attic:
-
-  - oak-mk-api        - MicroKernel API (_deprecated_, see OAK-2701)
-  - oak-mk            - MicroKernel implementation  (see OAK-2702)
-  - oak-mk-remote     - MicroKernel remoting  (see OAK-2693)
-  - oak-it/mk         - integration tests for MicroKernel
-
-License
--------
-
-(see [LICENSE.txt](LICENSE.txt) for full license details)
+See [LICENSE.txt](LICENSE.txt) and [NOTICE.txt](NOTICE.txt).
 
 Collective work: Copyright 2014 The Apache Software Foundation.
 
 Licensed to the Apache Software Foundation (ASF) under one or more
-contributor license agreements.  See the NOTICE file distributed with
+contributor license agreements. See the NOTICE file distributed with
 this work for additional information regarding copyright ownership.
 The ASF licenses this file to You under the Apache License, Version 2.0
 (the "License"); you may not use this file except in compliance with
-the License.  You may obtain a copy of the License at
+the License. You may obtain a copy of the License at
 
      http://www.apache.org/licenses/LICENSE-2.0
 

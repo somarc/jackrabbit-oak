@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 import org.apache.jackrabbit.oak.plugins.blob.AbstractSharedCachingDataStore;
 import org.apache.jackrabbit.oak.spi.blob.AbstractSharedBackend;
 import org.apache.jackrabbit.oak.spi.blob.SharedBackend;
+import org.apache.jackrabbit.oak.spi.blob.data.DataIdentifier;
 
 import java.util.Properties;
 
@@ -191,8 +192,7 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
             ? oakBlobId.substring(0, oakBlobId.indexOf('#')) 
             : oakBlobId;
         
-        org.apache.jackrabbit.core.data.DataIdentifier identifier = 
-            new org.apache.jackrabbit.core.data.DataIdentifier(blobIdWithoutSize);
+        DataIdentifier identifier = new DataIdentifier(blobIdWithoutSize);
         return ipfsBackend.getCID(identifier);
     }
     

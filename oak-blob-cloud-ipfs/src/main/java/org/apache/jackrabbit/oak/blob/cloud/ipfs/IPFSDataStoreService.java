@@ -16,7 +16,7 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
-import org.apache.jackrabbit.core.data.DataStore;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStore;
 import org.apache.jackrabbit.oak.plugins.blob.AbstractSharedCachingDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.AbstractDataStoreService;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
@@ -149,7 +149,7 @@ public class IPFSDataStoreService extends AbstractDataStoreService {
     }
 
     @Override
-    protected void deactivate() throws org.apache.jackrabbit.core.data.DataStoreException {
+    protected void deactivate() throws org.apache.jackrabbit.oak.spi.blob.data.DataStoreException {
         if (delegateReg != null) {
             delegateReg.unregister();
         }

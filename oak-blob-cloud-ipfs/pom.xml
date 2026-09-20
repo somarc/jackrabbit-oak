@@ -21,14 +21,19 @@
     <parent>
         <artifactId>oak-parent</artifactId>
         <groupId>org.apache.jackrabbit</groupId>
-        <version>1.93-SNAPSHOT</version>
+        <version>2.7-SNAPSHOT</version>
         <relativePath>../oak-parent/pom.xml</relativePath>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>oak-blob-cloud-ipfs</artifactId>
+    <version>2.7.0-somarc-SNAPSHOT</version>
     <name>Oak IPFS Cloud Blob Store</name>
     <packaging>bundle</packaging>
+
+    <properties>
+        <oak.version>${project.parent.version}</oak.version>
+    </properties>
 
     <repositories>
         <repository>
@@ -46,6 +51,12 @@
                     <instructions>
                         <Export-Package>org.apache.jackrabbit.oak.blob.cloud.ipfs</Export-Package>
                         <DynamicImport-Package>sun.io</DynamicImport-Package>
+                        <Bundle-Vendor>Somarc</Bundle-Vendor>
+                        <Bundle-DocURL>https://github.com/somarc/jackrabbit-oak</Bundle-DocURL>
+                        <Bundle-SCM>url=https://github.com/somarc/jackrabbit-oak</Bundle-SCM>
+                        <Oak-Upstream-Revision>${oak.upstream.revision}</Oak-Upstream-Revision>
+                        <Oak-Source-Revision>${oak.source.revision}</Oak-Source-Revision>
+                        <Oak-Source-Dirty>${oak.source.dirty}</Oak-Source-Dirty>
                     </instructions>
                 </configuration>
             </plugin>
@@ -99,53 +110,36 @@
             <artifactId>annotations</artifactId>
         </dependency>
 
-        <!-- JCR and Jackrabbit dependencies -->
-        <dependency>
-            <groupId>javax.jcr</groupId>
-            <artifactId>jcr</artifactId>
-            <version>2.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.jackrabbit</groupId>
-            <artifactId>jackrabbit-jcr-commons</artifactId>
-            <version>${jackrabbit.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.jackrabbit</groupId>
-            <artifactId>jackrabbit-data</artifactId>
-            <version>${jackrabbit.version}</version>
-        </dependency>
-
         <!-- Dependencies to other Oak components -->
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-api</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-commons</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-core-spi</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-blob</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-blob-plugins</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-store-spi</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
 
         <!-- IPFS HTTP Client from JitPack -->
@@ -176,21 +170,21 @@
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-commons</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-blob-plugins</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-blob</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>

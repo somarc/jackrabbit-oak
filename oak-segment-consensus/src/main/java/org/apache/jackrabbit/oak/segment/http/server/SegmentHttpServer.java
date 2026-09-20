@@ -24,6 +24,8 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
 import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.Connector;
+import org.eclipse.jetty.server.ServerConnector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -136,6 +138,7 @@ public class SegmentHttpServer {
         } catch (Exception e) {
             throw new RuntimeException("Failed to configure TLS", e);
         }
+        configureBindHost(server);
         
         // Initialize Prometheus metrics (JVM metrics: memory, GC, threads, etc.)
         DefaultExports.initialize();
@@ -145,6 +148,17 @@ public class SegmentHttpServer {
         log.info("   - Store: {}", this.storeDirectory);
         log.info("   - TLS: {}", tlsConfig.isEnabled() ? "enabled" : "disabled");
         log.info("   - Prometheus metrics enabled at /metrics");
+    }
+
+    static void configureBindHost(Server server) {
+        String host = RuntimeConfigValueResolver.readString("http.bind.host", null);
+        if (host != null) {
+            for (Connector connector : server.getConnectors()) {
+                if (connector instanceof ServerConnector) {
+                    ((ServerConnector) connector).setHost(host);
+                }
+            }
+        }
     }
 
     SegmentHttpServer(Server server,

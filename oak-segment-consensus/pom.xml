@@ -19,20 +19,22 @@
   <parent>
     <groupId>org.apache.jackrabbit</groupId>
     <artifactId>oak-parent</artifactId>
-    <version>1.93-SNAPSHOT</version>
+    <version>2.7-SNAPSHOT</version>
     <relativePath>../oak-parent/pom.xml</relativePath>
   </parent>
   <modelVersion>4.0.0</modelVersion>
 
   <artifactId>oak-segment-consensus</artifactId>
-  <name>Oak Segment Consensus (Blockchain AEM)</name>
-  <description>Distributed consensus layer for Oak Segment Store - Blockchain AEM with sharded Raft clusters</description>
+  <version>2.7.0-somarc-SNAPSHOT</version>
+  <name>Oak Segment Consensus</name>
+  <description>Somarc downstream validator runtime for Apache Jackrabbit Oak Segment Tar using Aeron Cluster</description>
   <packaging>bundle</packaging>
 
   <properties>
     <aeron.version>1.50.4</aeron.version>
     <jetty.version>12.0.34</jetty.version>
     <jakarta.servlet.version>6.0.0</jakarta.servlet.version>
+    <oak.version>${project.parent.version}</oak.version>
   </properties>
 
   <build>
@@ -44,13 +46,7 @@
             <instructions>
               <!-- Standalone runtime bundle: consensus depends on fork-exported Oak packages,
                    but it no longer attaches itself to oak-segment-tar as a fragment. -->
-              <Export-Package>
-                org.apache.jackrabbit.oak.segment.consensus,
-                org.apache.jackrabbit.oak.segment.consensus.protocol,
-                org.apache.jackrabbit.oak.segment.consensus.wallet,
-                org.apache.jackrabbit.oak.segment.consensus.network,
-                org.apache.jackrabbit.oak.segment.consensus.servlets
-              </Export-Package>
+              <Export-Package>!*</Export-Package>
               <Import-Package>
                 ch.qos.logback.classic;resolution:=optional,
                 ch.qos.logback.classic.joran;resolution:=optional,
@@ -61,6 +57,12 @@
                 org.bouncycastle.*,
                 *
               </Import-Package>
+              <Bundle-Vendor>Somarc</Bundle-Vendor>
+              <Bundle-DocURL>https://github.com/somarc/jackrabbit-oak</Bundle-DocURL>
+              <Bundle-SCM>url=https://github.com/somarc/jackrabbit-oak</Bundle-SCM>
+              <Oak-Upstream-Revision>${oak.upstream.revision}</Oak-Upstream-Revision>
+              <Oak-Source-Revision>${oak.source.revision}</Oak-Source-Revision>
+              <Oak-Source-Dirty>${oak.source.dirty}</Oak-Source-Dirty>
             </instructions>
           </configuration>
         </plugin>
@@ -107,7 +109,16 @@
                 <transformers>
                   <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                     <mainClass>org.apache.jackrabbit.oak.segment.consensus.server.GlobalStoreServer</mainClass>
+                    <manifestEntries>
+                      <Implementation-Title>Oak Segment Consensus</Implementation-Title>
+                      <Implementation-Vendor>Somarc</Implementation-Vendor>
+                      <Implementation-Version>${project.version}</Implementation-Version>
+                      <Oak-Upstream-Revision>${oak.upstream.revision}</Oak-Upstream-Revision>
+                      <Oak-Source-Revision>${oak.source.revision}</Oak-Source-Revision>
+                      <Oak-Source-Dirty>${oak.source.dirty}</Oak-Source-Dirty>
+                    </manifestEntries>
                   </transformer>
+                  <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                 </transformers>
                 <artifactSet>
                   <includes>
@@ -179,7 +190,7 @@
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-segment-tar</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         
         <!-- IPFS BlobStore for decentralized binary storage (ADR 015) -->
@@ -193,64 +204,64 @@
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-segment-azure</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
 
         <!-- AWS segment persistence: TAR segments in S3, journal/lock in DynamoDB (ADR 089) -->
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-segment-aws</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
 
         <!-- Azure BlobStore for enterprise binary persistence (ADR 082) -->
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-blob-cloud-azure</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
 
         <!-- S3 BlobStore for enterprise binary persistence (ADR 089) -->
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-blob-cloud</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         
         <!-- DataStoreBlobStore wrapper for converting DataStore to BlobStore -->
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-blob-plugins</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-store-spi</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         
         <!-- Mount API for Composite NodeStore (compile scope for standalone JAR) -->
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-api</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-store-composite</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-commons</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
 
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-segment-remote</artifactId>
-            <version>${project.version}</version>
+            <version>${oak.version}</version>
         </dependency>
         
         <!-- Oak Segment Standby (for Cold Standby bootstrap) -->
@@ -258,13 +269,12 @@
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
-            <version>4.1.94.Final</version>
+            <version>${netty.version}</version>
         </dependency>
         <!-- Commons Lang3 (required by Standby) - matches oak-parent version -->
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
-            <version>3.19.0</version>
         </dependency>
         
         <!-- Bouncy Castle for Ethereum secp256k1 signature verification -->
@@ -321,11 +331,10 @@
             <artifactId>jul-to-slf4j</artifactId>
         </dependency>
         
-        <!-- Dropwizard Metrics (required by Oak SegmentNodeStore) -->
+        <!-- Oak declares Metrics provided; the standalone runtime must package it. -->
         <dependency>
             <groupId>io.dropwizard.metrics</groupId>
             <artifactId>metrics-core</artifactId>
-            <version>4.2.25</version>
         </dependency>
 
         <!-- Prometheus metrics for observability -->
@@ -383,13 +392,6 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers</artifactId>
-            <version>1.19.3</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>1.19.3</version>
             <scope>test</scope>
         </dependency>
   </dependencies>

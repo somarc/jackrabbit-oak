@@ -19,6 +19,8 @@ package org.apache.jackrabbit.oak.segment.http.server;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.Connector;
+import org.eclipse.jetty.server.ServerConnector;
 import org.junit.Test;
 
 import java.net.URI;
@@ -28,9 +30,52 @@ import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class SegmentHttpServerTest {
+
+    @Test
+    public void testBindHostLeavesDefaultUnchanged() {
+        String previous = System.getProperty("http.bind.host");
+        try {
+            System.clearProperty("http.bind.host");
+            Server server = mock(Server.class);
+            SegmentHttpServer.configureBindHost(server);
+            verifyNoInteractions(server);
+        } finally {
+            restoreBindHost(previous);
+        }
+    }
+
+    @Test
+    public void testBindHostAppliesToAllNetworkConnectors() {
+        String previous = System.getProperty("http.bind.host");
+        try {
+            System.setProperty("http.bind.host", "127.0.0.1");
+            Server server = mock(Server.class);
+            ServerConnector http = mock(ServerConnector.class);
+            ServerConnector https = mock(ServerConnector.class);
+            Connector local = mock(Connector.class);
+            when(server.getConnectors()).thenReturn(new Connector[] {http, https, local});
+
+            SegmentHttpServer.configureBindHost(server);
+
+            verify(http).setHost("127.0.0.1");
+            verify(https).setHost("127.0.0.1");
+            verifyNoInteractions(local);
+        } finally {
+            restoreBindHost(previous);
+        }
+    }
+
+    private static void restoreBindHost(String previous) {
+        if (previous == null) {
+            System.clearProperty("http.bind.host");
+        } else {
+            System.setProperty("http.bind.host", previous);
+        }
+    }
 
     @Test
     public void testStartDelegatesToJettyServer() throws Exception {

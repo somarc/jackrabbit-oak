@@ -16,9 +16,9 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
-import org.apache.jackrabbit.core.data.DataIdentifier;
-import org.apache.jackrabbit.core.data.DataRecord;
-import org.apache.jackrabbit.core.data.DataStoreException;
+import org.apache.jackrabbit.oak.spi.blob.data.DataIdentifier;
+import org.apache.jackrabbit.oak.spi.blob.data.DataRecord;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;

@@ -20,6 +20,7 @@
 package org.apache.jackrabbit.oak.segment;
 
 import static org.apache.sling.testing.mock.osgi.MockOsgi.deactivate;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -28,10 +29,14 @@ import static org.mockito.Mockito.mock;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Dictionary;
 import java.util.Hashtable;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
+import org.apache.jackrabbit.oak.cache.api.CacheBuilder;
 import org.apache.jackrabbit.oak.spi.blob.data.DataRecord;
 import org.apache.jackrabbit.oak.plugins.blob.BlobGCMBean;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
@@ -40,6 +45,7 @@ import org.apache.jackrabbit.oak.plugins.blob.datastore.SharedDataStoreUtils;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.blob.GarbageCollectableBlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.apache.jackrabbit.oak.spi.toggle.FeatureToggle;
 import org.apache.jackrabbit.oak.stats.StatisticsProvider;
 import org.apache.sling.testing.mock.osgi.MockOsgi;
 import org.apache.sling.testing.mock.osgi.junit.OsgiContext;
@@ -60,6 +66,23 @@ public class SegmentNodeStoreServiceTest {
     @Before
     public void setUp(){
         context.registerService(StatisticsProvider.class, StatisticsProvider.NOOP);
+    }
+
+    @Test
+    public void testCacheFeatureTogglesRegisteredAndClosed() {
+        registerSegmentNodeStoreService(false);
+        assertServiceActivated();
+        assertCacheFeatureTogglesRegistered();
+
+        unregisterSegmentNodeStoreService();
+        assertEquals(0, context.getServices(FeatureToggle.class, null).length);
+    }
+
+    protected void assertCacheFeatureTogglesRegistered() {
+        Set<String> names = Arrays.stream(context.getServices(FeatureToggle.class, null))
+                .map(FeatureToggle::getName)
+                .collect(Collectors.toSet());
+        assertEquals(Set.of(SegmentCache.FT_OAK_12214, CacheBuilder.FT_OAK_12290), names);
     }
 
     /**

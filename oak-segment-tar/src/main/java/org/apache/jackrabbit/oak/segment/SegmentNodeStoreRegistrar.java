@@ -286,16 +286,7 @@ class SegmentNodeStoreRegistrar {
             return null;
         }
         registerCloseable(store);
-
-        // OAK-12214: bug-fix toggle (default on) so L2 eviction policy sees L1 memoised hits
-        registerCloseable(cfg.getWhiteboard().register(FeatureToggle.class,
-                new FeatureToggle(SegmentCache.FT_OAK_12214, SegmentCache.FT_OAK_12214_PROPAGATE_L1_HITS_TO_L2_ENABLED),
-                Collections.emptyMap()));
-
-        // OAK-12290: bug-fix toggle (default on) so Caffeine maintenance never runs on calling thread
-        registerCloseable(cfg.getWhiteboard().register(FeatureToggle.class,
-                new FeatureToggle(CacheBuilder.FT_OAK_12290, CacheBuilder.FT_OAK_12290_ASYNC_CACHE_MAINTENANCE_ENABLED),
-                Collections.emptyMap()));
+        registerCacheFeatureToggles();
 
         // Listen for Executor services on the whiteboard
 
@@ -544,6 +535,7 @@ class SegmentNodeStoreRegistrar {
             return null;
         }
         registerCloseable(store);
+        registerCacheFeatureToggles();
 
         // Expose stats about the segment cache (read-only stores have caches too)
         CacheStatsMBean segmentCacheStats = store.getSegmentCacheStats();
@@ -586,6 +578,18 @@ class SegmentNodeStoreRegistrar {
         cfg.getLogger().info("Secondary SegmentNodeStore initialized, role={}", cfg.getRole());
 
         return segmentNodeStore;
+    }
+
+    private void registerCacheFeatureToggles() {
+        // OAK-12214: bug-fix toggle (default on) so L2 eviction policy sees L1 memoised hits
+        registerCloseable(cfg.getWhiteboard().register(FeatureToggle.class,
+                new FeatureToggle(SegmentCache.FT_OAK_12214, SegmentCache.FT_OAK_12214_PROPAGATE_L1_HITS_TO_L2_ENABLED),
+                Collections.emptyMap()));
+
+        // OAK-12290: bug-fix toggle (default on) so Caffeine maintenance never runs on calling thread
+        registerCloseable(cfg.getWhiteboard().register(FeatureToggle.class,
+                new FeatureToggle(CacheBuilder.FT_OAK_12290, CacheBuilder.FT_OAK_12290_ASYNC_CACHE_MAINTENANCE_ENABLED),
+                Collections.emptyMap()));
     }
 
     private <T> Registration registerMBean(Class<T> clazz, T bean, String type, String name) {
