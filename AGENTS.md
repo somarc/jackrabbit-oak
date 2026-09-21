@@ -1,10 +1,15 @@
-# AGENTS.md - AI Agent Instructions for Apache Jackrabbit Oak
+# AGENTS.md - Somarc Oak Segment Consensus Development
 
 ## Project Overview
 
-Apache Jackrabbit Oak is a scalable, high-performance hierarchical content repository
-implementing the JCR (Java Content Repository) specification. It is a multi-module Maven
-project with ~47 modules written in Java 11.
+This is Somarc's permanent downstream Oak distribution, whose product is
+`oak-segment-consensus` and its required IPFS/Segment Tar integration. Apache
+Jackrabbit Oak supplies the inherited hierarchical content repository platform.
+The reactor targets Java 17; product CI validates JDK 17 and 21.
+
+Read `docs/FORK-MAIN-CONTRACT.md`, `docs/FORK-UPSTREAM-SYNC-RUNBOOK.md`, and
+`docs/PRODUCT-PROMOTION.md` before changing branch authority, shared Oak behavior,
+or release scope. Product maturity and production readiness are separate claims.
 
 ## General Guidelines
 
@@ -233,23 +238,39 @@ via the Apache RAT plugin. Use this exact header:
 
 ## Git Workflow
 
-- **Main branch:** `trunk` (not master/main). Never commit directly to trunk
-- **Issue tracker:** Apache Jira, project key `OAK` (e.g., OAK-12345)
-- **Branch naming:** `issue/OAK-<issue_number>` (e.g., `issue/OAK-12345`). If no Jira
-  issue is specified, ask the user what the branch name should be
-- **Commit message format:** Start with Jira issue key: `OAK-XXXXX: Description of change`
-- **PR target:** PRs should target `trunk`
-- All changes must be committed to the issue branch, never directly to trunk
+- **Product mainline:** `somarc/jackrabbit-oak:trunk`. Never commit directly to trunk.
+  Apache `upstream/trunk` is a separate baseline reference, not a replacement tree.
+  Preserve upstream and promotion merge commits; do not squash, rebase, or reset
+  established downstream history.
+- **Issue tracker:** Apache contributions use Jira, project key `OAK` (e.g.,
+  OAK-12345). Somarc-only downstream work does not require an Apache Jira issue
+- **Branch naming:** Apache issue work may use `issue/OAK-<issue_number>`.
+  Somarc work uses an agreed descriptive `feature/*`, `fix/*`, `sync/apache-*`,
+  or promotion branch. Ask the user for the name if none has been agreed.
+- **Commit message format:** When an OAK issue exists or the work is intended for
+  Apache, start with its Jira issue key: `OAK-XXXXX: Description of change`.
+  For Somarc-only downstream work without an OAK issue, use a concise descriptive
+  message (e.g., `Harden genesis v2 and three-node write safety`); do not invent a
+  Jira reference
+- **PR target:** `somarc/jackrabbit-oak:trunk`, never Apache by default.
+  Stop at a PR when the user requests review; do not infer permission to merge,
+  deploy, publish a package, or create a release.
+- All changes must be committed to the agreed topic or issue branch, never directly
+  to trunk
 - **Code review:** After pushing changes, remind the user to request a review from
   committers who have previously contributed to the affected modules
 
 ## CI
 
-- **GitHub Actions:** Runs on PRs and pushes to trunk. Builds with Java 11, runs full
-  test suite with `SEGMENT_TAR` and `DOCUMENT_NS` fixtures.
-- **Jenkins:** Parallel module testing pipeline.
-- **SonarCloud:** Code quality analysis runs after build.
-- **Commit checks:** PR commit messages and branch names are validated automatically.
+- **GitHub Actions:** Runs the consensus dependency reactor
+  (`mvn -pl oak-segment-consensus -am verify -DskipITs`) on JDK 17 and 21.
+  This is a unit/package gate, not live consensus or production proof.
+- **Publication:** Maven deployment is disabled by default. CI does not deploy,
+  publish containers/packages, create releases, or use Apache release credentials.
+- **Live validation:** Follow the consensus test charter. Confirm runtime roots
+  and obtain explicit approval for bounded live mutations, faults, and resets.
+- **Provenance:** Supply the exact source SHA and honest dirty state when creating
+  evidence-bearing artifacts; record the resulting JAR SHA-256.
 
 ## Common Pitfalls
 

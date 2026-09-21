@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oak Chain Visual Corpus</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f7f3ee;
+      --surface: rgba(255, 255, 255, 0.78);
+      --surface-strong: #fffaf4;
+      --border: rgba(34, 47, 62, 0.12);
+      --text: #1f2933;
+      --text-dim: #586777;
+      --ink: #28435a;
+      --terracotta: #b85a2b;
+      --sage: #6f8663;
+      --gold: #c89d3d;
+      --shadow: 0 24px 60px rgba(29, 35, 41, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(200, 157, 61, 0.14), transparent 28rem),
+        radial-gradient(circle at top right, rgba(111, 134, 99, 0.12), transparent 24rem),
+        linear-gradient(180deg, #fcf8f2 0%, var(--bg) 100%);
+    }
+    .shell {
+      width: min(1120px, calc(100vw - 2rem));
+      margin: 0 auto;
+      padding: 3rem 0 4rem;
+    }
+    .hero, .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      backdrop-filter: blur(8px);
+      box-shadow: var(--shadow);
+    }
+    .hero {
+      padding: 2.5rem;
+      display: grid;
+      gap: 1.25rem;
+    }
+    .eyebrow {
+      font: 500 0.82rem/1 "IBM Plex Mono", monospace;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--terracotta);
+    }
+    h1 {
+      margin: 0;
+      font: 400 clamp(2.5rem, 6vw, 4.8rem)/0.92 "Instrument Serif", serif;
+      color: var(--ink);
+      max-width: 12ch;
+    }
+    .lede {
+      max-width: 60ch;
+      color: var(--text-dim);
+      font-size: 1.05rem;
+      line-height: 1.65;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1.5rem;
+    }
+    .card {
+      padding: 1.5rem;
+      display: grid;
+      gap: 0.8rem;
+    }
+    .card h2 {
+      margin: 0;
+      font: 600 1.1rem/1.2 "IBM Plex Sans", sans-serif;
+      color: var(--ink);
+    }
+    .meta {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      color: var(--text-dim);
+      font-size: 0.95rem;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.35rem 0.7rem;
+      border-radius: 999px;
+      background: rgba(184, 90, 43, 0.1);
+      color: var(--terracotta);
+      font: 500 0.8rem/1 "IBM Plex Mono", monospace;
+    }
+    a.scope-link {
+      text-decoration: none;
+      color: inherit;
+    }
+    .cta {
+      display: inline-flex;
+      width: fit-content;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.8rem 1rem;
+      border-radius: 999px;
+      background: var(--ink);
+      color: #f9f6f1;
+      text-decoration: none;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="eyebrow">Oak Chain Visual Corpus</div>
+      <h1>Coverage work as architectural trajectory.</h1>
+      <p class="lede">
+        This corpus starts from a single question: what did the JaCoCo reduction work reveal about the shape of
+        oak-chain itself? The first capture turns a hard coverage sprint into a readable trajectory from monolith
+        intent toward explicit v1 seams.
+      </p>
+      <a class="cta" href="./oak-segment-consensus-coverage/index.html">Open Coverage Atlas</a>
+    </section>
+    <section class="grid">
+      <a class="scope-link" href="./oak-segment-consensus-coverage/index.html">
+        <article class="card">
+          <div class="pill">Scope</div>
+          <h2>Oak Segment Consensus Coverage Atlas</h2>
+          <div class="meta">
+            <span>1 capture</span>
+            <span>Latest line: 58.03%</span>
+            <span>Target line: 70%</span>
+          </div>
+          <p>
+            A first durable visual capture of the coverage staircase, the work waves, the module boundaries that are
+            v1-critical, and the next hotspot queue.
+          </p>
+        </article>
+      </a>
+    </section>
+  </main>
+</body>
+</html>

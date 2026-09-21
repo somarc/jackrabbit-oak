@@ -1,0 +1,197 @@
+{
+  "id": "2026-03-21-oak-segment-consensus-coverage",
+  "date": "2026-03-21",
+  "scope": "oak-segment-consensus-coverage",
+  "title": "Oak Segment Consensus Coverage Trajectory",
+  "headline": "A disciplined coverage push turned monolith intent into named, testable seams.",
+  "summary": "This capture records the v1-oriented coverage trajectory for oak-segment-consensus, showing how repeated JaCoCo-driven test seams forced the architecture into more explicit HTTP, handler, Aeron, and upcoming GC surfaces.",
+  "git_range": "476863d7bf..6b297322b3",
+  "metric_basis": "mixed-session-coverage-checkpoints",
+  "stats": {
+    "deliverable_modules": 2,
+    "deferred_poc_modules": 2,
+    "recent_commits_in_wave": 8,
+    "fresh_full_module_tests": 824,
+    "current_verified_line": 58.03,
+    "current_verified_branch": 45.56,
+    "v1_line_target": 70.0,
+    "v1_branch_target": 55.0
+  },
+  "checkpoints": [
+    {
+      "label": "User-reported baseline",
+      "instruction": 52.21,
+      "branch": 40.2,
+      "line": 51.2,
+      "basis": "user-reported-last-commit"
+    },
+    {
+      "label": "First pass",
+      "instruction": 53.97,
+      "branch": 41.92,
+      "line": 53.15,
+      "basis": "fresh-full-module-jacoco"
+    },
+    {
+      "label": "Auth and router",
+      "instruction": 56.9,
+      "branch": 43.0,
+      "line": 56.15,
+      "basis": "fresh-full-module-jacoco"
+    },
+    {
+      "label": "Consensus API",
+      "instruction": 57.13,
+      "branch": 43.23,
+      "line": 56.38,
+      "basis": "fresh-full-module-jacoco"
+    },
+    {
+      "label": "Write proposal",
+      "instruction": 57.48,
+      "branch": 43.65,
+      "line": 56.7,
+      "basis": "fresh-full-module-jacoco"
+    },
+    {
+      "label": "Proposal query",
+      "instruction": 57.69,
+      "branch": 43.91,
+      "line": 56.91,
+      "basis": "fresh-full-module-jacoco"
+    },
+    {
+      "label": "Fragmentation API",
+      "instruction": 58.11,
+      "branch": 44.55,
+      "line": 57.31,
+      "basis": "fresh-full-module-jacoco"
+    },
+    {
+      "label": "Router dispatch",
+      "instruction": 58.26,
+      "branch": 44.9,
+      "line": 57.48,
+      "basis": "fresh-full-module-jacoco"
+    },
+    {
+      "label": "Aeron and router full run",
+      "instruction": 58.84,
+      "branch": 45.56,
+      "line": 58.03,
+      "basis": "fresh-full-module-jacoco"
+    }
+  ],
+  "waves": [
+    {
+      "name": "Foundation",
+      "commits": [
+        "476863d7bf"
+      ],
+      "summary": "Normalized module coverage wiring and raised the first consensus and HTTP test seams."
+    },
+    {
+      "name": "Dead UI trim and auth/router stabilization",
+      "commits": [
+        "d42caaaa2e",
+        "b49da079b3"
+      ],
+      "summary": "Removed obsolete dashboard surface and raised coverage on validator auth plus router dispatch behavior."
+    },
+    {
+      "name": "Consensus and handler hardening",
+      "commits": [
+        "7d6b658d12",
+        "0159cc526d",
+        "f3d9699c8d",
+        "67a95535ad"
+      ],
+      "summary": "Drove the largest handler surfaces upward through deterministic API coverage rather than broad integration churn."
+    },
+    {
+      "name": "Router and Aeron seam extraction",
+      "commits": [
+        "6b297322b3"
+      ],
+      "summary": "Lifted RequestRouter substantially and then extended Aeron degraded-state, ops snapshot, leadership-history, replication, and mock-control branches in the working tree."
+    }
+  ],
+  "top_surfaces": [
+    {
+      "name": "RequestRouter",
+      "kind": "deliverable-http-surface",
+      "coverage": {
+        "instruction": 82.51,
+        "branch": 61.13,
+        "line": 81.74
+      }
+    },
+    {
+      "name": "AeronApiHandler",
+      "kind": "deliverable-aeron-surface",
+      "coverage": {
+        "instruction": 75.69,
+        "branch": 53.45,
+        "line": 71.77
+      }
+    },
+    {
+      "name": "WriteProposalHandler",
+      "kind": "deliverable-consensus-surface",
+      "coverage": {
+        "instruction": 78.31,
+        "branch": 63.88,
+        "line": 76.58
+      }
+    }
+  ],
+  "scope_boundary": {
+    "deliverable": [
+      "oak-segment-consensus",
+      "oak-segment-http"
+    ],
+    "deferred_poc": [
+      "oak-auth-web3",
+      "oak-segment-agentic"
+    ],
+    "maintain_only": [
+      "oak-blob-cloud-ipfs"
+    ]
+  },
+  "next_targets": [
+    "GCProposalManager invalid input, voting, payment, reject, and execution branches",
+    "GCAccountManager and EntityGCAccount debt and block logic",
+    "PeriodicGCJob scheduling and cycle behavior",
+    "Fresh full-module JaCoCo rerun after finalizing the current dirty test seam"
+  ],
+  "comparability_warnings": [
+    "The first checkpoint is user-reported rather than freshly rerun in this capture.",
+    "The latest 58.84 / 45.56 / 58.03 run was measured before removing one incidental /v1/chat router test; deliverable-focused targeted tests were rerun green afterward, but the exact full-module percentage after that trim was not yet remeasured."
+  ],
+  "sources": [
+    {
+      "type": "git",
+      "value": "476863d7bf..6b297322b3"
+    },
+    {
+      "type": "file",
+      "value": "/Users/mhess/aem/aem-code/OAK/jackrabbit-oak/oak-segment-consensus/target/site/jacoco-ut/jacoco.csv"
+    },
+    {
+      "type": "file",
+      "value": "/Users/mhess/aem/aem-code/OAK/jackrabbit-oak/meta/context-spine/notes/spine-notes-oak-chain-v1-coverage-baseline.md"
+    },
+    {
+      "type": "file",
+      "value": "/Users/mhess/aem/aem-code/OAK/jackrabbit-oak/meta/context-spine/runs/2026-03-21/session-consensus-coverage-push.md"
+    },
+    {
+      "type": "file",
+      "value": "/Users/mhess/aem/aem-code/OAK/jackrabbit-oak/oak-segment-consensus/src/test/java/org/apache/jackrabbit/oak/segment/http/server/RequestRouterTest.java"
+    },
+    {
+      "type": "file",
+      "value": "/Users/mhess/aem/aem-code/OAK/jackrabbit-oak/oak-segment-consensus/src/test/java/org/apache/jackrabbit/oak/segment/http/server/handlers/AeronApiHandlerTest.java"
+    }
+  ]
+}

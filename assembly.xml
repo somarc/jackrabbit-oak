@@ -27,6 +27,8 @@
         <exclude>**/target/**</exclude>
         <exclude>**/.*/**</exclude>
         <exclude>oak-shaded-guava/dependency-reduced-pom.xml</exclude>
+        <exclude>oak-segment-consensus/dependency-reduced-pom.xml</exclude>
+        <exclude>oak-segment-consensus/META-INF/MANIFEST.MF</exclude>
       </excludes>
     </fileSet>
   </fileSets>

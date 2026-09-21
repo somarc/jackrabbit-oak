@@ -54,6 +54,7 @@
     <module>oak-blob</module>
     <module>oak-blob-cloud</module>
     <module>oak-blob-cloud-azure</module>
+    <module>oak-blob-cloud-ipfs</module>
     <module>oak-core</module>
     <module>oak-jcr</module>
 
@@ -76,6 +77,7 @@
     <module>oak-segment-remote</module>
     <module>oak-segment-aws</module>
     <module>oak-segment-azure</module>
+    <module>oak-segment-consensus</module>
     <module>oak-benchmarks</module>
     <module>oak-search-elastic</module>
     <module>oak-benchmarks-lucene</module>

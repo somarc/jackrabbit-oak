@@ -1,0 +1,38 @@
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements. See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License. You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<header class="topbar">
+    <div class="topbar-left">
+        <a href="/" class="brand">
+            <div class="brand-mark">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+                </svg>
+            </div>
+            <div class="brand-copy">
+                <span class="brand-title">Blockchain AEM</span>
+            </div>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+            <a href="/" class="{{NAV_DASHBOARD_CLASS}}" {{NAV_DASHBOARD_CURRENT}}>Dashboard</a>
+            <a href="/explorer" class="{{NAV_EXPLORER_CLASS}}" {{NAV_EXPLORER_CURRENT}}>CRX/OC</a>
+            <a href="/api-browser" class="{{NAV_API_BROWSER_CLASS}}" {{NAV_API_BROWSER_CURRENT}}>API Browser</a>
+        </nav>
+    </div>
+    <div class="topbar-right">
+        <span class="mode-badge {{MODE_CLASS}}">{{MODE_LABEL}}</span>
+    </div>
+</header>

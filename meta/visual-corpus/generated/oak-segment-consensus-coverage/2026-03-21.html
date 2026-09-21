@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oak Segment Consensus Coverage Trajectory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f6f1ea;
+      --surface: rgba(255,255,255,0.78);
+      --surface-strong: #fffaf4;
+      --border: rgba(28, 41, 54, 0.12);
+      --text: #20303d;
+      --text-dim: #5f6b79;
+      --ink: #28435a;
+      --terracotta: #b85a2b;
+      --terracotta-dim: rgba(184, 90, 43, 0.12);
+      --sage: #6f8663;
+      --sage-dim: rgba(111, 134, 99, 0.14);
+      --gold: #c89d3d;
+      --gold-dim: rgba(200, 157, 61, 0.14);
+      --slate: #35546f;
+      --shadow: 0 24px 60px rgba(29, 35, 41, 0.12);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 0% 0%, rgba(200, 157, 61, 0.16), transparent 28rem),
+        radial-gradient(circle at 100% 0%, rgba(111, 134, 99, 0.14), transparent 22rem),
+        linear-gradient(180deg, #fbf8f4 0%, var(--bg) 100%);
+    }
+    .shell {
+      width: min(1280px, calc(100vw - 2rem));
+      margin: 0 auto;
+      padding: 2rem 0 4rem;
+    }
+    .hero, .panel, .metric, .wave, .insight {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+    .hero {
+      padding: 2.4rem;
+      display: grid;
+      grid-template-columns: 1.4fr 0.9fr;
+      gap: 1.4rem;
+    }
+    .eyebrow {
+      font: 500 0.82rem/1 "IBM Plex Mono", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--terracotta);
+    }
+    h1 {
+      margin: 0.4rem 0 0;
+      font: 400 clamp(2.6rem, 5vw, 5rem)/0.92 "Instrument Serif", serif;
+      color: var(--ink);
+      max-width: 12ch;
+    }
+    .lede, .copy {
+      line-height: 1.68;
+      color: var(--text-dim);
+    }
+    .hero-aside {
+      display: grid;
+      gap: 0.9rem;
+      align-content: start;
+    }
+    .kpi {
+      padding: 1rem 1.1rem;
+      border-radius: 22px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.68);
+    }
+    .kpi .label {
+      font: 500 0.74rem/1 "IBM Plex Mono", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--text-dim);
+    }
+    .kpi .value {
+      margin-top: 0.5rem;
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .kpi .delta {
+      margin-top: 0.4rem;
+      color: var(--sage);
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 1.2rem;
+      margin-top: 1.4rem;
+    }
+    .toc {
+      position: sticky;
+      top: 1rem;
+      align-self: start;
+      padding: 1rem;
+      background: rgba(255,255,255,0.66);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+    }
+    .toc h2 {
+      margin: 0 0 0.8rem;
+      font-size: 0.95rem;
+      color: var(--ink);
+    }
+    .toc a {
+      display: block;
+      padding: 0.55rem 0.65rem;
+      border-radius: 14px;
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 0.95rem;
+    }
+    .toc a:hover { background: var(--terracotta-dim); color: var(--ink); }
+    .content { display: grid; gap: 1.2rem; }
+    .section {
+      padding: 1.5rem;
+      display: grid;
+      gap: 1rem;
+    }
+    .section h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 1.35rem;
+    }
+    .subtle {
+      color: var(--text-dim);
+      font-size: 0.96rem;
+      line-height: 1.6;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.9rem;
+    }
+    .metric {
+      padding: 1rem;
+      display: grid;
+      gap: 0.4rem;
+    }
+    .metric .label {
+      font: 500 0.72rem/1 "IBM Plex Mono", monospace;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .metric .value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .metric .note {
+      color: var(--text-dim);
+      line-height: 1.45;
+    }
+    .chart-wrap {
+      padding: 1rem;
+      border-radius: 24px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.82), rgba(255,255,255,0.58)),
+        linear-gradient(90deg, rgba(184,90,43,0.06), transparent 40%, rgba(111,134,99,0.07));
+      border: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    svg {
+      display: block;
+      width: 100%;
+      min-width: 980px;
+      height: auto;
+    }
+    .legend {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      font: 500 0.82rem/1 "IBM Plex Mono", monospace;
+      color: var(--text-dim);
+    }
+    .legend span { display: inline-flex; align-items: center; gap: 0.45rem; }
+    .swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+    .timeline {
+      display: grid;
+      gap: 1rem;
+    }
+    .wave {
+      padding: 1.2rem;
+      display: grid;
+      gap: 0.55rem;
+    }
+    .wave .name {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .mono {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.84rem;
+      color: var(--text-dim);
+    }
+    .insights {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .insight {
+      padding: 1.2rem;
+      display: grid;
+      gap: 0.7rem;
+    }
+    .insight h3 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 1.02rem;
+    }
+    .boundary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+    .bucket {
+      padding: 1.15rem;
+      border-radius: 22px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.68);
+    }
+    .bucket h3 {
+      margin: 0 0 0.7rem;
+      color: var(--ink);
+      font-size: 1rem;
+    }
+    ul.flat {
+      margin: 0;
+      padding-left: 1.1rem;
+      color: var(--text-dim);
+      line-height: 1.7;
+    }
+    .warning {
+      padding: 1rem 1.1rem;
+      border-radius: 20px;
+      background: var(--gold-dim);
+      border: 1px solid rgba(200, 157, 61, 0.24);
+      color: #6b5413;
+      line-height: 1.6;
+    }
+    .footer {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.8rem;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 0.2rem;
+      color: var(--text-dim);
+      font-size: 0.92rem;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.8rem 1rem;
+      border-radius: 999px;
+      background: var(--ink);
+      color: #fffaf5;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; }
+      .layout { grid-template-columns: 1fr; }
+      .toc {
+        position: static;
+        display: flex;
+        gap: 0.4rem;
+        overflow-x: auto;
+      }
+      .toc h2 { display: none; }
+      .toc a {
+        white-space: nowrap;
+        background: rgba(255,255,255,0.7);
+        border: 1px solid var(--border);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Capture · 2026-03-21</div>
+        <h1>Coverage trajectory as architectural trajectory.</h1>
+        <p class="lede">
+          The rewarding part of this session is not just the percentage lift. It is that the JaCoCo reduction work
+          exposed the real shape of oak-chain. A broad, intent-heavy system was forced into smaller, named, and
+          testable surfaces: router seams, handler contracts, Aeron state views, and now GC policy and execution
+          paths. That is why this coverage push feels like design work.
+        </p>
+      </div>
+      <div class="hero-aside">
+        <div class="kpi">
+          <div class="label">Line coverage</div>
+          <div class="value">58.03%</div>
+          <div class="delta">+6.83 points from the user-reported 51.20% baseline</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Branch coverage</div>
+          <div class="value">45.56%</div>
+          <div class="delta">+5.36 points from the user-reported 40.20% baseline</div>
+        </div>
+        <div class="kpi">
+          <div class="label">V1 target</div>
+          <div class="value">70 / 55</div>
+          <div class="delta">Remaining gap: 11.97 line points and 9.44 branch points</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="layout">
+      <nav class="toc">
+        <h2>Sections</h2>
+        <a href="#staircase">Coverage Staircase</a>
+        <a href="#waves">Work Waves</a>
+        <a href="#meaning">Why It Matters</a>
+        <a href="#boundary">V1 Boundary</a>
+        <a href="#next">Next Targets</a>
+      </nav>
+
+      <div class="content">
+        <section class="panel section" id="staircase">
+          <h2>Coverage Staircase</h2>
+          <p class="subtle">
+            One session, nine checkpoints, three measurements. The important pattern is not the raw slope alone. It is
+            where the slope came from: targeted seams in stable deliverable surfaces rather than a generic test sprawl.
+          </p>
+          <div class="metrics">
+            <div class="metric">
+              <div class="label">Start</div>
+              <div class="value">51.20%</div>
+              <div class="note">User-reported line baseline before the current push.</div>
+            </div>
+            <div class="metric">
+              <div class="label">Current</div>
+              <div class="value">58.03%</div>
+              <div class="note">Fresh full-module run before the final incidental chat-test trim.</div>
+            </div>
+            <div class="metric">
+              <div class="label">Router</div>
+              <div class="value">81.74%</div>
+              <div class="note">RequestRouter stopped being the biggest drag once the routing seams became explicit.</div>
+            </div>
+            <div class="metric">
+              <div class="label">Aeron</div>
+              <div class="value">71.77%</div>
+              <div class="note">AeronApiHandler crossed into believable territory through degraded and cold-path testing.</div>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <div class="legend">
+              <span><i class="swatch" style="background:#b85a2b"></i>Instruction</span>
+              <span><i class="swatch" style="background:#6f8663"></i>Branch</span>
+              <span><i class="swatch" style="background:#35546f"></i>Line</span>
+            </div>
+            <svg viewBox="0 0 1120 420" role="img" aria-label="Coverage staircase">
+              <defs>
+                <linearGradient id="areaLine" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stop-color="rgba(53,84,111,0.18)"></stop>
+                  <stop offset="100%" stop-color="rgba(53,84,111,0)"></stop>
+                </linearGradient>
+              </defs>
+              <rect x="0" y="0" width="1120" height="420" rx="24" fill="transparent"></rect>
+              <g stroke="rgba(28,41,54,0.12)" stroke-width="1">
+                <line x1="92" y1="320" x2="1040" y2="320"></line>
+                <line x1="92" y1="260" x2="1040" y2="260"></line>
+                <line x1="92" y1="200" x2="1040" y2="200"></line>
+                <line x1="92" y1="140" x2="1040" y2="140"></line>
+                <line x1="92" y1="80" x2="1040" y2="80"></line>
+              </g>
+              <g fill="#6b7885" font-family="IBM Plex Mono, monospace" font-size="13">
+                <text x="48" y="324">40</text>
+                <text x="48" y="264">45</text>
+                <text x="48" y="204">50</text>
+                <text x="48" y="144">55</text>
+                <text x="48" y="84">60</text>
+              </g>
+              <path d="M 110 185 L 228 164 L 346 129 L 464 126 L 582 122 L 700 120 L 818 115 L 936 113 L 1030 106" fill="none" stroke="#b85a2b" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path d="M 110 318 L 228 297 L 346 284 L 464 281 L 582 276 L 700 273 L 818 265 L 936 261 L 1030 253" fill="none" stroke="#6f8663" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path d="M 110 197 L 228 174 L 346 138 L 464 135 L 582 131 L 700 128 L 818 123 L 936 119 L 1030 109" fill="none" stroke="#35546f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path>
+              <g fill="#20303d" font-family="IBM Plex Mono, monospace" font-size="12">
+                <text x="86" y="354">base</text>
+                <text x="203" y="354">first</text>
+                <text x="324" y="354">auth</text>
+                <text x="438" y="354">cons</text>
+                <text x="558" y="354">write</text>
+                <text x="674" y="354">query</text>
+                <text x="790" y="354">frag</text>
+                <text x="900" y="354">router</text>
+                <text x="995" y="354">aeron</text>
+              </g>
+              <g fill="#b85a2b">
+                <circle cx="110" cy="185" r="5"></circle>
+                <circle cx="228" cy="164" r="5"></circle>
+                <circle cx="346" cy="129" r="5"></circle>
+                <circle cx="464" cy="126" r="5"></circle>
+                <circle cx="582" cy="122" r="5"></circle>
+                <circle cx="700" cy="120" r="5"></circle>
+                <circle cx="818" cy="115" r="5"></circle>
+                <circle cx="936" cy="113" r="5"></circle>
+                <circle cx="1030" cy="106" r="6"></circle>
+              </g>
+              <g fill="#6f8663">
+                <circle cx="110" cy="318" r="5"></circle>
+                <circle cx="228" cy="297" r="5"></circle>
+                <circle cx="346" cy="284" r="5"></circle>
+                <circle cx="464" cy="281" r="5"></circle>
+                <circle cx="582" cy="276" r="5"></circle>
+                <circle cx="700" cy="273" r="5"></circle>
+                <circle cx="818" cy="265" r="5"></circle>
+                <circle cx="936" cy="261" r="5"></circle>
+                <circle cx="1030" cy="253" r="6"></circle>
+              </g>
+              <g fill="#35546f">
+                <circle cx="110" cy="197" r="5"></circle>
+                <circle cx="228" cy="174" r="5"></circle>
+                <circle cx="346" cy="138" r="5"></circle>
+                <circle cx="464" cy="135" r="5"></circle>
+                <circle cx="582" cy="131" r="5"></circle>
+                <circle cx="700" cy="128" r="5"></circle>
+                <circle cx="818" cy="123" r="5"></circle>
+                <circle cx="936" cy="119" r="5"></circle>
+                <circle cx="1030" cy="109" r="6"></circle>
+              </g>
+              <g fill="#20303d" font-family="IBM Plex Mono, monospace" font-size="12">
+                <text x="1010" y="90">58.84</text>
+                <text x="1010" y="235">45.56</text>
+                <text x="1010" y="125">58.03</text>
+              </g>
+            </svg>
+          </div>
+          <div class="warning">
+            Comparability warning: the first checkpoint is user-reported rather than freshly rerun in this capture. The
+            latest full-module run was taken before removing one incidental <span class="mono">/v1/chat</span> router
+            test; targeted deliverable-path tests were rerun green after that trim, but the exact post-trim full-module
+            percentage was not remeasured yet.
+          </div>
+        </section>
+
+        <section class="panel section" id="waves">
+          <h2>Work Waves</h2>
+          <p class="subtle">
+            The progress did not come from one giant rewrite. It came from a sequence of smaller waves, each one
+            cutting into a real surface and leaving behind a more explicit contract than before.
+          </p>
+          <div class="timeline">
+            <article class="wave">
+              <div class="name">Foundation</div>
+              <div class="mono">476863d7bf</div>
+              <div class="copy">Coverage wiring was normalized and the first consensus plus HTTP seams were raised.</div>
+            </article>
+            <article class="wave">
+              <div class="name">Dead UI trim and auth/router stabilization</div>
+              <div class="mono">d42caaaa2e · b49da079b3</div>
+              <div class="copy">Obsolete dashboard code was removed and validator auth plus router decisions became testable instead of implicit.</div>
+            </article>
+            <article class="wave">
+              <div class="name">Consensus and handler hardening</div>
+              <div class="mono">7d6b658d12 · 0159cc526d · f3d9699c8d · 67a95535ad</div>
+              <div class="copy">Consensus API, write proposal, proposal query, and fragmentation behavior were tightened through deterministic request and failure coverage.</div>
+            </article>
+            <article class="wave">
+              <div class="name">Router and Aeron seam extraction</div>
+              <div class="mono">6b297322b3 plus current working-tree tests</div>
+              <div class="copy">RequestRouter stopped being the dominant drag, and Aeron cold, degraded, follower, leadership, and ops-snapshot branches became explicit.</div>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel section" id="meaning">
+          <h2>Why This Mattered Architecturally</h2>
+          <div class="insights">
+            <article class="insight">
+              <h3>1. Coverage pressure broke intent into surfaces</h3>
+              <div class="copy">What started as broad “oak-chain” intent was forced into handler, router, Aeron, and upcoming GC surfaces with concrete contracts.</div>
+            </article>
+            <article class="insight">
+              <h3>2. The router stopped being magic</h3>
+              <div class="copy">Once routes were test-driven, RequestRouter became a readable map of the system rather than a vague dispatch blob.</div>
+            </article>
+            <article class="insight">
+              <h3>3. Aeron became inspectable</h3>
+              <div class="copy">Degraded cluster state, stale cache fallback, follower lookup, and leadership history turned from hidden runtime assumptions into testable behavior.</div>
+            </article>
+            <article class="insight">
+              <h3>4. The v1 boundary sharpened</h3>
+              <div class="copy">Deliverables stayed in scope while <span class="mono">oak-auth-web3</span> and <span class="mono">oak-segment-agentic</span> were deliberately pushed out of the gate.</div>
+            </article>
+            <article class="insight">
+              <h3>5. The next leverage point moved</h3>
+              <div class="copy">The main drag is no longer browser or dashboard churn. The leverage is now GC proposal, payment, debt, and execution policy code.</div>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel section" id="boundary">
+          <h2>V1 Boundary</h2>
+          <p class="subtle">
+            The merge gate is coverage plus hard load testing, not coverage alone. The scope boundary is part of the
+            discipline: only the real deliverables should consume the remaining energy.
+          </p>
+          <div class="boundary">
+            <div class="bucket">
+              <h3>Deliverable modules</h3>
+              <ul class="flat">
+                <li>oak-segment-consensus</li>
+                <li>oak-segment-http</li>
+              </ul>
+            </div>
+            <div class="bucket">
+              <h3>Deferred POC modules</h3>
+              <ul class="flat">
+                <li>oak-auth-web3</li>
+                <li>oak-segment-agentic</li>
+              </ul>
+            </div>
+            <div class="bucket">
+              <h3>Maintain-only for v1</h3>
+              <ul class="flat">
+                <li>oak-blob-cloud-ipfs</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel section" id="next">
+          <h2>Next Targets</h2>
+          <div class="metrics">
+            <div class="metric">
+              <div class="label">Primary hotspot</div>
+              <div class="value" style="font-size:1.25rem">GCProposalManager</div>
+              <div class="note">Invalid input, voting, reject quorum, payment, and execution branches are the next high-ROI seam.</div>
+            </div>
+            <div class="metric">
+              <div class="label">Follow-ons</div>
+              <div class="value" style="font-size:1.25rem">GC accounts</div>
+              <div class="note">Debt conversion, debt limit, blocking logic, and periodic GC behavior are cheap and meaningful next lifts.</div>
+            </div>
+            <div class="metric">
+              <div class="label">Quality gate</div>
+              <div class="value" style="font-size:1.25rem">Heavy load</div>
+              <div class="note">The branch becomes BE v1 only when the coverage floor and the load truth agree.</div>
+            </div>
+          </div>
+          <div class="footer">
+            <span>Sources: JaCoCo CSV, recent coverage commits, repo-local context spine notes, and current test seams.</span>
+            <a class="button" href="../index.html">Back to Scope Index</a>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

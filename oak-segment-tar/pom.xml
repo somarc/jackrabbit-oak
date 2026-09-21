@@ -40,6 +40,14 @@
                 <configuration>
                     <instructions>
                         <Export-Package>
+                            <!-- Fork-local contract: oak-segment-consensus now runs as a standalone
+                                 bundle instead of a Fragment-Host attached to oak-segment-tar, so
+                                 the fork must export the segment/standby packages it imports. -->
+                            org.apache.jackrabbit.oak.segment,
+                            org.apache.jackrabbit.oak.segment.file,
+                            org.apache.jackrabbit.oak.segment.file.tar,
+                            org.apache.jackrabbit.oak.segment.standby.client,
+                            org.apache.jackrabbit.oak.segment.standby.server,
                         	org.apache.jackrabbit.oak.segment.spi,
                             org.apache.jackrabbit.oak.segment.spi.monitor,
                             org.apache.jackrabbit.oak.segment.spi.persistence,
@@ -82,6 +90,7 @@
                             org.eclipse.jetty.alpn;version="[1,2)";resolution:=optional,
                             org.eclipse.jetty.npn;version="[1,2)";resolution:=optional,
                             org.jboss.marshalling;resolution:=optional,
+                            org.osgi.service.event;resolution:=optional,
                             sun.misc;resolution:=optional,
                             sun.nio.ch;resolution:=optional,
                             sun.security.ssl;resolution:=optional,
@@ -392,7 +401,7 @@
         <dependency>
             <groupId>org.osgi</groupId>
             <artifactId>org.osgi.service.event</artifactId>
-            <scope>test</scope>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.osgi</groupId>

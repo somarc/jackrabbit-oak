@@ -19,14 +19,22 @@
 package org.apache.jackrabbit.oak.segment;
 
 import static org.apache.sling.testing.mock.osgi.MockOsgi.deactivate;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
+import java.io.File;
 import java.util.Dictionary;
 import java.util.Hashtable;
 
+import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
+import org.apache.jackrabbit.oak.segment.file.ReadOnlyFileStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStoreProvider;
+import org.apache.jackrabbit.oak.spi.toggle.FeatureToggle;
 import org.apache.sling.testing.mock.osgi.MockOsgi;
+import org.junit.Test;
 
 public class SegmentNodeStoreFactoryTest extends SegmentNodeStoreServiceTest {
 
@@ -34,9 +42,13 @@ public class SegmentNodeStoreFactoryTest extends SegmentNodeStoreServiceTest {
 
     @Override
     protected void registerSegmentNodeStoreService(boolean customBlobStore) {
+        registerSegmentNodeStoreService(customBlobStore, "some-role");
+    }
+
+    private void registerSegmentNodeStoreService(boolean customBlobStore, String role) {
         Hashtable<String, Object> properties = new Hashtable<>();
 
-        properties.put("role", "some-role");
+        properties.put("role", role);
         properties.put("customBlobStore", customBlobStore);
         properties.put("repository.home", folder.getRoot().getAbsolutePath());
 
@@ -52,6 +64,25 @@ public class SegmentNodeStoreFactoryTest extends SegmentNodeStoreServiceTest {
         MockOsgi.injectServices(segmentNodeStoreFactory, context.bundleContext(), properties);
         MockOsgi.activate(segmentNodeStoreFactory, context.bundleContext(), (Dictionary<String, Object>) properties);
         context.bundleContext().registerService(SegmentNodeStoreFactory.class, segmentNodeStoreFactory, properties);
+    }
+
+    @Test
+    public void testReadOnlyCompositeMountRegistersCacheFeatureToggles() throws Exception {
+        String role = "composite-mount-oak-chain";
+        File directory = new File(folder.getRoot(), "segmentstore-" + role);
+        try (FileStore store = FileStoreBuilder.fileStoreBuilder(directory).build()) {
+            store.flush();
+        }
+
+        registerSegmentNodeStoreService(false, role);
+        assertServiceActivated();
+        SegmentStoreProvider provider = context.getService(SegmentStoreProvider.class);
+        assertNotNull(provider);
+        assertTrue(provider.getSegmentStore() instanceof ReadOnlyFileStore);
+        assertCacheFeatureTogglesRegistered();
+
+        unregisterSegmentNodeStoreService();
+        assertEquals(0, context.getServices(FeatureToggle.class, null).length);
     }
 
     @Override

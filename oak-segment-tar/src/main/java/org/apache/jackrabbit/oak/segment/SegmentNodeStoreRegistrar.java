@@ -45,6 +45,7 @@ import org.apache.jackrabbit.oak.segment.compaction.SegmentRevisionGC;
 import org.apache.jackrabbit.oak.segment.compaction.SegmentRevisionGCMBean;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
+import org.apache.jackrabbit.oak.segment.file.ReadOnlyFileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreGCMonitor;
 import org.apache.jackrabbit.oak.segment.file.FileStoreStatsMBean;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
@@ -269,6 +270,14 @@ class SegmentNodeStoreRegistrar {
             builder.withEagerSegmentCaching(true);
         }
 
+        // Determine if this is a read-only composite mount
+        boolean isReadOnlyCompositeMount = cfg.getRole() != null && cfg.getRole().startsWith("composite-mount-");
+        
+        if (isReadOnlyCompositeMount) {
+            // Create a read-only store for composite mounts
+            return registerReadOnlySegmentStore(builder);
+        }
+        
         FileStore store;
         try {
             store = builder.build();
@@ -277,16 +286,7 @@ class SegmentNodeStoreRegistrar {
             return null;
         }
         registerCloseable(store);
-
-        // OAK-12214: bug-fix toggle (default on) so L2 eviction policy sees L1 memoised hits
-        registerCloseable(cfg.getWhiteboard().register(FeatureToggle.class,
-                new FeatureToggle(SegmentCache.FT_OAK_12214, SegmentCache.FT_OAK_12214_PROPAGATE_L1_HITS_TO_L2_ENABLED),
-                Collections.emptyMap()));
-
-        // OAK-12290: bug-fix toggle (default on) so Caffeine maintenance never runs on calling thread
-        registerCloseable(cfg.getWhiteboard().register(FeatureToggle.class,
-                new FeatureToggle(CacheBuilder.FT_OAK_12290, CacheBuilder.FT_OAK_12290_ASYNC_CACHE_MAINTENANCE_ENABLED),
-                Collections.emptyMap()));
+        registerCacheFeatureToggles();
 
         // Listen for Executor services on the whiteboard
 
@@ -510,6 +510,86 @@ class SegmentNodeStoreRegistrar {
         }
 
         return segmentNodeStore;
+    }
+
+    private SegmentNodeStore registerReadOnlySegmentStore(FileStoreBuilder builder) throws IOException {
+        cfg.getLogger().info("Creating ReadOnlyFileStore for composite mount: {}", cfg.getRole());
+        
+        // ReadOnlyFileStore.buildReadOnly() validates that the directory EXISTS
+        // Unlike FileStore.build() which calls directory.mkdirs(), buildReadOnly() does NOT create the directory
+        // We must create the full segment store directory before calling buildReadOnly()
+        File segmentDir = cfg.getSegmentDirectory();
+        if (!segmentDir.exists()) {
+            cfg.getLogger().info("Creating segment store directory for HTTP-backed read-only mount: {}", segmentDir);
+            if (!segmentDir.mkdirs()) {
+                throw new IOException("Failed to create segment store directory: " + segmentDir);
+            }
+            cfg.getLogger().info("Segment store directory created: {}", segmentDir.getAbsolutePath());
+        }
+        
+        ReadOnlyFileStore store;
+        try {
+            store = builder.buildReadOnly();
+        } catch (InvalidFileStoreVersionException e) {
+            cfg.getLogger().error("The storage format is not compatible with this version of Oak Segment Tar", e);
+            return null;
+        }
+        registerCloseable(store);
+        registerCacheFeatureToggles();
+
+        // Expose stats about the segment cache (read-only stores have caches too)
+        CacheStatsMBean segmentCacheStats = store.getSegmentCacheStats();
+        registerCloseable(registerMBean(
+            CacheStatsMBean.class,
+            segmentCacheStats,
+            CacheStats.TYPE,
+            segmentCacheStats.getName()
+        ));
+
+        CacheStatsMBean stringCacheStats = store.getStringCacheStats();
+        registerCloseable(registerMBean(
+            CacheStatsMBean.class,
+            stringCacheStats,
+            CacheStats.TYPE,
+            stringCacheStats.getName()
+        ));
+
+        CacheStatsMBean templateCacheStats = store.getTemplateCacheStats();
+        registerCloseable(registerMBean(
+            CacheStatsMBean.class,
+            templateCacheStats,
+            CacheStats.TYPE,
+            templateCacheStats.getName()
+        ));
+
+        // Build the SegmentNodeStore
+        SegmentNodeStore.SegmentNodeStoreBuilder segmentNodeStoreBuilder = 
+            SegmentNodeStoreBuilders.builder(store).withStatisticsProvider(cfg.getStatisticsProvider());
+        segmentNodeStoreBuilder.dispatchChanges(cfg.dispatchChanges());
+
+        SegmentNodeStore segmentNodeStore = segmentNodeStoreBuilder.build();
+
+        // Register a factory service to expose the FileStore
+        registerCloseable(register(
+            SegmentStoreProvider.class,
+            new DefaultSegmentStoreProvider(store)
+        ));
+
+        cfg.getLogger().info("Secondary SegmentNodeStore initialized, role={}", cfg.getRole());
+
+        return segmentNodeStore;
+    }
+
+    private void registerCacheFeatureToggles() {
+        // OAK-12214: bug-fix toggle (default on) so L2 eviction policy sees L1 memoised hits
+        registerCloseable(cfg.getWhiteboard().register(FeatureToggle.class,
+                new FeatureToggle(SegmentCache.FT_OAK_12214, SegmentCache.FT_OAK_12214_PROPAGATE_L1_HITS_TO_L2_ENABLED),
+                Collections.emptyMap()));
+
+        // OAK-12290: bug-fix toggle (default on) so Caffeine maintenance never runs on calling thread
+        registerCloseable(cfg.getWhiteboard().register(FeatureToggle.class,
+                new FeatureToggle(CacheBuilder.FT_OAK_12290, CacheBuilder.FT_OAK_12290_ASYNC_CACHE_MAINTENANCE_ENABLED),
+                Collections.emptyMap()));
     }
 
     private <T> Registration registerMBean(Class<T> clazz, T bean, String type, String name) {

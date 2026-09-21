@@ -1,0 +1,398 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+   Licensed to the Apache Software Foundation (ASF) under one or more
+   contributor license agreements.  See the NOTICE file distributed with
+   this work for additional information regarding copyright ownership.
+   The ASF licenses this file to You under the Apache License, Version 2.0
+   (the "License"); you may not use this file except in compliance with
+   the License.  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+  -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <parent>
+    <groupId>org.apache.jackrabbit</groupId>
+    <artifactId>oak-parent</artifactId>
+    <version>2.7-SNAPSHOT</version>
+    <relativePath>../oak-parent/pom.xml</relativePath>
+  </parent>
+  <modelVersion>4.0.0</modelVersion>
+
+  <artifactId>oak-segment-consensus</artifactId>
+  <version>2.7.0-somarc-SNAPSHOT</version>
+  <name>Oak Segment Consensus</name>
+  <description>Somarc downstream validator runtime for Apache Jackrabbit Oak Segment Tar using Aeron Cluster</description>
+  <packaging>bundle</packaging>
+
+  <properties>
+    <aeron.version>1.50.4</aeron.version>
+    <jetty.version>12.0.34</jetty.version>
+    <jakarta.servlet.version>6.0.0</jakarta.servlet.version>
+    <oak.version>${project.parent.version}</oak.version>
+  </properties>
+
+  <build>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.felix</groupId>
+          <artifactId>maven-bundle-plugin</artifactId>
+          <configuration>
+            <instructions>
+              <!-- Standalone runtime bundle: consensus depends on fork-exported Oak packages,
+                   but it no longer attaches itself to oak-segment-tar as a fragment. -->
+              <Export-Package>!*</Export-Package>
+              <Import-Package>
+                ch.qos.logback.classic;resolution:=optional,
+                ch.qos.logback.classic.joran;resolution:=optional,
+                ch.qos.logback.classic.util;resolution:=optional,
+                ch.qos.logback.core.joran.spi;resolution:=optional,
+                ch.qos.logback.core.util;resolution:=optional,
+                org.slf4j.bridge;resolution:=optional,
+                org.bouncycastle.*,
+                *
+              </Import-Package>
+              <Bundle-Vendor>Somarc</Bundle-Vendor>
+              <Bundle-DocURL>https://github.com/somarc/jackrabbit-oak</Bundle-DocURL>
+              <Bundle-SCM>url=https://github.com/somarc/jackrabbit-oak</Bundle-SCM>
+              <Oak-Upstream-Revision>${oak.upstream.revision}</Oak-Upstream-Revision>
+              <Oak-Source-Revision>${oak.source.revision}</Oak-Source-Revision>
+              <Oak-Source-Dirty>${oak.source.dirty}</Oak-Source-Dirty>
+            </instructions>
+          </configuration>
+        </plugin>
+         <plugin>
+           <groupId>org.apache.rat</groupId>
+           <artifactId>apache-rat-plugin</artifactId>
+          <configuration>
+            <excludes>
+              <exclude>Dockerfile.global-store</exclude>
+              <!-- Documentation files don't need license headers -->
+              <exclude>**/*.md</exclude>
+              <!-- HTML templates with complex content -->
+              <exclude>**/validator-dashboard-template.html</exclude>
+            </excludes>
+           </configuration>
+        </plugin>
+        <!-- Skip remote-resources plugin (causes issues with JitPack dependencies through corporate Artifactory) -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-remote-resources-plugin</artifactId>
+          <executions>
+            <execution>
+              <id>process-resource-bundles</id>
+              <phase>none</phase>
+            </execution>
+          </executions>
+        </plugin>
+        <!-- Build executable uber JAR for GlobalStoreServer -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-shade-plugin</artifactId>
+          <version>3.4.1</version>
+          <executions>
+            <execution>
+              <phase>package</phase>
+              <goals>
+                <goal>shade</goal>
+              </goals>
+              <configuration>
+                <createDependencyReducedPom>false</createDependencyReducedPom>
+                <shadedArtifactAttached>true</shadedArtifactAttached>
+                <shadedClassifierName>standalone</shadedClassifierName>
+                <finalName>oak-segment-consensus</finalName>
+                <transformers>
+                  <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                    <mainClass>org.apache.jackrabbit.oak.segment.consensus.server.GlobalStoreServer</mainClass>
+                    <manifestEntries>
+                      <Implementation-Title>Oak Segment Consensus</Implementation-Title>
+                      <Implementation-Vendor>Somarc</Implementation-Vendor>
+                      <Implementation-Version>${project.version}</Implementation-Version>
+                      <Oak-Upstream-Revision>${oak.upstream.revision}</Oak-Upstream-Revision>
+                      <Oak-Source-Revision>${oak.source.revision}</Oak-Source-Revision>
+                      <Oak-Source-Dirty>${oak.source.dirty}</Oak-Source-Dirty>
+                    </manifestEntries>
+                  </transformer>
+                  <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                </transformers>
+                <artifactSet>
+                  <includes>
+                    <include>*:*</include>
+                  </includes>
+                </artifactSet>
+                <filters>
+                  <filter>
+                    <artifact>*:*</artifact>
+                    <excludes>
+                      <exclude>META-INF/*.SF</exclude>
+                      <exclude>META-INF/*.DSA</exclude>
+                      <exclude>META-INF/*.RSA</exclude>
+                    </excludes>
+                  </filter>
+                </filters>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <configuration>
+            <argLine>${test.opts} -javaagent:${org.mockito:mockito-core:jar} --add-opens java.base/jdk.internal.misc=ALL-UNNAMED</argLine>
+          </configuration>
+        </plugin>
+      </plugins>
+    </build>
+
+   <!-- ====================================================================== -->
+    <!-- D E P E N D E N C I E S -->
+    <!-- ====================================================================== -->
+    <dependencies>
+        <!-- Optional OSGi dependencies, used only when running within OSGi -->
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>osgi.core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.service.component</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.annotation.versioning</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.service.component.annotations</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.service.metatype.annotations</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Nullability annotations -->
+        <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
+        </dependency>
+
+        <!-- Dependencies to other Oak components (compile scope for standalone JAR) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-segment-tar</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+        
+        <!-- IPFS BlobStore for decentralized binary storage (ADR 015) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-blob-cloud-ipfs</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Azure segment persistence: TAR segments in Azure Blob Storage (ADR 082, ADR 089) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-segment-azure</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+
+        <!-- AWS segment persistence: TAR segments in S3, journal/lock in DynamoDB (ADR 089) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-segment-aws</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+
+        <!-- Azure BlobStore for enterprise binary persistence (ADR 082) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-blob-cloud-azure</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+
+        <!-- S3 BlobStore for enterprise binary persistence (ADR 089) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-blob-cloud</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+        
+        <!-- DataStoreBlobStore wrapper for converting DataStore to BlobStore -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-blob-plugins</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-store-spi</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+        
+        <!-- Mount API for Composite NodeStore (compile scope for standalone JAR) -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-api</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-store-composite</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-commons</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-segment-remote</artifactId>
+            <version>${oak.version}</version>
+        </dependency>
+        
+        <!-- Oak Segment Standby (for Cold Standby bootstrap) -->
+        <!-- Note: This is included in oak-segment-tar, but we need Netty explicitly -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+        <!-- Commons Lang3 (required by Standby) - matches oak-parent version -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+        </dependency>
+        
+        <!-- Bouncy Castle for Ethereum secp256k1 signature verification -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.78.1</version>
+        </dependency>
+        
+        <!-- Web3j for Ethereum blockchain interaction -->
+        <dependency>
+            <groupId>org.web3j</groupId>
+            <artifactId>core</artifactId>
+            <version>4.12.3</version>
+        </dependency>
+        
+        <!-- Servlet API (compile scope for standalone JAR - needed by Jetty) -->
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <version>${jakarta.servlet.version}</version>
+            <scope>compile</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-server</artifactId>
+            <version>${jetty.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.eclipse.jetty.ee10</groupId>
+            <artifactId>jetty-ee10-servlet</artifactId>
+            <version>${jetty.version}</version>
+        </dependency>
+
+        <!-- Logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <!-- Standalone validator logging -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>jul-to-slf4j</artifactId>
+        </dependency>
+        
+        <!-- Oak declares Metrics provided; the standalone runtime must package it. -->
+        <dependency>
+            <groupId>io.dropwizard.metrics</groupId>
+            <artifactId>metrics-core</artifactId>
+        </dependency>
+
+        <!-- Prometheus metrics for observability -->
+        <dependency>
+            <groupId>io.prometheus</groupId>
+            <artifactId>simpleclient</artifactId>
+            <version>0.16.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.prometheus</groupId>
+            <artifactId>simpleclient_servlet</artifactId>
+            <version>0.16.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.prometheus</groupId>
+            <artifactId>simpleclient_hotspot</artifactId>
+            <version>0.16.0</version>
+        </dependency>
+        <!-- Bridge Dropwizard metrics to Prometheus -->
+        <dependency>
+            <groupId>io.prometheus</groupId>
+            <artifactId>simpleclient_dropwizard</artifactId>
+            <version>0.16.0</version>
+        </dependency>
+
+        <!-- Aeron Cluster for Raft-based consensus -->
+        <dependency>
+            <groupId>io.aeron</groupId>
+            <artifactId>aeron-cluster</artifactId>
+            <version>${aeron.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.aeron</groupId>
+            <artifactId>aeron-client</artifactId>
+            <version>${aeron.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.aeron</groupId>
+            <artifactId>aeron-driver</artifactId>
+            <version>${aeron.version}</version>
+        </dependency>
+
+        <!-- Test dependencies -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Testcontainers for integration tests -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+  </dependencies>
+</project>

@@ -41,7 +41,7 @@
     <minimalMavenBuildVersion>3.6.1</minimalMavenBuildVersion><!-- due to https://issues.apache.org/jira/browse/MNG-6059 -->
     <test.opts.memory>-Xmx512m</test.opts.memory>
     <test.opts>${test.opts.coverage} ${test.opts.memory} -XX:+HeapDumpOnOutOfMemoryError -Dupdate.limit=100 -Djava.awt.headless=true</test.opts>
-    <skip.deployment>false</skip.deployment>
+    <skip.deployment>true</skip.deployment>
     <skip.coverage>true</skip.coverage>
     <minimum.line.coverage>0.0</minimum.line.coverage>
     <minimum.branch.coverage>0.0</minimum.branch.coverage>
@@ -98,6 +98,9 @@
     <sonar.coverage.jacoco.xmlReportPaths>${maven.multiModuleProjectDirectory}/target/site/jacoco-aggregate/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
     <sonar.organization>apache</sonar.organization>
     <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+    <oak.upstream.revision>9595d3fde56a1e8e6f75afafc487bde947659bdd</oak.upstream.revision>
+    <oak.source.revision>unrecorded</oak.source.revision>
+    <oak.source.dirty>unknown</oak.source.dirty>
   </properties>
 
   <issueManagement>
@@ -261,6 +264,8 @@
           <configuration>
             <consoleOutput>true</consoleOutput>
             <excludes>
+              <!-- Documentation files don't need license headers -->
+              <exclude>**/*.md</exclude>
               <exclude>**/AGENTS.md</exclude>
             </excludes>
           </configuration>
@@ -400,6 +405,11 @@
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
+        <configuration>
+          <skip>${skip.coverage}</skip>
+          <dataFile>${project.build.directory}/coverage-reports/jacoco-ut.exec</dataFile>
+          <outputDirectory>${project.reporting.outputDirectory}/jacoco-ut</outputDirectory>
+        </configuration>
         <executions>
           <execution>
             <id>pre-unit-test</id>
