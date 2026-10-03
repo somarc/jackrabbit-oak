@@ -1,3 +1,23 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.jackrabbit.oak.console.commands
+
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook
 import org.apache.jackrabbit.oak.commons.PathUtils
@@ -135,13 +155,12 @@ class RemoveNodesCommand extends CommandSupport {
             Matcher matcher = NODE_PATTERN.matcher(line)
             if (matcher.matches()) {
                 String blobId = matcher.group(1)
-                String path = matcher.group(2)
+                String path = normalizePath(matcher.group(2))
                 deleteType = "consistency-check"
                 log("[INFO] [${deleteType}] Processing Blob ID: '${blobId}' with JCR Path: '${path}'")
                 processNodeRemovalAdvanced(nodeStore, path, deleteType)
             } else if (line.startsWith(NODE_UNREADABLE_PREFIX)) {
-                String[] parts = line.split(" due to ")
-                String path = parts[0].replace(NODE_UNREADABLE_PREFIX, "").trim()
+                String path = parseLogPath(line, NODE_UNREADABLE_PREFIX)
                 deleteType = "count-nodes:node-unreadable"
                 log("[INFO] [${deleteType}] Attempting removal at: ${path}")
                 processNodeRemovalSimple(nodeStore, path, deleteType)
@@ -150,13 +169,15 @@ class RemoveNodesCommand extends CommandSupport {
                 String segmentId = extractSegmentId(line)
                 segmentIdCounts[segmentId] = (segmentIdCounts[segmentId] ?: 0) + 1
                 deleteType = "count-nodes:segment-not-found"
-                log("[WARN] [${deleteType}] ${line}")
+                String hint = line.startsWith(SEGMENT_NOT_FOUND_PREFIX) ?
+                        " -> not removed; use :remove-node ${parseLogPath(line, SEGMENT_NOT_FOUND_PREFIX)}" : ""
+                log("[WARN] [${deleteType}] ${line}${hint}")
                 incrementDeleteType(deleteType)
             } else if (line.startsWith("Warning: Missing blob at") ||
                       (line.contains("Record") && line.contains("does not exist"))) {
                 Matcher blobMatcher = MISSING_BLOB_PATTERN.matcher(line)
                 if (blobMatcher.find()) {
-                    String path = blobMatcher.group(1).trim()
+                    String path = normalizePath(blobMatcher.group(1).trim())
                     deleteType = "count-nodes:blob-missing"
                     log("[INFO] [${deleteType}] Attempting advanced removal at: ${path}")
                     processNodeRemovalAdvanced(nodeStore, path, deleteType)
@@ -257,6 +278,26 @@ class RemoveNodesCommand extends CommandSupport {
         if (path.startsWith("/tmp/") || path == "/tmp" || path.startsWith("/var/")) return "tmpVar"
         if (path.startsWith("/etc/packages/")) return "etcPackage"
         return "fallback"
+    }
+
+    /**
+     * Strips the trailing slash that count-nodes appends to every path ("/a/b/" -> "/a/b").
+     */
+    static String normalizePath(String path) {
+        String p = path.replaceAll(/\/+$/, "")
+        return p.isEmpty() ? "/" : p
+    }
+
+    /**
+     * Extracts the path from a count-nodes warning line ("<prefix> <path>/: <message>")
+     * or the legacy format ("<prefix> <path> due to <message>").
+     */
+    static String parseLogPath(String line, String prefix) {
+        String rest = line.substring(prefix.length()).trim()
+        int end = rest.indexOf("/: ")
+        if (end >= 0) return normalizePath(rest.substring(0, end + 1))
+        end = rest.indexOf(" due to ")
+        return normalizePath(end >= 0 ? rest.substring(0, end) : rest)
     }
 
     /**
