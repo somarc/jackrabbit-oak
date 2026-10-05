@@ -165,13 +165,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
 
     @Override
     @Nullable
-    public SettlementDetails getSettlementDetailsByProposalId(@NotNull String proposalId) {
-        PaymentProof proof = verifyPayment(proposalId);
-        return proof != null ? SettlementDetails.fromProof(getNetworkName(), proof) : null;
-    }
-
-    @Override
-    @Nullable
     public SettlementDetails getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
         PaymentProof cached = findCachedProofByTransactionHash(transactionHash);
         if (cached != null) {
@@ -199,21 +192,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
             return cached;
         }
         
-        // Create mock payment proof
-        // Use proposalId to generate a deterministic mock tx hash
-        String proposalIdHex = proposalId.replace("-", "");
-        String mockTxHash = "0x" + proposalIdHex;
-        // Pad to 66 chars (0x + 64 hex chars)
-        if (mockTxHash.length() < 66) {
-            int paddingNeeded = 66 - mockTxHash.length();
-            StringBuilder padding = new StringBuilder();
-            for (int i = 0; i < paddingNeeded; i++) {
-                padding.append("0");
-            }
-            mockTxHash = mockTxHash + padding.toString();
-        } else if (mockTxHash.length() > 66) {
-            mockTxHash = mockTxHash.substring(0, 66);
-        }
+        // Deterministic mock tx hash: the UUID's 32 hex digits right-padded to 0x + 64 hex chars
+        String mockTxHash = "0x" + proposalId.replace("-", "") + "0".repeat(32);
         
         // Increment block number for each new proposal (simulates block progression)
         currentBlock++;
