@@ -184,16 +184,7 @@ public class ExplorerApiV1Handler {
             }
 
             Map<String, Object> payload = explorerEnvelope();
-            payload.put("proposalId", status.getProposalId());
-            payload.put("state", status.getState().name());
-            payload.put("ethereumTxHash", status.getEthereumTxHash());
-            payload.put("timeoutTimestamp", status.getTimeoutTimestamp());
-            payload.put("confirmedBlock", status.getConfirmedBlock());
-            payload.put("rejectionReason", status.getRejectionReason());
-            payload.put("durabilityState", status.getDurabilityState() != null ? status.getDurabilityState().name() : "UNKNOWN");
-            payload.put("durabilityTimestamp", status.getDurabilityTimestamp());
-            payload.put("durabilityError", status.getDurabilityError());
-            payload.put("durableHead", status.getDurableHead());
+            ProposalQueryHandler.putStatusFields(payload, status, status.getConfirmedBlock());
 
             JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
