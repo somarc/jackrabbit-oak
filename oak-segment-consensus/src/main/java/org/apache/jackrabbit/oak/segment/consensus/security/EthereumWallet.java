@@ -43,7 +43,6 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Security;
-import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Arrays;
 import java.util.Properties;
@@ -427,45 +426,6 @@ public class EthereumWallet {
         keystoreFile.setReadable(true, true);
         keystoreFile.setWritable(false, false);
         keystoreFile.setWritable(true, true);
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Signing
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    /**
-     * Sign a message with the private key (Ethereum ECDSA).
-     */
-    public String sign(String message) throws Exception {
-        try {
-            Signature signature = Signature.getInstance("SHA256withECDSA");
-            signature.initSign(keyPair.getPrivate());
-            signature.update(message.getBytes(StandardCharsets.UTF_8));
-            byte[] signatureBytes = signature.sign();
-            return "0x" + bytesToHex(signatureBytes);
-        } catch (Exception e) {
-            log.error("Failed to sign message", e);
-            throw e;
-        }
-    }
-
-    /**
-     * Verify a signature from another validator.
-     */
-    public boolean verify(String message, String signatureHex, PublicKey theirPublicKey) throws Exception {
-        try {
-            Signature signature = Signature.getInstance("SHA256withECDSA");
-            signature.initVerify(theirPublicKey);
-            signature.update(message.getBytes(StandardCharsets.UTF_8));
-
-            byte[] signatureBytes = hexToBytes(signatureHex.startsWith("0x") ?
-                signatureHex.substring(2) : signatureHex);
-
-            return signature.verify(signatureBytes);
-        } catch (Exception e) {
-            log.error("Failed to verify signature", e);
-            return false;
-        }
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
