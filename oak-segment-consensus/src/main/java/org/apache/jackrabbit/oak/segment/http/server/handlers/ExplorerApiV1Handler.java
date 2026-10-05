@@ -161,8 +161,7 @@ public class ExplorerApiV1Handler {
             }
             payload.put("identities", identities);
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer summary", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer summary: " + e.getMessage());
@@ -200,8 +199,7 @@ public class ExplorerApiV1Handler {
             payload.put("durabilityError", status.getDurabilityError());
             payload.put("durableHead", status.getDurableHead());
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer proposal lookup {}", proposalId, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer proposal lookup: " + e.getMessage());
@@ -277,8 +275,7 @@ public class ExplorerApiV1Handler {
                 }
             }
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer wallet lookup {}", walletAddress, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer wallet lookup: " + e.getMessage());
@@ -304,8 +301,7 @@ public class ExplorerApiV1Handler {
             payload.put("mountedNeighbors", remoteClusters);
             payload.put("outerNetwork", buildOuterNetwork(remoteClusters.size()));
             payload.put("cacheHints", buildCacheHints());
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer content nav", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer content nav: " + e.getMessage());
@@ -358,8 +354,7 @@ public class ExplorerApiV1Handler {
             page.put("nextOffset", hasMore ? pageOffset + pageLimit : null);
             payload.put("children", children);
             payload.put("childrenPage", page);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer content tree for cluster {}", clusterId, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer content tree: " + e.getMessage());
@@ -390,8 +385,7 @@ public class ExplorerApiV1Handler {
             payload.put("node", buildNodeSummary(path, node));
             payload.put("properties", buildProperties(node));
             payload.put("childrenPreview", buildVisibleChildren(cluster, path, node, 0, 24));
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer content node for cluster {}", clusterId, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer content node: " + e.getMessage());
@@ -430,8 +424,7 @@ public class ExplorerApiV1Handler {
             facts.put("childCount", countChildren(node));
             payload.put("contentFacts", facts);
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer content provenance for cluster {}", clusterId, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer content provenance: " + e.getMessage());
@@ -450,8 +443,7 @@ public class ExplorerApiV1Handler {
             payload.put("contractVersion", "explorer.v1");
             payload.put("generatedAtMs", System.currentTimeMillis());
             payload.put("releaseFlow", flow);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer release flow", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer release flow: " + e.getMessage());

@@ -158,8 +158,7 @@ public class ExplorerApiHandler {
             }
             payload.put("properties", props);
             
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error exploring node: " + path, e);
@@ -193,8 +192,7 @@ public class ExplorerApiHandler {
                 }
             }
             
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(segments));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, segments);
             
         } catch (Exception e) {
             log.error("Error reading recent segments", e);
@@ -254,8 +252,7 @@ public class ExplorerApiHandler {
                 tarEntries.add(entry);
             }
             
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(tarEntries));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, tarEntries);
             
         } catch (Exception e) {
             log.error("Error reading TAR files", e);

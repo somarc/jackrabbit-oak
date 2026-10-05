@@ -77,8 +77,7 @@ public class FragmentationApiHandler {
             payload.put("contractVersion", "fragmentation.metrics.v1");
             payload.put("totalEntities", allMetrics.size());
             payload.put("entities", entities);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting fragmentation metrics", e);
@@ -109,8 +108,7 @@ public class FragmentationApiHandler {
             payload.put("contractVersion", "fragmentation.metrics.entity.v1");
             payload.put("walletAddress", walletAddress);
             payload.put("data", metricsToMap(metrics, tracker));
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting entity fragmentation metrics", e);
@@ -152,8 +150,7 @@ public class FragmentationApiHandler {
             payload.put("contractVersion", "fragmentation.top.v1");
             payload.put("limit", limit);
             payload.put("entities", entities);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting top fragmented entities", e);
@@ -189,8 +186,7 @@ public class FragmentationApiHandler {
             payload.put("lastGcReclaimedMB", lastGC != null ? lastGC.actualReclaimedSizeMB : null);
             payload.put("lastGcCostUSDC", lastGC != null && lastGC.actualCostUSDC != null ? lastGC.actualCostUSDC.toString() : null);
             payload.put("gcConsensusRequired", true);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting GC status", e);
@@ -221,8 +217,7 @@ public class FragmentationApiHandler {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("contractVersion", "gc.compaction.proposals.v1");
             payload.put("proposals", serialized);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting compaction proposals", e);
@@ -353,8 +348,7 @@ public class FragmentationApiHandler {
             log.info("✅ GC proposal {} sent through the Aeron cluster log", proposal.proposalId);
             
             Map<String, Object> payload = proposalToMap(proposal);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error proposing GC", e);
@@ -463,8 +457,7 @@ public class FragmentationApiHandler {
             payload.put("proposalId", proposalId);
             payload.put("executorId", executorId);
             payload.put("replicated", true);
-            response.setStatus(HttpServletResponse.SC_ACCEPTED);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_ACCEPTED, payload);
             
         } catch (Exception e) {
             log.error("Error executing GC", e);
@@ -589,8 +582,7 @@ public class FragmentationApiHandler {
             if (proposal != null) {
                 payload.put("proposal", proposalToMap(proposal));
             }
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
 
         } catch (Exception e) {
             log.error("Error voting on GC proposal", e);
@@ -718,8 +710,7 @@ public class FragmentationApiHandler {
             payload.put("lastDeleteTime", account.lastDeleteTime);
             payload.put("deleteCount", account.deletes.size());
             payload.put("paymentCount", account.payments.size());
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting GC account", e);
@@ -768,8 +759,7 @@ public class FragmentationApiHandler {
             payload.put("message", account.writesBlocked
                 ? "Payment recorded. Debt still exceeds limit - pay more to resume writes."
                 : "Payment recorded. Writes resumed.");
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error recording payment", e);
@@ -813,8 +803,7 @@ public class FragmentationApiHandler {
             payload.put("success", true);
             payload.put("debtLimit", account.debtLimit.toString());
             payload.put("writesBlocked", account.writesBlocked);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error setting debt limit", e);
@@ -855,8 +844,7 @@ public class FragmentationApiHandler {
             payload.put("message", account.writesBlocked
                 ? "Pending debt converted to executed. Writes now BLOCKED - pay to resume."
                 : "Pending debt converted to executed. Debt under limit.");
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error executing pending debt", e);
@@ -898,8 +886,7 @@ public class FragmentationApiHandler {
                 blockedWallets.add(account.walletAddress);
             }
             payload.put("blockedWallets", blockedWallets);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
             log.info("🧹 Manual GC triggered - {} entities with executed debt, {} blocked", 
                      withExecutedDebt.size(), blocked.size());

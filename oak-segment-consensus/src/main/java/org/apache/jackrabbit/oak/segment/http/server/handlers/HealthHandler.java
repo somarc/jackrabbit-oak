@@ -357,8 +357,7 @@ public class HealthHandler {
         payload.put("timestamp", System.currentTimeMillis());
         payload.put("success", allHealthy);
 
-        response.setStatus(allHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-        response.getWriter().write(JsonOutputUtil.toJson(payload));
+        JsonOutputUtil.write(response, allHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE, payload);
     }
     
     /**

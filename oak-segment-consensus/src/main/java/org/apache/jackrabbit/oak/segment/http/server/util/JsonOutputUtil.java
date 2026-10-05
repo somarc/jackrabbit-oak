@@ -16,6 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.util;
 
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.lang.reflect.Array;
 import java.util.Iterator;
 import java.util.Map;
@@ -35,6 +38,22 @@ public final class JsonOutputUtil {
         StringBuilder json = new StringBuilder();
         appendValue(json, value);
         return json.toString();
+    }
+
+    /** Sets the status and writes {@code value} as JSON; the content type is left to the caller. */
+    public static void write(HttpServletResponse response, int status, Object value) throws IOException {
+        response.setStatus(status);
+        response.getWriter().write(toJson(value));
+    }
+
+    /** Sends {@code json} as a complete UTF-8 JSON response and closes the writer. */
+    public static void send(HttpServletResponse response, int status, String json) throws IOException {
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
+        response.setStatus(status);
+        try (PrintWriter writer = response.getWriter()) {
+            writer.write(json);
+        }
     }
 
     @SuppressWarnings("unchecked")

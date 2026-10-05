@@ -101,7 +101,6 @@ final class OpsSnapshotCache {
         cache.put("ttlMs", ttlMs);
         payload.put("cache", cache);
         payload.put("data", snapshot);
-        response.setStatus(HttpServletResponse.SC_OK);
-        response.getWriter().write(JsonOutputUtil.toJson(payload));
+        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
     }
 }

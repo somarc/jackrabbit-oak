@@ -81,8 +81,7 @@ public class ProposalQueryHandler {
             payload.put("durabilityTimestamp", status.getDurabilityTimestamp());
             payload.put("durabilityError", status.getDurabilityError());
             payload.put("durableHead", status.getDurableHead());
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Error getting proposal status", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -143,8 +142,7 @@ public class ProposalQueryHandler {
             payload.put("ethereumTxHash", status.getEthereumTxHash());
             payload.put("confirmedBlock", status.getConfirmedBlock());
             payload.put("error", toOpsError(status, opsState));
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Error getting operation status", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -176,8 +174,7 @@ public class ProposalQueryHandler {
                 return;
             }
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(toSettlementPayload("proposalId", proposalId, details)));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, toSettlementPayload("proposalId", proposalId, details));
         } catch (Exception e) {
             log.error("Error getting settlement details by proposal id", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -209,8 +206,7 @@ public class ProposalQueryHandler {
                 return;
             }
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(toSettlementPayload("transactionHash", transactionHash, details)));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, toSettlementPayload("transactionHash", transactionHash, details));
         } catch (Exception e) {
             log.error("Error getting settlement details by transaction hash", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -233,8 +229,7 @@ public class ProposalQueryHandler {
             int count = context.proposalQueueManager.getPendingCount();
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("pendingCount", count);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Error getting pending count", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -255,8 +250,7 @@ public class ProposalQueryHandler {
             }
 
             Map<String, Object> stats = context.proposalQueueManager.getQueueStats();
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(stats));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, stats);
         } catch (Exception e) {
             log.error("Error getting queue stats", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -279,8 +273,7 @@ public class ProposalQueryHandler {
             Map<String, Object> flow = new LinkedHashMap<>(context.proposalQueueManager.getProposalReleaseFlowStats());
             flow.put("contractVersion", "release-flow.v1");
             flow.put("generatedAtMs", System.currentTimeMillis());
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(flow));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, flow);
         } catch (Exception e) {
             log.error("Error getting proposal release flow", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());

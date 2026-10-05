@@ -200,16 +200,13 @@ public class AeronApiHandler {
     public void handleClusterState(HttpServletResponse response) throws IOException {
         Map<String, Object> state = getClusterStateData();
         if (state == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "Aeron Cluster consensus not configured");
             return;
         }
 
         response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_OK);
-        
-        // Write JSON response
-        writeJsonResponse(response, state);
+        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, state);
     }
 
     /**
@@ -222,14 +219,13 @@ public class AeronApiHandler {
     public void handleValidatorIdentities(HttpServletResponse response) throws IOException {
         Map<String, Object> data = getValidatorIdentitiesData();
         if (data == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
                 "Aeron Cluster consensus not configured");
             return;
         }
 
         response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_OK);
-        writeJsonResponse(response, data);
+        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, data);
     }
     
     /**
@@ -275,7 +271,7 @@ public class AeronApiHandler {
      */
     public void handleRaftMetrics(HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "Aeron Cluster consensus not configured");
             return;
         }
@@ -303,9 +299,7 @@ public class AeronApiHandler {
         commitMetrics.put("currentEpoch", context.aeronConsensusEngine.getCurrentEpoch());
         commitMetrics.put("ethereumEpoch", context.aeronConsensusEngine.getCurrentEthereumEpoch());
         metrics.put("commitMetrics", commitMetrics);
-        
-        // Write JSON response
-        writeJsonResponse(response, metrics);
+        response.getWriter().write(JsonOutputUtil.toJson(metrics));
     }
 
     /**
@@ -317,7 +311,7 @@ public class AeronApiHandler {
      */
     public void handleNodeStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "Aeron Cluster consensus not configured");
             return;
         }
@@ -359,9 +353,7 @@ public class AeronApiHandler {
         Map<String, Object> metrics = new HashMap<>();
         metrics.put("reachableValidators", context.aeronConsensusEngine.getReachableValidatorCount());
         nodeStatus.put("metrics", metrics);
-        
-        // Write JSON response
-        writeJsonResponse(response, nodeStatus);
+        response.getWriter().write(JsonOutputUtil.toJson(nodeStatus));
     }
 
     /**
@@ -374,7 +366,7 @@ public class AeronApiHandler {
      */
     public void handleLeadershipHistory(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "Aeron Cluster consensus not configured");
             return;
         }
@@ -421,9 +413,7 @@ public class AeronApiHandler {
         history.put("history", entries);
         history.put("totalEntries", entries.size());
         history.put("limit", limit);
-        
-        // Write JSON response
-        writeJsonResponse(response, history);
+        response.getWriter().write(JsonOutputUtil.toJson(history));
     }
 
     /**
@@ -635,13 +625,6 @@ public class AeronApiHandler {
     }
 
     /**
-     * Write JSON response from Map.
-     */
-    private void writeJsonResponse(HttpServletResponse response, Map<String, Object> data) throws IOException {
-        response.getWriter().write(JsonOutputUtil.toJson(data));
-    }
-
-    /**
      * ✅ ADR 025: Handle GET /v1/aeron/replication-lag - Returns replication lag status
      * 
      * <p>Shows how far behind this follower is from the leader's log position.
@@ -660,7 +643,7 @@ public class AeronApiHandler {
      */
     public void handleReplicationLag(HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
                 "Aeron Cluster consensus not configured");
             return;
         }
@@ -668,14 +651,13 @@ public class AeronApiHandler {
         Map<String, Object> lagStatus = context.aeronConsensusEngine.getReplicationLagStatus();
         
         if (lagStatus == null) {
-            sendError(response, HttpServletResponse.SC_NOT_FOUND, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND,
                 "Replication lag not applicable (cluster not initialized)");
             return;
         }
         
         response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_OK);
-        writeJsonResponse(response, lagStatus);
+        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, lagStatus);
     }
 
     /**
@@ -700,7 +682,7 @@ public class AeronApiHandler {
                 throw new IllegalStateException("Aeron Cluster consensus not configured");
             }
             return data;
-        }, e -> sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage()));
+        }, e -> ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage()));
     }
 
     /**
@@ -715,13 +697,6 @@ public class AeronApiHandler {
                 throw new IllegalStateException("Replication lag not applicable (cluster not initialized)");
             }
             return data;
-        }, e -> sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage()));
-    }
-    
-    /**
-     * Send standardized error response.
-     */
-    private void sendError(HttpServletResponse response, int statusCode, String message) throws IOException {
-        ApiErrorUtil.sendJsonError(response, statusCode, message);
+        }, e -> ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage()));
     }
 }
