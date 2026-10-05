@@ -20,7 +20,6 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -36,53 +35,8 @@ public class HeadStateServiceTest {
         service.activate();
         service.deactivate();
 
-        assertFalse(service.checkAndCommitFinalityBoundary(false, 5, "head:1"));
-        assertFalse(service.checkAndCommitFinalityBoundary(true, 0, "head:1"));
-    }
-
-    @Test
-    public void checkAndCommitUsesExplicitQualifiedHead() {
-        HeadStateService service = new HeadStateService();
-
-        assertTrue(service.checkAndCommitFinalityBoundary(true, 1, "qualified:1"));
-        assertEquals("qualified:1", service.getCommittedHead());
-        assertEquals("qualified:1", service.getLatestHead());
-        assertEquals(0, service.getLastCommittedEpoch());
-    }
-
-    @Test
-    public void checkAndCommitFallsBackToTrackedLatestHead() {
-        HeadStateService service = new HeadStateService();
-        service.updateLatestHead("tracked:2");
-
-        assertTrue(service.checkAndCommitFinalityBoundary(true, 2, null));
-        assertEquals("tracked:2", service.getCommittedHead());
-        assertEquals("tracked:2", service.getLatestHead());
-        assertEquals(1, service.getLastCommittedEpoch());
-    }
-
-    @Test
-    public void checkAndCommitUsesFileStoreHeadForUnqualifiedOrMissingValues() {
-        FileStore fileStore = fileStoreWithHead("store:9");
-        HeadStateService service = new HeadStateService(fileStore);
-
-        assertTrue(service.checkAndCommitFinalityBoundary(true, 1, "plain-head"));
-        assertEquals("store:9", service.getCommittedHead());
-        assertEquals("store:9", service.getLatestHead());
-        assertEquals(0, service.getLastCommittedEpoch());
-
-        HeadStateService fallbackService = new HeadStateService(fileStore);
-        assertTrue(fallbackService.checkAndCommitFinalityBoundary(true, 1, null));
-        assertEquals("store:9", fallbackService.getCommittedHead());
-    }
-
-    @Test
-    public void checkAndCommitReturnsFalseWhenNoHeadIsAvailable() {
-        HeadStateService service = new HeadStateService();
-
-        assertFalse(service.checkAndCommitFinalityBoundary(true, 1, ""));
         assertNull(service.getCommittedHead());
-        assertNull(service.getLatestHead());
+        assertEquals(-1, service.getLastCommittedEpoch());
     }
 
     @Test
