@@ -78,10 +78,8 @@ public class PeerDiscoveryHandlerTest {
         context.registeredValidators.put("validator-2", new ValidatorRegistration("validator-2", "http://validator-2:8090"));
 
         AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
-        when(engine.getNonVotingFollowers()).thenReturn(Collections.emptyList());
         when(engine.getAllFollowers()).thenReturn(Collections.singletonList("http://validator-2:8090"));
         when(engine.getCurrentLeader()).thenReturn("http://validator-1:8090");
-        when(engine.getCurrentEpoch()).thenReturn(12);
         context.aeronConsensusEngine = engine;
 
         PeerDiscoveryHandler handler = new PeerDiscoveryHandler(context);

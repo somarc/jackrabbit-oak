@@ -54,12 +54,11 @@ public class PeerDiscoveryHandler {
      * Returns JSON array with enriched status:
      * [
      *   {"validatorId": "validator-1", "validatorUrl": "http://validator-1:8090", "lastSeen": 1234567890, "status": "READY"},
-     *   {"validatorId": "validator-2", "validatorUrl": "http://validator-2:8090", "lastSeen": 1234567891, "status": "PROBATION"}
+     *   {"validatorId": "validator-2", "validatorUrl": "http://validator-2:8090", "lastSeen": 1234567891, "status": "OFFLINE"}
      * ]
      * 
      * Status values:
      * - READY: Voting member, fully participating in consensus
-     * - PROBATION: Non-voting follower, must wait 1 epoch before joining electorate
      * - OFFLINE: Last seen > 2 epochs ago (10 minutes), likely disconnected
      */
     public void handlePeerList(HttpServletResponse response) throws IOException {
@@ -70,13 +69,11 @@ public class PeerDiscoveryHandler {
             // BLOCKCHAIN CONSENSUS: Use Aeron Cluster for single source of truth
             // This ensures /v1/peers returns the same validator list as /v1/consensus/status
             final long now = System.currentTimeMillis();
-            final List<String> nonVotingFollowers;
             final List<String> allValidatorUrls;
             int leaderTermSeconds = 300; // default
             
             if (context.aeronConsensusEngine != null) {
                 // Aeron Cluster consensus - use registered validators + Aeron peers
-                nonVotingFollowers = context.aeronConsensusEngine.getNonVotingFollowers();
                 // Use Set to deduplicate URLs - LinkedHashSet preserves insertion order
                 Set<String> validatorUrlSet = new LinkedHashSet<>();
                 if (context.selfUrl != null) {
@@ -98,7 +95,6 @@ public class PeerDiscoveryHandler {
                 Collections.sort(allValidatorUrls);
             } else {
                 // No consensus engine - standalone mode, but still show registered validators
-                nonVotingFollowers = new ArrayList<>();
                 allValidatorUrls = new ArrayList<>();
                 allValidatorUrls.add(context.selfUrl);
                 // Add any registered validators (from HTTP registration)
@@ -169,8 +165,6 @@ public class PeerDiscoveryHandler {
                     // Standalone mode - use lastSeen for status
                     if (timeSinceLastSeen > offlineThresholdMs) {
                         status = "OFFLINE";
-                    } else if (nonVotingFollowers.contains(validatorUrl)) {
-                        status = "PROBATION";
                     } else {
                         status = "READY";
                     }
@@ -183,27 +177,6 @@ public class PeerDiscoveryHandler {
                 peer.put("validatorUrl", validatorUrl);
                 peer.put("lastSeen", lastSeen);
                 peer.put("status", status);
-                
-                // Add epoch information for probation status (Aeron mode)
-                if ("PROBATION".equals(status) && context.aeronConsensusEngine != null) {
-                    Map<String, Long> joinTimes = context.aeronConsensusEngine.getValidatorJoinTimes();
-                    Long joinTime = joinTimes.get(validatorUrl);
-                    
-                    if (joinTime != null) {
-                        long probationPeriod = leaderTermSeconds * 1000L;
-                        long timeSinceJoin = now - joinTime;
-                        
-                        // Calculate epochs
-                        int joinEpoch = (int) (joinTime / (leaderTermSeconds * 1000L));
-                        int currentEpoch = context.aeronConsensusEngine.getCurrentEpoch();
-                        int eligibleEpoch = joinEpoch + 1; // Must wait 1 full epoch
-                        
-                        peer.put("joinEpoch", joinEpoch);
-                        peer.put("eligibleEpoch", eligibleEpoch);
-                        peer.put("currentEpoch", currentEpoch);
-                        peer.put("secondsRemaining", (probationPeriod - timeSinceJoin) / 1000L);
-                    }
-                }
 
                 peers.add(peer);
             }
