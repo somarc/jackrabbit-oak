@@ -76,7 +76,6 @@ public class RequestRouter implements AutoCloseable {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            context.aeronConsensusEngine,
             context.registeredClients,
             context.registeredValidators,
             context

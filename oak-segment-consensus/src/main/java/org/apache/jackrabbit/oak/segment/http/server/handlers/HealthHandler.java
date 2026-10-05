@@ -61,7 +61,6 @@ public class HealthHandler {
             FileStore fileStore,
             NodeStore nodeStore,
             Path storeDirectory,
-            AeronConsensusEngine aeronConsensusEngine,
             Map<String, ?> registeredClients,
             Map<String, ?> registeredValidators,
             ServerContext context) {
@@ -119,23 +118,7 @@ public class HealthHandler {
             payload.put("currentRole", context.aeronConsensusEngine.getCurrentRole().name());
             payload.put("internalIngressClient", context.aeronConsensusEngine.getInternalIngressClientDiagnostics());
 
-            String committedHead = context.aeronConsensusEngine.getCommittedHead();
-            String latestHead = context.aeronConsensusEngine.getLatestHead();
-            int latestEpochSeen = context.aeronConsensusEngine.getLatestEpochSeen();
-            int committedEpoch = context.aeronConsensusEngine.getLastCommittedEpoch();
-
-            if (committedHead != null && !committedHead.isEmpty()) {
-                payload.put("committedHead", committedHead);
-            }
-            if (latestHead != null && !latestHead.isEmpty()) {
-                payload.put("latestHead", latestHead);
-            }
-            if (latestEpochSeen >= 0) {
-                payload.put("latestEpochSeen", latestEpochSeen);
-            }
-            if (committedEpoch >= 0) {
-                payload.put("committedEpoch", committedEpoch);
-            }
+            putHeadState(payload, context.aeronConsensusEngine);
         }
 
         payload.put("sharding", buildShardingPayload());
@@ -191,18 +174,7 @@ public class HealthHandler {
                 fileStoreHealth.put("head", headId.substring(0, Math.min(16, headId.length())) + "...");
                 AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
                 if (aeronEngine != null) {
-                    if (aeronEngine.getCommittedHead() != null && !aeronEngine.getCommittedHead().isEmpty()) {
-                        fileStoreHealth.put("committedHead", aeronEngine.getCommittedHead());
-                    }
-                    if (aeronEngine.getLatestHead() != null && !aeronEngine.getLatestHead().isEmpty()) {
-                        fileStoreHealth.put("latestHead", aeronEngine.getLatestHead());
-                    }
-                    if (aeronEngine.getLatestEpochSeen() >= 0) {
-                        fileStoreHealth.put("latestEpochSeen", aeronEngine.getLatestEpochSeen());
-                    }
-                    if (aeronEngine.getLastCommittedEpoch() >= 0) {
-                        fileStoreHealth.put("committedEpoch", aeronEngine.getLastCommittedEpoch());
-                    }
+                    putHeadState(fileStoreHealth, aeronEngine);
                 }
             } else {
                 fileStoreHealth.put("status", "DOWN");
@@ -626,79 +598,29 @@ public class HealthHandler {
     }
 
     private Map<String, Object> buildMetricsPayload() {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("consensus", buildConsensusMetricsPayload());
-        payload.put("replication", buildReplicationMetricsPayload());
-
-        Map<String, Object> validator = new LinkedHashMap<>();
-        validator.put("registeredClients", registeredClients != null ? registeredClients.size() : 0);
-        validator.put("registeredValidators", registeredValidators != null ? registeredValidators.size() : 0);
-        validator.put("storePath", storeDirectory != null ? storeDirectory.toString() : "");
-        payload.put("validator", validator);
-        payload.put("ipfsPolicy", buildIpfsPolicyPayload());
-        return payload;
+        return MetricsHandler.buildMetricsPayload(
+            context != null ? context.aeronConsensusEngine : null,
+            context, registeredClients, registeredValidators, storeDirectory);
     }
 
-    private Map<String, Object> buildConsensusMetricsPayload() {
-        if (context == null || context.aeronConsensusEngine == null) {
-            return null;
+    /** Adds the finality-aware head fields that are set, in the order clients have always seen them. */
+    private static void putHeadState(Map<String, Object> target, AeronConsensusEngine engine) {
+        String committedHead = engine.getCommittedHead();
+        String latestHead = engine.getLatestHead();
+        int latestEpochSeen = engine.getLatestEpochSeen();
+        int committedEpoch = engine.getLastCommittedEpoch();
+        if (committedHead != null && !committedHead.isEmpty()) {
+            target.put("committedHead", committedHead);
         }
-
-        AeronConsensusEngine aeronEngine = context.aeronConsensusEngine;
-        Map<String, Object> consensus = new LinkedHashMap<>();
-        consensus.put("role", aeronEngine.getCurrentRole().name());
-        consensus.put("isLeader", aeronEngine.isLeader());
-        consensus.put("currentEpoch", aeronEngine.getCurrentEpoch());
-        consensus.put("currentTerm", aeronEngine.getCurrentTerm());
-        consensus.put("reachableValidators", aeronEngine.getReachableValidatorCount());
-        consensus.put("totalMembers", aeronEngine.getTotalMemberCount());
-        consensus.put("quorumSize", aeronEngine.getQuorumSize());
-        consensus.put("heartbeatAgeMs", aeronEngine.getHeartbeatAgeMs());
-        consensus.put("healthy", aeronEngine.isClusterHealthy());
-        if (aeronEngine.getUnhealthyReason() != null) {
-            consensus.put("unhealthyReason", aeronEngine.getUnhealthyReason());
+        if (latestHead != null && !latestHead.isEmpty()) {
+            target.put("latestHead", latestHead);
         }
-        return consensus;
-    }
-
-    private Map<String, Object> buildReplicationMetricsPayload() {
-        if (context == null || context.aeronConsensusEngine == null) {
-            return null;
+        if (latestEpochSeen >= 0) {
+            target.put("latestEpochSeen", latestEpochSeen);
         }
-
-        Map<String, Object> status = context.aeronConsensusEngine.getReplicationLagStatus();
-        if (status == null) {
-            return null;
+        if (committedEpoch >= 0) {
+            target.put("committedEpoch", committedEpoch);
         }
-
-        Map<String, Object> replication = new LinkedHashMap<>();
-        replication.put("role", status.get("role"));
-        replication.put("myLogPosition", status.get("myLogPosition"));
-        replication.put("leaderLogPosition", status.get("leaderLogPosition"));
-        replication.put("replicationLag", status.get("replicationLag"));
-        replication.put("lagThreshold", status.get("lagThreshold"));
-        replication.put("measurementAvailable", status.get("measurementAvailable"));
-        replication.put("measurementAgeMs", status.get("measurementAgeMs"));
-        replication.put("healthStatus", status.get("healthStatus"));
-        replication.put("healthy", status.get("healthy"));
-        if (status.get("reason") != null) {
-            replication.put("reason", status.get("reason"));
-        }
-        return replication;
-    }
-
-    private Map<String, Object> buildIpfsPolicyPayload() {
-        if (context == null) {
-            return null;
-        }
-
-        Map<String, Object> policy = new LinkedHashMap<>();
-        policy.put("rejectedAmbiguousSource", context.apiIpfsPolicyRejectAmbiguousSource.get());
-        policy.put("rejectedNonEnterpriseCid", context.apiIpfsPolicyRejectNonEnterpriseCid.get());
-        policy.put("rejectedUnknownCid", context.apiIpfsPolicyRejectUnknownCid.get());
-        policy.put("rejectedCidServiceUnavailable", context.apiIpfsPolicyRejectCidServiceUnavailable.get());
-        policy.put("acceptedEnterpriseCid", context.apiIpfsPolicyAcceptedEnterpriseCid.get());
-        return policy;
     }
 
     private Map<String, Object> buildFileStorePayload() {

@@ -57,7 +57,6 @@ public class HealthHandlerTest {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            null,
             Collections.emptyMap(),
             Collections.emptyMap(),
             context
@@ -96,7 +95,6 @@ public class HealthHandlerTest {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            engine,
             Collections.emptyMap(),
             Collections.emptyMap(),
             context
@@ -127,7 +125,6 @@ public class HealthHandlerTest {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            engine,
             Collections.emptyMap(),
             Collections.emptyMap(),
             context
@@ -354,7 +351,6 @@ public class HealthHandlerTest {
             null,
             null,
             storeDirectory,
-            engine,
             context.registeredClients,
             context.registeredValidators,
             context
@@ -531,7 +527,6 @@ public class HealthHandlerTest {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            context.aeronConsensusEngine,
             context.registeredClients,
             context.registeredValidators,
             context
