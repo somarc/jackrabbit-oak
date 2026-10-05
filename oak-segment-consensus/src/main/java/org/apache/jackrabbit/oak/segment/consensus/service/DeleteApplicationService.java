@@ -17,14 +17,11 @@
 package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import org.agrona.concurrent.AgentTerminationException;
-import org.apache.jackrabbit.oak.api.CommitFailedException;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
-import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
-import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.jetbrains.annotations.NotNull;
@@ -32,7 +29,6 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -150,11 +146,11 @@ public class DeleteApplicationService {
         try {
             CanonicalGenesisContent.requireMutable(walletAddress, path);
             log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
-            NodeStore nodeStore = requireNodeStore();
+            NodeStore nodeStore = MutationApplySupport.requireNodeStore(nodeStoreSupplier);
             
             // Get current HEAD for logging
             String previousHead = fileStore.getHead().getRecordId().toString();
-            log.debug("📍 Previous HEAD: {}", truncate(previousHead, 20));
+            log.debug("📍 Previous HEAD: {}", MutationApplySupport.truncate(previousHead, 20));
 
             if (signature == null) {
                 throw new MutationRejectedException("Missing signature in replicated delete");
@@ -211,25 +207,13 @@ public class DeleteApplicationService {
             }
             
             // Commit the deletion (deterministic on all nodes)
-            CommitInfo commitInfo = new CommitInfo(
-                "aeron-replication-delete", 
-                null, 
-                Collections.singletonMap("replicated", "true")
-            );
-            
-            if (auditMetadata != null && auditMetadata.getAppliedLogPosition() != null) {
-                auditMetadata.getAppliedLogPosition().writeTo(rootBuilder);
-            }
-            try {
-                nodeStore.merge(rootBuilder, EmptyHook.INSTANCE, commitInfo);
-            } catch (CommitFailedException e) {
-                throw new RuntimeException("Failed to commit delete", e);
-            }
+            MutationApplySupport.mergeReplicated(
+                nodeStore, rootBuilder, "aeron-replication-delete", auditMetadata, "Failed to commit delete");
             flushService.onChangeApplied(buildDurabilityCallback(proposalId));
             
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
-            log.info("✅ DELETE applied, HEAD: {}...", truncate(newHead, 20));
+            log.info("✅ DELETE applied, HEAD: {}...", MutationApplySupport.truncate(newHead, 20));
             
             // Update HEAD cache
             if (headUpdateCallback != null) {
@@ -238,7 +222,7 @@ public class DeleteApplicationService {
             
             // Emit SSE delete event
             if (sseEventCallback != null) {
-                String extractedOrg = extractOrganizationFromPath(path);
+                String extractedOrg = MutationApplySupport.extractOrganizationFromPath(path);
                 sseEventCallback.emitContentDelete(path, walletAddress, extractedOrg, signature);
             }
             
@@ -251,11 +235,7 @@ public class DeleteApplicationService {
             if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
                 durabilityCallback.onFailure(proposalId, e.getMessage());
             }
-            log.error("❌ Failed to apply replicated delete", e);
-            if (e instanceof MutationRejectedException) {
-                throw new MutationRejectedException("Failed to apply replicated delete", e);
-            }
-            throw new RuntimeException("Failed to apply replicated delete", e);
+            throw MutationApplySupport.applyFailure(log, "delete", e);
         }
     }
 
@@ -278,55 +258,6 @@ public class DeleteApplicationService {
         return () -> durabilityCallback.onDurable(proposalId, appliedHead);
     }
 
-    @NotNull
-    private NodeStore requireNodeStore() {
-        NodeStore nodeStore = nodeStoreSupplier.get();
-        if (nodeStore == null) {
-            throw new IllegalStateException("NodeStore supplier returned null");
-        }
-        return nodeStore;
-    }
-    
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Helper Methods
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Extract organization from path (ADR 037).
-     * 
-     * <p>Path format: /oak-chain/XX/YY/ZZ/0xWALLET/{organization}/content/{contentId}
-     */
-    @Nullable
-    private String extractOrganizationFromPath(@Nullable String path) {
-        if (path == null || path.isEmpty()) {
-            return null;
-        }
-        
-        String[] parts = path.split("/");
-        // Path: ["", "oak-chain", "XX", "YY", "ZZ", "0xWALLET", "Organization", "content", "contentId"]
-        // Index:  0       1         2     3     4        5            6            7          8
-        
-        if (parts.length < 8) {
-            return null;
-        }
-        
-        String potentialOrg = parts[6];
-        if (!"content".equals(potentialOrg) && !potentialOrg.startsWith("0x")) {
-            return potentialOrg;
-        }
-        
-        return null;
-    }
-    
-    /**
-     * Truncate string for logging.
-     */
-    private static String truncate(String value, int maxLength) {
-        if (value == null) return "null";
-        if (value.length() <= maxLength) return value;
-        return value.substring(0, maxLength) + "...";
-    }
-    
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // Callback Interfaces
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
