@@ -39,9 +39,7 @@ public class AeronHealthService {
         return System.currentTimeMillis() - lastHeartbeatTime;
     }
 
-    public boolean isClusterHealthy(Cluster.Role role,
-                                    java.util.function.Supplier<Boolean> quorumSupplier,
-                                    java.util.function.Supplier<io.aeron.cluster.client.AeronCluster> clientSupplier) {
+    public boolean isClusterHealthy(Cluster.Role role, java.util.function.Supplier<Boolean> quorumSupplier) {
         if (role == null) {
             return false;
         }
@@ -54,9 +52,7 @@ public class AeronHealthService {
         return true;
     }
 
-    public String getUnhealthyReason(Cluster.Role role,
-                                     java.util.function.Supplier<Boolean> quorumSupplier,
-                                     java.util.function.Supplier<io.aeron.cluster.client.AeronCluster> clientSupplier) {
+    public String getUnhealthyReason(Cluster.Role role, java.util.function.Supplier<Boolean> quorumSupplier) {
         if (role == null) {
             return "cluster_not_initialized";
         }

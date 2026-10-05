@@ -262,14 +262,14 @@ public class AeronConsensusEngine implements ClusteredService {
     private static final long DURABILITY_RETRY_DELAY_MS = 250L;
     private static final int MAX_DURABILITY_RETRY_ATTEMPTS = 4;
     
-    private final AeronMessageCodec messageCodec = AeronEngineComponentFactory.createMessageCodec();
+    private final AeronMessageCodec messageCodec = new AeronMessageCodec();
     private AeronIngressHandler ingressHandler;
     private volatile boolean genesisVerified;
     /** Latched by the first node-local apply failure: health and HTTP report it while the member fail-stops. */
     private volatile Throwable applicationFailure;
-    private AeronSessionManager sessionManager;
-    private AeronHealthService healthService = AeronEngineComponentFactory.createHealthService();
-    private AeronLeaderTracker leaderTracker;
+    private final AeronSessionManager sessionManager;
+    private final AeronHealthService healthService = new AeronHealthService();
+    private final AeronLeaderTracker leaderTracker;
     
     // Reachability cache
     private volatile long lastReachabilityCheckMs = 0;
@@ -294,7 +294,7 @@ public class AeronConsensusEngine implements ClusteredService {
             String storeDirectory,
             org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
         this(fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore,
-            AeronEngineComponentFactory.createSnapshotService(),
+            new SnapshotService(),
             new AeronBackgroundCoordinator());
     }
 
@@ -314,8 +314,8 @@ public class AeronConsensusEngine implements ClusteredService {
         this.peerUrls = peerUrls;
         this.wallet = wallet;
         this.storeDirectory = storeDirectory;
-        this.replicator = AeronEngineComponentFactory.createSegmentReplicator(fileStore);
-        this.backpressureManager = AeronEngineComponentFactory.createBackpressureManager();
+        this.replicator = new SegmentReplicator(fileStore);
+        this.backpressureManager = new org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager();
         this.transactionLifecycleManager = new TransactionLifecycleManager();
         this.peerProbeMode = parsePeerProbeMode();
         this.reachabilityCacheMs = Long.getLong("oak.cluster.reachability.cacheMs", 5000L);
@@ -328,23 +328,24 @@ public class AeronConsensusEngine implements ClusteredService {
         // ✅ PRODUCTION REFACTOR: Initialize service layer components
         this.snapshotService = snapshotService != null
             ? snapshotService
-            : AeronEngineComponentFactory.createSnapshotService();
+            : new SnapshotService();
         this.genesisInitializer = new AeronGenesisInitializer(fileStore, nodeStore, blobStore);
         this.backgroundCoordinator = backgroundCoordinator != null
             ? backgroundCoordinator
             : new AeronBackgroundCoordinator();
-        this.ingressWritePayloadBuilder = AeronEngineComponentFactory.createIngressWritePayloadBuilder();
-        this.ingressControlPayloadBuilder = AeronEngineComponentFactory.createIngressControlPayloadBuilder();
+        this.ingressWritePayloadBuilder = new AeronIngressWritePayloadBuilder();
+        this.ingressControlPayloadBuilder = new AeronIngressControlPayloadBuilder();
         this.clusterStateView = new AeronClusterStateView(selfUrl, peerUrls, nodeIdToUrl, this::isSameUrlByPort);
         this.internalIngressEndpointPlanner = AeronIngressEndpointPlanner.systemFromUrls(selfUrl, peerUrls);
-        this.internalClusterClientConnector = AeronEngineComponentFactory.createInternalClusterClientConnector();
+        this.internalClusterClientConnector = new AeronInternalClusterClientConnector();
         this.internalIngressClientManager = new AeronInternalIngressClientManager(
             () -> internalClusterClientConnector,
             internalIngressEndpointPlanner,
             () -> aeronDirectoryName
         );
-        this.leaderDiscoveryService = AeronEngineComponentFactory.createLeaderDiscoveryService(nodeIdToUrl, peerUrls, selfUrl);
-        this.messageDispatcher = AeronEngineComponentFactory.createMessageDispatcher(
+        this.leaderDiscoveryService = new LeaderDiscoveryService(nodeIdToUrl, peerUrls);
+        this.leaderDiscoveryService.setSelfUrl(selfUrl);
+        this.messageDispatcher = new MessageDispatcher(
             new MessageDispatcher.WriteCallback() {
                 @Override
                 public void applyWrite(String walletAddress, String path, String contentType,
@@ -441,12 +442,12 @@ public class AeronConsensusEngine implements ClusteredService {
             }
         });
 
-        this.headStateService = AeronEngineComponentFactory.createHeadStateService(fileStore);
-        this.ingressHandler = AeronEngineComponentFactory.createIngressHandler(
-            messageCodec, messageDispatcher, this::markHeartbeat, this::applyGenesisCreation
-        );
-        this.sessionManager = AeronEngineComponentFactory.createSessionManager(this::markHeartbeat);
-        this.leaderTracker = AeronEngineComponentFactory.createLeaderTracker(leaderDiscoveryService);
+        this.headStateService = new HeadStateService(fileStore);
+        this.ingressHandler = new AeronIngressHandler(messageCodec, messageDispatcher);
+        this.ingressHandler.setHeartbeatCallback(this::markHeartbeat);
+        this.ingressHandler.setGenesisCallback(this::applyGenesisCreation);
+        this.sessionManager = new AeronSessionManager(this::markHeartbeat);
+        this.leaderTracker = new AeronLeaderTracker(leaderDiscoveryService);
         
         log.info("Aeron Consensus Engine initializing - Consensus: Aeron Cluster (Raft), Self: {}, Peers: {}, Wallet: {}", 
             selfUrl, peerUrls.size(), wallet.getWalletAddress());
@@ -673,22 +674,12 @@ public class AeronConsensusEngine implements ClusteredService {
     
     @Override
     public void onSessionOpen(ClientSession session, long timestamp) {
-        if (sessionManager != null) {
-            sessionManager.onSessionOpen(session, timestamp);
-        } else {
-            log.info("Client session opened: {} (timestamp: {})", session.id(), timestamp);
-            markHeartbeat();
-        }
+        sessionManager.onSessionOpen(session, timestamp);
     }
     
     @Override
     public void onSessionClose(ClientSession session, long timestamp, CloseReason closeReason) {
-        if (sessionManager != null) {
-            sessionManager.onSessionClose(session, timestamp, closeReason);
-        } else {
-            log.info("Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
-            markHeartbeat();
-        }
+        sessionManager.onSessionClose(session, timestamp, closeReason);
         internalIngressClientManager.handleClusterSessionClose(session.id(), closeReason);
     }
     
@@ -1341,31 +1332,25 @@ public class AeronConsensusEngine implements ClusteredService {
             selfUrl
         );
         
-        if (leaderTracker != null) {
-            leaderTracker.recordChange(
-                change.newRole,
-                change.previousRole,
-                change.term,
-                change.memberId,
-                change.memberUrl,
-                change.timestamp,
-                change.clusterTime
-            );
-            leaderTracker.invalidateCache();
-            log.debug("Leadership history: {} total changes", leaderTracker.getLeadershipHistory(0).size());
-        }
+        leaderTracker.recordChange(
+            change.newRole,
+            change.previousRole,
+            change.term,
+            change.memberId,
+            change.memberUrl,
+            change.timestamp,
+            change.clusterTime
+        );
+        leaderTracker.invalidateCache();
+        log.debug("Leadership history: {} total changes", leaderTracker.getLeadershipHistory(0).size());
         
         if (newRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Now LEADER (term: {})", currentTerm);
-            if (leaderTracker != null) {
-                leaderTracker.notifyBecameLeader(memberId);
-            }
+            leaderTracker.notifyBecameLeader(memberId);
             scheduleGenesisBootstrapIfMissing("new leader");
         } else if (previousRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Stepped down from LEADER (term: {})", currentTerm);
-            if (leaderTracker != null) {
-                leaderTracker.notifyLostLeadership();
-            }
+            leaderTracker.notifyLostLeadership();
         }
 
         handleIngressClientRoleChange(previousRole, newRole);
@@ -1407,9 +1392,6 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return List of leadership changes, most recent first
      */
     public java.util.List<LeadershipChange> getLeadershipHistory(int limit) {
-        if (leaderTracker == null) {
-            return Collections.emptyList();
-        }
         return leaderTracker.getLeadershipHistory(limit);
     }
     
@@ -1505,11 +1487,8 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public boolean isClusterHealthy() {
         // The ingress client belongs to its owner thread; health does not read it.
-        return !hasApplicationFailure() && genesisVerified && healthService.isClusterHealthy(
-            publishedRole,
-            this::hasQuorum,
-            () -> null
-        );
+        return !hasApplicationFailure() && genesisVerified
+            && healthService.isClusterHealthy(publishedRole, this::hasQuorum);
     }
     
     /**
@@ -1526,11 +1505,7 @@ public class AeronConsensusEngine implements ClusteredService {
         if (!genesisVerified) {
             return "canonical_genesis_not_verified";
         }
-        return healthService.getUnhealthyReason(
-            publishedRole,
-            this::hasQuorum,
-            () -> null
-        );
+        return healthService.getUnhealthyReason(publishedRole, this::hasQuorum);
     }
 
     public Map<String, Object> getInternalIngressClientDiagnostics() {
