@@ -21,6 +21,8 @@ import java.io.PrintWriter;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils.escapeJson;
+
 /**
  * Represents a connected SSE client with filters.
  * 
@@ -269,17 +271,5 @@ public class SSEClient {
             return "proposal.queue.updated";
         }
         return "health.status.changed";
-    }
-
-    private String escapeJson(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t");
     }
 }

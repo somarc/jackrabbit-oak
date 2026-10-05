@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.sse;
 
+import static org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils.escapeJson;
+
 /**
  * Content event for SSE streaming (ADR 036).
  * 
@@ -197,16 +199,6 @@ public class ContentEvent {
         sse.append("id: ").append(id).append("\n");
         sse.append("data: ").append(toJson()).append("\n\n");
         return sse.toString();
-    }
-
-    private String escapeJson(String value) {
-        if (value == null) return "";
-        return value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t");
     }
 
     // Builder
