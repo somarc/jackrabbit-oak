@@ -16,11 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.eth;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -124,31 +120,4 @@ class BeaconchainDotInProvider implements BeaconChainProvider {
         return -1;
     }
 
-    static HttpFetcher defaultFetcher() {
-        return BeaconchainDotInProvider::httpGet;
-    }
-
-    private static String httpGet(String endpoint) throws Exception {
-        URL url = new URL(endpoint);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(10_000);
-        conn.setReadTimeout(10_000);
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setRequestProperty("User-Agent", "OakSegmentConsensus/1.0");
-
-        int rc = conn.getResponseCode();
-        if (rc != 200) {
-            throw new Exception("HTTP " + rc + " from " + endpoint);
-        }
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
-            return sb.toString();
-        }
-    }
 }
