@@ -81,6 +81,15 @@ public class EthereumSignatureVerifierTest {
     }
     
     @Test
+    public void testVerifySignatureRejectsNonHexSignature() {
+        assertFalse("Should reject a 130-char signature that is not hex",
+            EthereumSignatureVerifier.verifySignature(
+                "test",
+                "0x" + "zz".repeat(65),
+                "0x742d35Cc6634C0532925a3b844Bc9e7595f1b3E8"));
+    }
+
+    @Test
     public void testVerifySignatureInvalidRecoveryId() {
         assumeTrue("Requires Bouncy Castle", 
             EthereumSignatureVerifier.isFullVerificationAvailable());

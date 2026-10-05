@@ -111,6 +111,10 @@ public class EthereumSignatureVerifier {
                 log.warn("❌ Invalid signature length: {} (expected 130 hex chars)", normalizedSig.length());
                 return false;
             }
+            if (!normalizedSig.chars().allMatch(c -> Character.digit(c, 16) >= 0)) {
+                log.warn("❌ Invalid signature: not hex");
+                return false;
+            }
             
             // Parse signature components (r, s, v)
             byte[] signatureBytes = HexFormat.of().parseHex(normalizedSig);
