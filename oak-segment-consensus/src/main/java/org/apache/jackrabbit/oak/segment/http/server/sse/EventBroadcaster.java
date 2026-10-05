@@ -264,33 +264,6 @@ public class EventBroadcaster {
     }
 
     /**
-     * Emit a wallet registration event.
-     */
-    public void emitWalletRegistration(String wallet, String owner) {
-        ContentEvent event = ContentEvent.builder()
-            .type(ContentEvent.EventType.WALLET)
-            .action(ContentEvent.Action.REGISTER)
-            .wallet(wallet)
-            .message(owner != null ? "Owner: " + owner : null)
-            .build();
-
-        broadcast(event);
-    }
-
-    /**
-     * Emit a consensus event (leader change, commit, etc).
-     */
-    public void emitConsensusEvent(ContentEvent.Action action, String message) {
-        ContentEvent event = ContentEvent.builder()
-            .type(ContentEvent.EventType.CONSENSUS)
-            .action(action)
-            .message(message)
-            .build();
-
-        broadcast(event);
-    }
-
-    /**
      * Get recent events from buffer.
      */
     public List<ContentEvent> getRecentEvents(int limit) {

@@ -181,7 +181,6 @@ public class RateLimiter {
         totalRequests.incrementAndGet();
         
         String clientId = getClientId(request);
-        String path = request.getRequestURI();
         boolean isWriteRequest = isWriteRequest(request);
         
         // Check global rate limit
@@ -433,10 +432,6 @@ public class RateLimiter {
             this.throttledRequests = throttledRequests;
             this.activeClients = activeClients;
             this.activeWallets = activeWallets;
-        }
-        
-        public double getThrottleRate() {
-            return totalRequests > 0 ? (double) throttledRequests / totalRequests : 0;
         }
     }
 }

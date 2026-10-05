@@ -62,12 +62,6 @@ public class SegmentHttpServer {
     private final Server server;
     private final ServerContext context;
     private final RequestRouter router;
-    private final TlsConfiguration tlsConfig;
-    
-    // Keep references for backward compatibility and methods that need direct access
-    private final FileStore fileStore;
-    private final NodeStore nodeStore;
-    private final Path storeDirectory;
     
     /**
      * Create a new HTTP server for serving segment store files.
@@ -88,18 +82,13 @@ public class SegmentHttpServer {
      * @param port The HTTP port to listen on
      * @param fileStore The Oak FileStore instance
      * @param nodeStore The Oak NodeStore instance
-     * @param tlsConfig TLS configuration (use TlsConfiguration.builder() to create)
+     * @param tlsConfig TLS configuration
      */
     public SegmentHttpServer(File storeDirectory, int port, FileStore fileStore, NodeStore nodeStore, 
                             TlsConfiguration tlsConfig) {
-        this.storeDirectory = storeDirectory.toPath();
-        this.fileStore = fileStore;  // Use existing FileStore!
-        this.nodeStore = nodeStore;  // Use existing NodeStore!
-        this.tlsConfig = tlsConfig;
-        
-        // Create ServerContext with initial values
+        Path storePath = storeDirectory.toPath();
         String scheme = tlsConfig.isEnabled() ? "https" : "http";
-        this.context = new ServerContext(fileStore, nodeStore, this.storeDirectory, scheme + "://localhost:" + port);
+        this.context = new ServerContext(fileStore, nodeStore, storePath, scheme + "://localhost:" + port);
         
         // Create RequestRouter (will be updated when consensus engines are set)
         this.router = new RequestRouter(context);
@@ -133,7 +122,7 @@ public class SegmentHttpServer {
         
         log.info("Initialized SegmentHttpServer");
         log.info("   - Port: {}", port);
-        log.info("   - Store: {}", this.storeDirectory);
+        log.info("   - Store: {}", storePath);
         log.info("   - TLS: {}", tlsConfig.isEnabled() ? "enabled" : "disabled");
         log.info("   - Prometheus metrics enabled at /metrics");
     }
@@ -149,20 +138,10 @@ public class SegmentHttpServer {
         }
     }
 
-    SegmentHttpServer(Server server,
-                      ServerContext context,
-                      RequestRouter router,
-                      TlsConfiguration tlsConfig,
-                      FileStore fileStore,
-                      NodeStore nodeStore,
-                      Path storeDirectory) {
+    SegmentHttpServer(Server server, ServerContext context, RequestRouter router) {
         this.server = server;
         this.context = context;
         this.router = router;
-        this.tlsConfig = tlsConfig;
-        this.fileStore = fileStore;
-        this.nodeStore = nodeStore;
-        this.storeDirectory = storeDirectory;
     }
 
     private ServletContextHandler createServerHandler() {

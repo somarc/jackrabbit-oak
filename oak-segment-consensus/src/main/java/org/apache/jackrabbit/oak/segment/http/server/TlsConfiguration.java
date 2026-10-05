@@ -337,46 +337,4 @@ public class TlsConfiguration {
     private static boolean hasText(String value) {
         return value != null && !value.trim().isEmpty();
     }
-    
-    /**
-     * Builder for TlsConfiguration.
-     */
-    public static class Builder {
-        private boolean enabled = false;
-        private String keystorePath;
-        private String keystorePassword = "";
-        private String keystoreType = DEFAULT_KEYSTORE_TYPE;
-        private String certPath;
-        private String keyPath;
-        private String truststorePath;
-        private String truststorePassword = "";
-        private String clientAuth = DEFAULT_CLIENT_AUTH;
-        private String[] protocols = DEFAULT_PROTOCOLS.split(",");
-        private String[] ciphers = RECOMMENDED_CIPHERS;
-        
-        public Builder enabled(boolean enabled) {
-            this.enabled = enabled;
-            return this;
-        }
-        
-        public Builder protocols(String... protocols) {
-            this.protocols = protocols;
-            return this;
-        }
-        
-        public Builder ciphers(String... ciphers) {
-            this.ciphers = ciphers;
-            return this;
-        }
-        
-        public TlsConfiguration build() {
-            return new TlsConfiguration(enabled, keystorePath, keystorePassword,
-                keystoreType, certPath, keyPath, truststorePath, truststorePassword,
-                clientAuth, protocols, ciphers);
-        }
-    }
-    
-    public static Builder builder() {
-        return new Builder();
-    }
 }

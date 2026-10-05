@@ -82,15 +82,6 @@ public class AuthTokenValidator {
     }
     
     /**
-     * Check if authentication is enabled.
-     * 
-     * @return true if a token is configured, false otherwise (POC mode)
-     */
-    public boolean isAuthEnabled() {
-        return authEnabled;
-    }
-    
-    /**
      * Validate the Authorization header in the request.
      * 
      * <p>If authentication is disabled (no token configured), this always returns true.
