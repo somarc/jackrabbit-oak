@@ -19,7 +19,6 @@ package org.apache.jackrabbit.oak.segment.consensus.sharding;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -88,15 +87,6 @@ public class ShardDirectory {
     }
     
     /**
-     * Get all configured shards.
-     * 
-     * @return List of all shard IDs
-     */
-    public List<Integer> getAllShardIds() {
-        return new ArrayList<>(shards.keySet());
-    }
-    
-    /**
      * Get number of configured shards.
      * 
      * @return Number of shards
@@ -124,38 +114,6 @@ public class ShardDirectory {
         log.info("✅ Updated shard {}: {} → {} peers", shardId, 
             oldShard != null ? oldShard.getPeerUrls().size() : 0, 
             peerUrls.size());
-    }
-    
-    /**
-     * Add a new shard (for dynamic shard scaling).
-     * 
-     * @param shardId Shard ID
-     * @param peerUrls Peer URLs for the new shard
-     */
-    public void addShard(int shardId, List<String> peerUrls) {
-        if (shards.containsKey(shardId)) {
-            log.warn("⚠️  Shard {} already exists, updating instead", shardId);
-            updateShard(shardId, peerUrls);
-            return;
-        }
-        
-        ShardInfo shard = new ShardInfo(shardId, peerUrls);
-        shards.put(shardId, shard);
-        log.info("✅ Added shard {} with {} peers", shardId, peerUrls.size());
-    }
-    
-    /**
-     * Remove a shard (for shard decommissioning).
-     * 
-     * @param shardId Shard ID to remove
-     */
-    public void removeShard(int shardId) {
-        ShardInfo removed = shards.remove(shardId);
-        if (removed != null) {
-            log.info("✅ Removed shard {}", shardId);
-        } else {
-            log.warn("⚠️  Attempted to remove non-existent shard {}", shardId);
-        }
     }
     
     @Override

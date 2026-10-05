@@ -188,22 +188,6 @@ public class SSEClient {
         return closed.get();
     }
 
-    public long getConnectedAt() {
-        return connectedAt;
-    }
-
-    public Set<String> getWallets() {
-        return wallets;
-    }
-
-    public Set<String> getOrganizations() {
-        return organizations;
-    }
-
-    public Set<String> getTypes() {
-        return types;
-    }
-
     private String toOpsV1SSE(ContentEvent event) {
         String eventType = mapOpsEventType(event);
         StringBuilder sse = new StringBuilder();

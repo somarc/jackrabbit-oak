@@ -66,7 +66,6 @@ public class CircuitBreaker {
     
     // Metrics
     private final AtomicLong totalRequests = new AtomicLong(0);
-    private final AtomicLong totalFailures = new AtomicLong(0);
     private final AtomicLong totalRejected = new AtomicLong(0);
     
     /**
@@ -154,7 +153,6 @@ public class CircuitBreaker {
      * @param error The error that occurred
      */
     public void recordFailure(Throwable error) {
-        totalFailures.incrementAndGet();
         lastFailureTime.set(System.currentTimeMillis());
         
         switch (state) {
@@ -244,13 +242,6 @@ public class CircuitBreaker {
     }
     
     /**
-     * Force the circuit to close.
-     */
-    public void forceClose() {
-        transitionTo(State.CLOSED);
-    }
-    
-    /**
      * Reset the circuit breaker to initial state.
      */
     public void reset() {
@@ -269,54 +260,6 @@ public class CircuitBreaker {
      */
     public String getName() {
         return name;
-    }
-    
-    /**
-     * Get current failure count.
-     *
-     * @return Failure count
-     */
-    public int getFailureCount() {
-        return failureCount.get();
-    }
-    
-    /**
-     * Get total requests.
-     *
-     * @return Total request count
-     */
-    public long getTotalRequests() {
-        return totalRequests.get();
-    }
-    
-    /**
-     * Get total failures.
-     *
-     * @return Total failure count
-     */
-    public long getTotalFailures() {
-        return totalFailures.get();
-    }
-    
-    /**
-     * Get total rejected requests.
-     *
-     * @return Total rejected count
-     */
-    public long getTotalRejected() {
-        return totalRejected.get();
-    }
-    
-    /**
-     * Get time since circuit opened (if open).
-     *
-     * @return Milliseconds since opened, or 0 if not open
-     */
-    public long getTimeSinceOpened() {
-        if (state != State.OPEN) {
-            return 0;
-        }
-        return System.currentTimeMillis() - openedAt.get();
     }
     
     @Override

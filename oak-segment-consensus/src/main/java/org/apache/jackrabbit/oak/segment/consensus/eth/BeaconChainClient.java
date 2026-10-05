@@ -174,9 +174,6 @@ public class BeaconChainClient {
     public long getCachedFinalizedEpoch() { return cachedFinalizedEpoch; }
     public long getCachedCurrentEpoch()   { return cachedCurrentEpoch;   }
     public BlockchainConfig.Mode getNetworkMode() { return networkMode;  }
-    public long getMillisSinceLastUpdate() { return System.currentTimeMillis() - lastUpdateTime; }
-    public long getLastUpdateTime()        { return lastUpdateTime; }
-
     public boolean isEpochDataFresh() {
         return (System.currentTimeMillis() - lastUpdateTime) < 300_000L;
     }

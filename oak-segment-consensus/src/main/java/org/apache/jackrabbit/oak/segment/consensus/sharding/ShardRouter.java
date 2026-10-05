@@ -258,31 +258,6 @@ public class ShardRouter {
     }
     
     /**
-     * Invalidate leader cache on HTTP 307 redirect (Aeron follower → leader redirect).
-     * Call this when handling redirects to instantly update cache.
-     * 
-     * @param shardId Shard ID
-     * @param newLeaderUrl New leader URL (from redirect)
-     */
-    public void invalidateLeaderCache(int shardId, String newLeaderUrl) {
-        if (newLeaderUrl != null && !newLeaderUrl.isEmpty()) {
-            leaderCache.put(shardId, new CachedLeader(newLeaderUrl));
-            log.debug("✅ Updated leader cache for shard {}: {}", shardId, newLeaderUrl);
-        } else {
-            leaderCache.remove(shardId);
-            log.debug("✅ Invalidated leader cache for shard {}", shardId);
-        }
-    }
-    
-    /**
-     * Clear all leader caches (for testing or manual invalidation).
-     */
-    public void clearLeaderCache() {
-        leaderCache.clear();
-        log.info("✅ Cleared all leader caches");
-    }
-    
-    /**
      * Get shard directory.
      * 
      * @return Shard directory

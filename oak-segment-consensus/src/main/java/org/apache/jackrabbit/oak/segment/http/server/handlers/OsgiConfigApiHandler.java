@@ -957,21 +957,6 @@ public class OsgiConfigApiHandler {
         }
         return known;
     }
-
-    private int countCsv(String raw) {
-        if (!hasText(raw)) {
-            return 0;
-        }
-        int count = 0;
-        String[] split = raw.split(",");
-        for (String token : split) {
-            if (hasText(token)) {
-                count++;
-            }
-        }
-        return count;
-    }
-
     private static boolean hasText(String value) {
         return value != null && !value.trim().isEmpty();
     }

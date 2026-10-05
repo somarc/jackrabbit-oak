@@ -216,10 +216,6 @@ public class BackpressureManager {
         return backpressureTimeoutMs;
     }
 
-    public long getBackpressureParkNanos() {
-        return parkNanos;
-    }
-    
     /**
      * Apply backpressure if pending messages exceed maximum.
      * 

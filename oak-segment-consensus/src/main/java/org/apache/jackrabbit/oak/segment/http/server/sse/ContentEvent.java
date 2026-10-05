@@ -106,10 +106,6 @@ public class ContentEvent {
         return type.getValue();
     }
 
-    public EventType getEventType() {
-        return type;
-    }
-
     public String getAction() {
         return action != null ? action.getValue() : null;
     }

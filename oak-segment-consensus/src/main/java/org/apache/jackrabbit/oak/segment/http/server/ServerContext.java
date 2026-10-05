@@ -226,16 +226,6 @@ public class ServerContext {
         persistRegisteredClients();
         return updated;
     }
-
-    public synchronized void touchClientRegistration(ClientRegistration registration) {
-        if (registration == null) {
-            return;
-        }
-        registration.updateLastSeen();
-        indexClientRegistration(registration);
-        persistRegisteredClients();
-    }
-    
     public void setFragmentationTracker(FragmentationTracker fragmentationTracker) {
         this.fragmentationTracker = fragmentationTracker;
         log.info("✅ Fragmentation Tracker initialized");

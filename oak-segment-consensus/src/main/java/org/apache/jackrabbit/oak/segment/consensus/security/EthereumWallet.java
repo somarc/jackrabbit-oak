@@ -440,10 +440,6 @@ public class EthereumWallet {
         return publicKeyHex;
     }
 
-    public PublicKey getPublicKey() {
-        return keyPair.getPublic();
-    }
-
     public PrivateKey getPrivateKey() {
         return keyPair.getPrivate();
     }

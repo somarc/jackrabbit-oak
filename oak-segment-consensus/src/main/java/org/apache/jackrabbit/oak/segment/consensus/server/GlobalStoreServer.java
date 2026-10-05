@@ -436,13 +436,6 @@ public class GlobalStoreServer {
     }
 
     /**
-     * Get the NodeStore (for testing/debugging).
-     */
-    public NodeStore getNodeStore() {
-        return nodeStore;
-    }
-    
-    /**
      * Get the FileStore (for testing/debugging).
      */
     public FileStore getFileStore() {

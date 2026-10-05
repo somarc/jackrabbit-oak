@@ -158,17 +158,6 @@ public class UploadSessionManager {
     }
     
     /**
-     * Check if an intent token is valid.
-     * 
-     * @param intentToken the intent token
-     * @return true if valid, false if not found or expired
-     */
-    public boolean isValidIntent(String intentToken) {
-        UploadSession session = sessions.get(intentToken);
-        return session != null && !session.isExpired();
-    }
-    
-    /**
      * Generate a secure intent token.
      */
     private String generateIntentToken(String walletAddress, long filesize) {

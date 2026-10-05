@@ -359,46 +359,6 @@ public class TlsConfiguration {
             return this;
         }
         
-        public Builder keystorePath(String path) {
-            this.keystorePath = path;
-            return this;
-        }
-        
-        public Builder keystorePassword(String password) {
-            this.keystorePassword = password;
-            return this;
-        }
-        
-        public Builder keystoreType(String type) {
-            this.keystoreType = type;
-            return this;
-        }
-        
-        public Builder certPath(String path) {
-            this.certPath = path;
-            return this;
-        }
-        
-        public Builder keyPath(String path) {
-            this.keyPath = path;
-            return this;
-        }
-        
-        public Builder truststorePath(String path) {
-            this.truststorePath = path;
-            return this;
-        }
-        
-        public Builder truststorePassword(String password) {
-            this.truststorePassword = password;
-            return this;
-        }
-        
-        public Builder clientAuth(String mode) {
-            this.clientAuth = mode;
-            return this;
-        }
-        
         public Builder protocols(String... protocols) {
             this.protocols = protocols;
             return this;

@@ -351,13 +351,6 @@ public class EventBroadcaster {
     }
 
     /**
-     * Events not sent to live clients because the send queue was full.
-     */
-    public long getDroppedEvents() {
-        return droppedEvents.get();
-    }
-
-    /**
      * Shutdown the broadcaster.
      */
     public void shutdown() {
