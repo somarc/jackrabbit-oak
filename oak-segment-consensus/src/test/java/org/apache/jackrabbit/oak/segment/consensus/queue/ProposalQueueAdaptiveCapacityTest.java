@@ -19,12 +19,12 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
 import java.math.BigInteger;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.junit.After;
 import org.junit.BeforeClass;
@@ -293,22 +293,21 @@ public class ProposalQueueAdaptiveCapacityTest {
         }
 
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType, String message,
-                                   String signature) {
+        public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                               String contentType, String message, String signature,
+                                               String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                               MutationAuditMetadata unusedAudit) {
             processedCount.incrementAndGet();
             processedLatch.countDown();
+            return true;
         }
 
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType, String message,
-                                   String signature, String blobId, String mimeType) {
-            appendProposal(walletAddress, path, contentType, message, signature);
-        }
-
-        @Override
-        public void appendDeleteProposal(String walletAddress, String path, String signature) {
+        public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                     String signature, MutationAuditMetadata unusedAudit) {
             processedCount.incrementAndGet();
             processedLatch.countDown();
+            return true;
         }
 
         @Override

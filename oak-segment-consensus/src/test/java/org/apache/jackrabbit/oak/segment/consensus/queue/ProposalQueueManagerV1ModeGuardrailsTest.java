@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTr
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.junit.After;
 import org.junit.Test;
@@ -767,16 +768,17 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
     private static final class NoopRaftAppendCallback implements RaftAppendCallback {
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
+        public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                               String contentType, String message, String signature,
+                                               String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                               MutationAuditMetadata unusedAudit) {
+            return true;
         }
 
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType,
-                                   String message, String signature, String blobId, String mimeType) {
-        }
-
-        @Override
-        public void appendDeleteProposal(String walletAddress, String path, String signature) {
+        public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                     String signature, MutationAuditMetadata unusedAudit) {
+            return true;
         }
     }
 }

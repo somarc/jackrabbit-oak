@@ -181,92 +181,6 @@ final class ConsensusServicesInitializer {
     private static RaftAppendCallback createRaftAppendCallback(AeronConsensusEngine aeronEngine) {
         return new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposal!");
-                    return;
-                }
-                log.debug("📤 appendProposal() called - forwarding to Aeron (role: {})", aeronEngine.getCurrentRole());
-                boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() returned false!");
-                }
-            }
-
-            @Override
-            public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                             String message, String signature) {
-                tryAppendProposalWithId(proposalId, walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                                   String message, String signature) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
-                    return false;
-                }
-                boolean success = aeronEngine.sendWriteThroughIngressWithId(
-                    walletAddress, path, contentType, message, signature, null, proposalId);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() returned false!");
-                }
-                return success;
-            }
-
-            @Override
-            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                                   String message, String signature, MutationAuditMetadata auditMetadata) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
-                    return false;
-                }
-                boolean success = aeronEngine.sendWriteThroughIngressWithId(
-                    walletAddress, path, contentType, message, signature, null, auditMetadata);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() returned false!");
-                }
-                return success;
-            }
-
-            @Override
-            public void appendProposal(String walletAddress, String path, String contentType, String message,
-                                       String signature, String blobId, String mimeType) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposal!");
-                    return;
-                }
-                log.debug("📤 appendProposal() with binary - blobId={} (role: {})", blobId, aeronEngine.getCurrentRole());
-                boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature, blobId, mimeType);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() with binary returned false!");
-                }
-            }
-
-            @Override
-            public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                             String message, String signature, String blobId, String mimeType, String ipfsCid) {
-                tryAppendProposalWithId(
-                    proposalId, walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid);
-            }
-
-            @Override
-            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                                   String message, String signature, String blobId, String mimeType,
-                                                   String ipfsCid) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
-                    return false;
-                }
-                boolean success = aeronEngine.sendWriteThroughIngress(
-                    walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid, proposalId);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() with binary returned false!");
-                }
-                return success;
-            }
-
-            @Override
             public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
                                                    String message, String signature, String blobId, String mimeType,
                                                    String ipfsCid, MutationAuditMetadata auditMetadata) {
@@ -278,37 +192,6 @@ final class ConsensusServicesInitializer {
                     walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid, auditMetadata);
                 if (!success) {
                     log.error("❌ sendWriteThroughIngress() with binary returned false!");
-                }
-                return success;
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendDeleteProposal!");
-                    return;
-                }
-                log.debug("🗑️  appendDeleteProposal() called - forwarding to Aeron (role: {})", aeronEngine.getCurrentRole());
-                boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature);
-                if (!success) {
-                    log.error("❌ sendDeleteThroughIngress() returned false!");
-                }
-            }
-
-            @Override
-            public void appendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
-                tryAppendDeleteProposalWithId(proposalId, walletAddress, path, signature);
-            }
-
-            @Override
-            public boolean tryAppendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendDeleteProposalWithId!");
-                    return false;
-                }
-                boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature, proposalId);
-                if (!success) {
-                    log.error("❌ sendDeleteThroughIngress() returned false!");
                 }
                 return success;
             }
@@ -329,9 +212,6 @@ final class ConsensusServicesInitializer {
 
             @Override
             public int appendProposalBatch(List<QueuedProposal> proposals) {
-                log.debug("🔥🔥🔥 OVERRIDE CALLED: appendProposalBatch() - batch size: {}, class: {}",
-                    proposals.size(), this.getClass().getName());
-
                 if (aeronEngine == null) {
                     log.error("❌ aeronEngine is NULL in appendProposalBatch!");
                     return 0;

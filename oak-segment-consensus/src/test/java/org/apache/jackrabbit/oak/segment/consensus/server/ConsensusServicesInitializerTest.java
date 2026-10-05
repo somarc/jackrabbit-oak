@@ -31,6 +31,7 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOpt
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -147,12 +148,10 @@ public class ConsensusServicesInitializerTest {
         assertNotNull(proposalFactory.backpressureManager);
         assertEquals("/var/tmp/custom-proposals", proposalFactory.proposalPersistenceDir);
 
-        proposalFactory.raftAppendCallback.appendProposal("0xwallet", "/a", "text/plain", "body", "sig");
-        proposalFactory.raftAppendCallback.appendDeleteProposal("0xwallet", "/a", "sig");
         assertFalse(proposalFactory.raftAppendCallback.tryAppendProposalWithId(
-            "proposal-1", "0xwallet", "/a", "text/plain", "body", "sig"));
+            "proposal-1", "0xwallet", "/a", "text/plain", "body", "sig", null, null, null, writeAudit("proposal-1")));
         assertFalse(proposalFactory.raftAppendCallback.tryAppendDeleteProposalWithId(
-            "proposal-2", "0xwallet", "/a", "sig"));
+            "proposal-2", "0xwallet", "/a", "sig", deleteAudit("proposal-2")));
         assertEquals(0, proposalFactory.raftAppendCallback.appendProposalBatch(Collections.<QueuedProposal>emptyList()));
     }
 
@@ -262,20 +261,12 @@ public class ConsensusServicesInitializerTest {
         when(blockchainConfig.isMockMode()).thenReturn(true);
         when(blockchainConfig.getNetwork()).thenReturn("mock");
         when(blockchainConfig.getContractAddress()).thenReturn("0xabc");
-        when(testContext.aeronEngine.sendWriteThroughIngress("0xwallet", "/content", "text/plain", "body", "sig"))
-            .thenReturn(true);
-        when(testContext.aeronEngine.sendWriteThroughIngressWithId(
-            "0xwallet", "/content", "text/plain", "body", "sig", null, "proposal-1"))
-            .thenReturn(true);
+        MutationAuditMetadata writeAudit = writeAudit("proposal-2");
+        MutationAuditMetadata deleteAudit = deleteAudit("proposal-3");
         when(testContext.aeronEngine.sendWriteThroughIngress(
-            "0xwallet", "/content", "text/plain", "body", "sig", "blob-1", "image/png"))
+            "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1", writeAudit))
             .thenReturn(true);
-        when(testContext.aeronEngine.sendWriteThroughIngress(
-            "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1", "proposal-2"))
-            .thenReturn(true);
-        when(testContext.aeronEngine.sendDeleteThroughIngress("0xwallet", "/content", "sig"))
-            .thenReturn(true);
-        when(testContext.aeronEngine.sendDeleteThroughIngress("0xwallet", "/content", "sig", "proposal-3"))
+        when(testContext.aeronEngine.sendDeleteThroughIngress("0xwallet", "/content", "sig", deleteAudit))
             .thenReturn(true);
 
         ProposalQueueManagerOptimized proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
@@ -301,26 +292,24 @@ public class ConsensusServicesInitializerTest {
         );
 
         RaftAppendCallback callback = proposalFactory.raftAppendCallback;
-        callback.appendProposal("0xwallet", "/content", "text/plain", "body", "sig");
-        callback.appendProposal("0xwallet", "/content", "text/plain", "body", "sig", "blob-1", "image/png");
-        callback.appendDeleteProposal("0xwallet", "/content", "sig");
         assertTrue(callback.tryAppendProposalWithId(
-            "proposal-1", "0xwallet", "/content", "text/plain", "body", "sig"));
-        assertTrue(callback.tryAppendProposalWithId(
-            "proposal-2", "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1"));
-        assertTrue(callback.tryAppendDeleteProposalWithId("proposal-3", "0xwallet", "/content", "sig"));
+            "proposal-2", "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1",
+            writeAudit));
+        assertTrue(callback.tryAppendDeleteProposalWithId("proposal-3", "0xwallet", "/content", "sig", deleteAudit));
         assertEquals(2, callback.appendProposalBatch(proposalFactory.batchProposals));
 
-        verify(testContext.aeronEngine).sendWriteThroughIngress("0xwallet", "/content", "text/plain", "body", "sig");
-        verify(testContext.aeronEngine).sendWriteThroughIngressWithId(
-            "0xwallet", "/content", "text/plain", "body", "sig", null, "proposal-1");
         verify(testContext.aeronEngine).sendWriteThroughIngress(
-            "0xwallet", "/content", "text/plain", "body", "sig", "blob-1", "image/png");
-        verify(testContext.aeronEngine).sendWriteThroughIngress(
-            "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1", "proposal-2");
-        verify(testContext.aeronEngine).sendDeleteThroughIngress("0xwallet", "/content", "sig");
-        verify(testContext.aeronEngine).sendDeleteThroughIngress("0xwallet", "/content", "sig", "proposal-3");
+            "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1", writeAudit);
+        verify(testContext.aeronEngine).sendDeleteThroughIngress("0xwallet", "/content", "sig", deleteAudit);
         verify(testContext.aeronEngine).sendWriteBatchThroughIngress(proposalFactory.batchProposals);
+    }
+
+    private static MutationAuditMetadata writeAudit(String proposalId) {
+        return MutationAuditMetadata.write(null, null, proposalId, null, null, null, null);
+    }
+
+    private static MutationAuditMetadata deleteAudit(String proposalId) {
+        return MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null);
     }
 
     private TestContext newTestContext() throws Exception {
