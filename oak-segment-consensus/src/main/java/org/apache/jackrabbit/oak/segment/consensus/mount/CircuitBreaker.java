@@ -61,7 +61,6 @@ public class CircuitBreaker {
     private volatile State state = State.CLOSED;
     private final AtomicInteger failureCount = new AtomicInteger(0);
     private final AtomicInteger successCount = new AtomicInteger(0);
-    private final AtomicLong lastFailureTime = new AtomicLong(0);
     private final AtomicLong openedAt = new AtomicLong(0);
     
     // Metrics
@@ -153,8 +152,6 @@ public class CircuitBreaker {
      * @param error The error that occurred
      */
     public void recordFailure(Throwable error) {
-        lastFailureTime.set(System.currentTimeMillis());
-        
         switch (state) {
             case CLOSED:
                 int failures = failureCount.incrementAndGet();
@@ -214,52 +211,6 @@ public class CircuitBreaker {
      */
     public State getState() {
         return state;
-    }
-    
-    /**
-     * Check if circuit is open (failing fast).
-     *
-     * @return true if open
-     */
-    public boolean isOpen() {
-        return state == State.OPEN;
-    }
-    
-    /**
-     * Check if circuit is closed (normal operation).
-     *
-     * @return true if closed
-     */
-    public boolean isClosed() {
-        return state == State.CLOSED;
-    }
-    
-    /**
-     * Force the circuit to open.
-     */
-    public void forceOpen() {
-        transitionTo(State.OPEN);
-    }
-    
-    /**
-     * Reset the circuit breaker to initial state.
-     */
-    public void reset() {
-        state = State.CLOSED;
-        failureCount.set(0);
-        successCount.set(0);
-        lastFailureTime.set(0);
-        openedAt.set(0);
-        LOG.info("CircuitBreaker[{}] reset", name);
-    }
-    
-    /**
-     * Get the circuit breaker name.
-     *
-     * @return Name
-     */
-    public String getName() {
-        return name;
     }
     
     @Override

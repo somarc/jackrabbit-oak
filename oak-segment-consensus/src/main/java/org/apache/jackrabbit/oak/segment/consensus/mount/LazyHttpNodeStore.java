@@ -356,24 +356,6 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     }
     
     /**
-     * Check if the circuit breaker is open.
-     *
-     * @return true if circuit is open (failing fast)
-     */
-    public boolean isCircuitOpen() {
-        return circuitBreaker.isOpen();
-    }
-    
-    /**
-     * Get the circuit breaker state.
-     *
-     * @return Circuit breaker state
-     */
-    public CircuitBreaker.State getCircuitState() {
-        return circuitBreaker.getState();
-    }
-    
-    /**
      * Get the endpoint URL.
      *
      * @return Endpoint URL
@@ -389,17 +371,6 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
      */
     public String getMountName() {
         return mountName;
-    }
-    
-    /**
-     * Force reconnection attempt.
-     */
-    public void reconnect() {
-        delegate.set(null);
-        initialized.set(false);
-        lastInitializationAttemptAt.set(0L);
-        circuitBreaker.reset();
-        LOG.info("LazyHttpNodeStore[{}] reset for reconnection", mountName);
     }
     
     @Override

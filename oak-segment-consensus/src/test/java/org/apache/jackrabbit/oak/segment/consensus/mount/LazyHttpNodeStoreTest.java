@@ -39,12 +39,13 @@ public class LazyHttpNodeStoreTest {
     @Test
     public void testGetRootLazilyInitializesDelegateOnceAndForwardsConstructorContract() {
         RecordingFactory factory = new RecordingFactory(new CloseableMemoryNodeStore());
+        CircuitBreaker circuitBreaker = new CircuitBreaker("shard-0x100");
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-a:8090",
             "shard-0x100",
             1234L,
             5678L,
-            new CircuitBreaker("shard-0x100"),
+            circuitBreaker,
             factory
         );
 
@@ -62,7 +63,7 @@ public class LazyHttpNodeStoreTest {
         assertEquals(1234L, factory.lastConnectTimeoutMs);
         assertEquals(5678L, factory.lastReadTimeoutMs);
         assertTrue(store.isConnected());
-        assertEquals(CircuitBreaker.State.CLOSED, store.getCircuitState());
+        assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getState());
     }
 
     @Test
@@ -87,8 +88,7 @@ public class LazyHttpNodeStoreTest {
         assertFalse(root.hasChildNode("oak-chain"));
         assertEquals(1, attempts.get());
         assertFalse(store.isConnected());
-        assertTrue(store.isCircuitOpen());
-        assertEquals(CircuitBreaker.State.OPEN, store.getCircuitState());
+        assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.getState());
         assertTrue(store.checkpointInfo("missing").isEmpty());
         assertNull(store.retrieve("missing"));
 
@@ -96,42 +96,6 @@ public class LazyHttpNodeStoreTest {
 
         assertTrue(secondRoot.exists());
         assertEquals(1, attempts.get());
-    }
-
-    @Test
-    public void testReconnectResetsCircuitAndAllowsNewInitializationAttempt() {
-        AtomicInteger attempts = new AtomicInteger();
-        CloseableMemoryNodeStore recoveredStore = new CloseableMemoryNodeStore();
-        CircuitBreaker circuitBreaker = new CircuitBreaker("shard-0x300", 1, 60_000L, 1);
-        LazyHttpNodeStore store = new LazyHttpNodeStore(
-            "http://cluster-c:8090",
-            "shard-0x300",
-            5000L,
-            30000L,
-            circuitBreaker,
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> {
-                if (attempts.incrementAndGet() == 1) {
-                    throw new IOException("first attempt fails");
-                }
-                return recoveredStore;
-            }
-        );
-
-        NodeState failedRoot = store.getRoot();
-        assertTrue(failedRoot.exists());
-        assertEquals(1, attempts.get());
-        assertTrue(store.isCircuitOpen());
-
-        store.reconnect();
-
-        assertFalse(store.isCircuitOpen());
-        assertEquals(CircuitBreaker.State.CLOSED, store.getCircuitState());
-
-        NodeState recoveredRoot = store.getRoot();
-
-        assertTrue(recoveredRoot.exists());
-        assertEquals(2, attempts.get());
-        assertTrue(store.isConnected());
     }
 
     @Test
@@ -158,8 +122,7 @@ public class LazyHttpNodeStoreTest {
         }
 
         assertEquals(1, attempts.get());
-        assertEquals(CircuitBreaker.State.CLOSED, store.getCircuitState());
-        assertFalse(store.isCircuitOpen());
+        assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getState());
     }
 
     @Test
@@ -184,7 +147,7 @@ public class LazyHttpNodeStoreTest {
         NodeState failedRoot = store.getRoot();
         assertTrue(failedRoot.exists());
         assertEquals(1, attempts.get());
-        assertTrue(store.isCircuitOpen());
+        assertEquals(CircuitBreaker.State.OPEN, circuitBreaker.getState());
 
         NodeState recoveredRoot = store.getRoot();
 
