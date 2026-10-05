@@ -95,27 +95,6 @@ public class ShardDirectory {
         return shards.size();
     }
     
-    /**
-     * Update shard information (for dynamic shard membership changes).
-     * 
-     * @param shardId Shard ID
-     * @param peerUrls New peer URLs for the shard
-     */
-    public void updateShard(int shardId, List<String> peerUrls) {
-        if (peerUrls == null || peerUrls.isEmpty()) {
-            log.warn("⚠️  Attempted to update shard {} with empty peer URLs", shardId);
-            return;
-        }
-        
-        ShardInfo oldShard = shards.get(shardId);
-        ShardInfo newShard = new ShardInfo(shardId, peerUrls);
-        shards.put(shardId, newShard);
-        
-        log.info("✅ Updated shard {}: {} → {} peers", shardId, 
-            oldShard != null ? oldShard.getPeerUrls().size() : 0, 
-            peerUrls.size());
-    }
-    
     @Override
     public String toString() {
         return "ShardDirectory{shards=" + shards.size() + "}";
