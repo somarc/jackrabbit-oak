@@ -23,8 +23,6 @@ import org.junit.Test;
 
 import java.util.concurrent.ExecutorService;
 
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -41,15 +39,9 @@ public class AeronClusterShutdownCoordinatorTest {
         AeronClusterShutdownCoordinator.ResourceCloser resourceCloser =
             mock(AeronClusterShutdownCoordinator.ResourceCloser.class);
 
-        AeronClusterShutdownCoordinator.ShutdownResult result =
-            new AeronClusterShutdownCoordinator(2, resourceCloser)
-                .shutdown(healthMonitor, container, clusteredMediaDriver, barrier, shutdownExecutor);
+        new AeronClusterShutdownCoordinator(2, resourceCloser)
+            .shutdown(healthMonitor, container, clusteredMediaDriver, barrier, shutdownExecutor);
 
-        assertTrue(result.healthMonitorClosed);
-        assertTrue(result.resourcesClosed);
-        assertTrue(result.barrierSignaled);
-        assertTrue(result.barrierClosed);
-        assertTrue(result.executorShutdown);
         verify(healthMonitor).close();
         verify(resourceCloser).close(container, clusteredMediaDriver);
         verify(barrier).signal();
@@ -67,15 +59,10 @@ public class AeronClusterShutdownCoordinatorTest {
         AeronClusterShutdownCoordinator.ResourceCloser resourceCloser =
             mock(AeronClusterShutdownCoordinator.ResourceCloser.class);
 
-        AeronClusterShutdownCoordinator.ShutdownResult result =
-            new AeronClusterShutdownCoordinator(3, resourceCloser)
-                .shutdown(healthMonitor, null, null, barrier, shutdownExecutor);
+        new AeronClusterShutdownCoordinator(3, resourceCloser)
+            .shutdown(healthMonitor, null, null, barrier, shutdownExecutor);
 
-        assertFalse(result.healthMonitorClosed);
-        assertTrue(result.resourcesClosed);
-        assertTrue(result.barrierSignaled);
-        assertTrue(result.barrierClosed);
-        assertTrue(result.executorShutdown);
+        verify(healthMonitor).close();
         verify(resourceCloser).close(null, null);
         verify(barrier).signal();
         verify(barrier).close();
@@ -90,15 +77,9 @@ public class AeronClusterShutdownCoordinatorTest {
             mock(AeronClusterShutdownCoordinator.ResourceCloser.class);
         doThrow(new IllegalStateException("boom")).when(resourceCloser).close(null, null);
 
-        AeronClusterShutdownCoordinator.ShutdownResult result =
-            new AeronClusterShutdownCoordinator(4, resourceCloser)
-                .shutdown(null, null, null, barrier, shutdownExecutor);
+        new AeronClusterShutdownCoordinator(4, resourceCloser)
+            .shutdown(null, null, null, barrier, shutdownExecutor);
 
-        assertFalse(result.healthMonitorClosed);
-        assertFalse(result.resourcesClosed);
-        assertTrue(result.barrierSignaled);
-        assertTrue(result.barrierClosed);
-        assertTrue(result.executorShutdown);
         verify(resourceCloser).close(null, null);
         verify(barrier).signal();
         verify(barrier).close();

@@ -41,17 +41,15 @@ final class AeronClusterRuntimeBridge {
         this.healthMonitorFactory = healthMonitorFactory;
     }
 
-    RuntimeBridgeResult activate(ClusteredServiceContainer container,
-                                 String aeronDirectoryName,
-                                 AeronClusterFailureCoordinator failureCoordinator) {
+    MediaDriverHealthMonitor activate(ClusteredServiceContainer container,
+                                      String aeronDirectoryName,
+                                      AeronClusterFailureCoordinator failureCoordinator) {
         MediaDriverHealthMonitor healthMonitor = null;
-        boolean healthMonitorStarted = false;
 
         try {
             io.aeron.Aeron aeron = container.context().aeron();
             if (aeron != null) {
                 healthMonitor = healthMonitorFactory.create(aeron);
-                healthMonitorStarted = true;
             } else {
                 log.warn("⚠️  Aeron instance not available - health monitor not started");
             }
@@ -59,42 +57,16 @@ final class AeronClusterRuntimeBridge {
             log.warn("⚠️  Failed to start MediaDriver health monitor: {}", e.getMessage());
         }
 
-        boolean ingressConfigured = false;
         if (clusteredService instanceof AeronConsensusEngine) {
             AeronConsensusEngine engine = (AeronConsensusEngine) clusteredService;
             engine.setAeronDirectoryName(aeronDirectoryName);
-            ingressConfigured = true;
             log.info("✈️  Aeron directory configured: {}", aeronDirectoryName);
         }
 
-        boolean startupResetScheduled = false;
         if (failureCoordinator != null) {
             failureCoordinator.scheduleSuccessfulStartupReset();
-            startupResetScheduled = true;
         }
 
-        return new RuntimeBridgeResult(
-            healthMonitor,
-            healthMonitorStarted,
-            ingressConfigured,
-            startupResetScheduled
-        );
-    }
-
-    static final class RuntimeBridgeResult {
-        final MediaDriverHealthMonitor healthMonitor;
-        final boolean healthMonitorStarted;
-        final boolean ingressConfigured;
-        final boolean startupResetScheduled;
-
-        RuntimeBridgeResult(MediaDriverHealthMonitor healthMonitor,
-                            boolean healthMonitorStarted,
-                            boolean ingressConfigured,
-                            boolean startupResetScheduled) {
-            this.healthMonitor = healthMonitor;
-            this.healthMonitorStarted = healthMonitorStarted;
-            this.ingressConfigured = ingressConfigured;
-            this.startupResetScheduled = startupResetScheduled;
-        }
+        return healthMonitor;
     }
 }

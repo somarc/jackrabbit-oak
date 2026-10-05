@@ -303,9 +303,8 @@ public class AeronClusterLauncher {
         
         container = launchClusteredServiceContainer(contexts);
         
-        AeronClusterRuntimeBridge.RuntimeBridgeResult runtimeBridgeResult =
+        healthMonitor =
             new AeronClusterRuntimeBridge(clusteredService).activate(container, aeronDirName, failureCoordinator);
-        healthMonitor = runtimeBridgeResult.healthMonitor;
         
         log.info("✅ Aeron Cluster launched successfully");
         log.info("   Node {} started on {}", nodeId, getHostname());
