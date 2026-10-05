@@ -560,9 +560,9 @@ public class ProposalQueueManagerOptimized {
         stats.put("runtimeStageCounts", runtimeStages);
         stats.put("releaseMode", releaseMode.configValue());
         stats.put("requiredConfirmations", requiredConfirmations);
-        stats.put("adaptiveReleaseGovernorState", adaptiveDecision.getState().name());
-        stats.put("adaptiveReleaseAction", adaptiveDecision.getAction().name());
-        stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.getReasonCodes());
+        stats.put("adaptiveReleaseGovernorState", adaptiveDecision.state().name());
+        stats.put("adaptiveReleaseAction", adaptiveDecision.action().name());
+        stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.reasonCodes());
         Map<String, Object> releasePolicy = new LinkedHashMap<>();
         releasePolicy.put("scheduler", "adaptive");
         releasePolicy.put("releaseMode", releaseMode.configValue());
@@ -573,9 +573,9 @@ public class ProposalQueueManagerOptimized {
         releaseFlow.put("scheduler", "adaptive");
         releaseFlow.put("stages", runtimeStages);
         Map<String, Object> governor = new LinkedHashMap<>();
-        governor.put("state", adaptiveDecision.getState().name());
-        governor.put("action", adaptiveDecision.getAction().name());
-        governor.put("reasonCodes", adaptiveDecision.getReasonCodes());
+        governor.put("state", adaptiveDecision.state().name());
+        governor.put("action", adaptiveDecision.action().name());
+        governor.put("reasonCodes", adaptiveDecision.reasonCodes());
         releaseFlow.put("governor", governor);
         Map<String, Object> backpressure = new LinkedHashMap<>();
         backpressure.put("active", backpressureActive);
@@ -713,9 +713,9 @@ public class ProposalQueueManagerOptimized {
         if (releaseMode == AdaptiveReleaseMode.ADAPTIVE_SHADOW && !signature.equals(lastAdaptiveDecisionSignature)) {
             lastAdaptiveDecisionSignature = signature;
             log.info("ADAPTIVE_RELEASE_SHADOW state={} action={} reasons={} gap={} packing={} releaseReady={} pending={} pendingOldestMs={} pendingStalledMs={}",
-                decision.getState(),
-                decision.getAction(),
-                decision.getReasonCodes(),
+                decision.state(),
+                decision.action(),
+                decision.reasonCodes(),
                 Math.max(0L, totalVerifiedCount.get() - totalFinalizedCount.get()),
                 getVerifiedPackingBufferCount(),
                 getReleasePressureProposalCount(),
@@ -872,7 +872,7 @@ public class ProposalQueueManagerOptimized {
         if (decision == null) {
             return false;
         }
-        if (decision.getAction() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
+        if (decision.action() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
             return true;
         }
         return backpressureManager.isBackpressureActive()
@@ -883,7 +883,7 @@ public class ProposalQueueManagerOptimized {
         if (backpressureOverflowBuffer.isEmpty()) {
             return 0;
         }
-        if (decision == null || decision.getAction() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
+        if (decision == null || decision.action() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
             return 0;
         }
 
@@ -892,7 +892,7 @@ public class ProposalQueueManagerOptimized {
             return 0;
         }
 
-        int maxPromotions = decision.getAction() == AdaptiveReleaseGovernor.ReleaseAction.DIRECT
+        int maxPromotions = decision.action() == AdaptiveReleaseGovernor.ReleaseAction.DIRECT
             ? maxMessageBatch
             : Math.max(1, maxMessageBatch / 2);
         int promoted = backpressureOverflowBuffer.promoteTo(batchQueue, maxPromotions, maxReleaseReadyBatches);
@@ -2389,9 +2389,9 @@ public class ProposalQueueManagerOptimized {
                     totalProposals,
                     totalChunks,
                     overflowed ? "overflow batches/chunks" : "release batches/chunks",
-                    decision.getState(),
-                    decision.getAction(),
-                    decision.getReasonCodes());
+                    decision.state(),
+                    decision.action(),
+                    decision.reasonCodes());
 
                 batchedProposalsSent.addAndGet(totalProposals);
             }

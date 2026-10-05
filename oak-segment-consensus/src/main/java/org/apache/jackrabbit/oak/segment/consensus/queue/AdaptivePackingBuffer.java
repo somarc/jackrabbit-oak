@@ -207,7 +207,7 @@ final class AdaptivePackingBuffer {
 
         static DrainSettings forDecision(AdaptiveReleaseGovernor.Decision decision) {
             AdaptiveReleaseGovernor.GovernorState state = decision != null
-                ? decision.getState()
+                ? decision.state()
                 : AdaptiveReleaseGovernor.GovernorState.HEALTHY;
             switch (state) {
                 case OVERLOADED:
