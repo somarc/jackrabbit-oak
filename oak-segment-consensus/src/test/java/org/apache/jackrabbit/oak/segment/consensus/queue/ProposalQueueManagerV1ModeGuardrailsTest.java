@@ -54,7 +54,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
 
         BeaconChainClient beaconClient = mock(BeaconChainClient.class);
         when(beaconClient.getCachedCurrentEpoch()).thenReturn(10L);
@@ -99,7 +98,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             confirmedTxHash,
             123L,
@@ -157,7 +155,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -214,7 +211,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -277,7 +273,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -337,7 +332,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -397,7 +391,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -457,7 +450,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -517,7 +509,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -658,7 +649,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             SIGNED_TX_HASH,
             123L,

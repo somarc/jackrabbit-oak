@@ -113,15 +113,6 @@ public class EventDrivenEvmBridgeRuntimeTest {
     }
 
     @Test
-    public void calculateRequiredPaymentIncludesSegmentStorageAndBlobFees() {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge();
-
-        String amount = bridge.calculateRequiredPayment(2, 3_072L, 3);
-
-        assertEquals(new BigInteger("1380000000000000").toString(), amount);
-    }
-
-    @Test
     public void verifyPaymentRealModeRejectsMalformedProposalIdsWithoutChainCalls() throws Exception {
         Web3j web3j = mock(Web3j.class);
         EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(

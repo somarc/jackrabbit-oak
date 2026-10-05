@@ -20,8 +20,6 @@ import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge
 import org.junit.Test;
 
 import java.math.BigInteger;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.*;
 
@@ -68,38 +66,6 @@ public class EventDrivenEvmBridgeTest {
             assertEquals("Amount should match", amount.toString(), proof.getAmountWei());
             assertEquals("Block number should match", blockNumber, proof.getBlockNumber());
             assertTrue("Should be confirmed", proof.isConfirmed(1));
-            
-        } finally {
-            bridge.stop();
-        }
-    }
-    
-    @Test
-    public void testEventListeners() throws InterruptedException {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge();
-        bridge.start();
-        
-        try {
-            CountDownLatch latch = new CountDownLatch(1);
-            
-            // Add event listener
-            bridge.addEventListener(event -> {
-                assertEquals("0xabc123", event.proposalId);
-                latch.countDown();
-            });
-            
-            // Simulate event
-            bridge.simulateWriteAuthorizedEvent(
-                "0xabc123",
-                "0x742d35cc...",
-                "0xdef456",
-                BigInteger.valueOf(1_000_000),
-                12345L,
-                "0xtx123"
-            );
-            
-            // Wait for listener to be called
-            assertTrue("Listener should be called", latch.await(2, TimeUnit.SECONDS));
             
         } finally {
             bridge.stop();

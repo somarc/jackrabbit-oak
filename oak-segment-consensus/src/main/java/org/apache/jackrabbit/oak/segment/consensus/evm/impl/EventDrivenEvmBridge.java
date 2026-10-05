@@ -38,8 +38,6 @@ import org.web3j.protocol.http.HttpService;
 import java.math.BigInteger;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.Consumer;
 
 /**
  * Event-driven EVM bridge that can work in mock mode (for testing) or real mode (mainnet).
@@ -64,9 +62,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
     
     // Pricing constants (all in wei)
     private static final BigInteger BASE_FEE = new BigInteger("1000000000000000"); // 0.001 ETH
-    private static final BigInteger SEGMENT_FEE = new BigInteger("100000000000000"); // 0.0001 ETH per segment
-    private static final BigInteger STORAGE_FEE_PER_KB = new BigInteger("10000000000000"); // 0.00001 ETH per KB
-    private static final BigInteger BLOB_FEE = new BigInteger("50000000000000"); // 0.00005 ETH per blob
     private static final BigInteger EVENT_LOOKBACK_BLOCKS = BigInteger.valueOf(10_000L);
     
     private final String networkName;
@@ -79,9 +74,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
     // Web3j client (for real mode)
     private Web3j web3j;
     private Disposable eventSubscription;
-    
-    // Event listeners (for real mode - Web3j subscriptions)
-    private final CopyOnWriteArrayList<Consumer<WriteAuthorizedEvent>> eventListeners = new CopyOnWriteArrayList<>();
     
     // Payment proofs (proposalId -> PaymentProof)
     private final Map<String, PaymentProof> payments = new ConcurrentHashMap<>();
@@ -256,24 +248,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
         return mockMode;
     }
     
-    @Override
-    @NotNull
-    public String calculateRequiredPayment(int segmentCount, long byteSize, int blobCount) {
-        BigInteger total = BASE_FEE;
-        total = total.add(SEGMENT_FEE.multiply(BigInteger.valueOf(segmentCount)));
-        long kilobytes = byteSize / 1024;
-        total = total.add(STORAGE_FEE_PER_KB.multiply(BigInteger.valueOf(kilobytes)));
-        total = total.add(BLOB_FEE.multiply(BigInteger.valueOf(blobCount)));
-        return total.toString();
-    }
-    
-    @Override
-    public String getWalletUuidForAddress(@NotNull String ethereumAddress) {
-        // In real implementation, this would query a registry contract
-        return null;
-    }
-    
-    @Override
     public long getCurrentBlockNumber() {
         return currentBlock;
     }
@@ -685,23 +659,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
         // Update current block
         currentBlock = Math.max(currentBlock, event.blockNumber);
         
-        // Notify listeners (for future use - e.g., metrics, notifications)
-        for (Consumer<WriteAuthorizedEvent> listener : eventListeners) {
-            try {
-                listener.accept(event);
-            } catch (Exception e) {
-                log.error("Error in event listener", e);
-            }
-        }
-        
         log.info("✅ Payment proof stored: proposalId={}, verified=true", event.proposalId);
-    }
-    
-    /**
-     * Add event listener (for metrics, notifications, etc.).
-     */
-    public void addEventListener(Consumer<WriteAuthorizedEvent> listener) {
-        eventListeners.add(listener);
     }
     
     /**
