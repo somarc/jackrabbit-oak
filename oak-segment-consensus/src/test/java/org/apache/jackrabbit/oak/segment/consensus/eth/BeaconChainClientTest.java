@@ -32,7 +32,6 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 public class BeaconChainClientTest {
 
@@ -96,18 +95,12 @@ public class BeaconChainClientTest {
     }
 
     @Test
-    public void testStaleEpochDataDetectedAndFreshnessCheckThrows() throws Exception {
+    public void testStaleEpochDataDetected() throws Exception {
         BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.SEPOLIA, 200L);
 
         setField(client, "lastUpdateTime", System.currentTimeMillis() - 301000L);
 
         assertFalse(client.isEpochDataFresh());
-        try {
-            client.checkEpochFreshness();
-            fail("Expected IllegalStateException");
-        } catch (IllegalStateException e) {
-            assertEquals("Epoch data is stale!", e.getMessage());
-        }
     }
 
     @Test

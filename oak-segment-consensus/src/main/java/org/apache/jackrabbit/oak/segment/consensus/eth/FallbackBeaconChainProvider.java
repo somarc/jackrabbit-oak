@@ -80,11 +80,6 @@ public class FallbackBeaconChainProvider implements BeaconChainProvider {
         return providers.stream().map(BeaconChainProvider::name).collect(Collectors.toList());
     }
 
-    /** Returns the underlying provider list (package-private for tests). */
-    List<BeaconChainProvider> getProviders() {
-        return providers;
-    }
-
     /**
      * Builds a fallback provider from config, wrapping each with a circuit breaker.
      *

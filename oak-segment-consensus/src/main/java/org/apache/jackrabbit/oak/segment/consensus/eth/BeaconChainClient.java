@@ -174,12 +174,6 @@ public class BeaconChainClient {
         return (System.currentTimeMillis() - lastUpdateTime) < 300_000L;
     }
 
-    public void checkEpochFreshness() {
-        if (!isEpochDataFresh()) {
-            throw new IllegalStateException("Epoch data is stale!");
-        }
-    }
-
     public Map<String, Object> getHealthStatus() {
         Map<String, Object> h = new HashMap<>();
         h.put("mode",              networkMode.toString());

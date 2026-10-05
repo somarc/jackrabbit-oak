@@ -16,8 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.eth;
 
-import java.net.URL;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,10 +77,6 @@ class BeaconchainDotInProvider implements BeaconChainProvider {
         return "beaconcha.in(" + apiBaseUrl + ")";
     }
 
-    String getApiBaseUrl() {
-        return apiBaseUrl;
-    }
-
     /**
      * Parses an epoch number from a beaconcha.in JSON response.
      * Handles {@code {"data":{"epoch":NNN}}} and {@code {"data":NNN}} shapes.
@@ -93,21 +87,12 @@ class BeaconchainDotInProvider implements BeaconChainProvider {
             return -1;
         }
         try {
-            int epochIdx = json.indexOf("\"epoch\"");
-            if (epochIdx >= 0) {
-                int colonIdx = json.indexOf(":", epochIdx);
-                int endIdx = json.indexOf(",", colonIdx);
-                if (endIdx < 0) endIdx = json.indexOf("}", colonIdx);
-                if (colonIdx > 0 && endIdx > colonIdx) {
-                    return Long.parseLong(json.substring(colonIdx + 1, endIdx).trim());
-                }
-                return -1;
+            int keyIdx = json.indexOf("\"epoch\"");
+            if (keyIdx < 0) {
+                keyIdx = json.indexOf("\"data\"");
             }
-
-            // Alternate shape: "data": NNN
-            int dataIdx = json.indexOf("\"data\"");
-            if (dataIdx >= 0) {
-                int colonIdx = json.indexOf(":", dataIdx);
+            if (keyIdx >= 0) {
+                int colonIdx = json.indexOf(":", keyIdx);
                 int endIdx = json.indexOf(",", colonIdx);
                 if (endIdx < 0) endIdx = json.indexOf("}", colonIdx);
                 if (colonIdx > 0 && endIdx > colonIdx) {
