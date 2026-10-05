@@ -1,7 +1,10 @@
 # Genesis and replicated write-safety contract
 
-This is the code contract for the fixed three-member pre-production launch profile,
-not a claim that every production recovery or settlement gate has passed.
+This is the code contract for the fixed three-member pre-production launch profile
+(the local mock cluster started by
+[`oak-chain-infra`](https://github.com/somarc/oak-chain-infra)), not a claim that
+every production recovery or settlement gate has passed. Request-to-commit
+behavior is described in [OPERATION-LIFECYCLE.md](OPERATION-LIFECYCLE.md).
 
 ## Canonical genesis v2
 
@@ -48,8 +51,8 @@ or mutate the repository. Corrupt, incomplete, unsupported-version, or different
 authored content is rejected. The `genesisValidator` field denotes the configured
 bootstrap endpoint: the lexicographically first URL in the common configured HTTP
 member set. It is not an Aeron member-ID, ingress-caller, or elected-leader claim.
-All members must have the same configured HTTP endpoint set; local3 verifies this
-alongside the genesis digest.
+All members must have the same configured HTTP endpoint set; the local
+three-validator promotion campaign checks this alongside the genesis digest.
 Configured self and peer URLs share a pure lexical canonicalizer (including the
 `localhost`/`::1` loopback alias); public hostnames remain hostnames. DNS resolution
 is not allowed to change the identity recorded in genesis.
@@ -111,7 +114,8 @@ not sampled from potentially newer state when the callback runs.
 ## Startup feature gate
 
 The startup gate `oak.consensus.safety.enabled` defaults to true. The explicit value
-`false` prevents a v2 validator from starting; a misspelling does not disable safety.
+`false` prevents the validator from starting, because genesis v2 requires these
+invariants on every member; a misspelling does not disable safety.
 It is read at startup, not used to switch replicated semantics while a member is
 running. Clock, durability, reservation, integrity, and failure invariants are
 unconditional at apply, so mixed or changing node-local settings cannot restore an
