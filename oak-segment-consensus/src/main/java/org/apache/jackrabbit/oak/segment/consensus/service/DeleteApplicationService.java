@@ -50,8 +50,6 @@ import java.util.regex.Pattern;
  * <p><strong>Delete Semantics:</strong>
  * Delete in Oak = Remove node from tree (writes new segment saying "path no longer exists").
  * Old segments remain until GC/compaction runs.
- * 
- * @see org.apache.jackrabbit.oak.segment.consensus.validation.ContentDeleteProposal
  */
 public class DeleteApplicationService {
     

@@ -64,8 +64,6 @@ import java.util.function.Supplier;
  *   <li>Store IPFS CIDs (ADR 016)</li>
  *   <li>Handle intent tokens for lazy uploads (ADR 020)</li>
  * </ul>
- * 
- * @see org.apache.jackrabbit.oak.segment.consensus.validation.ContentWriteProposal
  */
 public class WriteApplicationService {
     
