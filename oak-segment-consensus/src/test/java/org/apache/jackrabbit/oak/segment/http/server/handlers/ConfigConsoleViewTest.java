@@ -119,12 +119,13 @@ public class ConfigConsoleViewTest {
         ConfigConsoleView.Row plain = row("plain.value", "tuning.plain_value");
         ConfigConsoleView.Row secret = row("auth.token", "tokenAuthTuning.auth_token");
 
-        assertEquals("<code>&lt;b&gt;</code>", ConfigConsoleView.renderValue(plain, "<b>"));
+        assertEquals("<span class=\"ro-field\">&lt;b&gt;</span>", ConfigConsoleView.renderValue(plain, "<b>"));
         assertTrue(ConfigConsoleView.renderValue(secret, "s3cr3t").contains("redacted"));
         assertFalse(ConfigConsoleView.renderValue(secret, "s3cr3t").contains("s3cr3t"));
-        assertTrue(ConfigConsoleView.renderValue(secret, true).contains("bool-true"));
+        assertTrue(ConfigConsoleView.renderValue(secret, true).contains("disabled checked"));
+        assertTrue(ConfigConsoleView.renderValue(plain, false).contains("bool-false"));
         assertTrue(ConfigConsoleView.renderValue(plain, "").contains("empty"));
-        assertTrue(ConfigConsoleView.renderValue(plain, null).contains("—"));
+        assertTrue(ConfigConsoleView.renderValue(plain, null).contains("empty"));
     }
 
     @Test
@@ -132,10 +133,11 @@ public class ConfigConsoleViewTest {
         Map<String, String> tokens = new ConfigConsoleView(new OsgiConfigApiHandler()).tokens();
         List<ConfigConsoleView.Config> configs = new ConfigConsoleView(new OsgiConfigApiHandler()).buildConfigs();
 
-        assertEquals("inactive", tokens.get("{{CONFIG_ADMIN_STATE}}"));
-        assertTrue(tokens.get("{{CONFIG_STATS}}").contains(">" + configs.size() + "</span>"));
-        assertTrue(tokens.get("{{CONFIG_LIST}}").contains("Oak Proposal Queue Tuning"));
-        assertTrue(tokens.get("{{CONFIG_LIST}}").contains("none — declared only"));
+        assertEquals("missing", tokens.get("{{CONFIG_ADMIN_STATE}}"));
+        assertTrue(tokens.get("{{CONFIG_STATLINE}}").startsWith("Configuration information: " + configs.size()
+            + " configurations in total - " + (configs.size() - 1) + " bound, 1 unbound."));
+        assertTrue(tokens.get("{{CONFIG_ROWS}}").contains("Oak Proposal Queue Tuning"));
+        assertTrue(tokens.get("{{CONFIG_ROWS}}").contains("Unbound: no runtime component reads this configuration"));
     }
 
     private static Map<String, Object> meta(Object defaultValue, String alias) {

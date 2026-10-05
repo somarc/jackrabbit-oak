@@ -322,7 +322,7 @@ public class RequestRouterTest {
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
             String html = body.toString();
-            assertTrue(html.contains("Configuration | Blockchain AEM Validator"));
+            assertTrue(html.contains("Blockchain AEM Web Console - Configuration"));
             assertFalse(html.contains("<form"));
         });
     }

@@ -415,11 +415,11 @@ public class DashboardHandler {
     }
 
     /**
-     * Handle the read-only, Felix-console-style configuration manager.
+     * Handle the read-only configuration manager, styled after the Felix Web Console.
      */
     public void handleConfigConsole(HttpServletResponse response) throws IOException {
-        String[] modeTokens = resolveModeTemplateTokens();
-        Map<String, String> tokens = buildSharedTemplateTokens("config", modeTokens[0], modeTokens[1]);
+        Map<String, String> tokens = new LinkedHashMap<>();
+        tokens.put("{{MODE_LABEL}}", resolveModeTemplateTokens()[1]);
         tokens.putAll(new ConfigConsoleView(new OsgiConfigApiHandler()).tokens());
         writeResolvedTemplate(response, "/config-console-template.html", tokens);
     }
@@ -452,7 +452,6 @@ public class DashboardHandler {
         boolean dashboardActive = "dashboard".equals(activeNav);
         boolean explorerActive = "explorer".equals(activeNav);
         boolean apiBrowserActive = "api-browser".equals(activeNav);
-        boolean configActive = "config".equals(activeNav);
 
         return loadTemplate("/shared-header.html")
             .replace("{{NAV_DASHBOARD_CLASS}}", dashboardActive ? "nav-link active" : "nav-link")
@@ -461,8 +460,6 @@ public class DashboardHandler {
             .replace("{{NAV_EXPLORER_CURRENT}}", explorerActive ? "aria-current=\"page\"" : "")
             .replace("{{NAV_API_BROWSER_CLASS}}", apiBrowserActive ? "nav-link active" : "nav-link")
             .replace("{{NAV_API_BROWSER_CURRENT}}", apiBrowserActive ? "aria-current=\"page\"" : "")
-            .replace("{{NAV_CONFIG_CLASS}}", configActive ? "nav-link active" : "nav-link")
-            .replace("{{NAV_CONFIG_CURRENT}}", configActive ? "aria-current=\"page\"" : "")
             .replace("{{MODE_CLASS}}", modeClass)
             .replace("{{MODE_LABEL}}", modeLabel);
     }

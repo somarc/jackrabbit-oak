@@ -253,150 +253,141 @@ final class ConfigConsoleView {
     Map<String, String> tokens() {
         List<Config> configs = buildConfigs();
         boolean configAdminBound = configs.stream().anyMatch(c -> OSGI_CONFIG_ADMIN_SOURCE.equals(c.source));
-        long declared = 0, bound = 0, declaredOnly = 0, runtimeOnly = 0, changed = 0;
+        long wired = configs.stream().filter(c -> c.componentId != null).count();
+        long declared = 0, bound = 0, changed = 0;
         for (Config config : configs) {
             declared += config.count(Binding.BOUND) + config.count(Binding.DECLARED_ONLY);
             bound += config.count(Binding.BOUND);
-            declaredOnly += config.count(Binding.DECLARED_ONLY);
-            runtimeOnly += config.count(Binding.RUNTIME_ONLY);
             changed += config.changed();
         }
 
-        StringBuilder stats = new StringBuilder();
-        appendStat(stats, "Configurations", configs.size(), "");
-        appendStat(stats, "Declared attributes", declared, "");
-        appendStat(stats, "Bound to runtime", bound, "");
-        appendStat(stats, "Changed from default", changed, changed > 0 ? "warn" : "");
-        appendStat(stats, "Declared, not read", declaredOnly, declaredOnly > 0 ? "warn" : "");
-        appendStat(stats, "Runtime, not declared", runtimeOnly, runtimeOnly > 0 ? "warn" : "");
-
-        StringBuilder list = new StringBuilder();
-        for (Config config : configs) {
-            renderConfig(list, config);
+        StringBuilder rows = new StringBuilder();
+        for (int i = 0; i < configs.size(); i++) {
+            renderConfig(rows, configs.get(i), i);
         }
 
         Map<String, String> tokens = new LinkedHashMap<>();
-        tokens.put("{{CONFIG_ADMIN_STATE}}", configAdminBound ? "bound" : "inactive");
-        tokens.put("{{CONFIG_ADMIN_LABEL}}", configAdminBound
-            ? "OSGi Configuration Admin is supplying values for at least one configuration."
-            : "OSGi Configuration Admin is not active in this standalone validator. Values resolve from -D system "
-                + "properties, environment variables, and code defaults; the OSGi declarations below document the contract.");
-        tokens.put("{{CONFIG_STATS}}", stats.toString());
-        tokens.put("{{CONFIG_LIST}}", list.toString());
+        tokens.put("{{CONFIG_ADMIN_STATLINE}}", configAdminBound
+            ? "Configuration Admin Service is running."
+            : "Configuration Admin Service is not running. This standalone validator resolves values from -D system "
+                + "properties, environment variables and code defaults; the OSGi declarations document the contract.");
+        tokens.put("{{CONFIG_ADMIN_STATE}}", configAdminBound ? "running" : "missing");
+        tokens.put("{{CONFIG_STATLINE}}", "Configuration information: " + configs.size() + " configurations in total - "
+            + wired + " bound, " + (configs.size() - wired) + " unbound. " + declared + " declared properties, "
+            + bound + " read at runtime, " + changed + " changed from default.");
+        tokens.put("{{CONFIG_ROWS}}", rows.toString());
         return tokens;
     }
 
-    private static void appendStat(StringBuilder html, String label, long value, String tone) {
-        html.append("<div class=\"stat ").append(tone).append("\"><span class=\"stat-label\">")
-            .append(label).append("</span><span class=\"stat-value\">").append(value).append("</span></div>");
-    }
-
-    private static void renderConfig(StringBuilder html, Config config) {
-        html.append("<details class=\"config\"><summary><span class=\"config-title\"><span class=\"config-name\">")
-            .append(esc(config.name)).append("</span><code class=\"config-pid\">").append(esc(config.pid))
-            .append("</code></span><span class=\"config-badges\">")
-            .append(badge(config.source, config.componentId == null ? "muted" : "source"))
-            .append(badge(config.rows.size() + (config.rows.size() == 1 ? " property" : " properties"), "muted"));
-        if (config.changed() > 0) {
-            html.append(badge(config.changed() + " changed", "warn"));
-        }
+    private static void renderConfig(StringBuilder html, Config config, int index) {
         long drift = config.count(Binding.DECLARED_ONLY) + config.count(Binding.RUNTIME_ONLY);
-        if (drift > 0) {
-            html.append(badge(drift + " unbound", "drift"));
-        }
-        html.append("</span></summary><div class=\"config-body\">");
+        String zebra = index % 2 == 0 ? "even" : "odd";
+        html.append("<tr class=\"config-row ").append(zebra).append("\">")
+            .append("<td class=\"col_Name\"><span class=\"toggle\" aria-hidden=\"true\"></span>")
+            .append("<span class=\"bName\">").append(esc(config.name)).append("</span> ")
+            .append("<span class=\"symName\">").append(esc(config.pid)).append("</span></td>")
+            .append("<td>").append(esc(config.source)).append("</td>")
+            .append("<td class=\"num\">").append(config.rows.size()).append("</td>")
+            .append("<td class=\"num").append(config.changed() > 0 ? " hl" : "").append("\">")
+            .append(config.changed()).append("</td>")
+            .append("<td class=\"num").append(drift > 0 ? " drift" : "").append("\">").append(drift).append("</td>")
+            .append("<td>").append(config.componentId == null ? "Unbound" : "Bound").append("</td></tr>");
+
+        html.append("<tr class=\"detail-row ").append(zebra).append("\" hidden><td colspan=\"6\"><div class=\"editor\">");
         if (!config.description.isEmpty()) {
-            html.append("<p class=\"config-desc\">").append(esc(config.description)).append("</p>");
+            html.append("<p class=\"configDescription\">").append(esc(config.description)).append("</p>");
         }
-        html.append("<table class=\"props\"><thead><tr><th>Property</th><th>Effective value</th><th>Default</th>")
-            .append("<th>Set via</th><th>Policy</th></tr></thead><tbody>");
+        html.append("<table class=\"editorTable\"><tbody>");
         for (Row row : config.rows) {
             renderRow(html, row);
         }
-        html.append("</tbody></table><dl class=\"config-info\">")
-            .append("<dt>Persistent identity (PID)</dt><dd><code>").append(esc(config.pid)).append("</code></dd>")
-            .append("<dt>Runtime component</dt><dd>")
-            .append(config.componentId == null ? "none — declared only" : "<code>" + esc(config.componentId) + "</code>")
-            .append("</dd><dt>Value source</dt><dd>").append(esc(config.source)).append("</dd></dl></div></details>");
+        html.append("<tr><th colspan=\"2\">Configuration Information</th></tr>")
+            .append(infoRow("Persistent Identity (PID)", "<code>" + esc(config.pid) + "</code>"))
+            .append(infoRow("Configuration Binding", config.componentId == null
+                ? "Unbound: no runtime component reads this configuration"
+                : "Runtime component <code>" + esc(config.componentId) + "</code>"))
+            .append(infoRow("Value Source", esc(config.source)))
+            .append("</tbody></table></div></td></tr>");
+    }
+
+    private static String infoRow(String label, String valueHtml) {
+        return "<tr><td class=\"minWidthCell\">" + label + "</td><td class=\"paddedCell\">" + valueHtml + "</td></tr>";
     }
 
     private static void renderRow(StringBuilder html, Row row) {
-        html.append("<tr class=\"row-").append(row.binding.name().toLowerCase(Locale.ROOT).replace('_', '-'))
-            .append(row.changed ? " row-changed" : "").append("\"><td><div class=\"prop-name\">")
-            .append(esc(row.label));
+        html.append("<tr class=\"prop ").append(row.binding.name().toLowerCase(Locale.ROOT).replace('_', '-'))
+            .append(row.changed ? " changed" : "").append("\"><td class=\"minWidthCell\">").append(esc(row.label))
+            .append("</td><td class=\"paddedCell\">");
         if (row.binding == Binding.DECLARED_ONLY) {
-            html.append(badge("declared, not read", "drift"));
-        } else if (row.binding == Binding.RUNTIME_ONLY) {
-            html.append(badge("not declared", "drift"));
-        }
-        html.append("</div><div class=\"prop-ids\">");
-        if (row.osgiId != null) {
-            html.append("<code title=\"OSGi attribute\">").append(esc(row.osgiId)).append("</code>");
-        }
-        if (row.runtimeKey != null) {
-            html.append("<code title=\"Runtime key\">").append(esc(row.runtimeKey)).append("</code>");
-        }
-        html.append("</div>");
-        if (row.description != null && !row.description.isEmpty()) {
-            html.append("<div class=\"prop-desc\">").append(esc(row.description)).append("</div>");
-        }
-        html.append("</td><td class=\"value\">");
-        if (row.binding == Binding.DECLARED_ONLY) {
-            html.append("<span class=\"empty\">not surfaced</span>");
+            html.append("<span class=\"ro-field na\">not read at runtime</span>");
         } else {
             html.append(renderValue(row, row.value));
-            if (row.changed) {
-                html.append(badge("changed", "warn"));
-            }
         }
-        html.append("</td><td class=\"value\">").append(renderValue(row, row.defaultValue)).append("</td><td>");
+        if (row.changed) {
+            html.append("<span class=\"flag changed\">changed from default</span>");
+        } else if (row.binding == Binding.RUNTIME_ONLY) {
+            html.append("<span class=\"flag drift\">not declared in metatype</span>");
+        }
+        html.append("<div class=\"topPaddedText\">").append(esc(nullToEmpty(row.description)));
+        if (row.osgiId != null) {
+            html.append(" <span class=\"pid\">").append(esc(row.osgiId)).append("</span>");
+        }
+        html.append("</div><div class=\"meta\">");
+        List<String> meta = new ArrayList<>();
+        if (row.defaultValue != null) {
+            meta.add("Default: " + renderDefault(row));
+        }
         if (row.alias != null && !row.alias.startsWith("osgi:")) {
             String[] names = row.alias.split("\\|");
-            html.append("<code>-D").append(esc(names[0])).append("</code>");
-            if (names.length > 1) {
-                html.append("<code>$").append(esc(names[1])).append("</code>");
-            }
+            meta.add("Read from: <code>-D" + esc(names[0]) + "</code>"
+                + (names.length > 1 ? " <code>$" + esc(names[1]) + "</code>" : ""));
         }
-        for (String layer : row.setVia) {
-            html.append(badge(layer, "OSGi only".equals(layer) ? "muted" : "set"));
+        if (row.binding != Binding.DECLARED_ONLY) {
+            meta.add("Set via: " + (row.setVia.isEmpty()
+                ? (row.changed ? "derived" : "default") : esc(String.join(", ", row.setVia))));
         }
-        if (row.binding != Binding.DECLARED_ONLY && row.setVia.isEmpty()) {
-            html.append(badge(row.changed ? "derived" : "default", "muted"));
-        }
-        html.append("</td><td>");
         if (row.reloadMode != null) {
-            html.append(badge(row.reloadMode, "muted"));
+            meta.add(esc(row.reloadMode));
         }
         if (row.risk != null) {
-            html.append(badge(row.risk, "risk-" + row.risk));
+            meta.add("<span class=\"risk-" + esc(row.risk) + "\">" + esc(row.risk) + "</span>");
         }
-        html.append("</td></tr>");
+        if (row.runtimeKey != null) {
+            meta.add("Key: <code>" + esc(row.runtimeKey) + "</code>");
+        }
+        html.append(String.join(" &middot; ", meta)).append("</div></td></tr>");
+    }
+
+    private static String renderDefault(Row row) {
+        String text = String.valueOf(row.defaultValue);
+        if (text.isEmpty()) {
+            return "<em>empty</em>";
+        }
+        return isSecret(row) ? "<em>redacted</em>" : "<code>" + esc(text) + "</code>";
     }
 
     static String renderValue(Row row, Object value) {
         if (value == null) {
-            return "<span class=\"empty\">—</span>";
-        }
-        String text = String.valueOf(value);
-        if (!(value instanceof Boolean) && !text.isEmpty() && isSecret(row)) {
-            return "<span class=\"redacted\">redacted</span>";
-        }
-        if (text.isEmpty()) {
-            return "<span class=\"empty\">empty</span>";
+            return "<span class=\"ro-field empty\">&nbsp;</span>";
         }
         if (value instanceof Boolean) {
-            return "<span class=\"bool bool-" + text + "\">" + text + "</span>";
+            boolean on = (Boolean) value;
+            return "<label class=\"ro-check bool-" + on + "\"><input type=\"checkbox\" disabled" + (on ? " checked" : "")
+                + "> " + on + "</label>";
         }
-        return "<code>" + esc(text) + "</code>";
+        String text = String.valueOf(value);
+        if (text.isEmpty()) {
+            return "<span class=\"ro-field empty\">&nbsp;</span>";
+        }
+        if (isSecret(row)) {
+            return "<span class=\"ro-field redacted\" title=\"redacted\">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span>";
+        }
+        return "<span class=\"ro-field\">" + esc(text) + "</span>";
     }
 
     static boolean isSecret(Row row) {
         return SECRET_NAME.matcher(nullToEmpty(row.osgiId) + " " + nullToEmpty(row.runtimeKey)
             + " " + nullToEmpty(row.alias)).find();
-    }
-
-    private static String badge(String text, String tone) {
-        return "<span class=\"badge " + tone + "\">" + esc(text) + "</span>";
     }
 
     private static String humanize(String key) {

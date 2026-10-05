@@ -19,311 +19,320 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Configuration | Blockchain AEM Validator</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <title>Blockchain AEM Web Console - Configuration</title>
+    <!-- Layout and palette follow the Apache Felix Web Console (webconsole.css, config.css, jQuery UI "smoothness"). -->
     <style>
-        :root {
-            --bg-canvas: #060914;
-            --border-soft: rgba(148, 163, 184, 0.16);
-            --text-primary: #e6edf7;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
-            --accent-cyan: #22d3ee;
-            --accent-green: #34d399;
-            --accent-amber: #f59e0b;
-            --accent-red: #f87171;
-            --accent-violet: #a78bfa;
-            --shadow-panel: 0 24px 80px rgba(2, 6, 23, 0.35);
-        }
-
         * { box-sizing: border-box; }
-
+        html, body { margin: 0; padding: 0; background: #fff; }
         body {
-            margin: 0;
-            font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            color: var(--text-primary);
-            background:
-                radial-gradient(circle at top left, rgba(34, 211, 238, 0.12), transparent 24%),
-                radial-gradient(circle at top right, rgba(96, 165, 250, 0.14), transparent 20%),
-                linear-gradient(180deg, #04070f 0%, var(--bg-canvas) 45%, #04070d 100%);
-            min-height: 100vh;
-            line-height: 1.5;
+            font-family: Verdana, Arial, Helvetica, sans-serif;
+            font-size: 12px;
+            color: #222;
         }
-
+        a { color: #222; }
         code {
-            font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
-            font-size: 0.86em;
-            color: var(--text-primary);
-            background: rgba(148, 163, 184, 0.08);
-            padding: 1px 6px;
-            border-radius: 6px;
+            font-family: Menlo, Consolas, "Courier New", monospace;
+            font-size: 11px;
             overflow-wrap: anywhere;
         }
 
-        a { color: var(--accent-cyan); text-decoration: none; }
-        a:hover { text-decoration: underline; }
+        #main { width: 90%; margin-left: 5%; padding-bottom: 2em; }
 
-{{SHARED_HEADER_STYLES}}
-
-        .shell {
-            display: flex;
-            flex-direction: column;
-            gap: 18px;
-            max-width: 1320px;
-            margin: 0 auto;
-            padding: 28px;
-        }
-
-        .panel {
-            background: linear-gradient(180deg, rgba(15, 22, 40, 0.96) 0%, rgba(10, 16, 31, 0.94) 100%);
-            border: 1px solid var(--border-soft);
-            border-radius: 20px;
-            box-shadow: var(--shadow-panel);
-            padding: 22px 24px;
-        }
-
-        .eyebrow {
-            color: var(--accent-cyan);
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-        }
-
-        h1 { margin: 8px 0 0; font-size: clamp(26px, 3vw, 34px); letter-spacing: -0.02em; line-height: 1.1; }
-
-        .hero-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-        .hero p { margin: 10px 0 0; max-width: 760px; color: var(--text-secondary); }
-
-        .readonly-pill {
-            flex: 0 0 auto;
-            padding: 6px 12px;
-            border-radius: 999px;
-            border: 1px solid rgba(148, 163, 184, 0.3);
-            color: var(--text-secondary);
-            font-size: 12px;
-            font-weight: 600;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-        }
-
-        .notice {
-            margin-top: 16px;
-            padding: 12px 14px;
-            border-radius: 14px;
-            border: 1px solid rgba(245, 158, 11, 0.35);
-            background: rgba(245, 158, 11, 0.07);
-            color: var(--text-secondary);
-            font-size: 14px;
-        }
-        .notice.bound { border-color: rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.07); }
-        .notice strong { color: var(--text-primary); }
-
-        .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
-        .stat {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            padding: 12px 14px;
-            border-radius: 14px;
-            border: 1px solid var(--border-soft);
-            background: rgba(2, 6, 23, 0.35);
-        }
-        .stat-label { color: var(--text-muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
-        .stat-value { font-size: 22px; font-weight: 600; }
-        .stat.warn .stat-value { color: var(--accent-amber); }
-
-        .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-        .toolbar input[type="search"] {
-            flex: 1 1 320px;
-            padding: 10px 14px;
-            border-radius: 12px;
-            border: 1px solid var(--border-soft);
-            background: rgba(2, 6, 23, 0.55);
-            color: var(--text-primary);
-            font: inherit;
-        }
-        .toolbar label { color: var(--text-secondary); font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
-        .toolbar button {
-            padding: 9px 14px;
-            border-radius: 12px;
-            border: 1px solid var(--border-soft);
-            background: rgba(148, 163, 184, 0.08);
-            color: var(--text-primary);
-            font: inherit;
-            font-size: 14px;
-            cursor: pointer;
-        }
-        .toolbar button:hover { border-color: rgba(34, 211, 238, 0.45); }
-
-        .config-list { display: flex; flex-direction: column; gap: 10px; }
-
-        .config {
-            border: 1px solid var(--border-soft);
-            border-radius: 16px;
-            background: linear-gradient(180deg, rgba(15, 22, 40, 0.96) 0%, rgba(10, 16, 31, 0.94) 100%);
-            overflow: hidden;
-        }
-        .config[open] { border-color: rgba(34, 211, 238, 0.35); }
-        .config > summary {
+        /* lead: title and logo */
+        #lead { padding-top: 10px; height: 83px; display: flex; justify-content: space-between; }
+        #lead h1 { margin: 0; font-size: 26px; font-weight: bold; line-height: 1.2; }
+        #lead .logo {
+            width: 63px;
+            height: 63px;
             display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 14px;
+            place-items: center;
+            background: #0f62fe;
+            color: #fff;
+        }
+        #lead .logo svg { width: 36px; height: 36px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+
+        /* top navigation */
+        #technav {
+            display: flex;
             align-items: center;
-            padding: 14px 18px;
+            gap: 4px;
+            margin-top: 6px;
+            padding: 4px;
+            border: 1px solid #aaa;
+            border-radius: 4px;
+            background: #fff;
+        }
+        #technav a { padding: 3px 7px; text-decoration: none; border: 1px solid transparent; border-radius: 4px; }
+        #technav a:hover { border-color: #999; background: #dadada; }
+        #technav a.current { border-color: #aaa; background: linear-gradient(#f6f6f6, #e6e6e6); font-weight: bold; }
+        #technav .right { margin-left: auto; padding: 3px 7px; color: #555; }
+
+        /* status line (ui-state-highlight) */
+        .statline {
+            margin: .6em 0 0;
+            padding: .3em .5em;
+            border: 1px solid #fcefa1;
+            background: #fbf9ee;
+            color: #363636;
+        }
+        .statline.missing { border-color: #e2c9a3; background: #fdf3e2; }
+
+        /* header bar with filter and buttons (ui-widget-header buttonGroup) */
+        .buttonGroup {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            margin-top: .6em;
+            padding: .5em 1em;
+            border: 1px solid #aaa;
+            border-bottom: none;
+            border-radius: 4px 4px 0 0;
+            background: linear-gradient(#e8e8e8, #cccccc);
+        }
+        .filterBox { display: flex; align-items: center; gap: 4px; }
+        .filterBox input {
+            width: 260px;
+            padding: 2px 4px;
+            font: inherit;
+            color: #184054;
+            background: #f0f0f0;
+            border: 1px solid #999;
+            border-bottom-color: #ccc;
+            border-right-color: #ccc;
+        }
+        .filterClear { cursor: pointer; padding: 0 4px; font-weight: bold; color: #555; }
+        .buttonGroup .spacer { flex: 1 1 auto; }
+        button, .button {
+            padding: 2px 10px;
+            font: inherit;
+            color: #555;
+            border: 1px solid #d3d3d3;
+            border-radius: 4px;
+            background: linear-gradient(#f6f6f6, #e6e6e6 50%, #dadada);
             cursor: pointer;
-            list-style: none;
         }
-        .config > summary::-webkit-details-marker { display: none; }
-        .config-name::before { content: "\25B8\00a0\00a0"; color: var(--text-muted); }
-        .config[open] .config-name::before { content: "\25BE\00a0\00a0"; }
-        .config-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-        .config-name { font-weight: 600; }
-        .config-pid { color: var(--text-muted); background: transparent; padding: 0 0 0 18px; font-size: 12px; }
-        .config-badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+        button:hover { border-color: #999; color: #212121; background: #dadada; }
+        button[aria-pressed="true"] { border-color: #aaa; color: #212121; background: #fff; font-weight: bold; }
 
-        .config-body { padding: 0 18px 18px; }
-        .config-desc { margin: 0 0 12px; color: var(--text-secondary); font-size: 14px; }
-
-        table.props { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed; }
-        table.props th:nth-child(1) { width: 36%; }
-        table.props th:nth-child(2) { width: 16%; }
-        table.props th:nth-child(3) { width: 13%; }
-        table.props th:nth-child(4) { width: 21%; }
-        table.props th:nth-child(5) { width: 14%; }
-        table.props th {
-            text-align: left;
-            padding: 8px 10px;
-            color: var(--text-muted);
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            border-bottom: 1px solid var(--border-soft);
-        }
-        table.props td { padding: 10px; vertical-align: top; border-bottom: 1px solid rgba(148, 163, 184, 0.08); }
-        table.props td code { display: inline-block; margin: 0 4px 4px 0; }
-        tr.row-changed td:first-child { box-shadow: inset 3px 0 0 var(--accent-amber); }
-        tr.row-declared-only td, tr.row-runtime-only td { background: rgba(167, 139, 250, 0.04); }
-        .prop-name { font-weight: 600; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-        .prop-ids { margin-top: 4px; }
-        .prop-desc { margin-top: 2px; color: var(--text-secondary); font-size: 13px; }
-
-        .badge {
-            display: inline-block;
-            padding: 2px 8px;
-            margin: 0 4px 4px 0;
-            border-radius: 999px;
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.04em;
-            border: 1px solid var(--border-soft);
-            color: var(--text-secondary);
+        /* nicetable */
+        table.nicetable { width: 100%; border-collapse: collapse; border: 1px solid #aaa; text-align: left; }
+        table.nicetable th, table.nicetable td { padding: .3em .8em; vertical-align: top; border-bottom: 1px solid #ccc; }
+        table.nicetable thead th {
+            background: linear-gradient(#f2f2f2, #dddddd);
+            font-weight: bold;
             white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
         }
-        .badge.source { color: var(--accent-cyan); border-color: rgba(34, 211, 238, 0.35); }
-        .badge.set { color: var(--accent-green); border-color: rgba(52, 211, 153, 0.4); }
-        .badge.warn { color: var(--accent-amber); border-color: rgba(245, 158, 11, 0.4); }
-        .badge.drift { color: var(--accent-violet); border-color: rgba(167, 139, 250, 0.4); }
-        .badge.risk-guarded { color: var(--accent-amber); }
-        .badge.risk-expert-only { color: var(--accent-red); border-color: rgba(248, 113, 113, 0.4); }
-        .empty, .redacted { color: var(--text-muted); font-style: italic; }
-        .bool-true { color: var(--accent-green); font-weight: 600; }
-        .bool-false { color: var(--text-secondary); font-weight: 600; }
+        table.nicetable thead th::after { content: " \21C5"; color: #888; font-weight: normal; }
+        table.nicetable thead th[aria-sort="ascending"]::after { content: " \25B2"; color: #333; }
+        table.nicetable thead th[aria-sort="descending"]::after { content: " \25BC"; color: #333; }
+        tr.config-row { cursor: pointer; }
+        tr.config-row.even, tr.detail-row.even { background: #f3f3f3; }
+        tr.config-row:hover { background: #e4ecf7; }
+        tr.config-row.open { background: #dfe7f3; }
+        .col_Name { width: 55%; }
+        .num { text-align: right; width: 6em; }
+        .num.hl { color: #b25b00; font-weight: bold; }
+        .num.drift { color: #6b4fbb; font-weight: bold; }
+        .toggle::before { content: "\25B8"; display: inline-block; width: 1.2em; color: #333; }
+        tr.open .toggle::before { content: "\25BE"; }
+        .bName { font-weight: normal; }
+        .symName { font-style: italic; color: #444; }
+        .symName::before { content: "("; }
+        .symName::after { content: ")"; }
 
-        dl.config-info {
-            display: grid;
-            grid-template-columns: max-content 1fr;
-            gap: 4px 14px;
-            margin: 14px 0 0;
-            padding-top: 12px;
-            border-top: 1px solid var(--border-soft);
-            font-size: 13px;
+        /* expanded configuration: mirrors the configMgr editor dialog */
+        tr.detail-row > td { padding: 0 .8em .8em 2em; }
+        .editor { border: 1px solid #aaa; border-radius: 4px; background: #fff; padding: .6em .8em; }
+        .configDescription { margin: 0 0 .8em; color: #333; }
+        table.editorTable { width: 100%; border-collapse: collapse; }
+        table.editorTable td { border-bottom: 1px solid #e5e5e5; vertical-align: top; }
+        table.editorTable th {
+            text-align: left;
+            padding: .4em .5em;
+            margin-top: .5em;
+            border: 1px solid #aaa;
+            background: linear-gradient(#e8e8e8, #cccccc);
         }
-        dl.config-info dt { color: var(--text-muted); }
-        dl.config-info dd { margin: 0; color: var(--text-secondary); }
-
-        .footnote { color: var(--text-muted); font-size: 13px; }
-        .footnote code { font-size: 0.92em; }
-
-        @media (max-width: 900px) {
-            .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .config > summary { grid-template-columns: 1fr; }
-            .config-badges { justify-content: flex-start; }
-            table.props { table-layout: auto; }
+        .minWidthCell { width: 22%; min-width: 10em; padding: .55em .5em .5em 0; font-weight: bold; }
+        .paddedCell { padding: .5em; }
+        .topPaddedText { padding-top: .35em; white-space: pre-wrap; color: #333; }
+        .pid { font-style: italic; color: #555; }
+        .pid::before { content: "("; }
+        .pid::after { content: ")"; }
+        .meta { padding-top: .25em; color: #777; font-size: 11px; }
+        .meta code { color: #555; }
+        .ro-field {
+            display: inline-block;
+            min-width: 24em;
+            max-width: 100%;
+            min-height: 1.6em;
+            padding: 2px 4px;
+            color: #184054;
+            background: #f0f0f0;
+            border: 1px solid #999;
+            border-bottom-color: #ccc;
+            border-right-color: #ccc;
+            font-family: Menlo, Consolas, "Courier New", monospace;
+            font-size: 11px;
+            overflow-wrap: anywhere;
+            vertical-align: middle;
         }
+        .ro-field.na, .ro-field.redacted { color: #888; font-style: italic; font-family: inherit; }
+        .ro-check { color: #555; }
+        .flag { display: inline-block; margin-left: .6em; padding: 0 .4em; font-size: 11px; border-radius: 3px; vertical-align: middle; }
+        .flag.changed { border: 1px solid #fcefa1; background: #fbf9ee; color: #8a6d00; }
+        .flag.drift { border: 1px solid #d6ccef; background: #f5f2fc; color: #6b4fbb; }
+        tr.prop.declared-only .minWidthCell { color: #888; }
+        .risk-expert-only { color: #b00; }
+        .risk-guarded { color: #8a6d00; }
+
+        #footer { margin-top: 1em; color: #777; font-size: 11px; }
+        #footer a { color: #555; }
     </style>
 </head>
 <body>
-{{SHARED_HEADER}}
-<main class="shell">
-    <section class="panel hero">
-        <div class="hero-row">
-            <div>
-                <div class="eyebrow">Configuration</div>
-                <h1>Configuration Manager</h1>
-                <p>Every configuration this validator declares, with the value it is actually running with.
-                    Expand a configuration to see each property, its default, and which layer set it.</p>
-            </div>
-            <span class="readonly-pill">Read-only</span>
+<div id="main">
+    <div id="lead">
+        <h1>Blockchain AEM Web Console<br>Configuration</h1>
+        <a class="logo" href="/" title="Blockchain AEM validator"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg></a>
+    </div>
+    <nav id="technav" aria-label="Primary">
+        <a href="/">Main</a>
+        <a href="/explorer">CRX/OC</a>
+        <a href="/api-browser">API Browser</a>
+        <a href="/console/configMgr" class="current" aria-current="page">Configuration</a>
+        <span class="right">{{MODE_LABEL}}</span>
+    </nav>
+
+    <p class="statline {{CONFIG_ADMIN_STATE}}">{{CONFIG_ADMIN_STATLINE}}</p>
+    <p class="statline">{{CONFIG_STATLINE}}</p>
+
+    <div class="buttonGroup">
+        <div class="filterBox">
+            <input id="filter" type="search" placeholder="Name, PID, property or -D key" title="Filter configurations and properties" autocomplete="off">
+            <span id="filterClear" class="filterClear" title="Clear filter">&#x2716;</span>
+            <button id="filterApply" type="button">Apply Filter</button>
         </div>
-        <div class="notice {{CONFIG_ADMIN_STATE}}"><strong>Config Admin {{CONFIG_ADMIN_STATE}}.</strong> {{CONFIG_ADMIN_LABEL}}</div>
-        <div class="stats">{{CONFIG_STATS}}</div>
-    </section>
+        <span class="spacer"></span>
+        <button type="button" data-only="changed" aria-pressed="false">Changed only</button>
+        <button type="button" data-only="drift" aria-pressed="false">Drift only</button>
+        <button type="button" data-expand="true">Expand All</button>
+        <button type="button" data-expand="false">Collapse All</button>
+        <button type="button" onclick="location.reload()">Reload</button>
+    </div>
+    <table id="configTable" class="nicetable">
+        <thead>
+            <tr>
+                <th data-sort="text">Name</th>
+                <th data-sort="text">Source</th>
+                <th data-sort="num">Properties</th>
+                <th data-sort="num">Changed</th>
+                <th data-sort="num">Drift</th>
+                <th data-sort="text">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+{{CONFIG_ROWS}}
+        </tbody>
+    </table>
 
-    <section class="toolbar" aria-label="Filter configurations">
-        <input id="config-filter" type="search" placeholder="Filter by name, PID, property, or -D key" autocomplete="off">
-        <label><input id="only-changed" type="checkbox"> Changed only</label>
-        <label><input id="only-unbound" type="checkbox"> Unbound only</label>
-        <button type="button" data-expand="true">Expand all</button>
-        <button type="button" data-expand="false">Collapse all</button>
-    </section>
-
-    <section class="config-list">
-{{CONFIG_LIST}}
-    </section>
-
-    <p class="footnote">
-        <strong>Set via</strong> lists the layers that currently carry a value: OSGi overrides, <code>-D</code> system properties, or
-        environment variables; <em>default</em> means none of them is set. <strong>Declared, not read</strong> marks OSGi attributes no
-        runtime value reports; <strong>not declared</strong> marks runtime values with no OSGi attribute. Secrets are never shown.
-        Machine-readable views: <a href="/v1/config/osgi">/v1/config/osgi</a>, <a href="/v1/config/osgi/schema">schema</a>,
-        <a href="/v1/config/osgi/sources">sources</a>, <a href="/v1/config/osgi/coverage">coverage</a>, <a href="/v1/config/osgi/delta">delta</a>.
+    <p id="footer">
+        Read-only. Change configuration through the validator launch flags (<code>-D</code>) or environment, then restart.
+        <em>Drift</em> counts OSGi properties no runtime value reports plus runtime values with no OSGi declaration.
+        JSON: <a href="/v1/config/osgi">effective</a> &middot; <a href="/v1/config/osgi/schema">schema</a> &middot;
+        <a href="/v1/config/osgi/sources">sources</a> &middot; <a href="/v1/config/osgi/coverage">coverage</a> &middot;
+        <a href="/v1/config/osgi/delta">delta</a>
     </p>
-</main>
+</div>
 <script>
     (function () {
-        var filter = document.getElementById('config-filter');
-        var onlyChanged = document.getElementById('only-changed');
-        var onlyUnbound = document.getElementById('only-unbound');
-        var configs = Array.prototype.slice.call(document.querySelectorAll('details.config'));
+        var tbody = document.querySelector('#configTable tbody');
+        var filter = document.getElementById('filter');
+        var only = { changed: false, drift: false };
 
-        function apply() {
-            var query = filter.value.trim().toLowerCase();
-            configs.forEach(function (config) {
-                var rows = Array.prototype.slice.call(config.querySelectorAll('tbody tr'));
-                var visibleRows = 0;
-                rows.forEach(function (row) {
-                    var show = (!onlyChanged.checked || row.classList.contains('row-changed'))
-                        && (!onlyUnbound.checked || !row.classList.contains('row-bound'))
-                        && (!query || row.textContent.toLowerCase().indexOf(query) >= 0
-                            || config.querySelector('summary').textContent.toLowerCase().indexOf(query) >= 0);
-                    row.hidden = !show;
-                    if (show) { visibleRows++; }
-                });
-                var narrowed = query || onlyChanged.checked || onlyUnbound.checked;
-                config.hidden = narrowed && visibleRows === 0;
-                if (narrowed && visibleRows > 0) { config.open = true; }
+        function pairs() {
+            return Array.prototype.map.call(tbody.querySelectorAll('tr.config-row'), function (row) {
+                return { row: row, detail: row.nextElementSibling };
             });
         }
 
-        [filter, onlyChanged, onlyUnbound].forEach(function (input) { input.addEventListener('input', apply); });
+        function setOpen(pair, open) {
+            pair.row.classList.toggle('open', open);
+            pair.detail.hidden = !open;
+        }
+
+        function restripe() {
+            pairs().filter(function (p) { return !p.row.hidden; }).forEach(function (p, i) {
+                var zebra = i % 2 === 0 ? 'even' : 'odd';
+                [p.row, p.detail].forEach(function (el) {
+                    el.classList.remove('even', 'odd');
+                    el.classList.add(zebra);
+                });
+            });
+        }
+
+        function apply() {
+            var query = filter.value.trim().toLowerCase();
+            var narrowed = query || only.changed || only.drift;
+            pairs().forEach(function (p) {
+                var header = p.row.textContent.toLowerCase();
+                var visible = 0;
+                p.detail.querySelectorAll('tr.prop').forEach(function (prop) {
+                    var show = (!only.changed || prop.classList.contains('changed'))
+                        && (!only.drift || !prop.classList.contains('bound'))
+                        && (!query || header.indexOf(query) >= 0 || prop.textContent.toLowerCase().indexOf(query) >= 0);
+                    prop.hidden = !show;
+                    if (show) { visible++; }
+                });
+                p.row.hidden = narrowed && visible === 0;
+                if (p.row.hidden) {
+                    setOpen(p, false);
+                } else if (narrowed) {
+                    setOpen(p, true);
+                }
+            });
+            restripe();
+        }
+
+        tbody.addEventListener('click', function (event) {
+            var row = event.target.closest('tr.config-row');
+            if (row) {
+                setOpen({ row: row, detail: row.nextElementSibling }, !row.classList.contains('open'));
+            }
+        });
+        filter.addEventListener('input', apply);
+        document.getElementById('filterApply').addEventListener('click', apply);
+        document.getElementById('filterClear').addEventListener('click', function () { filter.value = ''; apply(); });
+        document.querySelectorAll('button[data-only]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var key = button.getAttribute('data-only');
+                only[key] = !only[key];
+                button.setAttribute('aria-pressed', String(only[key]));
+                apply();
+            });
+        });
         document.querySelectorAll('button[data-expand]').forEach(function (button) {
             button.addEventListener('click', function () {
                 var open = button.getAttribute('data-expand') === 'true';
-                configs.forEach(function (config) { if (!config.hidden) { config.open = open; } });
+                pairs().forEach(function (p) { if (!p.row.hidden) { setOpen(p, open); } });
+            });
+        });
+        document.querySelectorAll('#configTable thead th').forEach(function (th, column) {
+            th.addEventListener('click', function () {
+                var ascending = th.getAttribute('aria-sort') !== 'ascending';
+                document.querySelectorAll('#configTable thead th').forEach(function (other) { other.removeAttribute('aria-sort'); });
+                th.setAttribute('aria-sort', ascending ? 'ascending' : 'descending');
+                var numeric = th.getAttribute('data-sort') === 'num';
+                pairs().sort(function (a, b) {
+                    var x = a.row.cells[column].textContent.trim();
+                    var y = b.row.cells[column].textContent.trim();
+                    var order = numeric ? Number(x) - Number(y) : x.localeCompare(y);
+                    return ascending ? order : -order;
+                }).forEach(function (p) { tbody.appendChild(p.row); tbody.appendChild(p.detail); });
+                restripe();
             });
         });
     })();
