@@ -49,7 +49,6 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class AeronClusterLauncherTest {
@@ -178,7 +177,6 @@ public class AeronClusterLauncherTest {
             AeronClusterLauncher.ContainerLaunchInvoker.DEFAULT
         );
 
-        assertEquals(AeronClusterLauncher.getPortBase(), launcher.getClusterBasePort());
         assertEquals(AeronClusterLauncher.calculatePort(1, 7), AeronClusterLauncher.calculatePort(
             AeronClusterLauncher.getPortBase(), 1, 7));
         assertEquals("node-1", invokeGetHostname(launcher));
@@ -198,11 +196,6 @@ public class AeronClusterLauncherTest {
         setField(launcher, "healthMonitor", healthMonitor);
         assertSame(crashHandler, launcher.getCrashHandler());
         assertSame(healthMonitor, launcher.getHealthMonitor());
-
-        org.agrona.concurrent.ShutdownSignalBarrier barrier = mock(org.agrona.concurrent.ShutdownSignalBarrier.class);
-        setField(launcher, "barrier", barrier);
-        launcher.awaitShutdown();
-        verify(barrier).await();
 
         launcher.shutdown();
         assertTrue(((AtomicBoolean) getField(launcher, "shutdownScheduled")).get());

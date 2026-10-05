@@ -83,32 +83,11 @@ public class MessageDispatcher {
                                 String message, String signature, String intentToken,
                                 String blobId, String mimeType, String ipfsCid,
                                 MutationAuditMetadata auditMetadata) {
-            applyWrite(
-                walletAddress,
-                path,
-                contentType,
-                message,
-                signature,
-                intentToken,
-                blobId,
-                mimeType,
-                ipfsCid,
-                auditMetadata != null ? auditMetadata.getProposalId() : null
-            );
-        }
-
-        default void applyWrite(String walletAddress, String path, String contentType,
-                                String message, String signature, String intentToken,
-                                String blobId, String mimeType, String ipfsCid, String proposalId) {
             throw new UnsupportedOperationException("Write callback must implement applyWrite");
         }
 
         default void applyDelete(String walletAddress, String path, String signature,
                                  MutationAuditMetadata auditMetadata) {
-            applyDelete(walletAddress, path, signature, auditMetadata != null ? auditMetadata.getProposalId() : null);
-        }
-
-        default void applyDelete(String walletAddress, String path, String signature, String proposalId) {
             throw new UnsupportedOperationException("Write callback must implement applyDelete");
         }
     }

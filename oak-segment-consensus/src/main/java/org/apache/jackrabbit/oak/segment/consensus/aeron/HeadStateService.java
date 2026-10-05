@@ -43,7 +43,7 @@ public class HeadStateService {
 
     private static final Logger log = LoggerFactory.getLogger(HeadStateService.class);
 
-    private FileStore fileStore;
+    private final FileStore fileStore;
 
     private volatile String latestHead = null;
 
@@ -63,10 +63,6 @@ public class HeadStateService {
     @Deactivate
     protected void deactivate() {
         log.info("✅ HeadStateService deactivated");
-    }
-
-    public void setFileStore(FileStore fileStore) {
-        this.fileStore = fileStore;
     }
 
     public void updateLatestHead(String newHead) {

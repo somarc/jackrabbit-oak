@@ -45,79 +45,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Aeron Cluster-based consensus engine using proven Raft algorithm.
- * 
- * <p><strong>DISTRIBUTED ARCHITECTURE:</strong>
- * This is a distributed consensus system designed to run across multiple machines,
- * networks, and data centers. Validators communicate via UDP/IP networks and can
- * be deployed across geographically distributed infrastructure. The system is
- * NOT confined to localhost or single-machine deployments.
- * 
- * <p>This implementation leverages Aeron Cluster's battle-tested Raft consensus
- * to provide election safety, quorum requirements, log matching, and leader
- * completeness guarantees. Our unique value is the Ethereum integration layer.
- * 
- * <p><strong>Distributed Deployment:</strong>
- * <pre>
- * ┌─────────────────────────────────────────────────────────────┐
- * │         Distributed Validator Network                      │
- * │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
- * │  │ Validator-0  │  │ Validator-1  │  │ Validator-2  │   │
- * │  │ (US-East)    │  │ (EU-West)    │  │ (AP-South)   │   │
- * │  │ 10.0.1.10    │  │ 10.0.2.10    │  │ 10.0.3.10    │   │
- * │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘   │
- * │         │                  │                  │           │
- * │         └──────────────────┼──────────────────┘           │
- * │                            │                               │
- * │                    UDP/IP Network                        │
- * │              (Aeron Cluster Raft)                        │
- * └─────────────────────────────────────────────────────────────┘
- *                            │
- *                            ▼
- * ┌─────────────────────────────────────────┐
- * │     Aeron Cluster (Raft)               │
- * │  - Term-based leadership                │
- * │  - Majority quorum requirements        │
- * │  - Election safety guarantees          │
- * │  - Log matching guarantees             │
- * │  - Leader completeness                 │
- * │  - Network partition tolerance         │
- * └─────────────────────────────────────────┘
- *              │
- *              ▼
- * ┌─────────────────────────────────────────┐
- * │     Ethereum Integration Layer          │
- * │  - Epoch values from Ethereum Beacon   │
- * │  - Transaction-driven writes           │
- * │  - USDC payment validation              │
- * │  - Wallet-based sharding                │
- * └─────────────────────────────────────────┘
- * </pre>
- * 
- * <p><strong>Network Configuration:</strong>
- * <ul>
- *   <li>Validators communicate via UDP/IP (configurable endpoints)</li>
- *   <li>Peer URLs can be IP addresses, hostnames, or public URLs</li>
- *   <li>Supports deployment across multiple data centers/regions</li>
- *   <li>Network discovery via configured peer URLs</li>
- *   <li>No hard-coded localhost assumptions - fully distributed</li>
- * </ul>
- * 
- * <p><strong>Key Benefits:</strong>
- * <ul>
- *   <li>✅ Proven Raft consensus (no split-brain, guaranteed safety)</li>
- *   <li>✅ High performance (low latency, high throughput)</li>
- *   <li>✅ Distributed by design (multi-region, multi-datacenter capable)</li>
- *   <li>✅ Focus on Ethereum integration (our unique value)</li>
- *   <li>✅ Reduced complexity (less custom code to maintain)</li>
- * </ul>
- * 
- * <p><strong>Reference:</strong>
- * <ul>
- *   <li><a href="https://github.com/aeron-io/aeron">Aeron GitHub</a></li>
- *   <li><a href="https://raft.github.io/">Raft Consensus Algorithm</a></li>
- *   <li><a href="https://aeron.io/case-studies/coinbase-cloudnative-crypto-exchange-aeron-cluster/">Coinbase Case Study</a></li>
- * </ul>
+ * Oak's {@link ClusteredService} on Aeron Cluster (Raft). Writes, deletes, GC commands, durability reports and
+ * transaction boundaries reach every member through cluster ingress and are applied in log order on the service
+ * thread; ingress, leader discovery, snapshots and genesis are delegated to the collaborators wired in the
+ * constructor.
  */
 public class AeronConsensusEngine implements ClusteredService {
     
@@ -140,7 +71,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final TransactionLifecycleManager transactionLifecycleManager;
     private final PeerProbeMode peerProbeMode;
     
-    // ✅ PRODUCTION REFACTOR: Service layer components (extracted from monolithic class)
+    // Service layer components (extracted from monolithic class)
     private final MessageDispatcher messageDispatcher;
     private final SnapshotService snapshotService;
     private final AeronGenesisInitializer genesisInitializer;
@@ -164,41 +95,19 @@ public class AeronConsensusEngine implements ClusteredService {
     private volatile long publishedClusterTime = -1L;
     private IdleStrategy idleStrategy;
     
-    // ✈️ AERON NATIVE: Media driver directory name (needed for client connections)
+    // Media driver directory name (needed for client connections)
     private String aeronDirectoryName = null;
     
-    // ✈️ AERON NATIVE: Callback interface for applying replicated writes and deletes
+    // Callback interface for applying replicated writes and deletes
     public interface WriteApplicationCallback {
         default void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
                                           String signature, String intentToken, String blobId, String mimeType,
                                           String ipfsCid, MutationAuditMetadata auditMetadata) {
-            applyReplicatedWrite(
-                walletAddress,
-                path,
-                contentType,
-                message,
-                signature,
-                intentToken,
-                blobId,
-                mimeType,
-                ipfsCid,
-                auditMetadata != null ? auditMetadata.getProposalId() : null
-            );
-        }
-
-        default void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
-                                          String signature, String intentToken, String blobId, String mimeType,
-                                          String ipfsCid, String proposalId) {
             throw new UnsupportedOperationException("Write application callback must implement applyReplicatedWrite");
         }
 
         default void applyReplicatedDelete(String walletAddress, String path, String signature,
                                            MutationAuditMetadata auditMetadata) {
-            applyReplicatedDelete(walletAddress, path, signature,
-                auditMetadata != null ? auditMetadata.getProposalId() : null);
-        }
-
-        default void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId) {
             throw new UnsupportedOperationException("Write application callback must implement applyReplicatedDelete");
         }
     }
@@ -319,7 +228,7 @@ public class AeronConsensusEngine implements ClusteredService {
         // Build node ID to URL mapping (will be populated when cluster starts)
         // This allows us to map Aeron Cluster leaderMemberId to validator URL
         
-        // ✅ PRODUCTION REFACTOR: Initialize service layer components
+        // Initialize service layer components
         this.snapshotService = snapshotService != null
             ? snapshotService
             : new SnapshotService();
@@ -498,7 +407,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * ✈️ AERON NATIVE: Set media driver directory name for client connections.
+     * Set media driver directory name for client connections.
      * This is required when creating Aeron clients to connect to the cluster's media driver.
      */
     public void setAeronDirectoryName(String aeronDirectoryName) {
@@ -607,7 +516,7 @@ public class AeronConsensusEngine implements ClusteredService {
             scheduleGenesisBootstrapIfMissing("initial leader");
         }
         
-        // ✈️ AERON NATIVE: Create internal AeronCluster client for sending writes through ingress
+        // Create internal AeronCluster client for sending writes through ingress
         // This allows us to send messages from within the ClusteredService
         // Uses UDP to connect to the cluster for reliable message delivery
         if (aeronDirectoryName != null && !aeronDirectoryName.isEmpty()
@@ -709,7 +618,7 @@ public class AeronConsensusEngine implements ClusteredService {
             throw applyFailStop(applicationFailure, header != null ? header.position() : -1L);
         }
         publishPosition(header.position(), timestamp);
-        // ✈️ AERON NATIVE: Handle replicated write proposals
+        // Handle replicated write proposals
         // This callback is invoked on ALL nodes after Aeron replicates the message via Raft
         // Deterministic state machine: ALL nodes process messages in same order
         try {
@@ -1044,7 +953,6 @@ public class AeronConsensusEngine implements ClusteredService {
      * Set the GC application callback.
      * 
      * <p>Wires the callback to MessageDispatcher for delegated GC message handling.
-     * Note: The callback is not stored as a field since it's only used to wire to MessageDispatcher.
      */
     public void setGCCallback(GCApplicationCallback callback) {
         this.gcApplicationCallback = callback;
@@ -1191,17 +1099,13 @@ public class AeronConsensusEngine implements ClusteredService {
         }
     }
     
-    // Note: onTakeSnapshot() is implemented above (line 507) with full snapshot support
-    // Snapshot loading happens in onStart() when snapshotImage is provided
-    // There is no onLoadSnapshot() method in ClusteredService interface
-    
     @Override
     public void onRoleChange(Cluster.Role newRole) {
         publishedRole = newRole;
         log.info("Role change: {} -> {}", currentRole, newRole.name());
         markHeartbeat();
         
-        // ✈️ AERON NATIVE: Track leadership rotation history
+        // Track leadership rotation history
         // Note: onRoleChange() is called with the NEW role, so we need to track previous role
         Cluster.Role previousRole;
         // Map our ValidatorRole to Cluster.Role for history (before we update)
@@ -1279,7 +1183,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * ✈️ AERON NATIVE: Get leadership rotation history.
+     * Get leadership rotation history.
      * 
      * Returns history of role changes tracked via onRoleChange() callbacks.
      * 
@@ -1337,7 +1241,7 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * Get current validator role (LEADER, FOLLOWER, etc.).
      * 
-     * ✈️ AERON NATIVE: Uses the role published by onStart/onRoleChange.
+     * Uses the role published by onStart/onRoleChange.
      */
     public ValidatorRole getCurrentRole() {
         Cluster.Role aeronRole = publishedRole;
@@ -1355,7 +1259,7 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * Check if this validator is currently the leader.
      * 
-     * ✈️ AERON NATIVE: Uses the role published by onStart/onRoleChange.
+     * Uses the role published by onStart/onRoleChange.
      */
     public boolean isLeader() {
         Cluster.Role aeronRole = publishedRole;
@@ -1426,7 +1330,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * ✈️ AERON NATIVE: Get native Aeron Cluster state.
+     * Get native Aeron Cluster state.
      * 
      * This exposes Aeron's internal cluster state directly using available native APIs.
      * Uses what's available from cluster object and falls back to our tracking for the rest.
@@ -1478,7 +1382,7 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * Get current leader URL.
      * 
-     * ✈️ AERON NATIVE: Uses cluster.clusterMembers() to find leader directly from Aeron.
+     * Uses cluster.clusterMembers() to find leader directly from Aeron.
      * This is the authoritative source - no HTTP API calls needed.
      * 
      * ✅ REFACTORED: Delegates to LeaderDiscoveryService for leader discovery.
@@ -1488,7 +1392,7 @@ public class AeronConsensusEngine implements ClusteredService {
             return currentLeader; // Fallback to cached value
         }
         
-        // ✈️ AERON NATIVE: If we're the leader, return self
+        // If we're the leader, return self
         if (publishedRole == Cluster.Role.LEADER) {
             return selfUrl;
         }
@@ -1563,7 +1467,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * ✈️ AERON NATIVE: Get Aeron Cluster instance (for accessing memberId, etc.).
+     * Get Aeron Cluster instance (for accessing memberId, etc.).
      */
     public Cluster getCluster() {
         return cluster;

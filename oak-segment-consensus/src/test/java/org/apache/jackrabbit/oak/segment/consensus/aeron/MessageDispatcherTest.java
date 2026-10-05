@@ -63,12 +63,12 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
-                calls.add(wallet + "|" + path + "|" + proposalId);
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
+                calls.add(wallet + "|" + path + "|" + audit.getProposalId());
             }
 
             @Override
-            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            public void applyDelete(String walletAddress, String path, String signature, MutationAuditMetadata audit) {
             }
         });
         dispatcher.setTermProvider(() -> 7L);
@@ -128,12 +128,12 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
                 called.set(wallet);
             }
 
             @Override
-            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            public void applyDelete(String walletAddress, String path, String signature, MutationAuditMetadata audit) {
             }
         });
         dispatcher.setTermProvider(() -> 10L);
@@ -154,12 +154,12 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
                 called.set(wallet + "|" + path);
             }
 
             @Override
-            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            public void applyDelete(String walletAddress, String path, String signature, MutationAuditMetadata audit) {
             }
         });
         dispatcher.setTermProvider(() -> 10L);
@@ -185,12 +185,12 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
                 calls.add(path);
             }
 
             @Override
-            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            public void applyDelete(String walletAddress, String path, String signature, MutationAuditMetadata audit) {
             }
         });
 
@@ -210,12 +210,12 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
                 calls.add(wallet + "|" + path);
             }
 
             @Override
-            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            public void applyDelete(String walletAddress, String path, String signature, MutationAuditMetadata audit) {
             }
         });
         dispatcher.setTermProvider(() -> 9L);
@@ -241,11 +241,11 @@ public class MessageDispatcherTest {
         MessageDispatcher withCallback = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
             }
 
             @Override
-            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            public void applyDelete(String walletAddress, String path, String signature, MutationAuditMetadata audit) {
             }
         });
 
@@ -258,12 +258,12 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
             }
 
             @Override
-            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
-                deleted.set(walletAddress + "|" + path + "|" + proposalId);
+            public void applyDelete(String walletAddress, String path, String signature, MutationAuditMetadata audit) {
+                deleted.set(walletAddress + "|" + path + "|" + audit.getProposalId());
             }
         });
         dispatcher.setTermProvider(() -> 5L);
@@ -315,11 +315,11 @@ public class MessageDispatcherTest {
         MessageDispatcher withCallback = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
+                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
             }
 
             @Override
-            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
+            public void applyDelete(String walletAddress, String path, String signature, MutationAuditMetadata audit) {
             }
         });
         withCallback.setTermProvider(() -> 5L);

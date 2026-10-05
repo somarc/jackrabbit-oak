@@ -52,11 +52,6 @@ public class HeadStateServiceTest {
         HeadStateService fallback = new HeadStateService(throwingFileStore());
         fallback.updateLatestHead("plain-fallback");
         assertEquals("plain-fallback", fallback.getLatestHead());
-
-        HeadStateService viaSetter = new HeadStateService();
-        viaSetter.setFileStore(fileStoreWithHead("store:12"));
-        viaSetter.updateLatestHead("plain-after-setter");
-        assertEquals("store:12", viaSetter.getLatestHead());
     }
 
     @Test

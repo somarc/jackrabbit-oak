@@ -304,15 +304,6 @@ public class AeronClusterLauncher {
     }
     
     /**
-     * Wait for shutdown signal (blocks until shutdown).
-     */
-    public void awaitShutdown() {
-        if (barrier != null) {
-            barrier.await();
-        }
-    }
-    
-    /**
      * Get the Aeron directory name used by this cluster node.
      * This is needed for creating Aeron clients that connect to the cluster.
      */
@@ -327,10 +318,6 @@ public class AeronClusterLauncher {
         return AeronClusterTopology.getPortBase();
     }
 
-    public int getClusterBasePort() {
-        return getPortBase();
-    }
-    
     private String getHostname() {
         return hostnames.get(nodeId);
     }

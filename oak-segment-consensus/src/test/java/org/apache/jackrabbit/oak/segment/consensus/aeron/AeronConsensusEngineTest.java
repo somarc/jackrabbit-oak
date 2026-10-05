@@ -1312,8 +1312,8 @@ public class AeronConsensusEngineTest {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message,
                                    String signature, String intentToken, String blobId, String mimeType,
-                                   String ipfsCid, String proposalId) {
-                applied.add(proposalId);
+                                   String ipfsCid, MutationAuditMetadata auditMetadata) {
+                applied.add(auditMetadata.getProposalId());
             }
         });
         dispatcher.setTermProvider(engine::getCurrentTerm);

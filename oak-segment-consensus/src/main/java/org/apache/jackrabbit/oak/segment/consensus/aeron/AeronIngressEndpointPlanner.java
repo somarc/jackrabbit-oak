@@ -40,12 +40,8 @@ final class AeronIngressEndpointPlanner {
     }
 
     static AeronIngressEndpointPlanner systemFromUrls(String selfUrl, List<String> peerUrls) {
-        return new AeronIngressEndpointPlanner(
-            clusterHostnamesFromUrls(selfUrl, peerUrls),
-            hostnameFromUrl(selfUrl),
-            hostname -> InetAddress.getByName(hostname).getHostAddress(),
-            AeronClusterAddressResolver.systemLocalAddressProvider()
-        );
+        return fromUrls(selfUrl, peerUrls, hostname -> InetAddress.getByName(hostname).getHostAddress(),
+            AeronClusterAddressResolver.systemLocalAddressProvider());
     }
 
     static AeronIngressEndpointPlanner fromUrls(String selfUrl,
