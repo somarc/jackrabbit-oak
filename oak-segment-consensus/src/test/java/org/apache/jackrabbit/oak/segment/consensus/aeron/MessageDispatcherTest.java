@@ -202,7 +202,6 @@ public class MessageDispatcherTest {
 
         assertTrue(result);
         assertEquals(2, calls.size());
-        assertEquals(2, dispatcher.getLastBatchSize());
     }
 
     @Test
@@ -230,7 +229,6 @@ public class MessageDispatcherTest {
         assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, payload));
         assertEquals(1, calls.size());
         assertEquals("0x1|/ok", calls.get(0));
-        assertEquals(1, dispatcher.getLastBatchSize());
     }
 
     @Test
@@ -240,7 +238,7 @@ public class MessageDispatcherTest {
         assertThrows(MessageDispatcher.ReplicatedApplyException.class,
             () -> dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH,
                 "{\"batch\":[{\"walletAddress\":\"0x1\",\"path\":\"/ok\"}]}"));
-        dispatcher.setCallbacks(new MessageDispatcher.WriteCallback() {
+        MessageDispatcher withCallback = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
                                    String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
@@ -251,7 +249,7 @@ public class MessageDispatcherTest {
             }
         });
 
-        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, "{\"oops\":true}"));
+        assertFalse(dispatch(withCallback, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, "{\"oops\":true}"));
     }
 
     @Test
@@ -314,7 +312,7 @@ public class MessageDispatcherTest {
             () -> dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
                 "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/test\",\"term\":5}"));
 
-        dispatcher.setCallbacks(new MessageDispatcher.WriteCallback() {
+        MessageDispatcher withCallback = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
                                    String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
@@ -324,8 +322,9 @@ public class MessageDispatcherTest {
             public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
             }
         });
+        withCallback.setTermProvider(() -> 5L);
 
-        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
+        assertFalse(dispatch(withCallback, SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL,
             "{\"walletAddress\":\"0xabc\",\"term\":5}"));
     }
 
@@ -611,28 +610,16 @@ public class MessageDispatcherTest {
     }
 
     @Test
-    public void testDispatchRejectsUnknownTemplateAndAcceptsGenesisAndSnapshot() {
+    public void testDispatchRejectsUnknownTemplate() {
         MessageDispatcher dispatcher = new MessageDispatcher();
 
         assertFalse(dispatch(dispatcher, 999, "{}"));
-        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, "{}"));
-        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT, "{}"));
     }
 
     @Test
     public void testLifecycleAndSetterMethodsAreCallable() {
         MessageDispatcher dispatcher = new MessageDispatcher();
         dispatcher.activate();
-        dispatcher.setCallbacks(new MessageDispatcher.WriteCallback() {
-            @Override
-            public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, String proposalId) {
-            }
-
-            @Override
-            public void applyDelete(String walletAddress, String path, String signature, String proposalId) {
-            }
-        });
         dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
             @Override
             public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
