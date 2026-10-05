@@ -63,10 +63,6 @@ public class SegmentHttpServer {
     private final ServerContext context;
     private final RequestRouter router;
     private final TlsConfiguration tlsConfig;
-    private final JoinProofFactory joinProofFactory;
-    private final PeerUrlResolver peerUrlResolver;
-    private final PeerJsonHttpClient peerJsonHttpClient;
-    private final PeerAnnouncementClient peerAnnouncementClient;
     
     // Keep references for backward compatibility and methods that need direct access
     private final FileStore fileStore;
@@ -107,14 +103,6 @@ public class SegmentHttpServer {
         
         // Create RequestRouter (will be updated when consensus engines are set)
         this.router = new RequestRouter(context);
-        this.joinProofFactory = new JoinProofFactory(fileStore, context, System::currentTimeMillis);
-        this.peerUrlResolver = new PeerUrlResolver();
-        this.peerJsonHttpClient = new PeerJsonHttpClient();
-        this.peerAnnouncementClient = new PeerAnnouncementClient(
-            peerUrlResolver::resolve,
-            peerJsonHttpClient::postJson,
-            Thread::sleep
-        );
         
         // Create server - TLS will be configured in start() if enabled
         this.server = new Server();
@@ -175,10 +163,6 @@ public class SegmentHttpServer {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.storeDirectory = storeDirectory;
-        this.joinProofFactory = null;
-        this.peerUrlResolver = null;
-        this.peerJsonHttpClient = null;
-        this.peerAnnouncementClient = null;
     }
 
     private ServletContextHandler createServerHandler() {
@@ -249,100 +233,6 @@ public class SegmentHttpServer {
         selfReg.updateStatus(ValidatorRegistration.Status.READY);
         context.registeredValidators.put(validatorId, selfReg);
         log.info("✅ Self registered (local context): {} ({})", validatorId, context.selfUrl);
-    }
-    
-    /**
-     * Register this validator with peer validators.
-     * Called during startup to announce this validator's presence to the network.
-     * 
-     * <p>Uses retry logic with exponential backoff to handle timing issues when
-     * peers aren't ready yet (common in Docker Compose startup scenarios).
-     * 
-     * <p>Uses IP-based URLs for reliable Docker networking (DNS can be unreliable).
-     * 
-     * @param validatorId Unique identifier for this validator (e.g., "validator-1")
-     * @param peerUrls List of peer validator URLs to register with
-     */
-    public void registerWithPeers(String validatorId, java.util.List<String> peerUrls) {
-        // CRITICAL: Register self first, even with no peers (genesis scenario)
-        ValidatorRegistration selfReg = new ValidatorRegistration(validatorId, context.selfUrl);
-        selfReg.updateStatus(ValidatorRegistration.Status.READY);
-        context.registeredValidators.put(validatorId, selfReg);
-        log.info("✅ Self registered: {} ({})", validatorId, context.selfUrl);
-        
-        if (peerUrls == null || peerUrls.isEmpty()) {
-            log.info("📡 Genesis validator - no peers to register with");
-            return;
-        }
-        
-        // ✈️ AERON MODE: Skip peer registration entirely - Aeron Cluster handles membership via Raft
-        // This HTTP registration is legacy from EpochLeaderEngine and not needed for Aeron
-        // Check if Aeron consensus engine is active (if so, skip peer registration)
-        if (context.aeronConsensusEngine != null) {
-            log.debug("✈️  Skipping HTTP peer registration (Aeron Cluster handles membership via Raft)");
-            return;
-        }
-        
-        peerAnnouncementClient.registerWithPeers(validatorId, context.selfUrl, peerUrls);
-    }
-    
-    /**
-     * Broadcast presence to the consensus network (Dynamic Peer Discovery).
-     * 
-     * This is called when a validator is promoted to PRIMARY and is ready to
-     * join the consensus network. Existing validators will receive this broadcast
-     * and dynamically add this validator to their consensus peer list.
-     * 
-     * @param validatorId The unique ID of this validator
-     * @param validatorUrl The URL of this validator (consensus endpoint)
-     * @param peerUrls List of known peer validators to broadcast to
-     */
-    public void broadcastPresenceToNetwork(String validatorId, String validatorUrl, 
-                                          java.util.List<String> peerUrls) {
-        if (peerUrls == null || peerUrls.isEmpty()) {
-            log.info("📡 No peers configured - running as genesis validator");
-            return;
-        }
-        
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("📣 BROADCASTING PRESENCE TO CONSENSUS NETWORK");
-        log.info("   Validator ID: {}", validatorId);
-        log.info("   Validator URL: {}", validatorUrl);
-        log.info("   Broadcasting to: {} peers", peerUrls.size());
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        
-        // Generate Proof-of-Readiness before broadcasting
-        org.apache.jackrabbit.oak.segment.consensus.security.JoinProof proof =
-            joinProofFactory.create(validatorId, validatorUrl);
-        
-        PeerAnnouncementClient.BroadcastSummary summary =
-            peerAnnouncementClient.broadcastPresence(validatorId, validatorUrl, peerUrls, proof);
-        int successCount = summary.getSuccessCount();
-        int failureCount = summary.getFailureCount();
-        
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("📡 BROADCAST COMPLETE: {} accepted, {} failed", successCount, failureCount);
-        
-        if (successCount > 0) {
-            log.info("✅ Successfully joined consensus network ({}/{} peers)", 
-                successCount, peerUrls.size());
-            // Mark self as READY after successful broadcast
-            ValidatorRegistration selfReg = new ValidatorRegistration(validatorId, validatorUrl);
-            selfReg.updateStatus(ValidatorRegistration.Status.READY);
-            context.registeredValidators.put(validatorId, selfReg);
-            log.info("✅ Self marked as READY");
-        } else if (peerUrls.isEmpty() || (peerUrls.size() == 1 && peerUrls.get(0).equals(validatorUrl))) {
-            log.info("✅ Genesis validator - no peers to broadcast to");
-            // Genesis validator is immediately READY
-            ValidatorRegistration selfReg = new ValidatorRegistration(validatorId, validatorUrl);
-            selfReg.updateStatus(ValidatorRegistration.Status.READY);
-            context.registeredValidators.put(validatorId, selfReg);
-        } else {
-            log.warn("⚠️  FAILED to join consensus - no peers accepted broadcast!");
-            log.warn("    This validator may be isolated from the network.");
-        }
-        
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
     
     /**

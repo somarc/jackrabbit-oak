@@ -22,7 +22,6 @@ import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
-import org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -59,7 +58,6 @@ public class ServerContext {
     public volatile AeronConsensusEngine aeronConsensusEngine;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics aeronPrometheusMetrics;
-    public volatile ProofVerifier proofVerifier;
     public volatile String selfUrl;
     public volatile GCCostEstimator gcCostEstimator;
     public volatile GCProposalManager gcProposalManager;
@@ -122,11 +120,6 @@ public class ServerContext {
         this.connectedPeers = java.util.concurrent.ConcurrentHashMap.newKeySet();
         this.recentWriteMetadata = new ConcurrentHashMap<>();
         loadDurableClientRegistrations();
-    }
-    
-    // Setters for consensus engines (can be set after construction)
-    public void setProofVerifier(ProofVerifier proofVerifier) {
-        this.proofVerifier = proofVerifier;
     }
     
     public void setSelfUrl(String selfUrl) {
