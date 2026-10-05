@@ -150,10 +150,6 @@ public class ProposalQueueManagerOptimized {
     private final java.util.concurrent.atomic.AtomicLong counterWindowStartMs =
         new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
     private final long counterRotationIntervalMs;
-    private final ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> finalizedByEpochAndTier =
-        new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> rejectedByEpochAndTier =
-        new ConcurrentHashMap<>();
     private final long processedRetentionMs;
     private final long processedPendingRecoveryMs;
     private volatile ReplicatedDurability replicatedDurability = ReplicatedDurability.NONE;
@@ -343,12 +339,6 @@ public class ProposalQueueManagerOptimized {
      */
     public org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient getBeaconClient() {
         return beaconClient;
-    }
-
-    private MutationAuditMetadata refreshAuditMetadata(QueuedProposal proposal) {
-        // Audit metadata must be explicitly sourced from transaction/chain details,
-        // not reconstructed from the queue's overlay epoch state.
-        return proposal.toAuditMetadata();
     }
 
     public long getCurrentEpoch() {
@@ -987,85 +977,6 @@ public class ProposalQueueManagerOptimized {
         return payload;
     }
 
-    private String normalizeTierKey(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
-        if (tier == null) {
-            return "standard";
-        }
-        switch (tier) {
-            case PRIORITY:
-                return "priority";
-            case EXPRESS:
-                return "express";
-            case STANDARD:
-            default:
-                return "standard";
-        }
-    }
-
-    private void incrementTerminalCounter(
-            ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
-            long epoch,
-            String tier) {
-        store.computeIfAbsent(epoch, k -> new ConcurrentHashMap<>())
-            .computeIfAbsent(tier, k -> new java.util.concurrent.atomic.AtomicLong(0))
-            .incrementAndGet();
-    }
-
-    private void decrementTerminalCounter(
-            ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
-            long epoch,
-            String tier) {
-        ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong> byTier = store.get(epoch);
-        if (byTier == null) {
-            return;
-        }
-        java.util.concurrent.atomic.AtomicLong counter = byTier.get(tier);
-        if (counter == null) {
-            return;
-        }
-        counter.updateAndGet(current -> current > 0L ? current - 1L : 0L);
-    }
-
-    private long getTerminalCounter(
-            ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
-            long epoch,
-            String tier) {
-        ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong> byTier = store.get(epoch);
-        if (byTier == null) {
-            return 0L;
-        }
-        java.util.concurrent.atomic.AtomicLong counter = byTier.get(tier);
-        return counter == null ? 0L : counter.get();
-    }
-
-    private void recordTerminalState(QueuedProposal proposal, ProposalState terminalState) {
-        if (proposal == null) {
-            return;
-        }
-        long epoch = proposal.getEpoch();
-        String tier = normalizeTierKey(proposal.getTier());
-        if (terminalState == ProposalState.PROCESSED) {
-            incrementTerminalCounter(finalizedByEpochAndTier, epoch, tier);
-        } else if (terminalState == ProposalState.REJECTED) {
-            incrementTerminalCounter(rejectedByEpochAndTier, epoch, tier);
-        }
-    }
-
-    private void rollbackTerminalState(QueuedProposal proposal, ProposalState terminalState) {
-        if (proposal == null) {
-            return;
-        }
-        long epoch = proposal.getEpoch();
-        String tier = normalizeTierKey(proposal.getTier());
-        if (terminalState == ProposalState.PROCESSED) {
-            totalFinalizedCount.updateAndGet(current -> current > 0L ? current - 1L : 0L);
-            decrementTerminalCounter(finalizedByEpochAndTier, epoch, tier);
-        } else if (terminalState == ProposalState.REJECTED) {
-            totalRejectedCount.updateAndGet(current -> current > 0L ? current - 1L : 0L);
-            decrementTerminalCounter(rejectedByEpochAndTier, epoch, tier);
-        }
-    }
-    
     private ProposalPersistenceStore createPersistenceStore(String persistenceDir, ProposalQueueTuning tuning) {
         if (tuning != null && !tuning.isPersistenceEnabled()) {
             log.info("Proposal queue persistence disabled via tuning (persistence_enabled=false)");
@@ -1325,13 +1236,6 @@ public class ProposalQueueManagerOptimized {
 
     private boolean isAsyncPersistenceEnabled() {
         return persistenceFlushIntervalMs > 0 || persistenceFlushBatch > 1;
-    }
-
-    private static void updateMax(java.util.concurrent.atomic.AtomicLong max, long candidate) {
-        long prev;
-        while (candidate > (prev = max.get()) && !max.compareAndSet(prev, candidate)) {
-            // retry until updated
-        }
     }
 
     /**
@@ -1872,7 +1776,6 @@ public class ProposalQueueManagerOptimized {
         }
         proposal.setState(ProposalState.PROCESSED);
         totalFinalizedCount.incrementAndGet();
-        recordTerminalState(proposal, ProposalState.PROCESSED);
     }
 
     private void transitionProposalToRejected(QueuedProposal proposal, String reason) {
@@ -1883,7 +1786,6 @@ public class ProposalQueueManagerOptimized {
         proposal.setRejectionReason(reason);
         cleanupPayload(proposal);
         totalRejectedCount.incrementAndGet();
-        recordTerminalState(proposal, ProposalState.REJECTED);
     }
     
     // ============================================================================
@@ -1963,7 +1865,7 @@ public class ProposalQueueManagerOptimized {
                     // This isolates whether the issue is queue mechanism vs templateId 106 encoding
                     if (batch.size() == 1) {
                         QueuedProposal proposal = batch.get(0);
-                        MutationAuditMetadata auditMetadata = refreshAuditMetadata(proposal);
+                        MutationAuditMetadata auditMetadata = proposal.toAuditMetadata();
                         
                         // Check proposal type: WRITE or DELETE
                         if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
@@ -1998,9 +1900,6 @@ public class ProposalQueueManagerOptimized {
                         }
                     } else {
                         // Multi-proposal batch: use templateId 106
-                        for (QueuedProposal proposal : batch) {
-                            refreshAuditMetadata(proposal);
-                        }
                         java.util.List<QueuedProposal> hydrated = hydrateBatchMessages(batch);
                         try {
                             log.debug("🔥 CALLING appendProposalBatch on instance of: {}", 
@@ -2181,7 +2080,7 @@ public class ProposalQueueManagerOptimized {
             return false;
         }
 
-        rollbackTerminalState(proposal, ProposalState.PROCESSED);
+        totalFinalizedCount.updateAndGet(current -> current > 0L ? current - 1L : 0L);
         proposal.markAppendedToLog();
         proposal.setState(ProposalState.VERIFIED);
         proposal.setRejectionReason(null);
@@ -2526,7 +2425,7 @@ public class ProposalQueueManagerOptimized {
                     verifierSuccessCount.incrementAndGet();
                     long queueWaitMs = System.currentTimeMillis() - proposal.getTimestamp();
                     verifierQueueWaitMsTotal.addAndGet(queueWaitMs);
-                    updateMax(verifierQueueWaitMsMax, queueWaitMs);
+                    verifierQueueWaitMsMax.accumulateAndGet(queueWaitMs, Math::max);
                     String txHashSummary = summarizeTxHash(proof.getTransactionHash());
                     
                     routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());

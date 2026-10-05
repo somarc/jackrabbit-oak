@@ -141,10 +141,6 @@ final class ProposalPayloadStore {
         return Math.max(0L, totalBytes.get());
     }
 
-    Path getPayloadDirectory() {
-        return payloadDirectory;
-    }
-
     void close() {
         if (!ephemeralDirectory) {
             return;

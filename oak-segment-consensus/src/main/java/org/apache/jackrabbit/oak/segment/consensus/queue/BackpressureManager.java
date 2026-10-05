@@ -333,21 +333,6 @@ public class BackpressureManager {
     }
     
     /**
-     * Reset counters (for testing).
-     */
-    public void reset() {
-        sentCount.set(0);
-        acknowledgedCount.set(0);
-        lastPendingChangeMs.set(0);
-        pendingSinceMs.set(0);
-        lastObservedPending.set(0);
-        backpressureTimeoutCount.set(0);
-        stalePendingReconciliationCount.set(0);
-        lastReconciledMs.set(0);
-        backpressureActive = false;
-    }
-    
-    /**
      * Get statistics summary for logging/metrics.
      * 
      * @return Human-readable statistics

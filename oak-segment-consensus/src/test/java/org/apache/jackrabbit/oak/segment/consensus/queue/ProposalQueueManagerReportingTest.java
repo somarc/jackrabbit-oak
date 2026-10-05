@@ -25,9 +25,7 @@ import org.junit.Test;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.Assert.assertEquals;
@@ -185,41 +183,8 @@ public class ProposalQueueManagerReportingTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static void putTerminalCounter(ProposalQueueManagerOptimized queueManager,
-                                           String fieldName,
-                                           long epoch,
-                                           String tier,
-                                           long value) throws Exception {
-        Field field = ProposalQueueManagerOptimized.class.getDeclaredField(fieldName);
-        field.setAccessible(true);
-        ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLong>> store =
-            (ConcurrentHashMap<Long, ConcurrentHashMap<String, AtomicLong>>) field.get(queueManager);
-        store.computeIfAbsent(epoch, ignored -> new ConcurrentHashMap<>())
-            .put(tier, new AtomicLong(value));
-    }
-
-    @SuppressWarnings("unchecked")
     private static Map<String, Object> mapValue(Object value) {
         return (Map<String, Object>) value;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> listValue(Object value) {
-        return (List<Map<String, Object>>) value;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Map<String, Long>> nestedCountMap(Object value) {
-        return (Map<String, Map<String, Long>>) value;
-    }
-
-    private static Map<String, Object> findBlock(List<Map<String, Object>> blocks, String status) {
-        for (Map<String, Object> block : blocks) {
-            if (status.equals(block.get("status"))) {
-                return block;
-            }
-        }
-        throw new AssertionError("Missing block with status " + status);
     }
 
     private static long longValue(Object value) {
