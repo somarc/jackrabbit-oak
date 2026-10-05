@@ -47,7 +47,7 @@ final class ConsensusServicesInitializer {
 
     private final Supplier<BlockchainConfig> blockchainConfigSupplier;
     private final EvmBridgeFactory evmBridgeFactory;
-    private final BeaconChainClientFactory beaconChainClientFactory;
+    private final Supplier<BeaconChainClient> beaconChainClientFactory;
     private final ProposalQueueManagerFactory proposalQueueManagerFactory;
     private final ValidatorEarningsTrackerFactory validatorEarningsTrackerFactory;
     private final RuntimeConfigReader runtimeConfigReader;
@@ -66,7 +66,7 @@ final class ConsensusServicesInitializer {
     ConsensusServicesInitializer(
             Supplier<BlockchainConfig> blockchainConfigSupplier,
             EvmBridgeFactory evmBridgeFactory,
-            BeaconChainClientFactory beaconChainClientFactory,
+            Supplier<BeaconChainClient> beaconChainClientFactory,
             ProposalQueueManagerFactory proposalQueueManagerFactory,
             ValidatorEarningsTrackerFactory validatorEarningsTrackerFactory,
             RuntimeConfigReader runtimeConfigReader) {
@@ -82,7 +82,6 @@ final class ConsensusServicesInitializer {
                     SegmentHttpServer httpServer,
                     EthereumWallet wallet,
                     String storeDirectory,
-                    String beaconApiUrl,
                     String finalClusterWallet,
                     List<String> hostnamesList) {
         // Initialize Proposal Queue Manager (for Ethereum confirmation tracking)
@@ -100,9 +99,9 @@ final class ConsensusServicesInitializer {
         BackpressureManager backpressureManager = resolveBackpressureManager(aeronEngine);
         BeaconChainClient beaconClient = aeronEngine != null ? aeronEngine.getBeaconClient() : null;
         if (beaconClient == null) {
-            beaconClient = beaconChainClientFactory.create(beaconApiUrl);
+            beaconClient = beaconChainClientFactory.get();
             beaconClient.startBackgroundPolling();
-            log.info("✅ Beacon Chain client initialized (tracking Ethereum epochs from {})", beaconApiUrl);
+            log.info("✅ Beacon Chain client initialized (providers={})", beaconClient.getHealthStatus().get("providers"));
         } else {
             log.info("✅ Reusing Aeron engine Beacon Chain client for proposal queue epoch telemetry");
         }
@@ -375,10 +374,6 @@ final class ConsensusServicesInitializer {
 
     interface EvmBridgeFactory {
         EvmBridge create(BlockchainConfig blockchainConfig);
-    }
-
-    interface BeaconChainClientFactory {
-        BeaconChainClient create(String beaconApiUrl);
     }
 
     interface ProposalQueueManagerFactory {

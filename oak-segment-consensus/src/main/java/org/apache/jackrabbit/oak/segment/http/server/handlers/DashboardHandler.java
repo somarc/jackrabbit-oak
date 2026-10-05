@@ -225,6 +225,7 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "POST", "/v1/binary/complete-upload", "Complete binary upload", "Binary", null);
 
         addLocalUiIndexEntry(endpoints, "GET", "/api-browser", "Validator-local diagnostic API browser", "UI");
+        addLocalUiIndexEntry(endpoints, "GET", "/console/configMgr", "Read-only configuration manager (OSGi contract and effective values)", "Configuration");
         addLocalUiIndexEntry(endpoints, "GET", "/dashboard", "Control-plane landing page", "UI");
         addLocalUiIndexEntry(endpoints, "GET", "/", "Control-plane landing page", "UI");
 
@@ -411,6 +412,16 @@ public class DashboardHandler {
      */
     public void handleApiBrowserUI(HttpServletResponse response) throws IOException {
         writeModeAwareTemplate(response, "/api-browser-template.html", "api-browser");
+    }
+
+    /**
+     * Handle the read-only configuration manager, styled after the Felix Web Console.
+     */
+    public void handleConfigConsole(HttpServletResponse response) throws IOException {
+        Map<String, String> tokens = new LinkedHashMap<>();
+        tokens.put("{{MODE_LABEL}}", resolveModeTemplateTokens()[1]);
+        tokens.putAll(new ConfigConsoleView(new OsgiConfigApiHandler()).tokens());
+        writeResolvedTemplate(response, "/config-console-template.html", tokens);
     }
 
     private void writeModeAwareTemplate(HttpServletResponse response, String resourcePath, String activeNav) throws IOException {

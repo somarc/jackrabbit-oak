@@ -23,7 +23,6 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
-import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
@@ -80,13 +79,11 @@ public class GlobalStoreServerLifecycleTest {
         GlobalStoreServer server = new GlobalStoreServer(8090, "/tmp/test-store");
         ValidatorBootstrap bootstrap = mock(ValidatorBootstrap.class);
         AeronClusterService aeronClusterService = mock(AeronClusterService.class);
-        EpochListener epochListener = mock(EpochListener.class);
         SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
         FileStore fileStore = mock(FileStore.class);
 
         setField(server, "bootstrap", bootstrap);
         setField(server, "aeronClusterService", aeronClusterService);
-        setField(server, "epochListener", epochListener);
         setField(server, "httpServer", httpServer);
         setField(server, "fileStore", fileStore);
 
@@ -96,7 +93,6 @@ public class GlobalStoreServerLifecycleTest {
 
             verify(bootstrap).shutdown();
             verify(aeronClusterService).shutdown();
-            verify(epochListener).stop();
             verify(httpServer).stop();
             verify(fileStore).close();
             assertTrue(TestLogAppenderSupport.contains(appender, "Shutting down global store server"));

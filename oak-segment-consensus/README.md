@@ -161,9 +161,12 @@ the environment variable wins. Settings listed without an environment variable a
 | `aeron.rcv.initial.window.length`, `aeron.socket.so_rcvbuf` | | Aeron defaults | If you set `so_rcvbuf`, make it at least the window length, or Aeron refuses to start. |
 
 A running validator reports most of its tunables, with defaults, current values
-and risk notes, at `GET /v1/config/osgi/schema` and `GET /v1/config/osgi`. That
-listing is not exhaustive: the storage backends, bind address, Aeron directory and
-port base, and the safety gate above are not included.
+and risk notes, at `GET /v1/config/osgi/schema` and `GET /v1/config/osgi`,
+including the storage backends, bind address, Aeron port base and safety gate
+above; the Aeron directory is not included. `/console/configMgr` shows the same
+values read-only, next to the declared OSGi properties. The validator runs without
+OSGi Configuration Admin, so the OSGi declarations document the contract and do not
+set values.
 
 ## Security
 
@@ -198,8 +201,9 @@ See the repository [security policy](../SECURITY.md).
 
 The governed read routes are published as an
 [OpenAPI contract](https://somarc.github.io/oak-chain-docs/openapi-validator-source.yaml).
-The built-in dashboard (`/`), `/explorer` and `/api-browser` are local diagnostic
-pages; integrations should use the API rather than dashboard badges.
+The built-in dashboard (`/`), `/explorer`, `/api-browser` and `/console/configMgr`
+are local diagnostic pages; integrations should use the API rather than dashboard
+badges.
 
 Health endpoints are observations, not correctness proofs. Validators also serve
 their segment files (`/segments/`, `/journal.log`, `/manifest`) for read-only

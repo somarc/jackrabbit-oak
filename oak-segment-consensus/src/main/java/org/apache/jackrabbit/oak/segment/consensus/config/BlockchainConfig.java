@@ -188,7 +188,7 @@ public class BlockchainConfig {
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         log.info("   Mode: {}", mode);
         log.info("   Contract: {}", contractAddress);
-        log.info("   RPC URL: {}", rpcUrl != null ? rpcUrl : "not configured");
+        log.info("   RPC URL: {}", rpcUrl != null ? "configured" : "not configured");
         log.info("   Gas model: price={} gwei, writeGasUnits=[std={}, exp={}, pri={}]",
             gasPriceGwei, gasWriteStandard, gasWriteExpress, gasWritePriority);
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

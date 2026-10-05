@@ -80,7 +80,6 @@ public class GlobalStoreRuntimeConfigUtilTest {
         System.clearProperty("wallet.keystore.path");
         System.clearProperty("consensus.self.url");
         System.clearProperty("consensus.peers");
-        System.clearProperty("ethereum.beacon.api.url");
     }
 
     @Test
@@ -101,7 +100,7 @@ public class GlobalStoreRuntimeConfigUtilTest {
 
     @Test
     public void testIsConfiguredSelfUrlUsesAeronConfig() {
-        assertTrue(GlobalStoreRuntimeConfigUtil.isConfiguredSelfUrl(aeronConfig("http://validator-7:8090", null, null)));
+        assertTrue(GlobalStoreRuntimeConfigUtil.isConfiguredSelfUrl(aeronConfig("http://validator-7:8090", null)));
     }
 
     @Test
@@ -122,7 +121,7 @@ public class GlobalStoreRuntimeConfigUtilTest {
 
         String url = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(
             8090,
-            aeronConfig("http://validator-3:8090", null, null)
+            aeronConfig("http://validator-3:8090", null)
         );
 
         assertEquals("http://validator-3:8090", url);
@@ -148,7 +147,7 @@ public class GlobalStoreRuntimeConfigUtilTest {
     @Test
     public void testResolvePeerUrlsUsesTrimmedAeronConfigPeers() {
         List<String> peerUrls = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(
-            aeronConfig(null, new String[] {" http://validator-1:8090 ", "", "http://validator-2:8090"}, null)
+            aeronConfig(null, new String[] {" http://validator-1:8090 ", "", "http://validator-2:8090"})
         );
 
         assertEquals(2, peerUrls.size());
@@ -167,25 +166,7 @@ public class GlobalStoreRuntimeConfigUtilTest {
         assertEquals("http://127.0.0.1:8092", peerUrls.get(1));
     }
 
-    @Test
-    public void testResolveBeaconApiUrlPrefersAeronConfig() {
-        String url = GlobalStoreRuntimeConfigUtil.resolveBeaconApiUrl(
-            aeronConfig(null, null, "https://beacon.example.com/api")
-        );
-
-        assertEquals("https://beacon.example.com/api", url);
-    }
-
-    @Test
-    public void testResolveBeaconApiUrlFallsBackToConfiguredPropertyThenDefault() {
-        System.setProperty("ethereum.beacon.api.url", "https://property.example.com/api");
-        assertEquals("https://property.example.com/api", GlobalStoreRuntimeConfigUtil.resolveBeaconApiUrl(null));
-
-        System.clearProperty("ethereum.beacon.api.url");
-        assertEquals("https://beaconcha.in/api", GlobalStoreRuntimeConfigUtil.resolveBeaconApiUrl(null));
-    }
-
-    private static AeronClusterConfig aeronConfig(String selfUrl, String[] peerUrls, String beaconApiUrl) {
+    private static AeronClusterConfig aeronConfig(String selfUrl, String[] peerUrls) {
         return (AeronClusterConfig) Proxy.newProxyInstance(
             AeronClusterConfig.class.getClassLoader(),
             new Class<?>[]{AeronClusterConfig.class},
@@ -195,8 +176,6 @@ public class GlobalStoreRuntimeConfigUtilTest {
                         return selfUrl != null ? selfUrl : method.getDefaultValue();
                     case "peerUrls":
                         return peerUrls != null ? peerUrls : method.getDefaultValue();
-                    case "beaconApiUrl":
-                        return beaconApiUrl != null ? beaconApiUrl : method.getDefaultValue();
                     case "annotationType":
                         return AeronClusterConfig.class;
                     default:

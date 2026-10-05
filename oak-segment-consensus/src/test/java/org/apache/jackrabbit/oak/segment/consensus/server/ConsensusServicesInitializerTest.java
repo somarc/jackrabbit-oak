@@ -84,7 +84,7 @@ public class ConsensusServicesInitializerTest {
         ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
             () -> blockchainConfig,
             ignored -> evmBridge,
-            ignored -> beaconClient,
+            () -> beaconClient,
             proposalFactory,
             earningsFactory,
             (property, env, defaultValue) -> defaultValue
@@ -95,7 +95,6 @@ public class ConsensusServicesInitializerTest {
             testContext.httpServer,
             testContext.wallet,
             testContext.storeDir.toString(),
-            "https://beacon.example",
             "0xcluster",
             Arrays.asList("node-1", "node-2", "node-3")
         );
@@ -146,7 +145,7 @@ public class ConsensusServicesInitializerTest {
         ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
             () -> blockchainConfig,
             ignored -> evmBridge,
-            ignored -> beaconClient,
+            () -> beaconClient,
             proposalFactory,
             earningsFactory,
             (property, env, defaultValue) -> "/var/tmp/custom-proposals"
@@ -157,7 +156,6 @@ public class ConsensusServicesInitializerTest {
             testContext.httpServer,
             testContext.wallet,
             testContext.storeDir.toString(),
-            "https://beacon.example",
             "0xcluster",
             null
         );
@@ -187,7 +185,7 @@ public class ConsensusServicesInitializerTest {
         ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
             () -> blockchainConfig,
             ignored -> mock(EvmBridge.class),
-            ignored -> mock(BeaconChainClient.class),
+            () -> mock(BeaconChainClient.class),
             (evmBridge, raftAppendCallback, backpressureManager, beaconClient, proposalPersistenceDir) ->
                 mock(ProposalQueueManagerOptimized.class),
             wallets -> mock(ValidatorEarningsTracker.class),
@@ -200,7 +198,6 @@ public class ConsensusServicesInitializerTest {
                 testContext.httpServer,
                 testContext.wallet,
                 testContext.storeDir.toString(),
-                "https://beacon.example",
                 "0xcluster",
                 Collections.singletonList("node-1")
             );
@@ -222,7 +219,7 @@ public class ConsensusServicesInitializerTest {
         ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
             () -> blockchainConfig,
             ignored -> mock(EvmBridge.class),
-            ignored -> mock(BeaconChainClient.class),
+            () -> mock(BeaconChainClient.class),
             (evmBridge, raftAppendCallback, backpressureManager, beaconClient, proposalPersistenceDir) ->
                 mock(ProposalQueueManagerOptimized.class),
             wallets -> mock(ValidatorEarningsTracker.class),
@@ -235,7 +232,6 @@ public class ConsensusServicesInitializerTest {
                 testContext.httpServer,
                 testContext.wallet,
                 testContext.storeDir.toString(),
-                "https://beacon.example",
                 "0xcluster",
                 Collections.singletonList("node-1")
             );
@@ -257,7 +253,7 @@ public class ConsensusServicesInitializerTest {
         ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
             () -> blockchainConfig,
             ignored -> mock(EvmBridge.class),
-            ignored -> mock(BeaconChainClient.class),
+            () -> mock(BeaconChainClient.class),
             (evmBridge, raftAppendCallback, backpressureManager, beaconClient, proposalPersistenceDir) ->
                 mock(ProposalQueueManagerOptimized.class),
             wallets -> mock(ValidatorEarningsTracker.class),
@@ -270,7 +266,6 @@ public class ConsensusServicesInitializerTest {
                 testContext.httpServer,
                 testContext.wallet,
                 testContext.storeDir.toString(),
-                "https://beacon.example",
                 "0xcluster",
                 Collections.singletonList("node-1")
             );
@@ -311,7 +306,7 @@ public class ConsensusServicesInitializerTest {
         ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
             () -> blockchainConfig,
             ignored -> mock(EvmBridge.class),
-            ignored -> mock(BeaconChainClient.class),
+            () -> mock(BeaconChainClient.class),
             proposalFactory,
             wallets -> mock(ValidatorEarningsTracker.class),
             (property, env, defaultValue) -> defaultValue
@@ -322,7 +317,6 @@ public class ConsensusServicesInitializerTest {
             testContext.httpServer,
             testContext.wallet,
             testContext.storeDir.toString(),
-            "https://beacon.example",
             "0xcluster",
             Collections.singletonList("node-1")
         );

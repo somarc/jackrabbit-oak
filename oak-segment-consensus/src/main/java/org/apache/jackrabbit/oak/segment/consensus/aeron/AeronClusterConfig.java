@@ -71,12 +71,6 @@ public @interface AeronClusterConfig {
     boolean logClusterStateDetails() default false;
 
     @AttributeDefinition(
-        name = "Beacon API URL",
-        description = "Ethereum beacon API URL"
-    )
-    String beaconApiUrl() default "https://beaconcha.in/api";
-
-    @AttributeDefinition(
         name = "Cluster Environment",
         description = "Environment label (dev/staging/prod), reported only. Optional."
     )

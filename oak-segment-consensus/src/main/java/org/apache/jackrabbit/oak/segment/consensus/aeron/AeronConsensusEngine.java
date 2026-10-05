@@ -638,16 +638,15 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * Initialize Ethereum Beacon Chain client for epoch integration.
      * 
-     * @param beaconApiUrl Beacon Chain API URL (e.g., https://beaconcha.in/api)
      */
-    public void initializeEthereumIntegration(String beaconApiUrl) {
-        this.beaconClient = new BeaconChainClient(beaconApiUrl);
+    public void initializeEthereumIntegration() {
+        this.beaconClient = new BeaconChainClient();
         if (beaconClient.getNetworkMode() == BlockchainConfig.Mode.MOCK) {
             log.info("Initializing Ethereum epoch integration - mode=MOCK, source=local-clock, "
                 + "externalNetworkPolling=false, currentEpoch={}", currentEthereumEpoch);
         } else {
-            log.info("Initializing Ethereum epoch integration - mode={}, Beacon API: {}, currentEpoch={}",
-                beaconClient.getNetworkMode(), beaconApiUrl, currentEthereumEpoch);
+            log.info("Initializing Ethereum epoch integration - mode={}, providers={}, currentEpoch={}",
+                beaconClient.getNetworkMode(), beaconClient.getHealthStatus().get("providers"), currentEthereumEpoch);
         }
 
         // Start unified epoch refresh (single source of truth)
