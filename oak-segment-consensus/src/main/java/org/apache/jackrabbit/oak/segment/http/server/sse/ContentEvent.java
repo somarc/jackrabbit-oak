@@ -141,10 +141,6 @@ public class ContentEvent {
         return signature;
     }
 
-    public Long getSize() {
-        return size;
-    }
-
     public String getContentType() {
         return contentType;
     }
