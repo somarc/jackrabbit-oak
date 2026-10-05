@@ -23,6 +23,8 @@ import org.junit.Test;
 import java.util.Collections;
 
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class BlockchainConfigTest {
 
@@ -122,6 +124,22 @@ public class BlockchainConfigTest {
 
         assertEquals(5L, config.getGasPriceGwei());
         assertEquals("osgi-config-admin", BlockchainConfigIntrospection.source());
+    }
+
+    @Test
+    public void testTuningServicePublishesOverridesThroughTheSharedRegistry() {
+        BlockchainConfigTuningConfig osgiConfig = mock(BlockchainConfigTuningConfig.class);
+        when(osgiConfig.gas_price_gwei()).thenReturn(7L);
+        BlockchainConfigTuningService service = new BlockchainConfigTuningService();
+
+        service.activate(osgiConfig);
+        assertEquals("7", RuntimePropertyOverrideRegistry.get(PROP_GAS_PRICE_GWEI));
+        assertEquals(7L, BlockchainConfig.getInstance().getGasPriceGwei());
+        assertEquals("osgi-config-admin", BlockchainConfigIntrospection.source());
+
+        service.deactivate();
+        assertNull(RuntimePropertyOverrideRegistry.get(PROP_GAS_PRICE_GWEI));
+        assertEquals("env-or-system-properties", BlockchainConfigIntrospection.source());
     }
 
     private void clearProps() {
