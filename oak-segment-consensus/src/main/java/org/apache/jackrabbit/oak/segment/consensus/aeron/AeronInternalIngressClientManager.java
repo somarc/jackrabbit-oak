@@ -72,7 +72,6 @@ final class AeronInternalIngressClientManager implements AutoCloseable {
     private static final long DEFAULT_RECONNECT_DELAY_MS = 250L;
     private static final long DEFAULT_SESSION_LIMIT_COOLDOWN_MS = 2000L;
     private static final long DEFAULT_WAIT_POLL_INTERVAL_MS = 50L;
-    private static final long CLOSE_WAIT_MS = 5000L;
     private static final int OFFER_MAX_RETRIES = 100;
 
     private final Supplier<AeronInternalClusterClientConnector> connectorSupplier;
@@ -195,29 +194,6 @@ final class AeronInternalIngressClientManager implements AutoCloseable {
         } else {
             log.debug("Ignoring cluster session close for non-owned session {} (owned={}, reason={})",
                 sessionId, clusterSessionId, closeReason);
-        }
-    }
-
-    /**
-     * Closes the client on the owner thread and waits (bounded) for it. Not for the service thread.
-     */
-    void closeClientNow(String reason) {
-        synchronized (monitor) {
-            if (state == State.CLOSED) {
-                return;
-            }
-            state = State.DRAINING;
-            reconnectInProgress = false;
-            cancelScheduledConnect();
-            cancelServiceLoop();
-            notifyWaiters();
-        }
-        try {
-            executor.submit(() -> closeAndUnbind(reason)).get(CLOSE_WAIT_MS, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        } catch (ExecutionException | TimeoutException | RejectedExecutionException e) {
-            log.warn("⚠️  Internal ingress client close did not complete ({}): {}", reason, e.toString());
         }
     }
 

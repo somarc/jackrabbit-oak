@@ -30,7 +30,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Set;
 import java.util.UUID;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
@@ -44,12 +43,10 @@ public class FileHandler {
     
     private final FileStore fileStore;
     private final Path storeDirectory;
-    private final Set<String> connectedPeers;  // For tracking peer connections
     
-    public FileHandler(FileStore fileStore, Path storeDirectory, Set<String> connectedPeers) {
+    public FileHandler(FileStore fileStore, Path storeDirectory) {
         this.fileStore = fileStore;
         this.storeDirectory = storeDirectory;
-        this.connectedPeers = connectedPeers;
     }
     
     /**
@@ -95,11 +92,7 @@ public class FileHandler {
         
         try (InputStream in = Files.newInputStream(filePath);
              OutputStream out = response.getOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int bytesRead;
-            while ((bytesRead = in.read(buffer)) != -1) {
-                out.write(buffer, 0, bytesRead);
-            }
+            in.transferTo(out);
         }
         
         log.info("📄 File GET: {} FROM {}:{} ({} bytes)", filename, remoteAddr, remotePort, fileSize);
@@ -132,11 +125,6 @@ public class FileHandler {
         
         log.info("📦 Segment GET: {} FROM {}:{} [UA: {}]", 
                  segmentId, remoteAddr, remotePort, userAgent != null ? userAgent : "unknown");
-        
-        // Track connected peer (Sling Author mounting this store)
-        if (!"localhost".equals(remoteAddr) && !"127.0.0.1".equals(remoteAddr)) {
-            connectedPeers.add(remoteAddr + ":" + remotePort);
-        }
         
         // Convert UUID string to msb/lsb
         UUID uuid;

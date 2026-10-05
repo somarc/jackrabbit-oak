@@ -100,12 +100,6 @@ public class AeronIngressControlPayloadBuilderTest {
         assertPayloadMatches(execute);
     }
 
-    @Test
-    public void escapeJsonNormalizesNullAndControlCharacters() {
-        assertEquals("", builder.escapeJson(null));
-        assertEquals("\\\"quote\\\"\\\\slash\\n", builder.escapeJson("\"quote\"\\slash\n"));
-    }
-
     private static void assertPayloadMatches(AeronEncodedMessage encoded) {
         SimpleMessageHeader.HeaderInfo header = SimpleMessageHeader.decode(encoded.buffer, 0);
         byte[] payload = new byte[encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH];

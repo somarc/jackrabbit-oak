@@ -24,7 +24,6 @@ import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
@@ -85,11 +84,6 @@ public final class DefaultGlobalStoreServerComponentFactory implements GlobalSto
     @Override
     public FragmentationTracker createFragmentationTracker() {
         return new FragmentationTracker();
-    }
-
-    @Override
-    public WalletStorageMetrics createWalletStorageMetrics(FileStore fileStore) {
-        return new WalletStorageMetrics(fileStore);
     }
 
     @Override

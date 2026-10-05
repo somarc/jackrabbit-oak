@@ -203,17 +203,6 @@ public class CidMappingService implements AutoCloseable {
     }
 
     /**
-     * Get local IPFS URL for an Oak blob ID.
-     * 
-     * @param oakBlobId Oak blob ID
-     * @return Optional containing local URL using the configured local gateway base
-     */
-    public Optional<String> getLocalUrl(String oakBlobId) {
-        return getCid(oakBlobId)
-            .map(IpfsGatewayUrls::localGatewayUrl);
-    }
-
-    /**
      * Get statistics about the mapping service.
      */
     public CidMappingStats getStats() {

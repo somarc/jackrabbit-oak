@@ -92,24 +92,4 @@ public class AeronEgressHandler {
 
         return OfferResult.SENT;
     }
-
-    public boolean offerWithRetry(AeronCluster client,
-                                  IdleStrategy idleStrategy,
-                                  DirectBuffer messageBuffer,
-                                  int totalLength,
-                                  String label,
-                                  int maxRetries,
-                                  Runnable onSuccess,
-                                  boolean logSuccess) {
-        return offerWithRetryResult(
-            client,
-            idleStrategy,
-            messageBuffer,
-            totalLength,
-            label,
-            maxRetries,
-            onSuccess,
-            logSuccess
-        ) == OfferResult.SENT;
-    }
 }

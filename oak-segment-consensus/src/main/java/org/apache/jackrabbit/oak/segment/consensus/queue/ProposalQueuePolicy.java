@@ -25,18 +25,18 @@ public final class ProposalQueuePolicy {
     }
 
     public static int requiredConfirmations() {
-        return ProposalQueueTuningRegistry.get().getRequiredConfirmations();
+        return ProposalQueueTuningRegistry.get().requiredConfirmations();
     }
 
     public static long confirmationTimeoutMs() {
-        return ProposalQueueTuningRegistry.get().getConfirmationTimeoutMs();
+        return ProposalQueueTuningRegistry.get().confirmationTimeoutMs();
     }
 
     public static String releaseMode() {
-        return ProposalQueueTuningRegistry.get().getReleaseMode().configValue();
+        return ProposalQueueTuningRegistry.get().releaseMode().configValue();
     }
 
     public static boolean isValidatorHostedBinaryUploadEnabled() {
-        return ProposalQueueTuningRegistry.get().isValidatorHostedBinaryUploadEnabled();
+        return ProposalQueueTuningRegistry.get().validatorHostedBinaryUploadEnabled();
     }
 }

@@ -43,15 +43,12 @@ import java.util.Set;
 public class AeronApiHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AeronApiHandler.class);
-    private static final long OPS_SNAPSHOT_TTL_MS = 1000L;
+
+    private static final String NOT_CONFIGURED = "Aeron Cluster consensus not configured";
 
     private final ServerContext context;
-    private final Object clusterSnapshotLock = new Object();
-    private final Object replicationSnapshotLock = new Object();
-    private volatile Map<String, Object> cachedClusterSnapshotData;
-    private volatile long cachedClusterSnapshotSourceTimestampMs;
-    private volatile Map<String, Object> cachedReplicationSnapshotData;
-    private volatile long cachedReplicationSnapshotSourceTimestampMs;
+    private final OpsSnapshotCache clusterSnapshot = new OpsSnapshotCache(1000L, log);
+    private final OpsSnapshotCache replicationSnapshot = new OpsSnapshotCache(1000L, log);
 
     public AeronApiHandler(ServerContext context) {
         this.context = context;
@@ -95,15 +92,13 @@ public class AeronApiHandler {
         
         // Add validator identity (wallet address and public key)
         Map<String, Object> validatorIdentity = new HashMap<>();
-        if (context.aeronConsensusEngine != null) {
-            String walletAddress = context.aeronConsensusEngine.getWalletAddress();
-            String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
-            if (walletAddress != null) {
-                validatorIdentity.put("walletAddress", walletAddress);
-            }
-            if (publicKey != null) {
-                validatorIdentity.put("publicKey", publicKey);
-            }
+        String walletAddress = context.aeronConsensusEngine.getWalletAddress();
+        String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
+        if (walletAddress != null) {
+            validatorIdentity.put("walletAddress", walletAddress);
+        }
+        if (publicKey != null) {
+            validatorIdentity.put("publicKey", publicKey);
         }
         if (!validatorIdentity.isEmpty()) {
             state.put("validatorIdentity", validatorIdentity);
@@ -160,9 +155,7 @@ public class AeronApiHandler {
         
         // Ensure consensus metrics are present
         Map<String, Object> consensus = new HashMap<>();
-        consensus.put("reachableValidators", 
-            state.containsKey("reachableCount") ? state.get("reachableCount") : 
-            context.aeronConsensusEngine.getReachableValidatorCount());
+        consensus.put("reachableValidators", state.get("reachableCount"));
         consensus.put("totalMembers", state.get("clusterMemberCount"));
         consensus.put("lastHeartbeat", context.aeronConsensusEngine.getLastHeartbeatTime());
         state.put("consensus", consensus);
@@ -205,16 +198,12 @@ public class AeronApiHandler {
     public void handleClusterState(HttpServletResponse response) throws IOException {
         Map<String, Object> state = getClusterStateData();
         if (state == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
         response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_OK);
-        
-        // Write JSON response
-        writeJsonResponse(response, state);
+        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, state);
     }
 
     /**
@@ -227,14 +216,12 @@ public class AeronApiHandler {
     public void handleValidatorIdentities(HttpServletResponse response) throws IOException {
         Map<String, Object> data = getValidatorIdentitiesData();
         if (data == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
         response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_OK);
-        writeJsonResponse(response, data);
+        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, data);
     }
     
     /**
@@ -280,8 +267,7 @@ public class AeronApiHandler {
      */
     public void handleRaftMetrics(HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
@@ -308,9 +294,7 @@ public class AeronApiHandler {
         commitMetrics.put("currentEpoch", context.aeronConsensusEngine.getCurrentEpoch());
         commitMetrics.put("ethereumEpoch", context.aeronConsensusEngine.getCurrentEthereumEpoch());
         metrics.put("commitMetrics", commitMetrics);
-        
-        // Write JSON response
-        writeJsonResponse(response, metrics);
+        response.getWriter().write(JsonOutputUtil.toJson(metrics));
     }
 
     /**
@@ -322,8 +306,7 @@ public class AeronApiHandler {
      */
     public void handleNodeStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
@@ -364,9 +347,7 @@ public class AeronApiHandler {
         Map<String, Object> metrics = new HashMap<>();
         metrics.put("reachableValidators", context.aeronConsensusEngine.getReachableValidatorCount());
         nodeStatus.put("metrics", metrics);
-        
-        // Write JSON response
-        writeJsonResponse(response, nodeStatus);
+        response.getWriter().write(JsonOutputUtil.toJson(nodeStatus));
     }
 
     /**
@@ -379,8 +360,7 @@ public class AeronApiHandler {
      */
     public void handleLeadershipHistory(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
@@ -426,9 +406,7 @@ public class AeronApiHandler {
         history.put("history", entries);
         history.put("totalEntries", entries.size());
         history.put("limit", limit);
-        
-        // Write JSON response
-        writeJsonResponse(response, history);
+        response.getWriter().write(JsonOutputUtil.toJson(history));
     }
 
     /**
@@ -441,16 +419,13 @@ public class AeronApiHandler {
         for (Map<String, Object> member : members) {
             String memberUrl = (String) member.get("url");
             if (memberUrl != null && memberUrl.equals(context.selfUrl)) {
-                // This is us - add our wallet info
-                if (context.aeronConsensusEngine != null) {
-                    String walletAddress = context.aeronConsensusEngine.getWalletAddress();
-                    String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
-                    if (walletAddress != null) {
-                        member.put("walletAddress", walletAddress);
-                    }
-                    if (publicKey != null) {
-                        member.put("publicKey", publicKey);
-                    }
+                String walletAddress = context.aeronConsensusEngine.getWalletAddress();
+                String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
+                if (walletAddress != null) {
+                    member.put("walletAddress", walletAddress);
+                }
+                if (publicKey != null) {
+                    member.put("publicKey", publicKey);
                 }
                 break; // Found self, no need to continue
             }
@@ -640,13 +615,6 @@ public class AeronApiHandler {
     }
 
     /**
-     * Write JSON response from Map.
-     */
-    private void writeJsonResponse(HttpServletResponse response, Map<String, Object> data) throws IOException {
-        response.getWriter().write(JsonOutputUtil.toJson(data));
-    }
-
-    /**
      * ✅ ADR 025: Handle GET /v1/aeron/replication-lag - Returns replication lag status
      * 
      * <p>Shows how far behind this follower is from the leader's log position.
@@ -665,22 +633,20 @@ public class AeronApiHandler {
      */
     public void handleReplicationLag(HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
         
         Map<String, Object> lagStatus = context.aeronConsensusEngine.getReplicationLagStatus();
         
         if (lagStatus == null) {
-            sendError(response, HttpServletResponse.SC_NOT_FOUND, 
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND,
                 "Replication lag not applicable (cluster not initialized)");
             return;
         }
         
         response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_OK);
-        writeJsonResponse(response, lagStatus);
+        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, lagStatus);
     }
 
     /**
@@ -699,55 +665,13 @@ public class AeronApiHandler {
      */
     public void handleGetOpsClusterSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (clusterSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedClusterSnapshotData != null
-                    && cachedClusterSnapshotSourceTimestampMs > 0
-                    && (now - cachedClusterSnapshotSourceTimestampMs) <= OPS_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedClusterSnapshotData;
-                    sourceTimestampMs = cachedClusterSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = getClusterStateData();
-                    if (data == null) {
-                        throw new IllegalStateException("Aeron Cluster consensus not configured");
-                    }
-                    sourceTimestampMs = now;
-                    cachedClusterSnapshotData = data;
-                    cachedClusterSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
+        clusterSnapshot.serve(response, "ops.v1", false, "cluster", () -> {
+            Map<String, Object> data = getClusterStateData();
+            if (data == null) {
+                throw new IllegalStateException(NOT_CONFIGURED);
             }
-
-                long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsSnapshotEnvelope(
-                data, sourceTimestampMs, servedAtMs, stalenessMs, false, null, fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops cluster snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedClusterSnapshotData != null && cachedClusterSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedClusterSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsSnapshotEnvelope(
-                    cachedClusterSnapshotData,
-                    cachedClusterSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage());
-        }
+            return data;
+        }, e -> ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage()));
     }
 
     /**
@@ -756,83 +680,12 @@ public class AeronApiHandler {
      */
     public void handleGetOpsReplicationSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (replicationSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedReplicationSnapshotData != null
-                    && cachedReplicationSnapshotSourceTimestampMs > 0
-                    && (now - cachedReplicationSnapshotSourceTimestampMs) <= OPS_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedReplicationSnapshotData;
-                    sourceTimestampMs = cachedReplicationSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = getReplicationLagData();
-                    if (data == null) {
-                        throw new IllegalStateException("Replication lag not applicable (cluster not initialized)");
-                    }
-                    sourceTimestampMs = now;
-                    cachedReplicationSnapshotData = data;
-                    cachedReplicationSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
+        replicationSnapshot.serve(response, "ops.v1", false, "replication", () -> {
+            Map<String, Object> data = getReplicationLagData();
+            if (data == null) {
+                throw new IllegalStateException("Replication lag not applicable (cluster not initialized)");
             }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsSnapshotEnvelope(
-                data, sourceTimestampMs, servedAtMs, stalenessMs, false, null, fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops replication snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedReplicationSnapshotData != null && cachedReplicationSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedReplicationSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsSnapshotEnvelope(
-                    cachedReplicationSnapshotData,
-                    cachedReplicationSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage());
-        }
-    }
-    
-    /**
-     * Send standardized error response.
-     */
-    private void sendError(HttpServletResponse response, int statusCode, String message) throws IOException {
-        ApiErrorUtil.sendJsonError(response, statusCode, message);
-    }
-
-    private String buildOpsSnapshotEnvelope(Object data,
-                                            long sourceTimestampMs,
-                                            long servedAtMs,
-                                            long stalenessMs,
-                                            boolean degraded,
-                                            String degradedReason,
-                                            boolean cacheHit) {
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("contractVersion", "ops.v1");
-        payload.put("sourceTimestampMs", sourceTimestampMs);
-        payload.put("servedAtMs", servedAtMs);
-        payload.put("stalenessMs", stalenessMs);
-        payload.put("degraded", degraded);
-        payload.put("degradedReason", degradedReason);
-        Map<String, Object> cache = new HashMap<>();
-        cache.put("hit", cacheHit);
-        cache.put("ttlMs", OPS_SNAPSHOT_TTL_MS);
-        payload.put("cache", cache);
-        payload.put("data", data);
-        return JsonOutputUtil.toJson(payload);
+            return data;
+        }, e -> ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage()));
     }
 }

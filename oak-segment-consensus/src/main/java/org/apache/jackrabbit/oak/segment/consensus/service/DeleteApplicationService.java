@@ -17,14 +17,11 @@
 package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import org.agrona.concurrent.AgentTerminationException;
-import org.apache.jackrabbit.oak.api.CommitFailedException;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
-import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
-import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.jetbrains.annotations.NotNull;
@@ -32,7 +29,6 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -50,8 +46,6 @@ import java.util.regex.Pattern;
  * <p><strong>Delete Semantics:</strong>
  * Delete in Oak = Remove node from tree (writes new segment saying "path no longer exists").
  * Old segments remain until GC/compaction runs.
- * 
- * @see org.apache.jackrabbit.oak.segment.consensus.validation.ContentDeleteProposal
  */
 public class DeleteApplicationService {
     
@@ -63,9 +57,9 @@ public class DeleteApplicationService {
     private final FileStoreFlushService flushService;
     
     // Optional callbacks for integration
-    private HeadUpdateCallback headUpdateCallback;
+    private WriteApplicationService.HeadUpdateCallback headUpdateCallback;
     private SSEEventCallback sseEventCallback;
-    private DurabilityCallback durabilityCallback;
+    private WriteApplicationService.DurabilityCallback durabilityCallback;
     
     /**
      * Create a new DeleteApplicationService.
@@ -93,7 +87,7 @@ public class DeleteApplicationService {
     // Callback Setters
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
-    public void setHeadUpdateCallback(HeadUpdateCallback callback) {
+    public void setHeadUpdateCallback(WriteApplicationService.HeadUpdateCallback callback) {
         this.headUpdateCallback = callback;
     }
     
@@ -101,7 +95,7 @@ public class DeleteApplicationService {
         this.sseEventCallback = callback;
     }
 
-    public void setDurabilityCallback(DurabilityCallback callback) {
+    public void setDurabilityCallback(WriteApplicationService.DurabilityCallback callback) {
         this.durabilityCallback = callback;
     }
     
@@ -152,11 +146,11 @@ public class DeleteApplicationService {
         try {
             CanonicalGenesisContent.requireMutable(walletAddress, path);
             log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
-            NodeStore nodeStore = requireNodeStore();
+            NodeStore nodeStore = MutationApplySupport.requireNodeStore(nodeStoreSupplier);
             
             // Get current HEAD for logging
             String previousHead = fileStore.getHead().getRecordId().toString();
-            log.debug("📍 Previous HEAD: {}", truncate(previousHead, 20));
+            log.debug("📍 Previous HEAD: {}", MutationApplySupport.truncate(previousHead, 20));
 
             if (signature == null) {
                 throw new MutationRejectedException("Missing signature in replicated delete");
@@ -193,7 +187,7 @@ public class DeleteApplicationService {
             if (!pathExists) {
                 log.warn("⚠️  Delete skipped - path doesn't exist: {}", path);
                 // Not an error - idempotent delete (already gone)
-                flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+                flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
                 return null;
             }
             
@@ -208,30 +202,18 @@ public class DeleteApplicationService {
             } else {
                 log.warn("⚠️  Target node doesn't exist: {} (idempotent delete)", targetNodeName);
                 // Not an error - already deleted
-                flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+                flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
                 return null;
             }
             
             // Commit the deletion (deterministic on all nodes)
-            CommitInfo commitInfo = new CommitInfo(
-                "aeron-replication-delete", 
-                null, 
-                Collections.singletonMap("replicated", "true")
-            );
-            
-            if (auditMetadata != null && auditMetadata.getAppliedLogPosition() != null) {
-                auditMetadata.getAppliedLogPosition().writeTo(rootBuilder);
-            }
-            try {
-                nodeStore.merge(rootBuilder, EmptyHook.INSTANCE, commitInfo);
-            } catch (CommitFailedException e) {
-                throw new RuntimeException("Failed to commit delete", e);
-            }
-            flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+            MutationApplySupport.mergeReplicated(
+                nodeStore, rootBuilder, "aeron-replication-delete", auditMetadata, "Failed to commit delete");
+            flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
             
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
-            log.info("✅ DELETE applied, HEAD: {}...", truncate(newHead, 20));
+            log.info("✅ DELETE applied, HEAD: {}...", MutationApplySupport.truncate(newHead, 20));
             
             // Update HEAD cache
             if (headUpdateCallback != null) {
@@ -240,7 +222,7 @@ public class DeleteApplicationService {
             
             // Emit SSE delete event
             if (sseEventCallback != null) {
-                String extractedOrg = extractOrganizationFromPath(path);
+                String extractedOrg = MutationApplySupport.extractOrganizationFromPath(path);
                 sseEventCallback.emitContentDelete(path, walletAddress, extractedOrg, signature);
             }
             
@@ -253,11 +235,7 @@ public class DeleteApplicationService {
             if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
                 durabilityCallback.onFailure(proposalId, e.getMessage());
             }
-            log.error("❌ Failed to apply replicated delete", e);
-            if (e instanceof MutationRejectedException) {
-                throw new MutationRejectedException("Failed to apply replicated delete", e);
-            }
-            throw new RuntimeException("Failed to apply replicated delete", e);
+            throw MutationApplySupport.applyFailure(log, "delete", e);
         }
     }
 
@@ -272,74 +250,9 @@ public class DeleteApplicationService {
         }
     }
 
-    private Runnable buildDurabilityCallback(String proposalId) {
-        if (durabilityCallback == null || proposalId == null || proposalId.isEmpty()) {
-            return null;
-        }
-        String appliedHead = fileStore.getHead().getRecordId().toString10();
-        return () -> durabilityCallback.onDurable(proposalId, appliedHead);
-    }
-
-    @NotNull
-    private NodeStore requireNodeStore() {
-        NodeStore nodeStore = nodeStoreSupplier.get();
-        if (nodeStore == null) {
-            throw new IllegalStateException("NodeStore supplier returned null");
-        }
-        return nodeStore;
-    }
-    
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Helper Methods
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Extract organization from path (ADR 037).
-     * 
-     * <p>Path format: /oak-chain/XX/YY/ZZ/0xWALLET/{organization}/content/{contentId}
-     */
-    @Nullable
-    private String extractOrganizationFromPath(@Nullable String path) {
-        if (path == null || path.isEmpty()) {
-            return null;
-        }
-        
-        String[] parts = path.split("/");
-        // Path: ["", "oak-chain", "XX", "YY", "ZZ", "0xWALLET", "Organization", "content", "contentId"]
-        // Index:  0       1         2     3     4        5            6            7          8
-        
-        if (parts.length < 8) {
-            return null;
-        }
-        
-        String potentialOrg = parts[6];
-        if (!"content".equals(potentialOrg) && !potentialOrg.startsWith("0x")) {
-            return potentialOrg;
-        }
-        
-        return null;
-    }
-    
-    /**
-     * Truncate string for logging.
-     */
-    private static String truncate(String value, int maxLength) {
-        if (value == null) return "null";
-        if (value.length() <= maxLength) return value;
-        return value.substring(0, maxLength) + "...";
-    }
-    
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // Callback Interfaces
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Callback for HEAD updates.
-     */
-    @FunctionalInterface
-    public interface HeadUpdateCallback {
-        void updateHead(String newHead);
-    }
     
     /**
      * Callback for SSE events.
@@ -349,11 +262,4 @@ public class DeleteApplicationService {
         void emitContentDelete(String path, String wallet, String org, String signature);
     }
 
-    /**
-     * Callback for durability confirmation (ADR 026).
-     */
-    public interface DurabilityCallback {
-        void onDurable(String proposalId, String durableHead);
-        void onFailure(String proposalId, String error);
-    }
 }

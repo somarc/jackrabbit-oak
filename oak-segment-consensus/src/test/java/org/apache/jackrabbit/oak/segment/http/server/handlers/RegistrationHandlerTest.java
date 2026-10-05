@@ -19,7 +19,6 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
-import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
 
@@ -156,56 +155,6 @@ public class RegistrationHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
         assertTrue(body.toString().contains("Invalid clientType"));
-    }
-
-    @Test
-    public void testHandleValidatorRegistrationRejectsMissingValidatorId() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-        HttpServletRequest request = baseRequest();
-        when(request.getReader()).thenReturn(readerFor(""));
-
-        RegistrationHandler handler = new RegistrationHandler(newContext());
-        handler.handleValidatorRegistration(request, response);
-
-        verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
-        assertTrue(body.toString().contains("Missing validatorId"));
-    }
-
-    @Test
-    public void testHandleValidatorRegistrationIgnoresSelfRegistration() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-        HttpServletRequest request = baseRequest();
-        when(request.getReader()).thenReturn(readerFor(""));
-        when(request.getParameter("validatorId")).thenReturn("validator-1");
-        when(request.getParameter("validatorUrl")).thenReturn("http://validator-1:8090");
-
-        RegistrationHandler handler = new RegistrationHandler(newContext());
-        handler.handleValidatorRegistration(request, response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        assertTrue(body.toString().contains("Self-registration ignored"));
-    }
-
-    @Test
-    public void testHandleValidatorRegistrationInfersUrlWhenMissing() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-        HttpServletRequest request = baseRequest();
-        when(request.getReader()).thenReturn(readerFor(""));
-        when(request.getParameter("validatorId")).thenReturn("validator-2");
-        when(request.getRemoteAddr()).thenReturn("10.0.0.2");
-        when(request.getRemotePort()).thenReturn(8090);
-
-        ServerContext context = newContext();
-        RegistrationHandler handler = new RegistrationHandler(context);
-        handler.handleValidatorRegistration(request, response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        ValidatorRegistration registration = context.registeredValidators.get("validator-2");
-        assertEquals("http://10.0.0.2:8090", registration.validatorUrl);
-        assertTrue(body.toString().contains("\"validatorId\":\"validator-2\""));
     }
 
     private static ServerContext newContext() {

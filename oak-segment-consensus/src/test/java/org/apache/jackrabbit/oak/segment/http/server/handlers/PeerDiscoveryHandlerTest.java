@@ -75,35 +75,20 @@ public class PeerDiscoveryHandlerTest {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
         ServerContext context = newContext("http://validator-1:8090");
-        context.myValidatorId = "0x1111111111111111111111111111111111111111";
         context.registeredValidators.put("validator-2", new ValidatorRegistration("validator-2", "http://validator-2:8090"));
 
         AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
-        when(engine.getNonVotingFollowers()).thenReturn(Collections.emptyList());
         when(engine.getAllFollowers()).thenReturn(Collections.singletonList("http://validator-2:8090"));
         when(engine.getCurrentLeader()).thenReturn("http://validator-1:8090");
-        when(engine.getCurrentEpoch()).thenReturn(12);
         context.aeronConsensusEngine = engine;
 
         PeerDiscoveryHandler handler = new PeerDiscoveryHandler(context);
         handler.handlePeerList(response);
 
         String json = body.toString();
-        assertTrue(json.contains("\"validatorId\":\"0x1111111111111111111111111111111111111111\""));
+        assertTrue(json.contains("\"validatorId\":\"0x5c1e6002cf04eb89c7c1920cb414b602e99ac42e\""));
         assertTrue(json.contains("\"validatorUrl\":\"http://validator-2:8090\""));
         assertTrue(json.contains("\"status\":\"READY\""));
-    }
-
-    @Test
-    public void testHandleNgrokUrlReturnsSelfUrl() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-        PeerDiscoveryHandler handler = new PeerDiscoveryHandler(newContext("https://public.ngrok.app"));
-
-        handler.handleNgrokUrl(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        assertTrue(body.toString().contains("https://public.ngrok.app"));
     }
 
     private static ServerContext newContext(String selfUrl) {

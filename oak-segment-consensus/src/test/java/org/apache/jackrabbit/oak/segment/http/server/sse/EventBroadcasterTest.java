@@ -88,17 +88,13 @@ public class EventBroadcasterTest {
             broadcaster.emitContentWrite("/content/doc-1", "0xwallet", "acme", "hello", "0xsig", "text/plain");
             broadcaster.emitBinaryUpload("/content/doc-2", "0xwallet", "acme", "img", "QmCid", 42L, "image/png");
             broadcaster.emitContentDelete("/content/doc-3", "0xwallet", "acme", "0xdead");
-            broadcaster.emitWalletRegistration("0xwallet", "owner");
-            broadcaster.emitConsensusEvent(ContentEvent.Action.COMMIT, "commit");
 
             List<ContentEvent> recent = broadcaster.getRecentEvents(10);
-            assertEquals(5, recent.size());
+            assertEquals(3, recent.size());
             assertEquals("content", recent.get(0).getType());
             assertEquals("binary", recent.get(1).getType());
             assertEquals("delete", recent.get(2).getType());
-            assertEquals("wallet", recent.get(3).getType());
-            assertEquals("consensus", recent.get(4).getType());
-            assertEquals(5L, broadcaster.getTotalEventsBroadcast());
+            assertEquals(3L, broadcaster.getTotalEventsBroadcast());
         } finally {
             broadcaster.shutdown();
         }

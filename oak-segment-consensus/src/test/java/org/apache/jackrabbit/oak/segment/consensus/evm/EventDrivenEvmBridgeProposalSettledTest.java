@@ -71,7 +71,7 @@ public class EventDrivenEvmBridgeProposalSettledTest {
         long blockNumber = 123789L;
         String txHash = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress, false);
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress);
 
         Log ethLog = new Log();
         ethLog.setAddress(contractAddress);
@@ -127,7 +127,7 @@ public class EventDrivenEvmBridgeProposalSettledTest {
         long blockNumber = 123790L;
         String txHash = "0xabababababababababababababababababababababababababababababababab";
 
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress, false);
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress);
 
         Log ethLog = new Log();
         ethLog.setAddress(contractAddress);
@@ -177,7 +177,7 @@ public class EventDrivenEvmBridgeProposalSettledTest {
         long blockNumber = 123791L;
         String txHash = "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress, false);
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress);
 
         Log ethLog = new Log();
         ethLog.setAddress(contractAddress);

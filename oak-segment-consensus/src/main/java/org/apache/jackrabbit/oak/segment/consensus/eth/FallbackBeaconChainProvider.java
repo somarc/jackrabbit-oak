@@ -80,11 +80,6 @@ public class FallbackBeaconChainProvider implements BeaconChainProvider {
         return providers.stream().map(BeaconChainProvider::name).collect(Collectors.toList());
     }
 
-    /** Returns the underlying provider list (package-private for tests). */
-    List<BeaconChainProvider> getProviders() {
-        return providers;
-    }
-
     /**
      * Builds a fallback provider from config, wrapping each with a circuit breaker.
      *
@@ -103,13 +98,13 @@ public class FallbackBeaconChainProvider implements BeaconChainProvider {
 
         if (localNodeUrl != null && !localNodeUrl.isEmpty()) {
             list.add(new CircuitBreakingBeaconProvider(
-                new LocalBeaconNodeProvider(localNodeUrl, LocalBeaconNodeProvider.defaultFetcher()),
+                new LocalBeaconNodeProvider(localNodeUrl, HttpFetcher::httpGet),
                 5, 60_000L));
             log.info("Beacon provider #1: local-beacon-node ({})", localNodeUrl);
         }
 
         list.add(new CircuitBreakingBeaconProvider(
-            new BeaconchainDotInProvider(primaryApiUrl, BeaconchainDotInProvider.defaultFetcher()),
+            new BeaconchainDotInProvider(primaryApiUrl, HttpFetcher::httpGet),
             5, 60_000L));
         log.info("Beacon provider #{}: beaconcha.in ({})", list.size(), primaryApiUrl);
 

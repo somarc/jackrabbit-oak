@@ -24,8 +24,6 @@ import org.osgi.service.component.annotations.Deactivate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.InetAddress;
-import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
@@ -337,22 +335,13 @@ public class LeaderDiscoveryService {
      */
     private String pollPeerForLeader(String peerUrl) {
         try {
-            java.net.URL apiUrl = new java.net.URL(peerUrl + "/v1/consensus/leader?" + LOCAL_ONLY_PARAM + "=true");
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(HTTP_READ_TIMEOUT_MS);
-            
-            // Handle ngrok URLs
-            if (peerUrl.contains("ngrok")) {
-                conn.setRequestProperty("ngrok-skip-browser-warning", "true");
-            }
-            
+            java.net.HttpURLConnection conn =
+                openGet(peerUrl + "/v1/consensus/leader?" + LOCAL_ONLY_PARAM + "=true", peerUrl);
             int responseCode = conn.getResponseCode();
             if (responseCode == 200) {
                 String json = readResponseBody(conn);
-                String currentLeader = extractJsonField(json, "currentLeader");
-                if (currentLeader != null && !currentLeader.isEmpty() && !"null".equals(currentLeader)) {
+                String currentLeader = presentLeader(extractJsonField(json, "currentLeader"));
+                if (currentLeader != null) {
                     log.debug("Peer {} reports leader as: {}", peerUrl, currentLeader);
                     return currentLeader;
                 }
@@ -377,40 +366,43 @@ public class LeaderDiscoveryService {
         return null;
     }
 
+    /** Fallback for peers that predate {@code /v1/consensus/leader}. */
     private String pollPeerForLeaderLegacy(String peerUrl) {
         try {
-            java.net.URL apiUrl = new java.net.URL(peerUrl + "/v1/aeron/cluster-state");
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(HTTP_READ_TIMEOUT_MS);
-
-            if (peerUrl.contains("ngrok")) {
-                conn.setRequestProperty("ngrok-skip-browser-warning", "true");
-            }
-
+            java.net.HttpURLConnection conn = openGet(peerUrl + "/v1/aeron/cluster-state", peerUrl);
             if (conn.getResponseCode() != 200) {
                 return null;
             }
 
             String json = readResponseBody(conn);
-            String currentLeader = extractJsonField(json, "currentLeader");
-            if (currentLeader != null && !currentLeader.isEmpty() && !"null".equals(currentLeader)) {
+            String currentLeader = presentLeader(extractJsonField(json, "currentLeader"));
+            if (currentLeader != null) {
                 return currentLeader;
             }
             String role = extractJsonField(json, "role");
             if ("LEADER".equalsIgnoreCase(role)) {
                 return peerUrl;
             }
-
-            String leaderUrl = extractJsonField(json, "leaderUrl");
-            if (leaderUrl != null && !leaderUrl.isEmpty() && !"null".equals(leaderUrl)) {
-                return leaderUrl;
-            }
+            return presentLeader(extractJsonField(json, "leaderUrl"));
         } catch (Exception e) {
             log.debug("Legacy leader polling failed for {}: {}", peerUrl, e.getMessage());
         }
         return null;
+    }
+
+    private static java.net.HttpURLConnection openGet(String url, String peerUrl) throws java.io.IOException {
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(HTTP_READ_TIMEOUT_MS);
+        if (peerUrl.contains("ngrok")) {
+            conn.setRequestProperty("ngrok-skip-browser-warning", "true");
+        }
+        return conn;
+    }
+
+    private static String presentLeader(String value) {
+        return value != null && !value.isEmpty() && !"null".equals(value) ? value : null;
     }
 
     private String readResponseBody(java.net.HttpURLConnection conn) throws java.io.IOException {
@@ -475,65 +467,6 @@ public class LeaderDiscoveryService {
         cachedLeaderUrl = null;
         cachedLeaderTimestamp = 0;
         log.debug("Leader cache invalidated");
-    }
-    
-    /**
-     * Check if two URLs point to the same validator (by port).
-     * 
-     * <p>This handles cases where URLs might differ in protocol or hostname
-     * but actually refer to the same validator instance.
-     */
-    public boolean isSameUrl(String url1, String url2) {
-        if (url1 == null || url2 == null) {
-            return false;
-        }
-        
-        if (url1.equals(url2)) {
-            return true;
-        }
-        
-        try {
-            URI uri1 = new URI(url1.startsWith("http") ? url1 : "http://" + url1);
-            URI uri2 = new URI(url2.startsWith("http") ? url2 : "http://" + url2);
-            
-            // Same host and port = same validator
-            if (uri1.getPort() == uri2.getPort()) {
-                String host1 = resolveUrlToIP(uri1.getHost());
-                String host2 = resolveUrlToIP(uri2.getHost());
-                
-                return host1 != null && host1.equals(host2);
-            }
-            
-        } catch (Exception e) {
-            log.debug("Failed to compare URLs: {} vs {}", url1, url2, e);
-        }
-        
-        return false;
-    }
-    
-    /**
-     * Resolve URL hostname to IP address.
-     */
-    private String resolveUrlToIP(String hostname) {
-        try {
-            // Handle localhost specially
-            if ("localhost".equalsIgnoreCase(hostname)) {
-                return "127.0.0.1";
-            }
-            
-            // Already an IP?
-            if (hostname.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
-                return hostname;
-            }
-            
-            // Resolve DNS
-            InetAddress addr = InetAddress.getByName(hostname);
-            return addr.getHostAddress();
-            
-        } catch (Exception e) {
-            log.debug("Failed to resolve hostname: {}", hostname, e);
-            return null;
-        }
     }
     
     /**

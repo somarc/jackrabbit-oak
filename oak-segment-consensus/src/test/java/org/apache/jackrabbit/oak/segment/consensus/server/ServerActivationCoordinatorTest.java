@@ -63,8 +63,8 @@ public class ServerActivationCoordinatorTest {
 
         verify(httpServer, never()).start();
         verifyNoInteractions(bootstrap);
-        assertSame(clusterService, activation.getAeronClusterService());
-        assertSame(existingLauncher, activation.getLauncher());
+        assertSame(clusterService, activation.aeronClusterService());
+        assertSame(existingLauncher, activation.launcher());
     }
 
     @Test
@@ -89,8 +89,8 @@ public class ServerActivationCoordinatorTest {
 
         verify(httpServer).start();
         verify(bootstrap).startStandbyServer();
-        assertSame(clusterService, activation.getAeronClusterService());
-        assertSame(launcher, activation.getLauncher());
+        assertSame(clusterService, activation.aeronClusterService());
+        assertSame(launcher, activation.launcher());
     }
 
     @Test
@@ -148,7 +148,7 @@ public class ServerActivationCoordinatorTest {
 
         verify(httpServer).start();
         verify(bootstrap).startStandbyServer();
-        assertSame(clusterService, activation.getAeronClusterService());
+        assertSame(clusterService, activation.aeronClusterService());
     }
 
     private static ServerActivationCoordinator.ActivationContext newContext(BootstrapMode detectedMode,
@@ -158,7 +158,6 @@ public class ServerActivationCoordinatorTest {
                                                                             AeronClusterLauncher existingLauncher) {
         return new ServerActivationCoordinator.ActivationContext(
             8090,
-            true,
             detectedMode,
             mock(FileStore.class),
             mock(NodeStore.class),

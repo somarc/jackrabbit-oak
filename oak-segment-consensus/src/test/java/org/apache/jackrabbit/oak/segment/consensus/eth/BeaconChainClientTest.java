@@ -32,7 +32,6 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 public class BeaconChainClientTest {
 
@@ -77,21 +76,6 @@ public class BeaconChainClientTest {
     }
 
     @Test
-    public void testMockEpochControlsAreDisabled() {
-        BeaconChainClient client = new BeaconChainClient(BlockchainConfig.Mode.MOCK, endpoint -> {
-            throw new AssertionError("Mock mode must not fetch " + endpoint);
-        });
-        long initialCurrent = client.getCachedCurrentEpoch();
-        long initialFinalized = client.getCachedFinalizedEpoch();
-
-        assertFalse(client.setMockEpochOffset(42L));
-        assertFalse(client.advanceMockEpoch(3));
-        assertEquals(0L, client.getMockEpochOffset());
-        assertEquals(initialCurrent, client.getCachedCurrentEpoch());
-        assertEquals(initialFinalized, client.getCachedFinalizedEpoch());
-    }
-
-    @Test
     public void testUsesLatestEndpointFallbackWhenFinalizedEndpointFails() {
         AtomicInteger fetchCount = new AtomicInteger();
         BeaconChainClient client = new BeaconChainClient(BlockchainConfig.Mode.SEPOLIA, endpoint -> {
@@ -111,38 +95,12 @@ public class BeaconChainClientTest {
     }
 
     @Test
-    public void testStaleEpochDataDetectedAndFreshnessCheckThrows() throws Exception {
+    public void testStaleEpochDataDetected() throws Exception {
         BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.SEPOLIA, 200L);
 
         setField(client, "lastUpdateTime", System.currentTimeMillis() - 301000L);
 
         assertFalse(client.isEpochDataFresh());
-        try {
-            client.checkEpochFreshness();
-            fail("Expected IllegalStateException");
-        } catch (IllegalStateException e) {
-            assertEquals("Epoch data is stale!", e.getMessage());
-        }
-    }
-
-    @Test
-    public void testEpochDetailsAndLatestFinalizedEpochReflectCachedState() throws Exception {
-        BeaconChainClient client = clientWithFinalizedEpoch(BlockchainConfig.Mode.SEPOLIA, 88L);
-
-        long currentEpoch = client.getCachedCurrentEpoch();
-        long finalizedEpoch = client.getCachedFinalizedEpoch();
-        EpochData finalized = client.getEpochDetails(finalizedEpoch);
-        EpochData future = client.getEpochDetails(currentEpoch + 1);
-        EpochData latest = client.getLatestFinalizedEpoch();
-
-        assertEquals(finalizedEpoch, finalized.epochNumber);
-        assertTrue(finalized.finalized);
-        assertEquals(2, finalized.epochsBehindCurrent);
-        assertEquals(currentEpoch + 1, future.epochNumber);
-        assertFalse(future.finalized);
-        assertEquals(-1, future.epochsBehindCurrent);
-        assertEquals(finalizedEpoch, latest.epochNumber);
-        assertTrue(latest.finalized);
     }
 
     @Test

@@ -45,7 +45,6 @@ public class ValidatorLifecycleManager {
     }
 
     private final ValidatorFactory factory;
-    private final ComponentRegistry registry;
     private final ShutdownHookHandler shutdownHookHandler;
     private final StartupExecutor startupExecutor;
     private GlobalStoreServer server;
@@ -55,16 +54,14 @@ public class ValidatorLifecycleManager {
     private volatile GlobalStoreServerComponentFactory componentFactory;
 
     public ValidatorLifecycleManager() {
-        this(new ValidatorFactory(), new ComponentRegistry(), new ShutdownHookHandler(),
+        this(new ValidatorFactory(), new ShutdownHookHandler(),
             (threadName, task) -> new Thread(task, threadName).start());
     }
 
     ValidatorLifecycleManager(ValidatorFactory factory,
-                              ComponentRegistry registry,
                               ShutdownHookHandler shutdownHookHandler,
                               StartupExecutor startupExecutor) {
         this.factory = factory;
-        this.registry = registry;
         this.shutdownHookHandler = shutdownHookHandler;
         this.startupExecutor = startupExecutor;
     }
@@ -82,7 +79,6 @@ public class ValidatorLifecycleManager {
             server.setComponentFactory(componentFactory);
             LOG.info("GlobalStoreServerComponentFactory injected");
         }
-        registry.register("GlobalStoreServer", server);
         shutdownHookHandler.register(server);
 
         // Start asynchronously to avoid blocking OSGi activate thread.

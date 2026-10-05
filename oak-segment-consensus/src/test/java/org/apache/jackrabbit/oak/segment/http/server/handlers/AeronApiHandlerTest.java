@@ -549,7 +549,7 @@ public class AeronApiHandlerTest {
         assertTrue(secondBody.toString().contains("\"hit\":true"));
         assertFalse(secondBody.toString().contains("\"degraded\":true"));
 
-        setLongField(handler, "cachedClusterSnapshotSourceTimestampMs", System.currentTimeMillis() - 5_000L);
+        ageSnapshotCache(handler, "clusterSnapshot", System.currentTimeMillis() - 5_000L);
         context.aeronConsensusEngine = null;
 
         StringWriter staleBody = new StringWriter();
@@ -586,7 +586,7 @@ public class AeronApiHandlerTest {
         verify(secondResponse).setStatus(HttpServletResponse.SC_OK);
         assertTrue(secondBody.toString().contains("\"hit\":true"));
 
-        setLongField(handler, "cachedReplicationSnapshotSourceTimestampMs", System.currentTimeMillis() - 5_000L);
+        ageSnapshotCache(handler, "replicationSnapshot", System.currentTimeMillis() - 5_000L);
         context.aeronConsensusEngine = null;
 
         StringWriter staleBody = new StringWriter();
@@ -644,9 +644,11 @@ public class AeronApiHandlerTest {
         return response;
     }
 
-    private static void setLongField(Object target, String fieldName, long value) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
+    private static void ageSnapshotCache(Object handler, String cacheField, long sourceTimestampMs) throws Exception {
+        Field field = handler.getClass().getDeclaredField(cacheField);
         field.setAccessible(true);
-        field.setLong(target, value);
+        Field timestamp = OpsSnapshotCache.class.getDeclaredField("sourceTimestampMs");
+        timestamp.setAccessible(true);
+        timestamp.setLong(field.get(handler), sourceTimestampMs);
     }
 }

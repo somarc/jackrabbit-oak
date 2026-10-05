@@ -75,32 +75,13 @@ final class GenesisStartupCoordinator {
         }
     }
 
-    static final class StartupContext {
-        private final BootstrapMode mode;
-        private final ValidatorBootstrap bootstrap;
-        private final int standbyPort;
-        private final NodeStore nodeStore;
-        private final FileStore fileStore;
-        private final BlobStore blobStore;
-        private final String selfUrl;
-        private final GlobalStoreServerComponentFactory componentFactory;
-
-        StartupContext(BootstrapMode mode,
-                       ValidatorBootstrap bootstrap,
-                       int standbyPort,
-                       NodeStore nodeStore,
-                       FileStore fileStore,
-                       BlobStore blobStore,
-                       String selfUrl,
-                       GlobalStoreServerComponentFactory componentFactory) {
-            this.mode = mode;
-            this.bootstrap = bootstrap;
-            this.standbyPort = standbyPort;
-            this.nodeStore = nodeStore;
-            this.fileStore = fileStore;
-            this.blobStore = blobStore;
-            this.selfUrl = selfUrl;
-            this.componentFactory = componentFactory;
-        }
+    record StartupContext(BootstrapMode mode,
+                          ValidatorBootstrap bootstrap,
+                          int standbyPort,
+                          NodeStore nodeStore,
+                          FileStore fileStore,
+                          BlobStore blobStore,
+                          String selfUrl,
+                          GlobalStoreServerComponentFactory componentFactory) {
     }
 }

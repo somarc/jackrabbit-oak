@@ -69,51 +69,19 @@ public final class RuntimeConfigValueResolver {
     }
 
     public static int readInt(String sysProp, int defaultValue) {
-        String raw = readString(sysProp, (String) null);
-        if (!hasText(raw)) {
-            return defaultValue;
-        }
-        try {
-            return Integer.parseInt(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
+        return parseInt(readString(sysProp, (String) null), defaultValue);
     }
 
     public static int readInt(String sysProp, String envVar, int defaultValue) {
-        String raw = readString(sysProp, envVar, null);
-        if (!hasText(raw)) {
-            return defaultValue;
-        }
-        try {
-            return Integer.parseInt(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
+        return parseInt(readString(sysProp, envVar, null), defaultValue);
     }
 
     public static long readLong(String sysProp, long defaultValue) {
-        String raw = readString(sysProp, (String) null);
-        if (!hasText(raw)) {
-            return defaultValue;
-        }
-        try {
-            return Long.parseLong(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
+        return parseLong(readString(sysProp, (String) null), defaultValue);
     }
 
     public static long readLongEnvFirst(String sysProp, String envVar, long defaultValue) {
-        String raw = readStringEnvFirst(sysProp, envVar, null);
-        if (!hasText(raw)) {
-            return defaultValue;
-        }
-        try {
-            return Long.parseLong(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
+        return parseLong(readStringEnvFirst(sysProp, envVar, null), defaultValue);
     }
 
     public static boolean hasConfiguredValue(String sysProp) {
@@ -132,15 +100,29 @@ public final class RuntimeConfigValueResolver {
         return hasText(System.getProperty(sysProp)) || hasText(System.getenv(envVar));
     }
 
-    public static boolean hasConfiguredValueEnvFirst(String sysProp, String envVar) {
-        String override = RuntimePropertyOverrideRegistry.get(sysProp);
-        if (override != null) {
-            return hasText(override);
-        }
-        return hasText(System.getenv(envVar)) || hasText(System.getProperty(sysProp));
-    }
-
     public static boolean hasText(String value) {
         return value != null && !value.trim().isEmpty();
+    }
+
+    private static int parseInt(String raw, int defaultValue) {
+        if (!hasText(raw)) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
+    }
+
+    private static long parseLong(String raw, long defaultValue) {
+        if (!hasText(raw)) {
+            return defaultValue;
+        }
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
     }
 }

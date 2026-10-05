@@ -190,7 +190,7 @@ public class ProposalQueueDurabilityRecoveryTest {
         ProposalPersistenceStore store =
             new ProposalPersistenceStore(Files.createTempDirectory("proposal-appended-marker"));
         QueuedProposal neverSent = new QueuedProposal(
-            "0xp-never-sent", "0xtx", null, 1L, 2L, ProposalState.VERIFIED);
+            "0xp-never-sent", "0xtx", 1L, 2L, ProposalState.VERIFIED);
 
         store.save(List.of(proposal, neverSent));
         List<QueuedProposal> restored = store.load();

@@ -16,6 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import static org.apache.jackrabbit.oak.segment.consensus.aeron.AeronIngressPayloadSupport.appendOptional;
+import static org.apache.jackrabbit.oak.segment.consensus.aeron.AeronIngressPayloadSupport.escapeJson;
+
 final class AeronIngressControlPayloadBuilder {
 
     AeronEncodedMessage buildStartTransaction(String transactionId,
@@ -26,12 +29,8 @@ final class AeronIngressControlPayloadBuilder {
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"transactionId\":\"").append(escapeJson(transactionId)).append("\"");
-        if (correlationId != null && !correlationId.isEmpty()) {
-            json.append(",\"correlationId\":\"").append(escapeJson(correlationId)).append("\"");
-        }
-        if (initiatorWallet != null && !initiatorWallet.isEmpty()) {
-            json.append(",\"initiatorWallet\":\"").append(escapeJson(initiatorWallet)).append("\"");
-        }
+        appendOptional(json, "correlationId", correlationId);
+        appendOptional(json, "initiatorWallet", initiatorWallet);
         json.append(",\"timeoutMs\":").append(timeoutMs > 0 ? timeoutMs : 30000L);
         appendTerm(json, term);
         json.append("}");
@@ -44,9 +43,7 @@ final class AeronIngressControlPayloadBuilder {
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"transactionId\":\"").append(escapeJson(transactionId)).append("\"");
-        if (correlationId != null && !correlationId.isEmpty()) {
-            json.append(",\"correlationId\":\"").append(escapeJson(correlationId)).append("\"");
-        }
+        appendOptional(json, "correlationId", correlationId);
         appendTerm(json, term);
         json.append("}");
         return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_COMMIT_TRANSACTION, json.toString());
@@ -59,12 +56,8 @@ final class AeronIngressControlPayloadBuilder {
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"transactionId\":\"").append(escapeJson(transactionId)).append("\"");
-        if (correlationId != null && !correlationId.isEmpty()) {
-            json.append(",\"correlationId\":\"").append(escapeJson(correlationId)).append("\"");
-        }
-        if (reason != null && !reason.isEmpty()) {
-            json.append(",\"reason\":\"").append(escapeJson(reason)).append("\"");
-        }
+        appendOptional(json, "correlationId", correlationId);
+        appendOptional(json, "reason", reason);
         appendTerm(json, term);
         json.append("}");
         return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_ABORT_TRANSACTION, json.toString());
@@ -86,12 +79,8 @@ final class AeronIngressControlPayloadBuilder {
         json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
         json.append("\"memberId\":").append(memberId).append(",");
         json.append("\"success\":").append(success);
-        if (durableHead != null && !durableHead.isEmpty()) {
-            json.append(",\"durableHead\":\"").append(escapeJson(durableHead)).append("\"");
-        }
-        if (error != null && !error.isEmpty()) {
-            json.append(",\"error\":\"").append(escapeJson(error)).append("\"");
-        }
+        appendOptional(json, "durableHead", durableHead);
+        appendOptional(json, "error", error);
         json.append("}");
         return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED, json.toString());
     }
@@ -134,9 +123,5 @@ final class AeronIngressControlPayloadBuilder {
         String json = "{\"proposalId\":\"" + escapeJson(proposalId) + "\"," +
             "\"executorId\":" + executorId + "}";
         return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE, json);
-    }
-
-    String escapeJson(String value) {
-        return AeronIngressPayloadSupport.escapeJson(value);
     }
 }

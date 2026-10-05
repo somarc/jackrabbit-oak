@@ -25,8 +25,6 @@ import org.osgi.service.component.annotations.Component;
 @Component(service = AeronHealthService.class)
 public class AeronHealthService {
 
-    private static final long DEFAULT_HEARTBEAT_MAX_AGE_MS = 30000L;
-
     private volatile long lastHeartbeatTime = System.currentTimeMillis();
 
     public void markHeartbeat() {
@@ -41,13 +39,7 @@ public class AeronHealthService {
         return System.currentTimeMillis() - lastHeartbeatTime;
     }
 
-    public boolean isHeartbeatStale() {
-        return getHeartbeatAgeMs() > Long.getLong("oak.cluster.heartbeat.maxAgeMs", DEFAULT_HEARTBEAT_MAX_AGE_MS);
-    }
-
-    public boolean isClusterHealthy(Cluster.Role role,
-                                    java.util.function.Supplier<Boolean> quorumSupplier,
-                                    java.util.function.Supplier<io.aeron.cluster.client.AeronCluster> clientSupplier) {
+    public boolean isClusterHealthy(Cluster.Role role, java.util.function.Supplier<Boolean> quorumSupplier) {
         if (role == null) {
             return false;
         }
@@ -60,9 +52,7 @@ public class AeronHealthService {
         return true;
     }
 
-    public String getUnhealthyReason(Cluster.Role role,
-                                     java.util.function.Supplier<Boolean> quorumSupplier,
-                                     java.util.function.Supplier<io.aeron.cluster.client.AeronCluster> clientSupplier) {
+    public String getUnhealthyReason(Cluster.Role role, java.util.function.Supplier<Boolean> quorumSupplier) {
         if (role == null) {
             return "cluster_not_initialized";
         }

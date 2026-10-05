@@ -24,7 +24,6 @@ import org.apache.jackrabbit.oak.segment.SegmentIdProvider;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
-import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
@@ -92,7 +91,6 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class RequestRouterTest {
@@ -1290,30 +1288,6 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testFollowerHeadUpdateRouteReplicatesHead() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
-            when(engine.isLeader()).thenReturn(false);
-            when(engine.getCurrentLeader()).thenReturn("http://127.0.0.1:8090");
-            when(engine.pullSegmentsForHead("abc:r1", "http://localhost:8090")).thenReturn(4);
-            context.aeronConsensusEngine = engine;
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/v1/follower/head-update");
-            when(request.getReader()).thenReturn(new java.io.BufferedReader(
-                new java.io.StringReader("{\"head\":\"abc:r1\",\"epoch\":\"12\",\"leaderUrl\":\"http://localhost:8090\"}")
-            ));
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"success\":true"));
-            assertTrue(body.toString().contains("\"segmentCount\":4"));
-        });
-    }
-
-    @Test
     public void testJournalRouteStreamsFileContents() throws Exception {
         withRoutingProperties(true, () -> {
             Path storeDirectory = Files.createTempDirectory("router-journal");
@@ -1386,22 +1360,6 @@ public class RequestRouterTest {
 
             verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
             assertTrue(body.toString().contains("Invalid segment UUID"));
-        });
-    }
-
-    @Test
-    public void testNgrokRouteReturnsSelfUrl() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            context.selfUrl = "https://public.ngrok.app";
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/v1/ngrok-url");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("https://public.ngrok.app"));
         });
     }
 
@@ -2010,76 +1968,6 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testMockEpochStatusRouteReturnsBeaconHealthPayloadInMockMode() throws Exception {
-        withBlockchainMode("mock", () -> withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-            BeaconChainClient beaconClient = mock(BeaconChainClient.class);
-            when(queueManager.getBeaconClient()).thenReturn(beaconClient);
-            when(beaconClient.getCachedCurrentEpoch()).thenReturn(1042L);
-            when(beaconClient.getCachedFinalizedEpoch()).thenReturn(1040L);
-            when(beaconClient.isEpochDataFresh()).thenReturn(true);
-            when(beaconClient.getMillisSinceLastUpdate()).thenReturn(15L);
-            context.proposalQueueManager = queueManager;
-
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/api/mock/epoch-status");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            assertTrue(body.toString().contains("\"mode\":\"MOCK\""));
-            assertTrue(body.toString().contains("\"currentEpoch\":1042"));
-            assertTrue(body.toString().contains("\"chainContext\":\"Sepolia\""));
-            assertFalse(body.toString().contains("\"mockEpochOffset\""));
-        }));
-    }
-
-    @Test
-    public void testMockAdvanceEpochRouteReturnsGoneInMockMode() throws Exception {
-        withBlockchainMode("mock", () -> withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-            BeaconChainClient beaconClient = mock(BeaconChainClient.class);
-            when(queueManager.getBeaconClient()).thenReturn(beaconClient);
-            context.proposalQueueManager = queueManager;
-
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/api/mock/advance-epoch");
-            when(request.getParameter("epochs")).thenReturn("3");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_GONE);
-            verifyNoInteractions(beaconClient);
-            assertTrue(body.toString().contains("Synthetic mock epoch control was removed by ADR 080"));
-        }));
-    }
-
-    @Test
-    public void testMockSetEpochOffsetRouteReturnsGoneInMockMode() throws Exception {
-        withBlockchainMode("mock", () -> withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-            BeaconChainClient beaconClient = mock(BeaconChainClient.class);
-            when(queueManager.getBeaconClient()).thenReturn(beaconClient);
-            context.proposalQueueManager = queueManager;
-
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/api/mock/set-epoch-offset");
-            when(request.getParameter("offset")).thenReturn("42");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_GONE);
-            verifyNoInteractions(beaconClient);
-            assertTrue(body.toString().contains("Synthetic mock epoch control was removed by ADR 080"));
-        }));
-    }
-
-    @Test
     public void testProposeWriteRouteUsesWalletFallbackForShardRouting() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
@@ -2240,18 +2128,6 @@ public class RequestRouterTest {
             } else {
                 System.setProperty("rate.limit.enabled", previousRateLimit);
             }
-        }
-    }
-
-    private void withBlockchainMode(String mode, ThrowingRunnable runnable) throws Exception {
-        String previousMode = System.getProperty("oak.blockchain.mode");
-        try {
-            restoreProperty("oak.blockchain.mode", mode);
-            BlockchainConfig.reset();
-            runnable.run();
-        } finally {
-            restoreProperty("oak.blockchain.mode", previousMode);
-            BlockchainConfig.reset();
         }
     }
 

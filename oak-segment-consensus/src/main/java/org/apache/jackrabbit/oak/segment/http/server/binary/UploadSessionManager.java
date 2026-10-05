@@ -23,6 +23,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -157,17 +158,6 @@ public class UploadSessionManager {
     }
     
     /**
-     * Check if an intent token is valid.
-     * 
-     * @param intentToken the intent token
-     * @return true if valid, false if not found or expired
-     */
-    public boolean isValidIntent(String intentToken) {
-        UploadSession session = sessions.get(intentToken);
-        return session != null && !session.isExpired();
-    }
-    
-    /**
      * Generate a secure intent token.
      */
     private String generateIntentToken(String walletAddress, long filesize) {
@@ -182,22 +172,11 @@ public class UploadSessionManager {
             digest.update(randomBytes);
             
             byte[] hash = digest.digest();
-            return "intent-" + bytesToHex(hash).substring(0, 32);
+            return "intent-" + HexFormat.of().formatHex(hash).substring(0, 32);
             
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not available", e);
         }
-    }
-    
-    /**
-     * Convert bytes to hex string.
-     */
-    private String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
-        return sb.toString();
     }
     
     /**

@@ -34,7 +34,6 @@ public class BootstrapPreflightPlannerTest {
         RecordingProbe probe = new RecordingProbe(Collections.singletonList("http://validator-1:8090/health"));
         BootstrapPreflightPlanner.Decision decision = new BootstrapPreflightPlanner(probe::isReachable).plan(
             true,
-            true,
             Collections.singletonList("http://validator-1:8090"),
             "",
             "",
@@ -54,7 +53,6 @@ public class BootstrapPreflightPlannerTest {
         RecordingProbe probe = new RecordingProbe(Collections.singletonList("http://validator-1:8090/health"));
         BootstrapPreflightPlanner.Decision decision = new BootstrapPreflightPlanner(probe::isReachable).plan(
             true,
-            true,
             Collections.singletonList("http://validator-1:8090"),
             "",
             "",
@@ -72,7 +70,6 @@ public class BootstrapPreflightPlannerTest {
     public void testPlanFallsBackToDefaultPortWhenBootstrapPrimaryPortIsInvalid() {
         RecordingProbe probe = new RecordingProbe(Collections.singletonList("http://bootstrap-node:8090/health"));
         BootstrapPreflightPlanner.Decision decision = new BootstrapPreflightPlanner(probe::isReachable).plan(
-            true,
             true,
             Collections.<String>emptyList(),
             "bootstrap-node",
@@ -92,7 +89,6 @@ public class BootstrapPreflightPlannerTest {
     public void testPlanSkipsProbeWhenStoreIsNotEmpty() {
         RecordingProbe probe = new RecordingProbe(Collections.singletonList("http://validator-1:8090/health"));
         BootstrapPreflightPlanner.Decision decision = new BootstrapPreflightPlanner(probe::isReachable).plan(
-            true,
             false,
             Collections.singletonList("http://validator-1:8090"),
             "bootstrap-node",
@@ -112,7 +108,6 @@ public class BootstrapPreflightPlannerTest {
         probe.markReachable("http://bootstrap-node:9000/health");
 
         BootstrapPreflightPlanner.Decision decision = new BootstrapPreflightPlanner(probe::isReachable).plan(
-            true,
             true,
             Arrays.asList("http://validator-1:8090", "http://validator-2:8090"),
             "bootstrap-node",

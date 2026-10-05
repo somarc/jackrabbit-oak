@@ -44,6 +44,7 @@ public final class BlockchainConfigIntrospection {
     }
 
     public static String source() {
-        return BlockchainConfigSourceRegistry.getSource();
+        return RuntimePropertySourceRegistry.getSource(
+            BlockchainConfigTuningService.COMPONENT, BlockchainConfigTuningService.FALLBACK_SOURCE);
     }
 }

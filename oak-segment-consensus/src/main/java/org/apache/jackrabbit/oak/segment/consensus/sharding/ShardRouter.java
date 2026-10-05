@@ -52,7 +52,7 @@ public class ShardRouter {
     private static final int READ_TIMEOUT_MS = 3000;
     
     private final ShardDirectory shardDirectory;
-    private final ShardingStrategy strategy;
+    private final WalletShardingStrategy strategy;
     
     /**
      * Cache of current leader per shard (with TTL).
@@ -66,7 +66,7 @@ public class ShardRouter {
      * @param shardDirectory Shard directory (maps shardId → peerUrls)
      * @param strategy Sharding strategy (computes shardId from wallet)
      */
-    public ShardRouter(ShardDirectory shardDirectory, ShardingStrategy strategy) {
+    public ShardRouter(ShardDirectory shardDirectory, WalletShardingStrategy strategy) {
         if (shardDirectory == null) {
             throw new IllegalArgumentException("ShardDirectory cannot be null");
         }
@@ -258,31 +258,6 @@ public class ShardRouter {
     }
     
     /**
-     * Invalidate leader cache on HTTP 307 redirect (Aeron follower → leader redirect).
-     * Call this when handling redirects to instantly update cache.
-     * 
-     * @param shardId Shard ID
-     * @param newLeaderUrl New leader URL (from redirect)
-     */
-    public void invalidateLeaderCache(int shardId, String newLeaderUrl) {
-        if (newLeaderUrl != null && !newLeaderUrl.isEmpty()) {
-            leaderCache.put(shardId, new CachedLeader(newLeaderUrl));
-            log.debug("✅ Updated leader cache for shard {}: {}", shardId, newLeaderUrl);
-        } else {
-            leaderCache.remove(shardId);
-            log.debug("✅ Invalidated leader cache for shard {}", shardId);
-        }
-    }
-    
-    /**
-     * Clear all leader caches (for testing or manual invalidation).
-     */
-    public void clearLeaderCache() {
-        leaderCache.clear();
-        log.info("✅ Cleared all leader caches");
-    }
-    
-    /**
      * Get shard directory.
      * 
      * @return Shard directory
@@ -296,7 +271,7 @@ public class ShardRouter {
      * 
      * @return Sharding strategy
      */
-    public ShardingStrategy getStrategy() {
+    public WalletShardingStrategy getStrategy() {
         return strategy;
     }
     

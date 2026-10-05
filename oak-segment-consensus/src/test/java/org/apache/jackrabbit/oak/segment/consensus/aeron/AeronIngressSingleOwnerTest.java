@@ -24,6 +24,7 @@ import org.agrona.DirectBuffer;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.NoOpIdleStrategy;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Rule;
@@ -91,7 +92,7 @@ public class AeronIngressSingleOwnerTest {
                 futures.add(pool.submit(() -> {
                     go.await();
                     for (int i = 0; !stop.get(); i++) {
-                        if (engine.sendWriteThroughIngressWithId("0xabc", "/content/" + sender + "/" + i,
+                        if (sendWrite(engine, "0xabc", "/content/" + sender + "/" + i,
                                 "page", "m", "sig", null, "p-" + sender + "-" + i)) {
                             sent.incrementAndGet();
                         }
@@ -163,7 +164,7 @@ public class AeronIngressSingleOwnerTest {
         AeronConsensusEngine engine = newEngine(connector);
         setField(engine, "idleStrategy", agentIdleStrategy);
         try {
-            assertTrue(engine.sendWriteThroughIngressWithId("0xabc", "/content/a", "page", "m", "sig", null, "p-1"));
+            assertTrue(sendWrite(engine, "0xabc", "/content/a", "page", "m", "sig", null, "p-1"));
         } finally {
             engine.onTerminate(mock(Cluster.class));
         }
@@ -270,5 +271,12 @@ public class AeronIngressSingleOwnerTest {
             Thread.sleep(10L);
         }
         return Boolean.TRUE.equals(condition.call());
+    }
+
+    private static boolean sendWrite(AeronConsensusEngine engine, String walletAddress, String path,
+                                     String contentType, String message, String signature, String ipfsCid,
+                                     String proposalId) {
+        return engine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature, null, null,
+            ipfsCid, MutationAuditMetadata.write(null, null, proposalId, null, null, null, null));
     }
 }

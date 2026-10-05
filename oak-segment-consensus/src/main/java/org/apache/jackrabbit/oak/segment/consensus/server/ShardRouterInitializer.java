@@ -21,7 +21,6 @@ import java.util.List;
 
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardDirectory;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingStrategy;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.WalletShardingStrategy;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.slf4j.Logger;
@@ -55,7 +54,7 @@ final class ShardRouterInitializer {
         }
 
         ShardDirectory shardDirectory = new ShardDirectory(allPeerUrls);
-        ShardingStrategy shardingStrategy = new WalletShardingStrategy(numShards);
+        WalletShardingStrategy shardingStrategy = new WalletShardingStrategy(numShards);
         ShardRouter shardRouter = new ShardRouter(shardDirectory, shardingStrategy);
 
         httpServer.getContext().setShardRouter(shardRouter);
@@ -64,8 +63,7 @@ final class ShardRouterInitializer {
         log.info("   - Number of shards: {}", numShards);
         log.info("   - Shard directory: {} shard(s)", shardDirectory.getNumShards());
         log.info("   - Sharding strategy: Wallet-based");
-        if (shardingStrategy instanceof WalletShardingStrategy
-            && ((WalletShardingStrategy) shardingStrategy).isPowerOfTwo()) {
+        if (shardingStrategy.isPowerOfTwo()) {
             log.info("   - Power-of-2: Yes (optimal)");
         } else if (logClusterStateDetails) {
             log.info("   - Power-of-2: No (consider using power-of-2 for optimal performance)");

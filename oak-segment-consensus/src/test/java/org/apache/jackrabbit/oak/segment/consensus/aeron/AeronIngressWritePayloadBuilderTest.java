@@ -42,7 +42,7 @@ public class AeronIngressWritePayloadBuilderTest {
             "sig\tvalue",
             Integer.valueOf(7),
             "bafy123",
-            "proposal-1"
+            MutationAuditMetadata.write(null, null, "proposal-1", null, null, null, null)
         );
 
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, encoded.templateId);
@@ -98,7 +98,7 @@ public class AeronIngressWritePayloadBuilderTest {
             "blob-123",
             null,
             null,
-            (String) null
+            MutationAuditMetadata.write(null, null, null, null, null, null, null)
         );
 
         assertTrue(encoded.json.contains("\"blobId\":\"blob-123\""));
@@ -114,7 +114,7 @@ public class AeronIngressWritePayloadBuilderTest {
             "/content/delete",
             null,
             null,
-            (String) null
+            MutationAuditMetadata.delete(null, null, null, null, null, null, null)
         );
 
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL, encoded.templateId);
@@ -174,12 +174,12 @@ public class AeronIngressWritePayloadBuilderTest {
 
     @Test
     public void escapeJsonNormalizesNullAndControlCharacters() {
-        assertEquals("", builder.escapeJson(null));
-        assertEquals("\\\"quote\\\"\\\\slash\\n", builder.escapeJson("\"quote\"\\slash\n"));
+        assertEquals("", AeronIngressPayloadSupport.escapeJson(null));
+        assertEquals("\\\"quote\\\"\\\\slash\\n", AeronIngressPayloadSupport.escapeJson("\"quote\"\\slash\n"));
     }
 
     private static QueuedProposal proposal(String proposalId) {
-        return new QueuedProposal(proposalId, "0xtx", null, 1L, 2L, ProposalState.PENDING);
+        return new QueuedProposal(proposalId, "0xtx", 1L, 2L, ProposalState.PENDING);
     }
 
     private static void assertPayloadMatches(AeronEncodedMessage encoded) {

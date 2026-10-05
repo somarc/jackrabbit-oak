@@ -19,12 +19,12 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
 import java.math.BigInteger;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
-import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.evm.impl.MockEventDrivenEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.junit.After;
 import org.junit.BeforeClass;
@@ -121,11 +121,9 @@ public class ProposalQueueAdaptiveCapacityTest {
         System.setProperty("oak.consensus.max.pending.messages", String.valueOf(scenario.maxPendingMessages));
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         BeaconChainClient beaconClient = new BeaconChainClient();
         bridge.start();
         beaconClient.startBackgroundPolling();
@@ -135,8 +133,8 @@ public class ProposalQueueAdaptiveCapacityTest {
         RaftAppendCallback callback = new CountingRaftAppendCallback(processedLatch, processedCount);
         BackpressureManager backpressureManager = new BackpressureManager(
             scenario.maxPendingMessages,
-            tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos()
+            tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos()
         );
         if (scenario.initialPendingDebt > 0L) {
             backpressureManager.incrementSent(scenario.initialPendingDebt);
@@ -293,22 +291,21 @@ public class ProposalQueueAdaptiveCapacityTest {
         }
 
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType, String message,
-                                   String signature) {
+        public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                               String contentType, String message, String signature,
+                                               String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                               MutationAuditMetadata unusedAudit) {
             processedCount.incrementAndGet();
             processedLatch.countDown();
+            return true;
         }
 
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType, String message,
-                                   String signature, String blobId, String mimeType) {
-            appendProposal(walletAddress, path, contentType, message, signature);
-        }
-
-        @Override
-        public void appendDeleteProposal(String walletAddress, String path, String signature) {
+        public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                     String signature, MutationAuditMetadata unusedAudit) {
             processedCount.incrementAndGet();
             processedLatch.countDown();
+            return true;
         }
 
         @Override

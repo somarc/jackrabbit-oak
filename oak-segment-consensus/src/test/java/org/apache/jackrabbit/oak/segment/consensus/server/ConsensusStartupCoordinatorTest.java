@@ -97,7 +97,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                true,
                 false,
                 testContext.fileStore,
                 testContext.nodeStore,
@@ -112,18 +111,17 @@ public class ConsensusStartupCoordinatorTest {
             )
         );
 
-        assertEquals(ConsensusStartupCoordinator.StartupDisposition.INITIALIZED, outcome.getDisposition());
-        assertEquals("http://validator-0:8090", outcome.getSelfUrl());
-        assertEquals(Arrays.asList("http://validator-1:8090", "http://validator-2:8090"), outcome.getPeerUrls());
-        assertSame(clusterService, outcome.getAeronClusterService());
-        assertSame(launcher, outcome.getLauncher());
+        assertEquals(ConsensusStartupCoordinator.StartupDisposition.INITIALIZED, outcome.disposition());
+        assertEquals("http://validator-0:8090", outcome.selfUrl());
+        assertEquals(Arrays.asList("http://validator-1:8090", "http://validator-2:8090"), outcome.peerUrls());
+        assertSame(clusterService, outcome.aeronClusterService());
+        assertSame(launcher, outcome.launcher());
         verify(initializer).initialize(
             aeronEngine,
             testContext.httpServer,
             testContext.wallet,
             "/tmp/test-store",
-            "0xcluster",
-            Arrays.asList("validator-0", "validator-1", "validator-2")
+            "0xcluster"
         );
     }
 
@@ -167,7 +165,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                true,
                 false,
                 testContext.fileStore,
                 testContext.nodeStore,
@@ -182,8 +179,8 @@ public class ConsensusStartupCoordinatorTest {
             )
         );
 
-        assertSame(clusterService, outcome.getAeronClusterService());
-        assertEquals(Arrays.asList("http://validator-1:8090", "http://validator-2:8090"), outcome.getPeerUrls());
+        assertSame(clusterService, outcome.aeronClusterService());
+        assertEquals(Arrays.asList("http://validator-1:8090", "http://validator-2:8090"), outcome.peerUrls());
         verify(testContext.componentFactory).createAeronClusterService();
     }
 
@@ -200,7 +197,6 @@ public class ConsensusStartupCoordinatorTest {
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
                 true,
-                true,
                 testContext.fileStore,
                 testContext.nodeStore,
                 testContext.httpServer,
@@ -214,9 +210,9 @@ public class ConsensusStartupCoordinatorTest {
             )
         );
 
-        assertEquals(ConsensusStartupCoordinator.StartupDisposition.DEFERRED, outcome.getDisposition());
-        assertEquals("http://validator-0:8090", outcome.getSelfUrl());
-        assertEquals(Collections.singletonList("http://validator-1:8090"), outcome.getPeerUrls());
+        assertEquals(ConsensusStartupCoordinator.StartupDisposition.DEFERRED, outcome.disposition());
+        assertEquals("http://validator-0:8090", outcome.selfUrl());
+        assertEquals(Collections.singletonList("http://validator-1:8090"), outcome.peerUrls());
         verifyNoInteractions(testContext.componentFactory);
     }
 
@@ -234,7 +230,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                true,
                 false,
                 testContext.fileStore,
                 testContext.nodeStore,
@@ -249,10 +244,10 @@ public class ConsensusStartupCoordinatorTest {
             )
         );
 
-        assertEquals(ConsensusStartupCoordinator.StartupDisposition.DISABLED, outcome.getDisposition());
-        assertEquals("http://validator-0:8090", outcome.getSelfUrl());
-        assertEquals(Collections.singletonList("http://validator-1:8090"), outcome.getPeerUrls());
-        assertTrue(outcome.getPeerUrls().contains("http://validator-1:8090"));
+        assertEquals(ConsensusStartupCoordinator.StartupDisposition.DISABLED, outcome.disposition());
+        assertEquals("http://validator-0:8090", outcome.selfUrl());
+        assertEquals(Collections.singletonList("http://validator-1:8090"), outcome.peerUrls());
+        assertTrue(outcome.peerUrls().contains("http://validator-1:8090"));
         verifyNoInteractions(testContext.componentFactory);
     }
 

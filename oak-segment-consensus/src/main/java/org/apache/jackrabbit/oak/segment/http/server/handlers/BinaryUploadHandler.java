@@ -29,7 +29,6 @@ import org.slf4j.LoggerFactory;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -99,18 +98,18 @@ public class BinaryUploadHandler {
             
             // Validate required params
             if (walletAddress == null || filesizeStr == null || mimeType == null) {
-                sendError(response, 400, "Missing required parameters: walletAddress, filesize, mimeType");
+                ApiErrorUtil.sendJsonError(response, 400, "Missing required parameters: walletAddress, filesize, mimeType");
                 return;
             }
             
             if (CanonicalGenesisContent.isReservedMutation(walletAddress, null)) {
-                sendError(response, 403, "GENESIS_NAMESPACE_RESERVED");
+                ApiErrorUtil.sendJsonError(response, 403, "GENESIS_NAMESPACE_RESERVED");
                 return;
             }
 
             // Validate wallet format
             if (!walletAddress.matches("^0x[a-fA-F0-9]{40}$")) {
-                sendError(response, 400, "Invalid wallet address format");
+                ApiErrorUtil.sendJsonError(response, 400, "Invalid wallet address format");
                 return;
             }
             
@@ -119,7 +118,7 @@ public class BinaryUploadHandler {
             try {
                 filesize = Long.parseLong(filesizeStr);
             } catch (NumberFormatException e) {
-                sendError(response, 400, "Invalid filesize: " + filesizeStr);
+                ApiErrorUtil.sendJsonError(response, 400, "Invalid filesize: " + filesizeStr);
                 return;
             }
             
@@ -130,14 +129,14 @@ public class BinaryUploadHandler {
             payload.put("intentToken", session.getIntentToken());
             payload.put("expirySeconds", 900);
             payload.put("message", "Upload binary when you receive confirmation notification");
-            sendJson(response, 200, JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.send(response, 200, JsonOutputUtil.toJson(payload));
             
             log.info("📎 Declared intent: wallet={}, token={}, filesize={}", 
                 walletAddress, session.getIntentToken(), filesize);
             
         } catch (Exception e) {
             log.error("Failed to handle declare-intent", e);
-            sendError(response, 500, "Internal server error: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, 500, "Internal server error: " + e.getMessage());
         }
     }
     
@@ -161,7 +160,7 @@ public class BinaryUploadHandler {
             UploadSession session = sessionManager.getSession(intentToken);
             
             if (session == null) {
-                sendError(response, 404, "Intent token not found or expired: " + intentToken);
+                ApiErrorUtil.sendJsonError(response, 404, "Intent token not found or expired: " + intentToken);
                 return;
             }
             
@@ -176,11 +175,11 @@ public class BinaryUploadHandler {
             if (session.getStatus() == UploadStatus.COMPLETED) {
                 payload.put("cid", session.getCid());
             }
-            sendJson(response, 200, JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.send(response, 200, JsonOutputUtil.toJson(payload));
             
         } catch (Exception e) {
             log.error("Failed to handle check-intent", e);
-            sendError(response, 500, "Internal server error: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, 500, "Internal server error: " + e.getMessage());
         }
     }
     
@@ -210,7 +209,7 @@ public class BinaryUploadHandler {
             
             // Validate required params
             if (intentToken == null || cid == null || walletAddress == null) {
-                sendError(response, 400, "Missing required parameters: intentToken, cid, walletAddress");
+                ApiErrorUtil.sendJsonError(response, 400, "Missing required parameters: intentToken, cid, walletAddress");
                 return;
             }
             
@@ -218,24 +217,24 @@ public class BinaryUploadHandler {
             UploadSession session = sessionManager.getSession(intentToken);
             
             if (session == null) {
-                sendError(response, 404, "Intent token not found or expired: " + intentToken);
+                ApiErrorUtil.sendJsonError(response, 404, "Intent token not found or expired: " + intentToken);
                 return;
             }
             
             if (CanonicalGenesisContent.isReservedMutation(walletAddress, null)) {
-                sendError(response, 403, "GENESIS_NAMESPACE_RESERVED");
+                ApiErrorUtil.sendJsonError(response, 403, "GENESIS_NAMESPACE_RESERVED");
                 return;
             }
 
             // Validate wallet matches
             if (!session.getWalletAddress().equals(walletAddress)) {
-                sendError(response, 403, "Wallet address mismatch");
+                ApiErrorUtil.sendJsonError(response, 403, "Wallet address mismatch");
                 return;
             }
             
             // Validate CID format (IPFS CIDv0 or CIDv1)
             if (!cid.matches("^Qm[a-zA-Z0-9]{44}$") && !cid.matches("^b[a-zA-Z0-9]{58,}$")) {
-                sendError(response, 400, "Invalid IPFS CID format: " + cid);
+                ApiErrorUtil.sendJsonError(response, 400, "Invalid IPFS CID format: " + cid);
                 return;
             }
             
@@ -246,20 +245,20 @@ public class BinaryUploadHandler {
             boolean success = sessionManager.completeUpload(intentToken, cid);
             
             if (!success) {
-                sendError(response, 410, "Failed to complete upload (session expired)");
+                ApiErrorUtil.sendJsonError(response, 410, "Failed to complete upload (session expired)");
                 return;
             }
             
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("status", "complete");
             payload.put("cid", cid);
-            sendJson(response, 200, JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.send(response, 200, JsonOutputUtil.toJson(payload));
             
             log.info("✅ Upload complete: intentToken={}, cid={}", intentToken, cid);
             
         } catch (Exception e) {
             log.error("Failed to handle complete-upload", e);
-            sendError(response, 500, "Internal server error: " + e.getMessage());
+            ApiErrorUtil.sendJsonError(response, 500, "Internal server error: " + e.getMessage());
         }
     }
     
@@ -271,25 +270,4 @@ public class BinaryUploadHandler {
     public UploadSessionManager getSessionManager() {
         return sessionManager;
     }
-    
-    /**
-     * Send JSON response.
-     */
-    private void sendJson(HttpServletResponse response, int statusCode, String json) throws IOException {
-        response.setContentType("application/json");
-        response.setCharacterEncoding("UTF-8");
-        response.setStatus(statusCode);
-        
-        try (PrintWriter writer = response.getWriter()) {
-            writer.write(json);
-        }
-    }
-    
-    /**
-     * Send error response.
-     */
-    private void sendError(HttpServletResponse response, int statusCode, String message) throws IOException {
-        ApiErrorUtil.sendJsonError(response, statusCode, message);
-    }
-    
 }

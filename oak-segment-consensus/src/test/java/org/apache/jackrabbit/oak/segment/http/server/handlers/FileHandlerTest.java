@@ -34,8 +34,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -55,7 +53,7 @@ public class FileHandlerTest {
             StringWriter body = new StringWriter();
             HttpServletResponse response = responseWithBody(body);
 
-            new FileHandler(mock(FileStore.class), storeDirectory, new HashSet<>())
+            new FileHandler(mock(FileStore.class), storeDirectory)
                 .handleFileHead(response, "manifest", "text/plain");
 
             verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
@@ -73,7 +71,7 @@ public class FileHandlerTest {
             Files.write(storeDirectory.resolve("manifest"), payload);
             HttpServletResponse response = mock(HttpServletResponse.class);
 
-            new FileHandler(mock(FileStore.class), storeDirectory, new HashSet<>())
+            new FileHandler(mock(FileStore.class), storeDirectory)
                 .handleFileHead(response, "manifest", "text/plain");
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
@@ -95,7 +93,7 @@ public class FileHandlerTest {
             when(response.getOutputStream()).thenReturn(output);
             HttpServletRequest request = request("10.0.0.5", 4502, "OakClient/1.0");
 
-            new FileHandler(mock(FileStore.class), storeDirectory, new HashSet<>())
+            new FileHandler(mock(FileStore.class), storeDirectory)
                 .handleFile(request, response, "journal.log", "text/plain");
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
@@ -114,7 +112,7 @@ public class FileHandlerTest {
             StringWriter body = new StringWriter();
             HttpServletResponse response = responseWithBody(body);
 
-            new FileHandler(mock(FileStore.class), storeDirectory, new HashSet<>())
+            new FileHandler(mock(FileStore.class), storeDirectory)
                 .handleSegmentHead(response, UUID.randomUUID().toString());
 
             verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
@@ -131,7 +129,7 @@ public class FileHandlerTest {
             Files.write(storeDirectory.resolve("data00000a.tar"), new byte[] {1});
             HttpServletResponse response = mock(HttpServletResponse.class);
 
-            new FileHandler(mock(FileStore.class), storeDirectory, new HashSet<>())
+            new FileHandler(mock(FileStore.class), storeDirectory)
                 .handleSegmentHead(response, UUID.randomUUID().toString());
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
@@ -148,7 +146,7 @@ public class FileHandlerTest {
             StringWriter body = new StringWriter();
             HttpServletResponse response = responseWithBody(body);
 
-            new FileHandler(mock(FileStore.class), storeDirectory, new HashSet<>())
+            new FileHandler(mock(FileStore.class), storeDirectory)
                 .handleSegmentGet(request("127.0.0.1", 8090, "OakClient/1.0"), response, "not-a-uuid");
 
             verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
@@ -174,7 +172,7 @@ public class FileHandlerTest {
             StringWriter body = new StringWriter();
             HttpServletResponse response = responseWithBody(body);
 
-            new FileHandler(fileStore, storeDirectory, new HashSet<>())
+            new FileHandler(fileStore, storeDirectory)
                 .handleSegmentGet(request("127.0.0.1", 8090, "OakClient/1.0"), response, uuid.toString());
 
             verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
@@ -204,12 +202,11 @@ public class FileHandlerTest {
                 return null;
             }).when(segment).writeTo(any(ByteArrayOutputStream.class));
 
-            Set<String> connectedPeers = new HashSet<>();
             RecordingServletOutputStream output = new RecordingServletOutputStream();
             HttpServletResponse response = mock(HttpServletResponse.class);
             when(response.getOutputStream()).thenReturn(output);
 
-            new FileHandler(fileStore, storeDirectory, connectedPeers)
+            new FileHandler(fileStore, storeDirectory)
                 .handleSegmentGet(request("10.0.0.8", 8090, "OakClient/1.0"), response, uuid.toString());
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
@@ -217,7 +214,6 @@ public class FileHandlerTest {
             verify(response).setContentLength(4);
             verify(response).setHeader("X-Segment-Length", "4");
             assertArrayEquals(new byte[] {1, 2, 3, 4}, output.toByteArray());
-            assertTrue(connectedPeers.contains("10.0.0.8:8090"));
         } finally {
             deleteRecursively(storeDirectory);
         }

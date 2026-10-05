@@ -25,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -140,10 +141,6 @@ final class ProposalPayloadStore {
         return Math.max(0L, totalBytes.get());
     }
 
-    Path getPayloadDirectory() {
-        return payloadDirectory;
-    }
-
     void close() {
         if (!ephemeralDirectory) {
             return;
@@ -210,13 +207,7 @@ final class ProposalPayloadStore {
     private static String sha256Hex(byte[] payloadBytes) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(payloadBytes);
-            StringBuilder hex = new StringBuilder(hash.length * 2);
-            for (byte b : hash) {
-                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
-                hex.append(Character.forDigit(b & 0xF, 16));
-            }
-            return hex.toString();
+            return HexFormat.of().formatHex(digest.digest(payloadBytes));
         } catch (Exception e) {
             throw new IllegalStateException("SHA-256 not available", e);
         }

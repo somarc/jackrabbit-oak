@@ -52,9 +52,9 @@ public class AdaptiveReleaseGovernorTest {
             8
         ));
 
-        assertEquals(AdaptiveReleaseGovernor.GovernorState.HEALTHY, decision.getState());
-        assertEquals(AdaptiveReleaseGovernor.ReleaseAction.DIRECT, decision.getAction());
-        assertTrue(decision.getReasonCodes().isEmpty());
+        assertEquals(AdaptiveReleaseGovernor.GovernorState.HEALTHY, decision.state());
+        assertEquals(AdaptiveReleaseGovernor.ReleaseAction.DIRECT, decision.action());
+        assertTrue(decision.reasonCodes().isEmpty());
     }
 
     @Test
@@ -71,9 +71,9 @@ public class AdaptiveReleaseGovernorTest {
             10
         ));
 
-        assertEquals(AdaptiveReleaseGovernor.GovernorState.PRESSURED, decision.getState());
-        assertEquals(AdaptiveReleaseGovernor.ReleaseAction.BUFFERED, decision.getAction());
-        assertTrue(decision.getReasonCodes().contains("verified_finalized_gap_high"));
+        assertEquals(AdaptiveReleaseGovernor.GovernorState.PRESSURED, decision.state());
+        assertEquals(AdaptiveReleaseGovernor.ReleaseAction.BUFFERED, decision.action());
+        assertTrue(decision.reasonCodes().contains("verified_finalized_gap_high"));
     }
 
     @Test
@@ -90,10 +90,10 @@ public class AdaptiveReleaseGovernorTest {
             175
         ));
 
-        assertEquals(AdaptiveReleaseGovernor.GovernorState.OVERLOADED, decision.getState());
-        assertEquals(AdaptiveReleaseGovernor.ReleaseAction.THROTTLED, decision.getAction());
-        assertTrue(decision.getReasonCodes().contains("backpressure_active"));
-        assertTrue(decision.getReasonCodes().contains("backpressure_pending_stalled"));
-        assertTrue(decision.getReasonCodes().contains("release_ready_backlog_high"));
+        assertEquals(AdaptiveReleaseGovernor.GovernorState.OVERLOADED, decision.state());
+        assertEquals(AdaptiveReleaseGovernor.ReleaseAction.THROTTLED, decision.action());
+        assertTrue(decision.reasonCodes().contains("backpressure_active"));
+        assertTrue(decision.reasonCodes().contains("backpressure_pending_stalled"));
+        assertTrue(decision.reasonCodes().contains("release_ready_backlog_high"));
     }
 }

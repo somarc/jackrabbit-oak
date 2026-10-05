@@ -113,10 +113,7 @@ public class AeronInternalIngressClientManagerTest {
                 (aeronDirectoryName, ingressPlan, idleStrategy) -> {
                     connectCalls.incrementAndGet();
                     throw new RuntimeException("ERROR - concurrent session limit");
-                },
-                Thread::sleep,
-                1,
-                attempt -> 0L
+                }
             ),
             AeronIngressEndpointPlanner.systemFromUrls("http://self:8080", java.util.List.of("http://peer:8082")),
             () -> "target/aeron-dir",
@@ -400,10 +397,7 @@ public class AeronInternalIngressClientManagerTest {
                 (aeronDirectoryName, ingressPlan, idleStrategy) -> {
                     connectCalls.incrementAndGet();
                     return connectResultSupplier.get();
-                },
-                Thread::sleep,
-                1,
-                attempt -> 0L
+                }
             ),
             AeronIngressEndpointPlanner.systemFromUrls("http://self:8080", java.util.List.of("http://peer:8082")),
             () -> "target/aeron-dir",

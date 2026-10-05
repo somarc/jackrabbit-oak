@@ -62,15 +62,6 @@ public class AeronLeaderTracker {
                              int term,
                              int memberId,
                              String memberUrl,
-                             long timestamp) {
-        recordChange(newRole, previousRole, term, memberId, memberUrl, timestamp, -1L);
-    }
-
-    public void recordChange(Cluster.Role newRole,
-                             Cluster.Role previousRole,
-                             int term,
-                             int memberId,
-                             String memberUrl,
                              long timestamp,
                              long clusterTime) {
         leadershipHistory.add(new LeadershipChange(

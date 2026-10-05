@@ -19,8 +19,10 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.api.Blob;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
+import org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
@@ -29,7 +31,6 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
-import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUtil;
 import org.apache.jackrabbit.oak.spi.state.ChildNodeEntry;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.slf4j.Logger;
@@ -38,9 +39,9 @@ import org.slf4j.LoggerFactory;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -104,15 +105,11 @@ public class DeleteProposalHandler {
                 return;
             }
 
-            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig =
-                org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
-            if (!blockchainConfig.isMockMode()
-                && !org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
-                    .isFullVerificationAvailable()) {
+            BlockchainConfig blockchainConfig = BlockchainConfig.getInstance();
+            if (!blockchainConfig.isMockMode() && !EthereumSignatureVerifier.isFullVerificationAvailable()) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.error("❌ Full Ethereum signature verification unavailable: {}",
-                    org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
-                        .getAvailabilityReason());
+                    EthereumSignatureVerifier.getAvailabilityReason());
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
                     "Full Ethereum signature verification unavailable. Validator is missing required Bouncy Castle support.");
                 return;
@@ -132,39 +129,15 @@ public class DeleteProposalHandler {
                 return;
             }
 
-            if (!ShardWriteAuthorityEnforcer.allowLocalWrite(
-                context,
-                normalizedWallet,
-                "/v1/propose-delete",
-                response
-            )) {
+            if (!ProposalRequestSupport.allowShardAndLeader(context, normalizedWallet, "/v1/propose-delete", response)) {
                 return;
             }
 
-            if (!LeaderWriteRedirectUtil.allowLeaderWrite(context, "/v1/propose-delete", response)) {
-                return;
-            }
-
-            // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
-            // This is the primary identifier - clientId is secondary
-            ClientRegistration clientReg = context.findClientRegistrationByWallet(normalizedWallet);
-            String clientId = clientReg != null ? clientReg.clientId : null;
-
-            // If not found by wallet, try clientId lookup (wallet address is preferred)
-            // Note: IP-based fallback has been removed - wallet address is required
-            if (clientReg == null) {
-                String clientIdHeader = request.getHeader("X-Client-Id");
-                if (clientIdHeader == null || clientIdHeader.isEmpty()) {
-                    clientIdHeader = request.getParameter("clientId");
-                }
-                // Only use explicit clientId header/param, not IP address
-                if (clientIdHeader != null && !clientIdHeader.isEmpty()) {
-                    clientReg = context.findClientRegistrationByClientId(clientIdHeader);
-                    if (clientReg != null) {
-                        clientId = clientIdHeader;
-                    }
-                }
-            }
+            // PATH ENFORCEMENT: wallet address is the primary identifier, clientId is secondary
+            ProposalRequestSupport.ClientLookup lookup =
+                ProposalRequestSupport.lookupClient(context, request, normalizedWallet);
+            ClientRegistration clientReg = lookup.registration;
+            String clientId = lookup.clientId;
 
             // If still not found, reject delete
             if (clientReg == null) {
@@ -234,33 +207,22 @@ public class DeleteProposalHandler {
             }
 
             String clientProposalId = request.getParameter("proposalId");
-            String proposalId;
-            if (clientProposalId != null && !clientProposalId.trim().isEmpty()) {
-                proposalId = clientProposalId.trim();
-                if (!isValidClientProposalId(proposalId)) {
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
-                    return;
-                }
-                if (proposalId.startsWith("0X")) {
-                    proposalId = "0x" + proposalId.substring(2);
-                }
-            } else {
+            if (clientProposalId == null || clientProposalId.trim().isEmpty()) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
                     "Missing proposalId parameter. Clients must supply a 0x-prefixed 32-byte hex proposalId from the settlement contract flow.");
                 return;
             }
-
-            if (!isChainBackedProposalId(proposalId)) {
+            String proposalId = clientProposalId.trim();
+            if (!ProposalRequestSupport.isValidProposalId(proposalId)) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "proposalId must be a 0x-prefixed 32-byte hex value.");
+                    "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
                 return;
             }
+            proposalId = ProposalRequestSupport.normalizeProposalId(proposalId);
 
             // A delete signature is an EIP-191 personal_sign over exactly the contentPath.
             if (!blockchainConfig.isMockMode()
-                && !org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
-                    .verifySignature(contentPath, signature, normalizedWallet)) {
+                && !EthereumSignatureVerifier.verifySignature(contentPath, signature, normalizedWallet)) {
                 context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Delete signature verification failed for wallet {}", normalizedWallet);
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_UNAUTHORIZED,
@@ -271,24 +233,18 @@ public class DeleteProposalHandler {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // GC DEBT TRACKING: Track debt when content is deleted (deferred cost)
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            java.math.BigDecimal gcDebtIncurred = java.math.BigDecimal.ZERO;
-            java.math.BigDecimal totalDebt = java.math.BigDecimal.ZERO;
-            java.math.BigDecimal pendingDebt = java.math.BigDecimal.ZERO;
+            BigDecimal gcDebtIncurred = BigDecimal.ZERO;
+            BigDecimal totalDebt = BigDecimal.ZERO;
+            BigDecimal pendingDebt = BigDecimal.ZERO;
             boolean writesBlocked = false;
             DeleteSizeEstimate deleteSizeEstimate = estimateDeleteSize(contentPath);
 
             if (context.gcAccountManager != null) {
                 try {
                     // Add debt to account (pending until GC executes)
-                    java.math.BigDecimal debtCost = context.gcAccountManager.addDebt(
-                        normalizedWallet,
-                        contentPath,
-                        deleteSizeEstimate.estimatedSizeMB
-                    );
-
-                    // Get updated account state
-                    org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account =
-                        context.gcAccountManager.getAccount(normalizedWallet);
+                    BigDecimal debtCost = context.gcAccountManager.addDebt(
+                        normalizedWallet, contentPath, deleteSizeEstimate.estimatedSizeMB());
+                    EntityGCAccount account = context.gcAccountManager.getAccount(normalizedWallet);
 
                     gcDebtIncurred = debtCost;
                     totalDebt = account.totalDebt;
@@ -303,11 +259,11 @@ public class DeleteProposalHandler {
                         totalDebt,
                         pendingDebt,
                         writesBlocked,
-                        deleteSizeEstimate.estimatedSizeMB,
-                        deleteSizeEstimate.nodeCount,
+                        deleteSizeEstimate.estimatedSizeMB(),
+                        deleteSizeEstimate.nodeCount(),
                         deleteSizeEstimate.descendantCount(),
-                        deleteSizeEstimate.propertyCount,
-                        deleteSizeEstimate.truncated
+                        deleteSizeEstimate.propertyCount(),
+                        deleteSizeEstimate.truncated()
                     );
 
                 } catch (Exception e) {
@@ -331,18 +287,8 @@ public class DeleteProposalHandler {
 
             // Return 202 Accepted (queued for processing)
             response.setContentType("application/json");
-            response.setStatus(HttpServletResponse.SC_ACCEPTED);
-            Map<String, Object> links = new LinkedHashMap<>();
-            links.put("self", "/v1/ops/operations/" + proposalId);
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("contractVersion", "ops.v1");
-            payload.put("status", "accepted");
-            payload.put("operationId", proposalId);
-            payload.put("receivedAtMs", System.currentTimeMillis());
-            payload.put("ackState", "ACCEPTED");
-            payload.put("links", links);
-            payload.put("proposalId", proposalId);
-            payload.put("proposalIdSource", clientProposalId != null && !clientProposalId.trim().isEmpty() ? "client" : "server");
+            Map<String, Object> payload = ProposalRequestSupport.acceptedEnvelope(proposalId);
+            payload.put("proposalIdSource", "client");
             payload.put("type", "DELETE");
             payload.put("state", "PENDING");
             payload.put("message", "Delete proposal queued, waiting for Ethereum confirmation");
@@ -350,16 +296,16 @@ public class DeleteProposalHandler {
             payload.put("timeoutTimestamp", System.currentTimeMillis() + ProposalQueuePolicy.confirmationTimeoutMs());
             payload.put("wallet", wallet);
             payload.put("contentPath", contentPath);
-            payload.put("estimatedDeleteSizeMb", deleteSizeEstimate.estimatedSizeMB);
-            payload.put("estimatedNodeCount", deleteSizeEstimate.nodeCount);
+            payload.put("estimatedDeleteSizeMb", deleteSizeEstimate.estimatedSizeMB());
+            payload.put("estimatedNodeCount", deleteSizeEstimate.nodeCount());
             payload.put("estimatedDescendantCount", deleteSizeEstimate.descendantCount());
-            payload.put("estimatedPropertyCount", deleteSizeEstimate.propertyCount);
-            payload.put("estimationTruncated", deleteSizeEstimate.truncated);
+            payload.put("estimatedPropertyCount", deleteSizeEstimate.propertyCount());
+            payload.put("estimationTruncated", deleteSizeEstimate.truncated());
             payload.put("gcDebtIncurred", gcDebtIncurred.toString());
             payload.put("totalDebt", totalDebt.toString());
             payload.put("pendingDebt", pendingDebt.toString());
             payload.put("writesBlocked", writesBlocked);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_ACCEPTED, payload);
             log.info("✅ DELETE proposal {} queued successfully (path: {})", proposalId, contentPath);
 
         } catch (Exception e) {
@@ -413,7 +359,7 @@ public class DeleteProposalHandler {
                 TraversalFrame frame = stack.pop();
                 nodeCount++;
 
-                for (PropertyState prop : frame.node.getProperties()) {
+                for (PropertyState prop : frame.node().getProperties()) {
                     propertyCount++;
                     if (prop.getType() == Type.BINARY) {
                         try {
@@ -425,19 +371,19 @@ public class DeleteProposalHandler {
                     }
                 }
 
-                if (frame.depth >= MAX_DELETE_ESTIMATION_DEPTH) {
-                    if (frame.node.getChildNodeCount(1) > 0) {
+                if (frame.depth() >= MAX_DELETE_ESTIMATION_DEPTH) {
+                    if (frame.node().getChildNodeCount(1) > 0) {
                         truncated = true;
                     }
                     continue;
                 }
 
-                for (ChildNodeEntry childEntry : frame.node.getChildNodeEntries()) {
+                for (ChildNodeEntry childEntry : frame.node().getChildNodeEntries()) {
                     if (nodeCount + stack.size() >= MAX_DELETE_ESTIMATION_NODES) {
                         truncated = true;
                         break;
                     }
-                    stack.push(new TraversalFrame(childEntry.getNodeState(), frame.depth + 1));
+                    stack.push(new TraversalFrame(childEntry.getNodeState(), frame.depth() + 1));
                 }
             }
 
@@ -452,11 +398,11 @@ public class DeleteProposalHandler {
             log.debug(
                 "Delete size estimate for {}: nodes={}, descendants={}, properties={}, ~{} MB, truncated={}",
                 contentPath,
-                estimate.nodeCount,
+                estimate.nodeCount(),
                 estimate.descendantCount(),
-                estimate.propertyCount,
-                estimate.estimatedSizeMB,
-                estimate.truncated
+                estimate.propertyCount(),
+                estimate.estimatedSizeMB(),
+                estimate.truncated()
             );
 
             return estimate;
@@ -467,41 +413,10 @@ public class DeleteProposalHandler {
         }
     }
 
-    private static boolean isValidClientProposalId(String proposalId) {
-        if (proposalId == null) {
-            return false;
-        }
-        String value = proposalId.trim();
-        return value.matches("(?i)^0x[a-f0-9]{64}$");
+    private record TraversalFrame(NodeState node, int depth) {
     }
 
-    private static boolean isChainBackedProposalId(String proposalId) {
-        return proposalId != null && proposalId.trim().matches("(?i)^0x[a-f0-9]{64}$");
-    }
-
-    private static final class TraversalFrame {
-        private final NodeState node;
-        private final int depth;
-
-        private TraversalFrame(NodeState node, int depth) {
-            this.node = node;
-            this.depth = depth;
-        }
-    }
-
-    private static final class DeleteSizeEstimate {
-        private final long estimatedSizeMB;
-        private final long nodeCount;
-        private final long propertyCount;
-        private final boolean truncated;
-
-        private DeleteSizeEstimate(long estimatedSizeMB, long nodeCount, long propertyCount, boolean truncated) {
-            this.estimatedSizeMB = estimatedSizeMB;
-            this.nodeCount = nodeCount;
-            this.propertyCount = propertyCount;
-            this.truncated = truncated;
-        }
-
+    private record DeleteSizeEstimate(long estimatedSizeMB, long nodeCount, long propertyCount, boolean truncated) {
         private long descendantCount() {
             return nodeCount > 0 ? nodeCount - 1 : 0;
         }
@@ -510,5 +425,4 @@ public class DeleteProposalHandler {
             return new DeleteSizeEstimate(DEFAULT_DELETE_SIZE_MB, 0, 0, false);
         }
     }
-
 }

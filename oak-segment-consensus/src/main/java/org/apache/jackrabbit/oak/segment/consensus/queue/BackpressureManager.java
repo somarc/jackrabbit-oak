@@ -82,9 +82,9 @@ public class BackpressureManager {
      * Create a new backpressure manager.
      */
     public BackpressureManager() {
-        this(ProposalQueueTuningRegistry.get().getMaxPendingMessages(),
-            ProposalQueueTuningRegistry.get().getBackpressureTimeoutMs(),
-            ProposalQueueTuningRegistry.get().getBackpressureParkNanos());
+        this(ProposalQueueTuningRegistry.get().maxPendingMessages(),
+            ProposalQueueTuningRegistry.get().backpressureTimeoutMs(),
+            ProposalQueueTuningRegistry.get().backpressureParkNanos());
     }
 
     /**
@@ -216,10 +216,6 @@ public class BackpressureManager {
         return backpressureTimeoutMs;
     }
 
-    public long getBackpressureParkNanos() {
-        return parkNanos;
-    }
-    
     /**
      * Apply backpressure if pending messages exceed maximum.
      * 
@@ -330,21 +326,6 @@ public class BackpressureManager {
             pending,
             now
         );
-    }
-    
-    /**
-     * Reset counters (for testing).
-     */
-    public void reset() {
-        sentCount.set(0);
-        acknowledgedCount.set(0);
-        lastPendingChangeMs.set(0);
-        pendingSinceMs.set(0);
-        lastObservedPending.set(0);
-        backpressureTimeoutCount.set(0);
-        stalePendingReconciliationCount.set(0);
-        lastReconciledMs.set(0);
-        backpressureActive = false;
     }
     
     /**

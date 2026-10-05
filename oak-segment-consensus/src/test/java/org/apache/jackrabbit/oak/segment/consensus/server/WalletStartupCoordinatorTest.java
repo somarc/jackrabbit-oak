@@ -62,8 +62,8 @@ public class WalletStartupCoordinatorTest {
             componentFactory
         );
 
-        assertSame(wallet, result.getWallet());
-        assertEquals("0xcluster000000000000000000000000000000000000", result.getClusterWalletAddress());
+        assertSame(wallet, result.wallet());
+        assertEquals("0xcluster000000000000000000000000000000000000", result.clusterWalletAddress());
         verify(componentFactory).createEthereumWallet(storeDir.resolve("validator-keystore.properties").toString());
     }
 
@@ -80,7 +80,7 @@ public class WalletStartupCoordinatorTest {
             componentFactory
         );
 
-        assertEquals("0xnode111111111111111111111111111111111111", result.getClusterWalletAddress());
+        assertEquals("0xnode111111111111111111111111111111111111", result.clusterWalletAddress());
     }
 
     @Test
@@ -98,7 +98,7 @@ public class WalletStartupCoordinatorTest {
             componentFactory
         );
 
-        assertEquals("0xnode222222222222222222222222222222222222", result.getClusterWalletAddress());
+        assertEquals("0xnode222222222222222222222222222222222222", result.clusterWalletAddress());
     }
 
     @Test
@@ -116,7 +116,7 @@ public class WalletStartupCoordinatorTest {
             componentFactory
         );
 
-        assertSame(wallet, result.getWallet());
+        assertSame(wallet, result.wallet());
         verify(componentFactory).createEthereumWallet("/secure/node-wallet.properties");
     }
 

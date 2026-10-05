@@ -17,7 +17,11 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
+import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCExecutionResult;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
+import org.apache.jackrabbit.oak.segment.consensus.gc.GCVote;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
@@ -28,11 +32,13 @@ import org.slf4j.LoggerFactory;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Handler for fragmentation metrics and GC/compaction consensus APIs.
@@ -60,9 +66,8 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            FragmentationTracker tracker = getFragmentationTracker();
+            FragmentationTracker tracker = requireFragmentationTracker(response);
             if (tracker == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
                 return;
             }
             
@@ -77,8 +82,7 @@ public class FragmentationApiHandler {
             payload.put("contractVersion", "fragmentation.metrics.v1");
             payload.put("totalEntities", allMetrics.size());
             payload.put("entities", entities);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting fragmentation metrics", e);
@@ -93,9 +97,8 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            FragmentationTracker tracker = getFragmentationTracker();
+            FragmentationTracker tracker = requireFragmentationTracker(response);
             if (tracker == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
                 return;
             }
             
@@ -109,8 +112,7 @@ public class FragmentationApiHandler {
             payload.put("contractVersion", "fragmentation.metrics.entity.v1");
             payload.put("walletAddress", walletAddress);
             payload.put("data", metricsToMap(metrics, tracker));
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting entity fragmentation metrics", e);
@@ -125,9 +127,8 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            FragmentationTracker tracker = getFragmentationTracker();
+            FragmentationTracker tracker = requireFragmentationTracker(response);
             if (tracker == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
                 return;
             }
             
@@ -152,8 +153,7 @@ public class FragmentationApiHandler {
             payload.put("contractVersion", "fragmentation.top.v1");
             payload.put("limit", limit);
             payload.put("entities", entities);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting top fragmented entities", e);
@@ -168,18 +168,17 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            GCProposalManager gcManager = getGCProposalManager();
+            GCProposalManager gcManager = requireGCProposalManager(response);
             if (gcManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
                 return;
             }
             
             // Get pending proposals
-            List<org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal> pending = gcManager.getPendingProposals();
+            List<GCProposal> pending = gcManager.getPendingProposals();
             
             // Get last GC execution
-            List<org.apache.jackrabbit.oak.segment.consensus.gc.GCExecutionResult> history = gcManager.getGCHistory(1);
-            org.apache.jackrabbit.oak.segment.consensus.gc.GCExecutionResult lastGC = history.isEmpty() ? null : history.get(0);
+            List<GCExecutionResult> history = gcManager.getGCHistory(1);
+            GCExecutionResult lastGC = history.isEmpty() ? null : history.get(0);
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("contractVersion", "gc.status.v1");
@@ -189,8 +188,7 @@ public class FragmentationApiHandler {
             payload.put("lastGcReclaimedMB", lastGC != null ? lastGC.actualReclaimedSizeMB : null);
             payload.put("lastGcCostUSDC", lastGC != null && lastGC.actualCostUSDC != null ? lastGC.actualCostUSDC.toString() : null);
             payload.put("gcConsensusRequired", true);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting GC status", e);
@@ -205,24 +203,22 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            GCProposalManager gcManager = getGCProposalManager();
+            GCProposalManager gcManager = requireGCProposalManager(response);
             if (gcManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
                 return;
             }
             
-            List<org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal> proposals = gcManager.getPendingProposals();
+            List<GCProposal> proposals = gcManager.getPendingProposals();
 
             List<Map<String, Object>> serialized = new ArrayList<>();
-            for (org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal : proposals) {
+            for (GCProposal proposal : proposals) {
                 serialized.add(proposalToMap(proposal));
             }
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("contractVersion", "gc.compaction.proposals.v1");
             payload.put("proposals", serialized);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting compaction proposals", e);
@@ -253,9 +249,8 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            GCProposalManager gcManager = getGCProposalManager();
+            GCProposalManager gcManager = requireGCProposalManager(response);
             if (gcManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
                 return;
             }
             
@@ -266,15 +261,8 @@ public class FragmentationApiHandler {
             String contentType = request.getContentType();
             if (contentType != null && contentType.contains("application/json")) {
                 try {
-                    java.io.BufferedReader reader = request.getReader();
-                    StringBuilder body = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        body.append(line);
-                    }
-                    
-                    if (body.length() > 0) {
-                        String jsonBody = body.toString();
+                    String jsonBody = request.getReader().lines().collect(Collectors.joining());
+                    if (!jsonBody.isEmpty()) {
                         // Simple JSON parsing (no Gson dependency)
                         // Extract walletAddress
                         int walletStart = jsonBody.indexOf("\"walletAddress\"");
@@ -336,7 +324,7 @@ public class FragmentationApiHandler {
             }
             
             // The proposal becomes state on every validator only when its GC_PROPOSAL log entry is applied
-            org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal = gcManager.proposeGC(proposerWallet, targetRevision);
+            GCProposal proposal = gcManager.proposeGC(proposerWallet, targetRevision);
             boolean replicated = context.aeronConsensusEngine != null
                 && context.aeronConsensusEngine.sendGCProposalThroughIngress(
                     proposal.proposalId,
@@ -353,8 +341,7 @@ public class FragmentationApiHandler {
             log.info("✅ GC proposal {} sent through the Aeron cluster log", proposal.proposalId);
             
             Map<String, Object> payload = proposalToMap(proposal);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error proposing GC", e);
@@ -385,9 +372,8 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            GCProposalManager gcManager = getGCProposalManager();
+            GCProposalManager gcManager = requireGCProposalManager(response);
             if (gcManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
                 return;
             }
             
@@ -397,15 +383,8 @@ public class FragmentationApiHandler {
             String contentType = request.getContentType();
             if (contentType != null && contentType.contains("application/json")) {
                 try {
-                    java.io.BufferedReader reader = request.getReader();
-                    StringBuilder body = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        body.append(line);
-                    }
-                    
-                    if (body.length() > 0) {
-                        String jsonBody = body.toString();
+                    String jsonBody = request.getReader().lines().collect(Collectors.joining());
+                    if (!jsonBody.isEmpty()) {
                         // Simple JSON parsing
                         int proposalStart = jsonBody.indexOf("\"proposalId\"");
                         if (proposalStart >= 0) {
@@ -441,12 +420,12 @@ public class FragmentationApiHandler {
                 executorId = context.aeronConsensusEngine.getCluster().memberId();
             }
             
-            org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal = gcManager.getProposal(proposalId);
+            GCProposal proposal = gcManager.getProposal(proposalId);
             if (proposal == null) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "GC proposal not found: " + proposalId);
                 return;
             }
-            if (proposal.state != org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal.GCProposalState.APPROVED) {
+            if (proposal.state != GCProposal.GCProposalState.APPROVED) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
                     "GC proposal not approved: " + proposalId + " (state: " + proposal.state + ")");
                 return;
@@ -463,8 +442,7 @@ public class FragmentationApiHandler {
             payload.put("proposalId", proposalId);
             payload.put("executorId", executorId);
             payload.put("replicated", true);
-            response.setStatus(HttpServletResponse.SC_ACCEPTED);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_ACCEPTED, payload);
             
         } catch (Exception e) {
             log.error("Error executing GC", e);
@@ -489,9 +467,8 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
 
         try {
-            GCProposalManager gcManager = getGCProposalManager();
+            GCProposalManager gcManager = requireGCProposalManager(response);
             if (gcManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
                 return;
             }
 
@@ -503,13 +480,7 @@ public class FragmentationApiHandler {
             String contentType = request.getContentType();
             if (contentType != null && contentType.contains("application/json")) {
                 try {
-                    java.io.BufferedReader reader = request.getReader();
-                    StringBuilder body = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        body.append(line);
-                    }
-                    String jsonBody = body.toString();
+                    String jsonBody = request.getReader().lines().collect(Collectors.joining());
                     if (!jsonBody.isEmpty()) {
                         proposalId = extractJsonStringField(jsonBody, "proposalId");
                         validatorId = extractJsonIntField(jsonBody, "validatorId");
@@ -576,7 +547,7 @@ public class FragmentationApiHandler {
                 return;
             }
 
-            org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal = gcManager.getProposal(proposalId);
+            GCProposal proposal = gcManager.getProposal(proposalId);
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("success", true);
@@ -589,8 +560,7 @@ public class FragmentationApiHandler {
             if (proposal != null) {
                 payload.put("proposal", proposalToMap(proposal));
             }
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
 
         } catch (Exception e) {
             log.error("Error voting on GC proposal", e);
@@ -598,15 +568,14 @@ public class FragmentationApiHandler {
         }
     }
     
-    /**
-     * Get GC Proposal Manager from context.
-     */
-    private GCProposalManager getGCProposalManager() {
-        if (context.gcProposalManager == null) {
+    /** The GC proposal manager, or null after sending 503 when it is not initialized. */
+    private GCProposalManager requireGCProposalManager(HttpServletResponse response) throws IOException {
+        GCProposalManager manager = context.gcProposalManager;
+        if (manager == null) {
             log.debug("GCProposalManager not initialized in ServerContext");
-            return null;
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Proposal Manager not initialized");
         }
-        return context.gcProposalManager;
+        return manager;
     }
     
     /**
@@ -679,15 +648,22 @@ public class FragmentationApiHandler {
         return null;
     }
     
-    /**
-     * Get fragmentation tracker from context.
-     */
-    private FragmentationTracker getFragmentationTracker() {
-        if (context.fragmentationTracker == null) {
+    /** The fragmentation tracker, or null after sending 503 when it is not initialized. */
+    private FragmentationTracker requireFragmentationTracker(HttpServletResponse response) throws IOException {
+        FragmentationTracker tracker = context.fragmentationTracker;
+        if (tracker == null) {
             log.debug("FragmentationTracker not initialized in ServerContext");
-            return null;
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Fragmentation tracker not initialized");
         }
-        return context.fragmentationTracker;
+        return tracker;
+    }
+
+    private boolean gcAccountManagerMissing(HttpServletResponse response) throws IOException {
+        if (context.gcAccountManager == null) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+            return true;
+        }
+        return false;
     }
     
     /**
@@ -701,13 +677,11 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            if (context.gcAccountManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+            if (gcAccountManagerMissing(response)) {
                 return;
             }
             
-            org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
-                context.gcAccountManager.getAccount(walletAddress);
+            EntityGCAccount account = context.gcAccountManager.getAccount(walletAddress);
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("walletAddress", account.walletAddress);
             payload.put("totalDebt", account.totalDebt.toString());
@@ -718,8 +692,7 @@ public class FragmentationApiHandler {
             payload.put("lastDeleteTime", account.lastDeleteTime);
             payload.put("deleteCount", account.deletes.size());
             payload.put("paymentCount", account.payments.size());
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error getting GC account", e);
@@ -738,8 +711,7 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            if (context.gcAccountManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+            if (gcAccountManagerMissing(response)) {
                 return;
             }
             
@@ -750,15 +722,14 @@ public class FragmentationApiHandler {
                 return;
             }
             
-            java.math.BigDecimal amount = new java.math.BigDecimal(amountStr);
+            BigDecimal amount = new BigDecimal(amountStr);
             String txHash = request.getParameter("txHash");  // Optional
             
             // Record payment
             context.gcAccountManager.recordPayment(walletAddress, amount, txHash);
             
             // Get updated account
-            org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
-                context.gcAccountManager.getAccount(walletAddress);
+            EntityGCAccount account = context.gcAccountManager.getAccount(walletAddress);
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("success", true);
@@ -768,8 +739,7 @@ public class FragmentationApiHandler {
             payload.put("message", account.writesBlocked
                 ? "Payment recorded. Debt still exceeds limit - pay more to resume writes."
                 : "Payment recorded. Writes resumed.");
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error recording payment", e);
@@ -788,8 +758,7 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            if (context.gcAccountManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+            if (gcAccountManagerMissing(response)) {
                 return;
             }
             
@@ -800,21 +769,19 @@ public class FragmentationApiHandler {
                 return;
             }
             
-            java.math.BigDecimal limit = new java.math.BigDecimal(limitStr);
+            BigDecimal limit = new BigDecimal(limitStr);
             
             // Set limit
             context.gcAccountManager.setDebtLimit(walletAddress, limit);
             
             // Get updated account
-            org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
-                context.gcAccountManager.getAccount(walletAddress);
+            EntityGCAccount account = context.gcAccountManager.getAccount(walletAddress);
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("success", true);
             payload.put("debtLimit", account.debtLimit.toString());
             payload.put("writesBlocked", account.writesBlocked);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error setting debt limit", e);
@@ -833,16 +800,14 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            if (context.gcAccountManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+            if (gcAccountManagerMissing(response)) {
                 return;
             }
             
             // Get account
-            org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = 
-                context.gcAccountManager.getAccount(walletAddress);
+            EntityGCAccount account = context.gcAccountManager.getAccount(walletAddress);
             
-            java.math.BigDecimal pending = account.getPendingDebt();
+            BigDecimal pending = account.getPendingDebt();
             
             // Convert pending to executed
             account.convertPendingToExecuted(pending);
@@ -855,8 +820,7 @@ public class FragmentationApiHandler {
             payload.put("message", account.writesBlocked
                 ? "Pending debt converted to executed. Writes now BLOCKED - pay to resume."
                 : "Pending debt converted to executed. Debt under limit.");
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
         } catch (Exception e) {
             log.error("Error executing pending debt", e);
@@ -874,8 +838,7 @@ public class FragmentationApiHandler {
         response.setContentType("application/json");
         
         try {
-            if (context.gcAccountManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "GC Account Manager not initialized");
+            if (gcAccountManagerMissing(response)) {
                 return;
             }
             
@@ -883,10 +846,8 @@ public class FragmentationApiHandler {
             context.gcAccountManager.convertAllPendingToExecuted();
             
             // Get stats
-            java.util.List<org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount> blocked = 
-                context.gcAccountManager.getBlockedAccounts();
-            java.util.List<org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount> withExecutedDebt = 
-                context.gcAccountManager.getAccountsWithExecutedDebt();
+            List<EntityGCAccount> blocked = context.gcAccountManager.getBlockedAccounts();
+            List<EntityGCAccount> withExecutedDebt = context.gcAccountManager.getAccountsWithExecutedDebt();
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("success", true);
@@ -894,12 +855,11 @@ public class FragmentationApiHandler {
             payload.put("entitiesWithExecutedDebt", withExecutedDebt.size());
             payload.put("entitiesBlocked", blocked.size());
             List<String> blockedWallets = new ArrayList<>();
-            for (org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account : blocked) {
+            for (EntityGCAccount account : blocked) {
                 blockedWallets.add(account.walletAddress);
             }
             payload.put("blockedWallets", blockedWallets);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
             
             log.info("🧹 Manual GC triggered - {} entities with executed debt, {} blocked", 
                      withExecutedDebt.size(), blocked.size());
@@ -910,7 +870,7 @@ public class FragmentationApiHandler {
         }
     }
 
-    private Map<String, Object> proposalToMap(org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal proposal) {
+    private Map<String, Object> proposalToMap(GCProposal proposal) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("proposalId", proposal.proposalId);
         payload.put("proposerWallet", proposal.proposerWallet);
@@ -924,8 +884,8 @@ public class FragmentationApiHandler {
         payload.put("expiresAt", proposal.expiresAt);
 
         Map<String, Object> votes = new LinkedHashMap<>();
-        for (Map.Entry<Integer, org.apache.jackrabbit.oak.segment.consensus.gc.GCVote> entry : proposal.votes.entrySet()) {
-            org.apache.jackrabbit.oak.segment.consensus.gc.GCVote vote = entry.getValue();
+        for (Map.Entry<Integer, GCVote> entry : proposal.votes.entrySet()) {
+            GCVote vote = entry.getValue();
             Map<String, Object> votePayload = new LinkedHashMap<>();
             votePayload.put("vote", vote.approve ? "APPROVE" : "REJECT");
             votePayload.put("reason", vote.reason != null ? vote.reason : "");

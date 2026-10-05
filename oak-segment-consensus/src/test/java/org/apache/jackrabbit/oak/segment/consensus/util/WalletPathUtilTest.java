@@ -47,17 +47,4 @@ public class WalletPathUtilTest {
         assertNotNull(WalletPathUtil.validateOrganization("bad name"));
     }
 
-    @Test
-    public void testExtractShardIdAndIsShardedWalletPath() {
-        String path = "/oak-chain/74-2d-35/content";
-        assertEquals("74-2d-35", WalletPathUtil.extractShardId(path));
-        assertTrue(WalletPathUtil.isShardedWalletPath(path));
-        assertFalse(WalletPathUtil.isShardedWalletPath("/content/site"));
-    }
-
-    @Test
-    public void testEstimateWalletsPerBucket() {
-        int estimate = WalletPathUtil.estimateWalletsPerBucket(100_000_000L);
-        assertTrue(estimate >= 0);
-    }
 }

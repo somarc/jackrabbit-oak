@@ -48,8 +48,6 @@ import java.util.concurrent.Executor;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -84,7 +82,6 @@ public class Http2ClientPoolTest {
         byte[] body = pool.get(baseUrl + "/bytes");
 
         assertArrayEquals(new byte[] {1, 2, 3, 4}, body);
-        assertNotNull(pool.getHttpClient());
         assertTrue(pool.getPoolStats().contains("Requests=1"));
         assertTrue(pool.getPoolStats().contains("HTTP/1.1=1"));
         assertTrue(pool.getPoolStats().contains("BytesReceived=4"));
@@ -139,7 +136,6 @@ public class Http2ClientPoolTest {
         assertArrayEquals(new byte[] {9, 8}, pool.get("http://validator.example/bytes"));
         assertEquals("hello-h2", pool.getString("http://validator.example/text"));
         assertTrue(pool.exists("http://validator.example/exists"));
-        assertSame(HttpClient.Version.HTTP_2, pool.getHttpClient().version());
 
         String stats = pool.getPoolStats();
         assertTrue(stats.contains("Requests=3"));
@@ -147,7 +143,6 @@ public class Http2ClientPoolTest {
         assertTrue(stats.contains("HTTP/1.1=0"));
         assertTrue(stats.contains("BytesReceived=2"));
 
-        pool.logStats();
         pool.shutdown();
     }
 

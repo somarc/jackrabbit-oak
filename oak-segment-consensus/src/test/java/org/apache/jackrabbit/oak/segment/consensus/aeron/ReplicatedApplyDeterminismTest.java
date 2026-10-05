@@ -70,15 +70,23 @@ public class ReplicatedApplyDeterminismTest {
         MessageDispatcher dispatcher = dispatcherFor(nodeStore);
         AeronIngressWritePayloadBuilder builder = new AeronIngressWritePayloadBuilder();
 
-        dispatch(dispatcher, T1, builder.buildWriteProposal(WALLET, BASE + "doc-1", "page", "one", "sig-1", 7, null, "p1"));
-        dispatch(dispatcher, T2, builder.buildWriteProposal(WALLET, BASE + "doc-x", "page", "x", "sig-x", 7, null, "px"));
+        dispatch(dispatcher, T1, builder.buildWriteProposal(WALLET, BASE + "doc-1", "page", "one", "sig-1", 7, null, writeAudit("p1")));
+        dispatch(dispatcher, T2, builder.buildWriteProposal(WALLET, BASE + "doc-x", "page", "x", "sig-x", 7, null, writeAudit("px")));
         List<QueuedProposal> batch = Arrays.asList(
             ReplicatedCommandRoundTripTest.batchItem("p2", BASE + "doc-2", QueuedProposal.ProposalType.WRITE),
             ReplicatedCommandRoundTripTest.batchItem("p3", BASE + "doc-3", QueuedProposal.ProposalType.WRITE));
         batch.forEach(p -> p.setWalletAddress(WALLET));
         dispatch(dispatcher, T3, builder.buildWriteBatch(batch, 7));
-        dispatch(dispatcher, T4, builder.buildDeleteProposal(WALLET, BASE + "doc-x", "sig-del", 7, "pdel"));
+        dispatch(dispatcher, T4, builder.buildDeleteProposal(WALLET, BASE + "doc-x", "sig-del", 7, deleteAudit("pdel")));
         return nodeStore;
+    }
+
+    private static MutationAuditMetadata writeAudit(String proposalId) {
+        return MutationAuditMetadata.write(null, null, proposalId, null, null, null, null);
+    }
+
+    private static MutationAuditMetadata deleteAudit(String proposalId) {
+        return MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null);
     }
 
     private static void dispatch(MessageDispatcher dispatcher, long clusterTimestamp, AeronEncodedMessage encoded) {

@@ -34,18 +34,7 @@ final class AeronClusterElectionObserver {
         void sleep(long millis) throws InterruptedException;
     }
 
-    static final class ObservationSummary {
-        final int changeCount;
-        final int uniqueLeaders;
-        final int finalLeaderId;
-        final int clusterSize;
-
-        ObservationSummary(int changeCount, int uniqueLeaders, int finalLeaderId, int clusterSize) {
-            this.changeCount = changeCount;
-            this.uniqueLeaders = uniqueLeaders;
-            this.finalLeaderId = finalLeaderId;
-            this.clusterSize = clusterSize;
-        }
+    record ObservationSummary(int changeCount, int uniqueLeaders, int finalLeaderId, int clusterSize) {
     }
 
     private final TimeSource timeSource;

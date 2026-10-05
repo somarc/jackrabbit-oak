@@ -34,102 +34,37 @@ final class AdaptiveReleaseGovernor {
         THROTTLED
     }
 
-    static final class SignalSnapshot {
-        private final long verifiedFinalizedGap;
-        private final long backpressurePendingCount;
-        private final long backpressureMaxPending;
-        private final boolean backpressureActive;
-        private final long backpressurePendingOldestMs;
-        private final long backpressurePendingStalledMs;
-        private final long verifiedPackingBufferCount;
-        private final long releaseReadyBatchCount;
-        private final long releaseReadyProposalCount;
-
-        SignalSnapshot(long verifiedFinalizedGap,
-                       long backpressurePendingCount,
-                       long backpressureMaxPending,
-                       boolean backpressureActive,
-                       long backpressurePendingOldestMs,
-                       long backpressurePendingStalledMs,
-                       long verifiedPackingBufferCount,
-                       long releaseReadyBatchCount,
-                       long releaseReadyProposalCount) {
-            this.verifiedFinalizedGap = Math.max(0L, verifiedFinalizedGap);
-            this.backpressurePendingCount = Math.max(0L, backpressurePendingCount);
-            this.backpressureMaxPending = Math.max(1L, backpressureMaxPending);
-            this.backpressureActive = backpressureActive;
-            this.backpressurePendingOldestMs = Math.max(0L, backpressurePendingOldestMs);
-            this.backpressurePendingStalledMs = Math.max(0L, backpressurePendingStalledMs);
-            this.verifiedPackingBufferCount = Math.max(0L, verifiedPackingBufferCount);
-            this.releaseReadyBatchCount = Math.max(0L, releaseReadyBatchCount);
-            this.releaseReadyProposalCount = Math.max(0L, releaseReadyProposalCount);
-        }
-
-        long getVerifiedFinalizedGap() {
-            return verifiedFinalizedGap;
-        }
-
-        long getBackpressurePendingCount() {
-            return backpressurePendingCount;
-        }
-
-        long getBackpressureMaxPending() {
-            return backpressureMaxPending;
-        }
-
-        boolean isBackpressureActive() {
-            return backpressureActive;
-        }
-
-        long getBackpressurePendingOldestMs() {
-            return backpressurePendingOldestMs;
-        }
-
-        long getBackpressurePendingStalledMs() {
-            return backpressurePendingStalledMs;
-        }
-
-        long getVerifiedPackingBufferCount() {
-            return verifiedPackingBufferCount;
-        }
-
-        long getReleaseReadyBatchCount() {
-            return releaseReadyBatchCount;
-        }
-
-        long getReleaseReadyProposalCount() {
-            return releaseReadyProposalCount;
+    record SignalSnapshot(long verifiedFinalizedGap,
+                          long backpressurePendingCount,
+                          long backpressureMaxPending,
+                          boolean backpressureActive,
+                          long backpressurePendingOldestMs,
+                          long backpressurePendingStalledMs,
+                          long verifiedPackingBufferCount,
+                          long releaseReadyBatchCount,
+                          long releaseReadyProposalCount) {
+        SignalSnapshot {
+            verifiedFinalizedGap = Math.max(0L, verifiedFinalizedGap);
+            backpressurePendingCount = Math.max(0L, backpressurePendingCount);
+            backpressureMaxPending = Math.max(1L, backpressureMaxPending);
+            backpressurePendingOldestMs = Math.max(0L, backpressurePendingOldestMs);
+            backpressurePendingStalledMs = Math.max(0L, backpressurePendingStalledMs);
+            verifiedPackingBufferCount = Math.max(0L, verifiedPackingBufferCount);
+            releaseReadyBatchCount = Math.max(0L, releaseReadyBatchCount);
+            releaseReadyProposalCount = Math.max(0L, releaseReadyProposalCount);
         }
     }
 
-    static final class Decision {
+    record Decision(GovernorState state, ReleaseAction action, List<String> reasonCodes) {
         private static final Decision HEALTHY_DIRECT =
             new Decision(GovernorState.HEALTHY, ReleaseAction.DIRECT, Collections.<String>emptyList());
 
-        private final GovernorState state;
-        private final ReleaseAction action;
-        private final List<String> reasonCodes;
-
-        Decision(GovernorState state, ReleaseAction action, List<String> reasonCodes) {
-            this.state = state;
-            this.action = action;
-            this.reasonCodes = Collections.unmodifiableList(new ArrayList<String>(reasonCodes));
+        Decision {
+            reasonCodes = Collections.unmodifiableList(new ArrayList<String>(reasonCodes));
         }
 
         static Decision healthyDirect() {
             return HEALTHY_DIRECT;
-        }
-
-        GovernorState getState() {
-            return state;
-        }
-
-        ReleaseAction getAction() {
-            return action;
-        }
-
-        List<String> getReasonCodes() {
-            return reasonCodes;
         }
 
         String signature() {
@@ -177,11 +112,11 @@ final class AdaptiveReleaseGovernor {
     }
 
     static AdaptiveReleaseGovernor fromTuning(ProposalQueueTuning tuning) {
-        long baseReleaseWindow = Math.max(1L, (long) tuning.getFinalizationChunkSize() * tuning.getMaxMessageBatch());
+        long baseReleaseWindow = Math.max(1L, (long) tuning.finalizationChunkSize() * tuning.maxMessageBatch());
         long pressuredGap = Math.max(64L, baseReleaseWindow * 4L);
         long overloadedGap = Math.max(256L, pressuredGap * 4L);
-        long pressuredPending = Math.max(1L, tuning.getMaxPendingMessages() / 2L);
-        long overloadedPending = Math.max(1L, Math.max(pressuredPending + 1L, (tuning.getMaxPendingMessages() * 9L) / 10L));
+        long pressuredPending = Math.max(1L, tuning.maxPendingMessages() / 2L);
+        long overloadedPending = Math.max(1L, Math.max(pressuredPending + 1L, (tuning.maxPendingMessages() * 9L) / 10L));
         long pressuredPacking = Math.max(64L, baseReleaseWindow * 4L);
         long overloadedPacking = Math.max(256L, pressuredPacking * 4L);
         long pressuredReleaseReady = Math.max(32L, baseReleaseWindow * 2L);
@@ -225,28 +160,28 @@ final class AdaptiveReleaseGovernor {
         long packingThreshold = overloaded ? overloadedVerifiedPackingBufferCount : pressuredVerifiedPackingBufferCount;
         long releaseReadyThreshold = overloaded ? overloadedReleaseReadyProposalCount : pressuredReleaseReadyProposalCount;
 
-        if (signals.isBackpressureActive()) {
+        if (signals.backpressureActive()) {
             reasons.add("backpressure_active");
         }
-        if (signals.getBackpressurePendingCount() >= pendingThreshold) {
+        if (signals.backpressurePendingCount() >= pendingThreshold) {
             reasons.add("backpressure_pending_high");
         }
-        if (signals.getBackpressurePendingOldestMs() >= oldestThreshold) {
+        if (signals.backpressurePendingOldestMs() >= oldestThreshold) {
             reasons.add("backpressure_pending_oldest_high");
         }
-        if (signals.getBackpressurePendingStalledMs() >= stalledThreshold) {
+        if (signals.backpressurePendingStalledMs() >= stalledThreshold) {
             reasons.add("backpressure_pending_stalled");
         }
-        if (signals.getVerifiedFinalizedGap() >= gapThreshold) {
+        if (signals.verifiedFinalizedGap() >= gapThreshold) {
             reasons.add("verified_finalized_gap_high");
         }
-        if (signals.getVerifiedPackingBufferCount() >= packingThreshold) {
+        if (signals.verifiedPackingBufferCount() >= packingThreshold) {
             reasons.add("verified_packing_buffer_high");
         }
-        if (signals.getReleaseReadyProposalCount() >= releaseReadyThreshold) {
+        if (signals.releaseReadyProposalCount() >= releaseReadyThreshold) {
             reasons.add("release_ready_backlog_high");
         }
-        if (signals.getReleaseReadyBatchCount() > 0 && signals.getBackpressurePendingCount() >= pendingThreshold) {
+        if (signals.releaseReadyBatchCount() > 0 && signals.backpressurePendingCount() >= pendingThreshold) {
             reasons.add("release_ready_batches_waiting");
         }
         return reasons;

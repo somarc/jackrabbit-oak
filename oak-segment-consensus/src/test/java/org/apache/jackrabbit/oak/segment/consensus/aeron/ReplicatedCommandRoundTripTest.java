@@ -94,7 +94,7 @@ public class ReplicatedCommandRoundTripTest {
         int i = 0;
         for (String s : SAMPLES) {
             String n = (i++) + s;
-            QueuedProposal p = new QueuedProposal("pid" + n, "eth" + n, null, 1L, 2L, ProposalState.PENDING);
+            QueuedProposal p = new QueuedProposal("pid" + n, "eth" + n, 1L, 2L, ProposalState.PENDING);
             p.setWalletAddress("0xw" + n);
             p.setPath("/p" + n);
             p.setContentType("ct" + n);
@@ -127,7 +127,7 @@ public class ReplicatedCommandRoundTripTest {
         List<QueuedProposal> batch = new ArrayList<>();
         List<String> expected = new ArrayList<>();
         for (int i = 0; i < messages.length; i++) {
-            QueuedProposal p = new QueuedProposal("pid" + i, null, null, 1L, 2L, ProposalState.PENDING);
+            QueuedProposal p = new QueuedProposal("pid" + i, null, 1L, 2L, ProposalState.PENDING);
             p.setWalletAddress("0xw" + i);
             p.setPath("/p" + i);
             p.setContentType("page");
@@ -207,7 +207,8 @@ public class ReplicatedCommandRoundTripTest {
             big.append("chunk \"").append(big.length()).append("\" \uD83D\uDE00 ");
         }
         String message = big.toString();
-        AeronEncodedMessage encoded = writes.buildWriteProposal("0xw", "/p", "page", message, "sig", 7, null, "pid");
+        AeronEncodedMessage encoded = writes.buildWriteProposal("0xw", "/p", "page", message, "sig", 7, null,
+            MutationAuditMetadata.write(null, null, "pid", null, null, null, null));
         assertTrue(encoded.totalLength > 0xFFFF);
 
         List<String> calls = new ArrayList<>();
@@ -245,7 +246,7 @@ public class ReplicatedCommandRoundTripTest {
     }
 
     static QueuedProposal batchItem(String proposalId, String path, QueuedProposal.ProposalType type) {
-        QueuedProposal p = new QueuedProposal(proposalId, null, null, 1L, 2L, ProposalState.PENDING);
+        QueuedProposal p = new QueuedProposal(proposalId, null, 1L, 2L, ProposalState.PENDING);
         p.setType(type);
         p.setWalletAddress("0xw");
         p.setPath(path);

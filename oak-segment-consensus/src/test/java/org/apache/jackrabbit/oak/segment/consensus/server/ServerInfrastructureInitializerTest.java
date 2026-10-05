@@ -93,12 +93,12 @@ public class ServerInfrastructureInitializerTest {
             fixture.factory
         );
 
-        assertSame(fixture.blobStore, result.getBlobStore());
-        assertSame(fixture.fileStore, result.getFileStore());
-        assertSame(fixture.nodeStore, result.getNodeStore());
-        assertSame(fixture.httpServer, result.getHttpServer());
-        assertSame(fixture.gcCostEstimator, result.getGcCostEstimator());
-        assertEquals("ipfs", result.getBlobStoreType());
+        assertSame(fixture.blobStore, result.blobStore());
+        assertSame(fixture.fileStore, result.fileStore());
+        assertSame(fixture.nodeStore, result.nodeStore());
+        assertSame(fixture.httpServer, result.httpServer());
+        assertSame(fixture.gcCostEstimator, result.gcCostEstimator());
+        assertEquals("ipfs", result.blobStoreType());
         assertEquals("http://validator-0:8090", fixture.context.selfUrl);
         assertSame(fixture.blobStore, fixture.context.blobStore);
         assertEquals("ipfs", fixture.context.blobStoreType);
@@ -131,7 +131,7 @@ public class ServerInfrastructureInitializerTest {
             fixture.factory
         );
 
-        assertSame(fixture.httpServer, result.getHttpServer());
+        assertSame(fixture.httpServer, result.httpServer());
         assertNull(fixture.context.cidMappingService);
         assertSame(fixture.gcProposalManager, fixture.context.gcProposalManager);
     }
@@ -151,7 +151,7 @@ public class ServerInfrastructureInitializerTest {
             fixture.factory
         );
 
-        assertNull(result.getGcCostEstimator());
+        assertNull(result.gcCostEstimator());
         assertNull(fixture.context.gcCostEstimator);
         verify(fixture.factory, never()).createGCCostEstimator(any(), any(), any());
     }
@@ -173,7 +173,7 @@ public class ServerInfrastructureInitializerTest {
             fixture.factory
         );
 
-        assertSame(fixture.httpServer, result.getHttpServer());
+        assertSame(fixture.httpServer, result.httpServer());
         assertNull(fixture.context.gcProposalManager);
         assertNull(fixture.context.gcAccountManager);
         assertNull(fixture.context.periodicGCJob);
@@ -200,7 +200,7 @@ public class ServerInfrastructureInitializerTest {
         when(factory.createIpfsBlobStore(anyString(), eq(tempFolder.getRoot()))).thenReturn(blobStore);
         storageFactory.when(() -> StorageBackendFactory.createStorageRuntime(eq(tempFolder.getRoot()), eq(blobStore),
             any(org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig.class)))
-            .thenReturn(new ServerStorageRuntime(fileStore, nodeStore));
+            .thenReturn(new ServerStorageRuntime(fileStore, nodeStore, nodeStore, null));
         when(factory.extractTarFiles(fileStore)).thenReturn(tarFiles);
         when(factory.createGCCostEstimator(eq(fileStore), eq(tarFiles), any(BigDecimal.class))).thenReturn(gcCostEstimator);
         when(factory.createHttpServer(tempFolder.getRoot(), 8090, fileStore, nodeStore)).thenReturn(httpServer);
@@ -208,9 +208,6 @@ public class ServerInfrastructureInitializerTest {
             mock(org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService.class)
         );
         when(factory.createFragmentationTracker()).thenReturn(fragmentationTracker);
-        when(factory.createWalletStorageMetrics(fileStore)).thenReturn(
-            mock(org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.class)
-        );
         when(factory.createGCProposalManager(any(), any(), any(), any(), anyInt(), any(), any())).thenReturn(gcProposalManager);
         when(factory.createGCAccountManager()).thenReturn(gcAccountManager);
         when(factory.createPeriodicGCJob(gcAccountManager)).thenReturn(periodicGCJob);

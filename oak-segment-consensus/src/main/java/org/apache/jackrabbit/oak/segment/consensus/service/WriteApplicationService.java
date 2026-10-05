@@ -18,7 +18,6 @@ package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import org.agrona.concurrent.AgentTerminationException;
 import org.apache.jackrabbit.oak.api.Blob;
-import org.apache.jackrabbit.oak.api.CommitFailedException;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob;
@@ -28,8 +27,6 @@ import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisConte
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
-import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
-import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -39,7 +36,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -64,8 +60,6 @@ import java.util.function.Supplier;
  *   <li>Store IPFS CIDs (ADR 016)</li>
  *   <li>Handle intent tokens for lazy uploads (ADR 020)</li>
  * </ul>
- * 
- * @see org.apache.jackrabbit.oak.segment.consensus.validation.ContentWriteProposal
  */
 public class WriteApplicationService {
     
@@ -208,12 +202,12 @@ public class WriteApplicationService {
             CanonicalGenesisContent.requireMutable(walletAddress, path);
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
                      walletAddress, path, intentToken, blobId, ipfsCid);
-            NodeStore nodeStore = requireNodeStore();
+            NodeStore nodeStore = MutationApplySupport.requireNodeStore(nodeStoreSupplier);
             BlobStore blobStore = blobStoreSupplier.get();
             
             // Get current HEAD for logging
             String previousHead = fileStore.getHead().getRecordId().toString();
-            log.debug("📍 Previous HEAD: {}", truncate(previousHead, 20));
+            log.debug("📍 Previous HEAD: {}", MutationApplySupport.truncate(previousHead, 20));
             
             // Validate path format
             String[] pathParts = path.split("/");
@@ -293,21 +287,9 @@ public class WriteApplicationService {
             }
             
             // Commit (deterministic on all nodes)
-            CommitInfo commitInfo = new CommitInfo(
-                "aeron-replication", 
-                null, 
-                Collections.singletonMap("replicated", "true")
-            );
-            
-            if (auditMetadata != null && auditMetadata.getAppliedLogPosition() != null) {
-                auditMetadata.getAppliedLogPosition().writeTo(rootBuilder);
-            }
-            try {
-                nodeStore.merge(rootBuilder, EmptyHook.INSTANCE, commitInfo);
-            } catch (CommitFailedException e) {
-                throw new RuntimeException("Failed to commit write", e);
-            }
-            flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+            MutationApplySupport.mergeReplicated(
+                nodeStore, rootBuilder, "aeron-replication", auditMetadata, "Failed to commit write");
+            flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
             
             // Track fragmentation
             if (fragmentationCallback != null) {
@@ -316,7 +298,7 @@ public class WriteApplicationService {
             
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
-            log.debug("✅ Write applied, HEAD: {}...", truncate(newHead, 20));
+            log.debug("✅ Write applied, HEAD: {}...", MutationApplySupport.truncate(newHead, 20));
             
             // Update HEAD cache
             if (headUpdateCallback != null) {
@@ -325,7 +307,7 @@ public class WriteApplicationService {
             
             // Emit SSE event
             if (sseEventCallback != null) {
-                String extractedOrg = extractOrganizationFromPath(path);
+                String extractedOrg = MutationApplySupport.extractOrganizationFromPath(path);
                 if (blobId != null && !blobId.isEmpty()) {
                     String eventCid = resolveIpfsCid(blobId, ipfsCid, path);
                     sseEventCallback.emitBinaryUpload(path, walletAddress, extractedOrg, message, eventCid, mimeType);
@@ -343,20 +325,8 @@ public class WriteApplicationService {
             if (durabilityCallback != null && proposalId != null && !proposalId.isEmpty()) {
                 durabilityCallback.onFailure(proposalId, e.getMessage());
             }
-            log.error("❌ Failed to apply replicated write", e);
-            if (e instanceof MutationRejectedException) {
-                throw new MutationRejectedException("Failed to apply replicated write", e);
-            }
-            throw new RuntimeException("Failed to apply replicated write", e);
+            throw MutationApplySupport.applyFailure(log, "write", e);
         }
-    }
-
-    private Runnable buildDurabilityCallback(String proposalId) {
-        if (durabilityCallback == null || proposalId == null || proposalId.isEmpty()) {
-            return null;
-        }
-        String appliedHead = fileStore.getHead().getRecordId().toString10();
-        return () -> durabilityCallback.onDurable(proposalId, appliedHead);
     }
 
     private boolean isDuplicateProposalReplay(NodeBuilder contentNode,
@@ -376,7 +346,7 @@ public class WriteApplicationService {
      */
     @NotNull
     private String acknowledgeDuplicateReplay(@Nullable String proposalId) {
-        flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+        flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
         String currentHead = fileStore.getHead().getRecordId().toString10();
         if (headUpdateCallback != null) {
             headUpdateCallback.updateHead(currentHead);
@@ -417,7 +387,7 @@ public class WriteApplicationService {
         normalizeCanonicalPayload(contentNode, message);
         
         // ADR 037: Extract and store organization from path
-        String extractedOrg = extractOrganizationFromPath(path);
+        String extractedOrg = MutationApplySupport.extractOrganizationFromPath(path);
         if (extractedOrg != null && !extractedOrg.isEmpty()) {
             contentNode.setProperty("organization", extractedOrg);
             log.debug("🏢 Stored organization property: {}", extractedOrg);
@@ -516,15 +486,6 @@ public class WriteApplicationService {
         }
     }
     
-    @NotNull
-    private NodeStore requireNodeStore() {
-        NodeStore nodeStore = nodeStoreSupplier.get();
-        if (nodeStore == null) {
-            throw new IllegalStateException("NodeStore supplier returned null");
-        }
-        return nodeStore;
-    }
-    
     /**
      * Enrich wallet node with metadata.
      */
@@ -569,33 +530,6 @@ public class WriteApplicationService {
     }
     
     /**
-     * Extract organization from path (ADR 037).
-     * 
-     * <p>Path format: /oak-chain/XX/YY/ZZ/0xWALLET/{organization}/content/{contentId}
-     */
-    @Nullable
-    public String extractOrganizationFromPath(@Nullable String path) {
-        if (path == null || path.isEmpty()) {
-            return null;
-        }
-        
-        String[] parts = path.split("/");
-        // Path: ["", "oak-chain", "XX", "YY", "ZZ", "0xWALLET", "Organization", "content", "contentId"]
-        // Index:  0       1         2     3     4        5            6            7          8
-        
-        if (parts.length < 8) {
-            return null;
-        }
-        
-        String potentialOrg = parts[6];
-        if (!"content".equals(potentialOrg) && !potentialOrg.startsWith("0x")) {
-            return potentialOrg;
-        }
-        
-        return null;
-    }
-    
-    /**
      * Resolve IPFS CID from various sources.
      */
     @Nullable
@@ -616,7 +550,7 @@ public class WriteApplicationService {
         
         // Try reading from node
         try {
-            NodeState current = requireNodeStore().getRoot();
+            NodeState current = MutationApplySupport.requireNodeStore(nodeStoreSupplier).getRoot();
             for (String part : path.substring(1).split("/")) {
                 if (!part.isEmpty() && current.hasChildNode(part)) {
                     current = current.getChildNode(part);
@@ -633,15 +567,6 @@ public class WriteApplicationService {
         }
         
         return null;
-    }
-    
-    /**
-     * Truncate string for logging.
-     */
-    private static String truncate(String value, int maxLength) {
-        if (value == null) return "null";
-        if (value.length() <= maxLength) return value;
-        return value.substring(0, maxLength) + "...";
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -23,8 +23,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.math.BigInteger;
-
 import static org.junit.Assert.*;
 
 /**
@@ -55,43 +53,6 @@ public class EvmBridgeTest {
         assertEquals("Contract address should match", 
                 "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0", 
                 bridge.getContractAddress());
-        assertTrue("Bridge should be running", bridge.isRunning());
-    }
-    
-    @Test
-    public void testCalculatePayment() {
-        // Test basic write with 1 segment, 1KB, 0 blobs
-        String cost1 = bridge.calculateRequiredPayment(1, 1024, 0);
-        assertNotNull("Cost should not be null", cost1);
-        
-        BigInteger amount1 = new BigInteger(cost1);
-        assertTrue("Cost should be positive", amount1.compareTo(BigInteger.ZERO) > 0);
-        
-        // Test larger write with more segments
-        String cost2 = bridge.calculateRequiredPayment(10, 10240, 5);
-        BigInteger amount2 = new BigInteger(cost2);
-        
-        // Larger write should cost more
-        assertTrue("Larger write should cost more", amount2.compareTo(amount1) > 0);
-    }
-    
-    @Test
-    public void testPaymentCalculationFormula() {
-        // Base fee: 0.001 ETH = 1,000,000,000,000,000 wei
-        // Segment fee: 0.0001 ETH = 100,000,000,000,000 wei per segment
-        // Storage fee: 0.00001 ETH = 10,000,000,000,000 wei per KB
-        // Blob fee: 0.00005 ETH = 50,000,000,000,000 wei per blob
-        
-        // Test: 5 segments, 10KB, 2 blobs
-        // Expected: 1000000000000000 + (5 * 100000000000000) + (10 * 10000000000000) + (2 * 50000000000000)
-        //         = 1000000000000000 + 500000000000000 + 100000000000000 + 100000000000000
-        //         = 1700000000000000 wei
-        
-        String cost = bridge.calculateRequiredPayment(5, 10 * 1024, 2);
-        BigInteger amount = new BigInteger(cost);
-        BigInteger expected = new BigInteger("1700000000000000");
-        
-        assertEquals("Cost should match expected formula", expected, amount);
     }
     
     @Test
@@ -188,49 +149,6 @@ public class EvmBridgeTest {
     }
     
     @Test
-    public void testWalletMapping() {
-        String ethAddress = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0";
-        String walletUuid = "550e8400-e29b-41d4-a716-446655440000";
-        
-        // Initially no mapping
-        String result1 = bridge.getWalletUuidForAddress(ethAddress);
-        assertNull("Should have no mapping initially", result1);
-        
-        // Register mapping
-        bridge.registerWallet(ethAddress, walletUuid);
-        
-        // Verify mapping
-        String result2 = bridge.getWalletUuidForAddress(ethAddress);
-        assertNotNull("Should find mapping", result2);
-        assertEquals("Wallet UUID should match", walletUuid, result2);
-    }
-    
-    @Test
-    public void testWalletMappingCaseInsensitive() {
-        String ethAddress = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0";
-        String walletUuid = "wallet-uuid-123";
-        
-        bridge.registerWallet(ethAddress, walletUuid);
-        
-        // Should work with different case
-        String result = bridge.getWalletUuidForAddress("0x742D35CC6634C0532925A3B844BC9E7595F0BEB0");
-        assertNotNull("Should find mapping with different case", result);
-        assertEquals("Wallet UUID should match", walletUuid, result);
-    }
-    
-    @Test
-    public void testBlockProgression() {
-        long initialBlock = bridge.getCurrentBlockNumber();
-        
-        bridge.advanceBlock();
-        assertEquals("Block should advance by 1", initialBlock + 1, bridge.getCurrentBlockNumber());
-        
-        bridge.advanceBlock();
-        bridge.advanceBlock();
-        assertEquals("Block should advance by 3 total", initialBlock + 3, bridge.getCurrentBlockNumber());
-    }
-    
-    @Test
     public void testMultiplePayments() {
         // Simulate multiple payments
         for (int i = 0; i < 10; i++) {
@@ -279,18 +197,6 @@ public class EvmBridgeTest {
         assertEquals("Payment token should default to UNKNOWN", PaymentProof.PaymentToken.UNKNOWN, payment.getPaymentToken());
         assertEquals("Capability flags should default to zero", 0, payment.getCapabilityFlags());
         assertEquals("Confirmations should match", 20, payment.getConfirmations());
-    }
-    
-    @Test
-    public void testBridgeLifecycle() {
-        SimpleEvmBridge newBridge = new SimpleEvmBridge();
-        assertFalse("Bridge should not be running initially", newBridge.isRunning());
-        
-        newBridge.start();
-        assertTrue("Bridge should be running after start", newBridge.isRunning());
-        
-        newBridge.stop();
-        assertFalse("Bridge should not be running after stop", newBridge.isRunning());
     }
 
     @Test

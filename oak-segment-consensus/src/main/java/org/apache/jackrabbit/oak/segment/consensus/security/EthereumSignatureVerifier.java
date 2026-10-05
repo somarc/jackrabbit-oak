@@ -22,9 +22,9 @@ import org.slf4j.LoggerFactory;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.security.Security;
 import java.util.Arrays;
+import java.util.HexFormat;
 
 /**
  * Ethereum signature verifier for MetaMask personal_sign signatures.
@@ -111,9 +111,13 @@ public class EthereumSignatureVerifier {
                 log.warn("❌ Invalid signature length: {} (expected 130 hex chars)", normalizedSig.length());
                 return false;
             }
+            if (!normalizedSig.chars().allMatch(c -> Character.digit(c, 16) >= 0)) {
+                log.warn("❌ Invalid signature: not hex");
+                return false;
+            }
             
             // Parse signature components (r, s, v)
-            byte[] signatureBytes = hexToBytes(normalizedSig);
+            byte[] signatureBytes = HexFormat.of().parseHex(normalizedSig);
             byte[] r = Arrays.copyOfRange(signatureBytes, 0, 32);
             byte[] s = Arrays.copyOfRange(signatureBytes, 32, 64);
             int v = signatureBytes[64] & 0xFF;
@@ -284,7 +288,7 @@ public class EthereumSignatureVerifier {
         byte[] hash = keccak256(publicKey);
         // Take last 20 bytes
         byte[] addressBytes = Arrays.copyOfRange(hash, 12, 32);
-        return bytesToHex(addressBytes);
+        return HexFormat.of().formatHex(addressBytes);
     }
     
     /**
@@ -323,27 +327,5 @@ public class EthereumSignatureVerifier {
      */
     public static String getAvailabilityReason() {
         return availabilityReason != null ? availabilityReason : "Bouncy Castle provider is available";
-    }
-    
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Hex Utilities
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    private static String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
-        return sb.toString();
-    }
-    
-    private static byte[] hexToBytes(String hex) {
-        int len = hex.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
-                                 + Character.digit(hex.charAt(i+1), 16));
-        }
-        return data;
     }
 }

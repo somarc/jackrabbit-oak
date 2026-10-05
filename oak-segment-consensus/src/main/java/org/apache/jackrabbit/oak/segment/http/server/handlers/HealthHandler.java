@@ -30,7 +30,6 @@ import org.slf4j.LoggerFactory;
 
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,9 +45,6 @@ import java.util.Map;
  */
 public class HealthHandler {
     private static final Logger log = LoggerFactory.getLogger(HealthHandler.class);
-    private static final long OPS_HEALTH_SNAPSHOT_TTL_MS = 1000L;
-    private static final long OPS_RUNTIME_SNAPSHOT_TTL_MS = 1000L;
-    private static final long OPS_STORAGE_SNAPSHOT_TTL_MS = 5000L;
     
     private final FileStore fileStore;
     private final NodeStore nodeStore;
@@ -56,21 +52,14 @@ public class HealthHandler {
     private final ServerContext context;
     private final Map<String, ?> registeredClients;
     private final Map<String, ?> registeredValidators;
-    private final Object opsHealthSnapshotLock = new Object();
-    private final Object opsRuntimeSnapshotLock = new Object();
-    private final Object opsStorageSnapshotLock = new Object();
-    private volatile Map<String, Object> cachedOpsHealthSnapshotData;
-    private volatile long cachedOpsHealthSnapshotSourceTimestampMs;
-    private volatile Map<String, Object> cachedOpsRuntimeSnapshotData;
-    private volatile long cachedOpsRuntimeSnapshotSourceTimestampMs;
-    private volatile Map<String, Object> cachedOpsStorageSnapshotData;
-    private volatile long cachedOpsStorageSnapshotSourceTimestampMs;
+    private final OpsSnapshotCache opsHealthSnapshot = new OpsSnapshotCache(1000L, log);
+    private final OpsSnapshotCache opsRuntimeSnapshot = new OpsSnapshotCache(1000L, log);
+    private final OpsSnapshotCache opsStorageSnapshot = new OpsSnapshotCache(5000L, log);
     
     public HealthHandler(
             FileStore fileStore,
             NodeStore nodeStore,
             Path storeDirectory,
-            AeronConsensusEngine aeronConsensusEngine,
             Map<String, ?> registeredClients,
             Map<String, ?> registeredValidators,
             ServerContext context) {
@@ -128,23 +117,7 @@ public class HealthHandler {
             payload.put("currentRole", context.aeronConsensusEngine.getCurrentRole().name());
             payload.put("internalIngressClient", context.aeronConsensusEngine.getInternalIngressClientDiagnostics());
 
-            String committedHead = context.aeronConsensusEngine.getCommittedHead();
-            String latestHead = context.aeronConsensusEngine.getLatestHead();
-            int latestEpochSeen = context.aeronConsensusEngine.getLatestEpochSeen();
-            int committedEpoch = context.aeronConsensusEngine.getLastCommittedEpoch();
-
-            if (committedHead != null && !committedHead.isEmpty()) {
-                payload.put("committedHead", committedHead);
-            }
-            if (latestHead != null && !latestHead.isEmpty()) {
-                payload.put("latestHead", latestHead);
-            }
-            if (latestEpochSeen >= 0) {
-                payload.put("latestEpochSeen", latestEpochSeen);
-            }
-            if (committedEpoch >= 0) {
-                payload.put("committedEpoch", committedEpoch);
-            }
+            putHeadState(payload, context.aeronConsensusEngine);
         }
 
         payload.put("sharding", buildShardingPayload());
@@ -200,18 +173,7 @@ public class HealthHandler {
                 fileStoreHealth.put("head", headId.substring(0, Math.min(16, headId.length())) + "...");
                 AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
                 if (aeronEngine != null) {
-                    if (aeronEngine.getCommittedHead() != null && !aeronEngine.getCommittedHead().isEmpty()) {
-                        fileStoreHealth.put("committedHead", aeronEngine.getCommittedHead());
-                    }
-                    if (aeronEngine.getLatestHead() != null && !aeronEngine.getLatestHead().isEmpty()) {
-                        fileStoreHealth.put("latestHead", aeronEngine.getLatestHead());
-                    }
-                    if (aeronEngine.getLatestEpochSeen() >= 0) {
-                        fileStoreHealth.put("latestEpochSeen", aeronEngine.getLatestEpochSeen());
-                    }
-                    if (aeronEngine.getLastCommittedEpoch() >= 0) {
-                        fileStoreHealth.put("committedEpoch", aeronEngine.getLastCommittedEpoch());
-                    }
+                    putHeadState(fileStoreHealth, aeronEngine);
                 }
             } else {
                 fileStoreHealth.put("status", "DOWN");
@@ -255,21 +217,8 @@ public class HealthHandler {
         }
         payload.put("cluster", cluster);
 
-        Map<String, Object> nodeStoreHealth = new HashMap<>();
-        try {
-            if (nodeStore != null) {
-                nodeStoreHealth.put("status", "UP");
-                nodeStoreHealth.put("rootExists", nodeStore.getRoot() != null);
-            } else {
-                nodeStoreHealth.put("status", "DOWN");
-                nodeStoreHealth.put("error", "NodeStore not initialized");
-                allHealthy = false;
-            }
-        } catch (Exception e) {
-            nodeStoreHealth.put("status", "DOWN");
-            nodeStoreHealth.put("error", e.getMessage());
-            allHealthy = false;
-        }
+        Map<String, Object> nodeStoreHealth = buildNodeStorePayload(new HashMap<>());
+        allHealthy &= "UP".equals(nodeStoreHealth.get("status"));
         payload.put("nodeStore", nodeStoreHealth);
 
         Map<String, Object> diskSpace = new HashMap<>();
@@ -362,29 +311,7 @@ public class HealthHandler {
         clients.put("registeredValidators", registeredValidators.size());
         payload.put("clients", clients);
 
-        Map<String, Object> blobStore = new HashMap<>();
-        if (context != null && context.blobStoreType != null) {
-            String blobStoreType = context.blobStoreType;
-            blobStore.put("type", blobStoreType);
-            if (context.blobStore != null) {
-                blobStore.put("status", "UP");
-                if ("ipfs".equalsIgnoreCase(blobStoreType)) {
-                    blobStore.put("cidMappingAvailable", context.cidMappingService != null);
-                    blobStore.put("ipfsGateway", IpfsGatewayUrls.gatewayBase());
-                    blobStore.put("ipfsLocalGateway", IpfsGatewayUrls.localGatewayBase());
-                } else {
-                    blobStore.put("note", blobStoreType + " storage configured");
-                }
-            } else {
-                blobStore.put("status", "DEGRADED");
-                blobStore.put("error", "BlobStore not initialized");
-            }
-        } else {
-            blobStore.put("type", "default");
-            blobStore.put("status", "UP");
-            blobStore.put("note", "FileDataStore (embedded)");
-        }
-        payload.put("blobStore", blobStore);
+        payload.put("blobStore", buildBlobStorePayload(new HashMap<>()));
         payload.put("sharding", buildShardingPayload());
 
         Map<String, Object> overall = new HashMap<>();
@@ -394,8 +321,7 @@ public class HealthHandler {
         payload.put("timestamp", System.currentTimeMillis());
         payload.put("success", allHealthy);
 
-        response.setStatus(allHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-        response.getWriter().write(JsonOutputUtil.toJson(payload));
+        JsonOutputUtil.write(response, allHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE, payload);
     }
     
     /**
@@ -445,56 +371,10 @@ public class HealthHandler {
      */
     public void handleGetOpsHealthSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (opsHealthSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedOpsHealthSnapshotData != null
-                    && cachedOpsHealthSnapshotSourceTimestampMs > 0
-                    && (now - cachedOpsHealthSnapshotSourceTimestampMs) <= OPS_HEALTH_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedOpsHealthSnapshotData;
-                    sourceTimestampMs = cachedOpsHealthSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = buildOpsHealthData();
-                    sourceTimestampMs = now;
-                    cachedOpsHealthSnapshotData = data;
-                    cachedOpsHealthSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
-            }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsEnvelope(
-                "ops.v1", OPS_HEALTH_SNAPSHOT_TTL_MS, data, sourceTimestampMs, servedAtMs, stalenessMs, false, null, fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops health snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedOpsHealthSnapshotData != null && cachedOpsHealthSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedOpsHealthSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsEnvelope(
-                    "ops.v1",
-                    OPS_HEALTH_SNAPSHOT_TTL_MS,
-                    cachedOpsHealthSnapshotData,
-                    cachedOpsHealthSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-
+        opsHealthSnapshot.serve(response, "ops.v1", false, "health", this::buildOpsHealthData, e -> {
             response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
             response.getWriter().write(buildUnavailableOpsPayload("ops.v1"));
-        }
+        });
     }
 
     /**
@@ -503,64 +383,10 @@ public class HealthHandler {
      */
     public void handleGetOpsRuntimeSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (opsRuntimeSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedOpsRuntimeSnapshotData != null
-                    && cachedOpsRuntimeSnapshotSourceTimestampMs > 0
-                    && (now - cachedOpsRuntimeSnapshotSourceTimestampMs) <= OPS_RUNTIME_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedOpsRuntimeSnapshotData;
-                    sourceTimestampMs = cachedOpsRuntimeSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = buildOpsRuntimeData();
-                    sourceTimestampMs = now;
-                    cachedOpsRuntimeSnapshotData = data;
-                    cachedOpsRuntimeSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
-            }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsEnvelope(
-                "ops.runtime.v1",
-                OPS_RUNTIME_SNAPSHOT_TTL_MS,
-                data,
-                sourceTimestampMs,
-                servedAtMs,
-                stalenessMs,
-                false,
-                null,
-                fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops runtime snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedOpsRuntimeSnapshotData != null && cachedOpsRuntimeSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedOpsRuntimeSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsEnvelope(
-                    "ops.runtime.v1",
-                    OPS_RUNTIME_SNAPSHOT_TTL_MS,
-                    cachedOpsRuntimeSnapshotData,
-                    cachedOpsRuntimeSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-
+        opsRuntimeSnapshot.serve(response, "ops.runtime.v1", false, "runtime", this::buildOpsRuntimeData, e -> {
             response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
             response.getWriter().write(buildUnavailableOpsPayload("ops.runtime.v1"));
-        }
+        });
     }
 
     /**
@@ -569,64 +395,10 @@ public class HealthHandler {
      */
     public void handleGetOpsStorageSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (opsStorageSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedOpsStorageSnapshotData != null
-                    && cachedOpsStorageSnapshotSourceTimestampMs > 0
-                    && (now - cachedOpsStorageSnapshotSourceTimestampMs) <= OPS_STORAGE_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedOpsStorageSnapshotData;
-                    sourceTimestampMs = cachedOpsStorageSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = buildOpsStorageData();
-                    sourceTimestampMs = now;
-                    cachedOpsStorageSnapshotData = data;
-                    cachedOpsStorageSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
-            }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsEnvelope(
-                "ops.storage.v1",
-                OPS_STORAGE_SNAPSHOT_TTL_MS,
-                data,
-                sourceTimestampMs,
-                servedAtMs,
-                stalenessMs,
-                false,
-                null,
-                fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops storage snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedOpsStorageSnapshotData != null && cachedOpsStorageSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedOpsStorageSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsEnvelope(
-                    "ops.storage.v1",
-                    OPS_STORAGE_SNAPSHOT_TTL_MS,
-                    cachedOpsStorageSnapshotData,
-                    cachedOpsStorageSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-
+        opsStorageSnapshot.serve(response, "ops.storage.v1", false, "storage", this::buildOpsStorageData, e -> {
             response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
             response.getWriter().write(buildUnavailableOpsPayload("ops.storage.v1"));
-        }
+        });
     }
 
     private Map<String, Object> buildOpsHealthData() {
@@ -684,14 +456,15 @@ public class HealthHandler {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("storePath", storeDirectory != null ? storeDirectory.toString() : null);
         payload.put("fileStore", buildFileStorePayload());
-        payload.put("nodeStore", buildNodeStorePayload());
+        payload.put("nodeStore", buildNodeStorePayload(new LinkedHashMap<>()));
         payload.put("diskSpace", buildDiskSpacePayload());
-        payload.put("blobStore", buildBlobStorePayload());
+        payload.put("blobStore", buildBlobStorePayload(new LinkedHashMap<>()));
         List<Map<String, Object>> tarFiles = buildTarEntries();
         payload.put("tarFiles", tarFiles);
         payload.put("tarFileCount", tarFiles.size());
-        payload.put("totalTarSizeBytes", totalTarSizeBytes(tarFiles));
-        payload.put("totalTarSizeFormatted", FormatUtils.formatBytes(totalTarSizeBytes(tarFiles)));
+        long totalTarSize = totalTarSizeBytes(tarFiles);
+        payload.put("totalTarSizeBytes", totalTarSize);
+        payload.put("totalTarSizeFormatted", FormatUtils.formatBytes(totalTarSize));
         payload.put("sharding", buildShardingPayload());
         return payload;
     }
@@ -789,79 +562,29 @@ public class HealthHandler {
     }
 
     private Map<String, Object> buildMetricsPayload() {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("consensus", buildConsensusMetricsPayload());
-        payload.put("replication", buildReplicationMetricsPayload());
-
-        Map<String, Object> validator = new LinkedHashMap<>();
-        validator.put("registeredClients", registeredClients != null ? registeredClients.size() : 0);
-        validator.put("registeredValidators", registeredValidators != null ? registeredValidators.size() : 0);
-        validator.put("storePath", storeDirectory != null ? storeDirectory.toString() : "");
-        payload.put("validator", validator);
-        payload.put("ipfsPolicy", buildIpfsPolicyPayload());
-        return payload;
+        return MetricsHandler.buildMetricsPayload(
+            context != null ? context.aeronConsensusEngine : null,
+            context, registeredClients, registeredValidators, storeDirectory);
     }
 
-    private Map<String, Object> buildConsensusMetricsPayload() {
-        if (context == null || context.aeronConsensusEngine == null) {
-            return null;
+    /** Adds the finality-aware head fields that are set, in the order clients have always seen them. */
+    private static void putHeadState(Map<String, Object> target, AeronConsensusEngine engine) {
+        String committedHead = engine.getCommittedHead();
+        String latestHead = engine.getLatestHead();
+        int latestEpochSeen = engine.getLatestEpochSeen();
+        int committedEpoch = engine.getLastCommittedEpoch();
+        if (committedHead != null && !committedHead.isEmpty()) {
+            target.put("committedHead", committedHead);
         }
-
-        AeronConsensusEngine aeronEngine = context.aeronConsensusEngine;
-        Map<String, Object> consensus = new LinkedHashMap<>();
-        consensus.put("role", aeronEngine.getCurrentRole().name());
-        consensus.put("isLeader", aeronEngine.isLeader());
-        consensus.put("currentEpoch", aeronEngine.getCurrentEpoch());
-        consensus.put("currentTerm", aeronEngine.getCurrentTerm());
-        consensus.put("reachableValidators", aeronEngine.getReachableValidatorCount());
-        consensus.put("totalMembers", aeronEngine.getTotalMemberCount());
-        consensus.put("quorumSize", aeronEngine.getQuorumSize());
-        consensus.put("heartbeatAgeMs", aeronEngine.getHeartbeatAgeMs());
-        consensus.put("healthy", aeronEngine.isClusterHealthy());
-        if (aeronEngine.getUnhealthyReason() != null) {
-            consensus.put("unhealthyReason", aeronEngine.getUnhealthyReason());
+        if (latestHead != null && !latestHead.isEmpty()) {
+            target.put("latestHead", latestHead);
         }
-        return consensus;
-    }
-
-    private Map<String, Object> buildReplicationMetricsPayload() {
-        if (context == null || context.aeronConsensusEngine == null) {
-            return null;
+        if (latestEpochSeen >= 0) {
+            target.put("latestEpochSeen", latestEpochSeen);
         }
-
-        Map<String, Object> status = context.aeronConsensusEngine.getReplicationLagStatus();
-        if (status == null) {
-            return null;
+        if (committedEpoch >= 0) {
+            target.put("committedEpoch", committedEpoch);
         }
-
-        Map<String, Object> replication = new LinkedHashMap<>();
-        replication.put("role", status.get("role"));
-        replication.put("myLogPosition", status.get("myLogPosition"));
-        replication.put("leaderLogPosition", status.get("leaderLogPosition"));
-        replication.put("replicationLag", status.get("replicationLag"));
-        replication.put("lagThreshold", status.get("lagThreshold"));
-        replication.put("measurementAvailable", status.get("measurementAvailable"));
-        replication.put("measurementAgeMs", status.get("measurementAgeMs"));
-        replication.put("healthStatus", status.get("healthStatus"));
-        replication.put("healthy", status.get("healthy"));
-        if (status.get("reason") != null) {
-            replication.put("reason", status.get("reason"));
-        }
-        return replication;
-    }
-
-    private Map<String, Object> buildIpfsPolicyPayload() {
-        if (context == null) {
-            return null;
-        }
-
-        Map<String, Object> policy = new LinkedHashMap<>();
-        policy.put("rejectedAmbiguousSource", context.apiIpfsPolicyRejectAmbiguousSource.get());
-        policy.put("rejectedNonEnterpriseCid", context.apiIpfsPolicyRejectNonEnterpriseCid.get());
-        policy.put("rejectedUnknownCid", context.apiIpfsPolicyRejectUnknownCid.get());
-        policy.put("rejectedCidServiceUnavailable", context.apiIpfsPolicyRejectCidServiceUnavailable.get());
-        policy.put("acceptedEnterpriseCid", context.apiIpfsPolicyAcceptedEnterpriseCid.get());
-        return policy;
     }
 
     private Map<String, Object> buildFileStorePayload() {
@@ -889,8 +612,7 @@ public class HealthHandler {
         return payload;
     }
 
-    private Map<String, Object> buildNodeStorePayload() {
-        Map<String, Object> payload = new LinkedHashMap<>();
+    private Map<String, Object> buildNodeStorePayload(Map<String, Object> payload) {
         try {
             if (nodeStore == null) {
                 payload.put("status", "DOWN");
@@ -927,8 +649,7 @@ public class HealthHandler {
         return diskSpace;
     }
 
-    private Map<String, Object> buildBlobStorePayload() {
-        Map<String, Object> blobStore = new LinkedHashMap<>();
+    private Map<String, Object> buildBlobStorePayload(Map<String, Object> blobStore) {
         if (context != null && context.blobStoreType != null) {
             String blobStoreType = context.blobStoreType;
             blobStore.put("type", blobStoreType);
@@ -960,39 +681,7 @@ public class HealthHandler {
         }
 
         try {
-            int totalSegments = 0;
-            Path journalPath = storeDirectory.resolve("journal.log");
-            if (Files.exists(journalPath)) {
-                totalSegments = Files.readAllLines(journalPath).size();
-            }
-
-            List<Path> tarFiles = new ArrayList<>();
-            long totalSize = 0L;
-            try (java.util.stream.Stream<Path> paths = Files.list(storeDirectory)) {
-                tarFiles = paths
-                    .filter(p -> p.toString().endsWith(".tar"))
-                    .sorted(java.util.Comparator.comparing(Path::toString))
-                    .collect(java.util.stream.Collectors.toList());
-                for (Path tarFile : tarFiles) {
-                    totalSize += Files.size(tarFile);
-                }
-            }
-
-            for (Path tarFile : tarFiles) {
-                long fileSize = Files.size(tarFile);
-                BasicFileAttributes attrs = Files.readAttributes(tarFile, BasicFileAttributes.class);
-                int estimatedSegments = totalSize > 0 ? (int) ((fileSize * totalSegments) / totalSize) : 0;
-
-                Map<String, Object> entry = new LinkedHashMap<>();
-                entry.put("name", tarFile.getFileName().toString());
-                entry.put("size", fileSize);
-                entry.put("sizeFormatted", FormatUtils.formatBytes(fileSize));
-                entry.put("segmentCount", estimatedSegments);
-                entry.put("estimatedCount", true);
-                entry.put("created", attrs.creationTime().toString());
-                entry.put("modified", attrs.lastModifiedTime().toString());
-                tarEntries.add(entry);
-            }
+            ExplorerApiHandler.addTarEntries(storeDirectory, tarEntries);
         } catch (Exception e) {
             log.warn("Error building tar inventory snapshot: {}", e.getMessage());
         }
@@ -1029,30 +718,6 @@ public class HealthHandler {
             context.authoritativeNodeStore != null && context.authoritativeNodeStore != context.nodeStore
         );
         return sharding;
-    }
-
-    private String buildOpsEnvelope(String contractVersion,
-                                    long ttlMs,
-                                    Object data,
-                                    long sourceTimestampMs,
-                                    long servedAtMs,
-                                    long stalenessMs,
-                                    boolean degraded,
-                                    String degradedReason,
-                                    boolean cacheHit) {
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("contractVersion", contractVersion);
-        payload.put("sourceTimestampMs", sourceTimestampMs);
-        payload.put("servedAtMs", servedAtMs);
-        payload.put("stalenessMs", stalenessMs);
-        payload.put("degraded", degraded);
-        payload.put("degradedReason", degradedReason);
-        Map<String, Object> cache = new HashMap<>();
-        cache.put("hit", cacheHit);
-        cache.put("ttlMs", ttlMs);
-        payload.put("cache", cache);
-        payload.put("data", data);
-        return JsonOutputUtil.toJson(payload);
     }
 
     private String buildUnavailableOpsPayload(String contractVersion) {
