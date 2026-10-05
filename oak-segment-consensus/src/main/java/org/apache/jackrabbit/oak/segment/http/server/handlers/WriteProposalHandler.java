@@ -24,12 +24,10 @@ import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
-import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -194,16 +192,7 @@ public class WriteProposalHandler {
                 return;
             }
 
-            if (!ShardWriteAuthorityEnforcer.allowLocalWrite(
-                context,
-                normalizedWallet,
-                "/v1/propose-write",
-                response
-            )) {
-                return;
-            }
-
-            if (!LeaderWriteRedirectUtil.allowLeaderWrite(context, "/v1/propose-write", response)) {
+            if (!ProposalRequestSupport.allowShardAndLeader(context, normalizedWallet, "/v1/propose-write", response)) {
                 return;
             }
 
@@ -222,26 +211,11 @@ public class WriteProposalHandler {
                 log.debug("🏢 Organization: {} (wallet: {})", organization, normalizedWallet.substring(0, 10) + "...");
             }
 
-            // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
-            // This is the primary identifier - clientId is secondary
-            ClientRegistration clientReg = context.findClientRegistrationByWallet(normalizedWallet);
-            String clientId = clientReg != null ? clientReg.clientId : null;
-
-            // If not found by wallet, try clientId lookup (wallet address is preferred)
-            // Note: IP-based fallback has been removed - wallet address is required
-            if (clientReg == null) {
-                String clientIdHeader = request.getHeader("X-Client-Id");
-                if (clientIdHeader == null || clientIdHeader.isEmpty()) {
-                    clientIdHeader = request.getParameter("clientId");
-                }
-                // Only use explicit clientId header/param, not IP address
-                if (clientIdHeader != null && !clientIdHeader.isEmpty()) {
-                    clientReg = context.findClientRegistrationByClientId(clientIdHeader);
-                    if (clientReg != null) {
-                        clientId = clientIdHeader;
-                    }
-                }
-            }
+            // PATH ENFORCEMENT: wallet address is the primary identifier, clientId is secondary
+            ProposalRequestSupport.ClientLookup lookup =
+                ProposalRequestSupport.lookupClient(context, request, normalizedWallet);
+            ClientRegistration clientReg = lookup.registration;
+            String clientId = lookup.clientId;
 
             // TEMPORARY FOR TESTING REPLICATION: Auto-register any valid Ethereum address
             // This bypasses registration persistence issues so we can focus on testing replication
@@ -629,26 +603,17 @@ public class WriteProposalHandler {
             String proposalId;
             if (clientProposalId != null && !clientProposalId.trim().isEmpty()) {
                 proposalId = clientProposalId.trim();
-                if (!isValidClientProposalId(proposalId)) {
+                if (!ProposalRequestSupport.isValidProposalId(proposalId)) {
                     context.apiRejectedRequests.incrementAndGet();
                     ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
                         "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
                     return;
                 }
-                if (proposalId.startsWith("0X")) {
-                    proposalId = "0x" + proposalId.substring(2);
-                }
+                proposalId = ProposalRequestSupport.normalizeProposalId(proposalId);
             } else {
                 context.apiRejectedRequests.incrementAndGet();
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
                     "Missing proposalId parameter. Clients must supply a 0x-prefixed 32-byte hex proposalId from the authorize/payment contract flow.");
-                return;
-            }
-
-            if (!isChainBackedProposalId(proposalId)) {
-                context.apiRejectedRequests.incrementAndGet();
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "proposalId must be a 0x-prefixed 32-byte hex value.");
                 return;
             }
 
@@ -698,16 +663,7 @@ public class WriteProposalHandler {
             // Return queued status (202 Accepted)
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_ACCEPTED);
-            Map<String, Object> links = new LinkedHashMap<>();
-            links.put("self", "/v1/ops/operations/" + proposalId);
-            Map<String, Object> resultPayload = new LinkedHashMap<>();
-            resultPayload.put("contractVersion", "ops.v1");
-            resultPayload.put("status", "accepted");
-            resultPayload.put("operationId", proposalId);
-            resultPayload.put("receivedAtMs", System.currentTimeMillis());
-            resultPayload.put("ackState", "ACCEPTED");
-            resultPayload.put("links", links);
-            resultPayload.put("proposalId", proposalId);
+            Map<String, Object> resultPayload = ProposalRequestSupport.acceptedEnvelope(proposalId);
             resultPayload.put("state", "PENDING");
             resultPayload.put("message", "Proposal queued, waiting for Ethereum confirmation");
             resultPayload.put("ethereumTxHash", ethereumTxHash);
@@ -760,16 +716,5 @@ public class WriteProposalHandler {
         }
     }
 
-    private static boolean isValidClientProposalId(String proposalId) {
-        if (proposalId == null) {
-            return false;
-        }
-        String value = proposalId.trim();
-        return value.matches("(?i)^0x[a-f0-9]{64}$");
-    }
-
-    private static boolean isChainBackedProposalId(String proposalId) {
-        return proposalId != null && proposalId.trim().matches("(?i)^0x[a-f0-9]{64}$");
-    }
 
 }

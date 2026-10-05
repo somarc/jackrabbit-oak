@@ -20,7 +20,6 @@ import org.apache.jackrabbit.oak.api.Blob;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
@@ -29,7 +28,6 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
-import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUtil;
 import org.apache.jackrabbit.oak.spi.state.ChildNodeEntry;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.slf4j.Logger;
@@ -40,7 +38,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -132,39 +129,15 @@ public class DeleteProposalHandler {
                 return;
             }
 
-            if (!ShardWriteAuthorityEnforcer.allowLocalWrite(
-                context,
-                normalizedWallet,
-                "/v1/propose-delete",
-                response
-            )) {
+            if (!ProposalRequestSupport.allowShardAndLeader(context, normalizedWallet, "/v1/propose-delete", response)) {
                 return;
             }
 
-            if (!LeaderWriteRedirectUtil.allowLeaderWrite(context, "/v1/propose-delete", response)) {
-                return;
-            }
-
-            // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
-            // This is the primary identifier - clientId is secondary
-            ClientRegistration clientReg = context.findClientRegistrationByWallet(normalizedWallet);
-            String clientId = clientReg != null ? clientReg.clientId : null;
-
-            // If not found by wallet, try clientId lookup (wallet address is preferred)
-            // Note: IP-based fallback has been removed - wallet address is required
-            if (clientReg == null) {
-                String clientIdHeader = request.getHeader("X-Client-Id");
-                if (clientIdHeader == null || clientIdHeader.isEmpty()) {
-                    clientIdHeader = request.getParameter("clientId");
-                }
-                // Only use explicit clientId header/param, not IP address
-                if (clientIdHeader != null && !clientIdHeader.isEmpty()) {
-                    clientReg = context.findClientRegistrationByClientId(clientIdHeader);
-                    if (clientReg != null) {
-                        clientId = clientIdHeader;
-                    }
-                }
-            }
+            // PATH ENFORCEMENT: wallet address is the primary identifier, clientId is secondary
+            ProposalRequestSupport.ClientLookup lookup =
+                ProposalRequestSupport.lookupClient(context, request, normalizedWallet);
+            ClientRegistration clientReg = lookup.registration;
+            String clientId = lookup.clientId;
 
             // If still not found, reject delete
             if (clientReg == null) {
@@ -237,23 +210,15 @@ public class DeleteProposalHandler {
             String proposalId;
             if (clientProposalId != null && !clientProposalId.trim().isEmpty()) {
                 proposalId = clientProposalId.trim();
-                if (!isValidClientProposalId(proposalId)) {
+                if (!ProposalRequestSupport.isValidProposalId(proposalId)) {
                     ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
                         "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
                     return;
                 }
-                if (proposalId.startsWith("0X")) {
-                    proposalId = "0x" + proposalId.substring(2);
-                }
+                proposalId = ProposalRequestSupport.normalizeProposalId(proposalId);
             } else {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
                     "Missing proposalId parameter. Clients must supply a 0x-prefixed 32-byte hex proposalId from the settlement contract flow.");
-                return;
-            }
-
-            if (!isChainBackedProposalId(proposalId)) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "proposalId must be a 0x-prefixed 32-byte hex value.");
                 return;
             }
 
@@ -332,16 +297,7 @@ public class DeleteProposalHandler {
             // Return 202 Accepted (queued for processing)
             response.setContentType("application/json");
             response.setStatus(HttpServletResponse.SC_ACCEPTED);
-            Map<String, Object> links = new LinkedHashMap<>();
-            links.put("self", "/v1/ops/operations/" + proposalId);
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("contractVersion", "ops.v1");
-            payload.put("status", "accepted");
-            payload.put("operationId", proposalId);
-            payload.put("receivedAtMs", System.currentTimeMillis());
-            payload.put("ackState", "ACCEPTED");
-            payload.put("links", links);
-            payload.put("proposalId", proposalId);
+            Map<String, Object> payload = ProposalRequestSupport.acceptedEnvelope(proposalId);
             payload.put("proposalIdSource", clientProposalId != null && !clientProposalId.trim().isEmpty() ? "client" : "server");
             payload.put("type", "DELETE");
             payload.put("state", "PENDING");
@@ -467,17 +423,6 @@ public class DeleteProposalHandler {
         }
     }
 
-    private static boolean isValidClientProposalId(String proposalId) {
-        if (proposalId == null) {
-            return false;
-        }
-        String value = proposalId.trim();
-        return value.matches("(?i)^0x[a-f0-9]{64}$");
-    }
-
-    private static boolean isChainBackedProposalId(String proposalId) {
-        return proposalId != null && proposalId.trim().matches("(?i)^0x[a-f0-9]{64}$");
-    }
 
     private static final class TraversalFrame {
         private final NodeState node;
