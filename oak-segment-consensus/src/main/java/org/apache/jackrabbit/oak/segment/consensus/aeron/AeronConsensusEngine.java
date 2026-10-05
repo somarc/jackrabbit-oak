@@ -258,21 +258,9 @@ public class AeronConsensusEngine implements ClusteredService {
     // Map node IDs to URLs for leader lookup
     private final Map<Integer, String> nodeIdToUrl = new ConcurrentHashMap<>();
     
-    // Write throughput tracking (for periodic summary logging)
-    private final java.util.concurrent.atomic.AtomicLong totalWritesProcessed = new java.util.concurrent.atomic.AtomicLong(0);
-    private volatile long lastSummaryLogTime = System.currentTimeMillis();
-    private volatile long lastSummaryWriteCount = 0;
-    private static final long SUMMARY_LOG_INTERVAL_MS = 10000; // Log summary every 10 seconds
     private static final long INGRESS_CLIENT_REQUEST_WAIT_MS = 3000L;
     private static final long DURABILITY_RETRY_DELAY_MS = 250L;
     private static final int MAX_DURABILITY_RETRY_ATTEMPTS = 4;
-    
-    // Raft performance metrics (track consensus latency, throughput, utilization)
-    private final AeronPerformanceMetrics performanceMetrics = new AeronPerformanceMetrics();
-    
-    // Ingress timestamp tracking (for Raft latency calculation)
-    // Since Raft processes messages in order, we can use a simple FIFO queue
-    private final java.util.concurrent.ConcurrentLinkedQueue<Long> ingressTimestamps = new java.util.concurrent.ConcurrentLinkedQueue<>();
     
     private final AeronMessageCodec messageCodec = AeronEngineComponentFactory.createMessageCodec();
     private AeronIngressHandler ingressHandler;
@@ -368,9 +356,7 @@ public class AeronConsensusEngine implements ClusteredService {
                         writeCallback.applyReplicatedWrite(walletAddress, path, contentType, 
                                                           message, signature, intentToken, 
                                                           blobId, mimeType, ipfsCid, auditMetadata);
-                        
-                        // Track metrics after successful write
-                        trackWriteMetrics();
+                        backpressureManager.incrementAcknowledged();
                     } else {
                         throw new IllegalStateException("Replicated write callback unavailable");
                     }
@@ -382,9 +368,7 @@ public class AeronConsensusEngine implements ClusteredService {
                     // Delegate to existing delete application logic
                     if (writeCallback != null) {
                         writeCallback.applyReplicatedDelete(walletAddress, path, signature, auditMetadata);
-                        
-                        // Track metrics after successful delete
-                        trackWriteMetrics();
+                        backpressureManager.incrementAcknowledged();
                     } else {
                         throw new IllegalStateException("Replicated delete callback unavailable");
                     }
@@ -939,14 +923,7 @@ public class AeronConsensusEngine implements ClusteredService {
         if (!ensureIngressClient("transaction message (" + label + ")", INGRESS_CLIENT_REQUEST_WAIT_MS)) {
             return false;
         }
-        return sendEncodedMessage(
-            encoded,
-            "TX " + label,
-            () -> {
-                ingressTimestamps.offer(System.nanoTime());
-                performanceMetrics.recordMessageIngressed();
-            }
-        );
+        return sendEncodedMessage(encoded, "TX " + label, null);
     }
     
     public boolean sendWriteThroughIngress(String walletAddress, String path, 
@@ -1010,11 +987,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 boolean sent = sendEncodedMessage(
                     encoded,
                     "write ingress",
-                    () -> {
-                        ingressTimestamps.offer(System.nanoTime());
-                        performanceMetrics.recordMessageIngressed();
-                        backpressureManager.incrementSent();
-                    }
+                    () -> backpressureManager.incrementSent()
                 );
                 if (sent) {
                     log.debug("✅ Write sent through AeronCluster.offer() - will replicate to all nodes via Raft");
@@ -1105,11 +1078,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 boolean sent = sendEncodedMessage(
                     encoded,
                     "write (binary) ingress",
-                    () -> {
-                        ingressTimestamps.offer(System.nanoTime());
-                        performanceMetrics.recordMessageIngressed();
-                        backpressureManager.incrementSent();
-                    }
+                    () -> backpressureManager.incrementSent()
                 );
                 if (sent) {
                     log.debug("✅ Write with binary sent through AeronCluster.offer() - blobId={}", blobId);
@@ -1180,11 +1149,7 @@ public class AeronConsensusEngine implements ClusteredService {
             boolean sent = sendEncodedMessage(
                 encoded,
                 "delete ingress",
-                () -> {
-                    ingressTimestamps.offer(System.nanoTime());
-                    performanceMetrics.recordMessageIngressed();
-                    backpressureManager.incrementSent();
-                }
+                () -> backpressureManager.incrementSent()
             );
             if (sent) {
                 log.info("✅ DELETE sent through AeronCluster.offer() - will replicate to all nodes via Raft");
@@ -1254,13 +1219,7 @@ public class AeronConsensusEngine implements ClusteredService {
                 boolean sent = sendEncodedMessage(
                     encoded,
                     "batch ingress",
-                    () -> {
-                        log.debug("🔍DEBUG_BATCH [8]: offer() SUCCESS");
-                        ingressTimestamps.offer(System.nanoTime());
-                        performanceMetrics.recordMessageIngressed();
-                        log.debug("🔍DEBUG_BATCH [11]: Tracked ingress timestamp and metrics");
-                        backpressureManager.incrementSent(proposals.size());
-                    }
+                    () -> backpressureManager.incrementSent(proposals.size())
                 );
                 if (!sent) {
                     return 0;
@@ -1476,15 +1435,8 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     private boolean sendMessageWithRetry(AeronEncodedMessage encoded, String messageType) {
         try {
-            boolean sent = sendEncodedMessage(
-                encoded,
-                messageType + " ingress",
-                () -> {
-                    ingressTimestamps.offer(System.nanoTime());
-                    performanceMetrics.recordMessageIngressed();
-                    // Transaction control messages are not proposal writes; do not affect write backpressure.
-                }
-            );
+            // Control messages are not proposal writes; they do not affect write backpressure.
+            boolean sent = sendEncodedMessage(encoded, messageType + " ingress", null);
             if (sent) {
                 log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", messageType);
             }
@@ -2100,59 +2052,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Track metrics after a successful write/delete operation.
-     * 
-     * <p>Called from MessageDispatcher callbacks to track:
-     * <ul>
-     *   <li>Backpressure acknowledgment</li>
-     *   <li>Replication latency</li>
-     *   <li>Write throughput</li>
-     *   <li>Queue depths</li>
-     * </ul>
-     */
-    private void trackWriteMetrics() {
-        // Track acknowledgment for backpressure management
-        backpressureManager.incrementAcknowledged();
-        
-        // Track replication latency for Raft performance metrics
-        Long ingressTimestampNanos = ingressTimestamps.poll();
-        if (ingressTimestampNanos != null) {
-            performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
-        } else {
-            performanceMetrics.recordMessageReplicated(System.nanoTime());
-        }
-        
-        // Track write throughput and log periodic summaries
-        long currentWriteCount = totalWritesProcessed.incrementAndGet();
-        long currentTime = System.currentTimeMillis();
-        
-        // Update queue depths for metrics
-        performanceMetrics.updateQueueDepths(0, backpressureManager.getPendingCount());
-        
-        // Log summary every 10 seconds
-        if (currentTime - lastSummaryLogTime >= SUMMARY_LOG_INTERVAL_MS) {
-            long writesInInterval = currentWriteCount - lastSummaryWriteCount;
-            long intervalSeconds = (currentTime - lastSummaryLogTime) / 1000;
-            if (intervalSeconds == 0) intervalSeconds = 1;
-            
-            double writesPerSecond = (double) writesInInterval / intervalSeconds;
-            
-            // Get Raft performance snapshot
-            AeronPerformanceMetrics.Snapshot metrics = performanceMetrics.getSnapshot();
-            
-            log.info("📊 Write Throughput: {} writes in {}s ({} writes/sec) | Total: {}", 
-                writesInInterval, intervalSeconds, String.format("%.1f", writesPerSecond),
-                currentWriteCount);
-            
-            // Log detailed Raft metrics
-            log.info(metrics.toSummaryString());
-            
-            lastSummaryLogTime = currentTime;
-            lastSummaryWriteCount = currentWriteCount;
-        }
-    }
-    
-    /**
      * Get committed HEAD (has reached finality, epoch N-2) - immutable, safe.
      * This HEAD is guaranteed to be finalized and will never change.
      */
@@ -2329,15 +2228,6 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager getBackpressureManager() {
         return backpressureManager;
-    }
-    
-    /**
-     * Get Raft performance metrics (for monitoring and testing).
-     * 
-     * @return AeronPerformanceMetrics instance tracking consensus latency, throughput, utilization
-     */
-    public AeronPerformanceMetrics getPerformanceMetrics() {
-        return performanceMetrics;
     }
     
     /**
