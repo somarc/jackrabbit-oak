@@ -135,11 +135,11 @@ public class AeronClusterServiceTest {
 
         verify(launcher).shutdown();
         AeronClusterRuntimeRegistry.Snapshot snapshot = AeronClusterRuntimeRegistry.snapshot();
-        assertTrue(snapshot.enabled);
+        assertFalse(snapshot.enabled);
         assertEquals(0, snapshot.nodeId);
         assertNull(snapshot.selfUrl);
         assertTrue(snapshot.peerUrls.isEmpty());
-        assertTrue(snapshot.observeElections);
+        assertFalse(snapshot.observeElections);
         assertFalse(snapshot.logClusterStateDetails);
     }
 

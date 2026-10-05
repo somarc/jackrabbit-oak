@@ -312,6 +312,35 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void testConfigConsoleRouteRendersReadOnlyConfigManager() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            HttpServletRequest request = request("GET", "/console/configMgr");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request, response);
+
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            String html = body.toString();
+            assertTrue(html.contains("Configuration | Blockchain AEM Validator"));
+            assertFalse(html.contains("<form"));
+        });
+    }
+
+    @Test
+    public void testConfigConsoleDisabledWhenBrowserUiIsOff() throws Exception {
+        withRoutingProperties(false, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            HttpServletRequest request = request("GET", "/console/configMgr");
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request, response);
+
+            verify(response).setStatus(HttpServletResponse.SC_GONE);
+        });
+    }
+
+    @Test
     public void testApiIndexRouteReturnsIndexPayload() throws Exception {
         withRoutingProperties(true, () -> {
             RequestRouter router = new RequestRouter(newContext());

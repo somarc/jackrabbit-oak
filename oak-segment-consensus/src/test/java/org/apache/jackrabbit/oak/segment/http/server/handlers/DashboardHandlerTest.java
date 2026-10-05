@@ -368,6 +368,29 @@ public class DashboardHandlerTest {
         assertSharedHeader(renderDashboard(handler), "/", "Dashboard");
         assertSharedHeader(renderExplorer(handler), "/explorer", "CRX/OC");
         assertSharedHeader(renderApiBrowser(handler), "/api-browser", "API Browser");
+        assertSharedHeader(renderConfigConsole(handler), "/console/configMgr", "Config");
+    }
+
+    @Test
+    public void testHandleConfigConsoleRendersEveryDeclaredConfigurationReadOnly() throws Exception {
+        String html = renderConfigConsole(new DashboardHandler(newContext()));
+
+        assertTrue(html.contains("Configuration Manager"));
+        assertTrue(html.contains("org.apache.jackrabbit.oak.segment.consensus.config.NodeRuntimeTuningService"));
+        assertTrue(html.contains("org.apache.jackrabbit.oak.segment.consensus.server.lifecycle.ValidatorLifecycleManager"));
+        assertTrue(html.contains("Config Admin inactive."));
+        assertFalse(html.contains("{{"));
+        assertFalse(html.contains("<form"));
+    }
+
+    private static String renderConfigConsole(DashboardHandler handler) throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+        handler.handleConfigConsole(response);
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("text/html; charset=UTF-8");
+        return body.toString();
     }
 
     private static String renderDashboard(DashboardHandler handler) throws Exception {

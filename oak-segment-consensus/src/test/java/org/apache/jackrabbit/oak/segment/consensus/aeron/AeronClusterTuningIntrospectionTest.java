@@ -132,6 +132,29 @@ public class AeronClusterTuningIntrospectionTest {
         assertEquals(2, values.get("peer_urls_count"));
     }
 
+    @Test
+    public void effectiveValuesReportStandaloneRuntimeBehaviourWithoutOsgiConfig() {
+        Map<String, Object> values = AeronClusterTuningIntrospection.effectiveValues();
+
+        assertEquals(false, values.get("enabled"));
+        assertEquals(false, values.get("observe_elections"));
+        assertEquals(30L, values.get("effective_session_timeout_seconds"));
+        assertEquals(600_000L, values.get("snapshot_interval_ms"));
+        assertEquals(10_000L, values.get("snapshot_entry_interval"));
+    }
+
+    @Test
+    public void effectiveSessionTimeoutPrefersSecondsOverMinutes() {
+        System.setProperty("oak.cluster.session.timeout.minutes", "5");
+        assertEquals(300L, AeronClusterTuningIntrospection.effectiveValues().get("effective_session_timeout_seconds"));
+
+        System.setProperty("oak.cluster.session.timeout.seconds", "45");
+        System.setProperty(SnapshotTrigger.INTERVAL_MS_PROPERTY, "1000");
+        Map<String, Object> values = AeronClusterTuningIntrospection.effectiveValues();
+        assertEquals(45L, values.get("effective_session_timeout_seconds"));
+        assertEquals(1000L, values.get("snapshot_interval_ms"));
+    }
+
     private static void clearProperties() {
         System.clearProperty(AeronClusterTopology.PORT_BASE_PROPERTY);
         System.clearProperty("consensus.enabled");
@@ -140,6 +163,9 @@ public class AeronClusterTuningIntrospectionTest {
         System.clearProperty("consensus.peers");
         System.clearProperty("oak.cluster.environment");
         System.clearProperty("oak.cluster.session.timeout.minutes");
+        System.clearProperty("oak.cluster.session.timeout.seconds");
+        System.clearProperty(SnapshotTrigger.INTERVAL_MS_PROPERTY);
+        System.clearProperty(SnapshotTrigger.ENTRY_INTERVAL_PROPERTY);
         System.clearProperty("oak.cluster.media.driver.timeout.ms");
         System.clearProperty("aeron.socket.so_sndbuf");
         System.clearProperty("aeron.socket.so_rcvbuf");
