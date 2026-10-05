@@ -207,7 +207,8 @@ public class ReplicatedCommandRoundTripTest {
             big.append("chunk \"").append(big.length()).append("\" \uD83D\uDE00 ");
         }
         String message = big.toString();
-        AeronEncodedMessage encoded = writes.buildWriteProposal("0xw", "/p", "page", message, "sig", 7, null, "pid");
+        AeronEncodedMessage encoded = writes.buildWriteProposal("0xw", "/p", "page", message, "sig", 7, null,
+            MutationAuditMetadata.write(null, null, "pid", null, null, null, null));
         assertTrue(encoded.totalLength > 0xFFFF);
 
         List<String> calls = new ArrayList<>();

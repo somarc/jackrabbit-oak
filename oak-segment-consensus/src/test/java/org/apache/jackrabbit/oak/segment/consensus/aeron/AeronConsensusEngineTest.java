@@ -34,6 +34,7 @@ import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -424,9 +425,9 @@ public class AeronConsensusEngineTest {
         when(cluster.context().clusterDir()).thenReturn(clusterDirWithTerms(0L));
         engine.onStart(cluster, null);
         AeronEncodedMessage replayed = new AeronIngressWritePayloadBuilder()
-            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/old", "page", "m", "sig", null, null, "p-old");
+            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/old", "page", "m", "sig", null, null, writeAudit("p-old"));
         AeronEncodedMessage fresh = new AeronIngressWritePayloadBuilder()
-            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/new", "page", "m", "sig", null, null, "p-new");
+            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/new", "page", "m", "sig", null, null, writeAudit("p-new"));
 
         engine.onSessionMessage(mock(ClientSession.class), 1L, replayed.buffer, 0, replayed.totalLength, headerAt(512L));
         engine.onSessionMessage(mock(ClientSession.class), 2L, fresh.buffer, 0, fresh.totalLength, headerAt(640L));
@@ -450,7 +451,7 @@ public class AeronConsensusEngineTest {
         });
         setField(engine, "cluster", mock(Cluster.class));
         AeronEncodedMessage write = new AeronIngressWritePayloadBuilder()
-            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/doc", "page", "m", "sig", null, null, "p-1");
+            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/doc", "page", "m", "sig", null, null, writeAudit("p-1"));
 
         try {
             engine.onSessionMessage(mock(ClientSession.class), 1L, write.buffer, 0, write.totalLength, headerAt(640L));
@@ -1334,7 +1335,7 @@ public class AeronConsensusEngineTest {
                     1, java.util.concurrent.TimeUnit.MILLISECONDS, 1);
             } else {
                 AeronEncodedMessage encoded = builder.buildWriteProposal(
-                    "0xabc", "/oak-chain/" + entry, "page", entry, "sig", term, null, entry);
+                    "0xabc", "/oak-chain/" + entry, "page", entry, "sig", term, null, writeAudit(entry));
                 dispatcher.dispatch(step * 100L, encoded.buffer, 0, encoded.totalLength);
             }
         }
@@ -1515,6 +1516,10 @@ public class AeronConsensusEngineTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private static MutationAuditMetadata writeAudit(String proposalId) {
+        return MutationAuditMetadata.write(null, null, proposalId, null, null, null, null);
     }
 
     private static boolean waitUntil(java.util.concurrent.Callable<Boolean> condition, long timeoutMs) throws Exception {
