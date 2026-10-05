@@ -289,7 +289,7 @@ public class WriteApplicationService {
             // Commit (deterministic on all nodes)
             MutationApplySupport.mergeReplicated(
                 nodeStore, rootBuilder, "aeron-replication", auditMetadata, "Failed to commit write");
-            flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+            flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
             
             // Track fragmentation
             if (fragmentationCallback != null) {
@@ -329,14 +329,6 @@ public class WriteApplicationService {
         }
     }
 
-    private Runnable buildDurabilityCallback(String proposalId) {
-        if (durabilityCallback == null || proposalId == null || proposalId.isEmpty()) {
-            return null;
-        }
-        String appliedHead = fileStore.getHead().getRecordId().toString10();
-        return () -> durabilityCallback.onDurable(proposalId, appliedHead);
-    }
-
     private boolean isDuplicateProposalReplay(NodeBuilder contentNode,
                                               boolean contentNodeExists,
                                               @Nullable String proposalId) {
@@ -354,7 +346,7 @@ public class WriteApplicationService {
      */
     @NotNull
     private String acknowledgeDuplicateReplay(@Nullable String proposalId) {
-        flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+        flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
         String currentHead = fileStore.getHead().getRecordId().toString10();
         if (headUpdateCallback != null) {
             headUpdateCallback.updateHead(currentHead);

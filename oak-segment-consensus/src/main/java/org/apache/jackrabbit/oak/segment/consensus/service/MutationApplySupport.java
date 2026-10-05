@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import org.apache.jackrabbit.oak.api.CommitFailedException;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
+import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -60,6 +61,17 @@ final class MutationApplySupport {
         } catch (CommitFailedException e) {
             throw new RuntimeException(failureMessage, e);
         }
+    }
+
+    /** The durability notification to run once the applied change is flushed, or {@code null} if none is due. */
+    @Nullable
+    static Runnable durabilityRunnable(@Nullable WriteApplicationService.DurabilityCallback callback,
+                                       FileStore fileStore, @Nullable String proposalId) {
+        if (callback == null || proposalId == null || proposalId.isEmpty()) {
+            return null;
+        }
+        String appliedHead = fileStore.getHead().getRecordId().toString10();
+        return () -> callback.onDurable(proposalId, appliedHead);
     }
 
     /**

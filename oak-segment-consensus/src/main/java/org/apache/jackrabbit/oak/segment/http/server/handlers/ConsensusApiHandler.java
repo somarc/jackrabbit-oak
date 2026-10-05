@@ -71,7 +71,7 @@ public class ConsensusApiHandler implements AutoCloseable {
             }
         };
         writeApplicationService.setHeadUpdateCallback(headCallback);
-        deleteApplicationService.setHeadUpdateCallback(headCallback::updateHead);
+        deleteApplicationService.setHeadUpdateCallback(headCallback);
         
         // SSE event callback for writes
         if (context.eventBroadcaster != null) {
@@ -125,7 +125,7 @@ public class ConsensusApiHandler implements AutoCloseable {
         }
 
         // Durability callbacks must tolerate late context wiring during startup.
-        writeApplicationService.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
+        WriteApplicationService.DurabilityCallback durabilityCallback = new WriteApplicationService.DurabilityCallback() {
             @Override
             public void onDurable(String proposalId, String durableHead) {
                 forwardDurabilitySuccess(proposalId, durableHead);
@@ -135,18 +135,9 @@ public class ConsensusApiHandler implements AutoCloseable {
             public void onFailure(String proposalId, String error) {
                 forwardDurabilityFailure(proposalId, error);
             }
-        });
-        deleteApplicationService.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
-            @Override
-            public void onDurable(String proposalId, String durableHead) {
-                forwardDurabilitySuccess(proposalId, durableHead);
-            }
-
-            @Override
-            public void onFailure(String proposalId, String error) {
-                forwardDurabilityFailure(proposalId, error);
-            }
-        });
+        };
+        writeApplicationService.setDurabilityCallback(durabilityCallback);
+        deleteApplicationService.setDurabilityCallback(durabilityCallback);
 
         if (context.aeronConsensusEngine != null) {
             context.aeronConsensusEngine.setDurabilityStatusCallback(new org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine.DurabilityStatusCallback() {

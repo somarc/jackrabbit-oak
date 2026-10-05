@@ -57,9 +57,9 @@ public class DeleteApplicationService {
     private final FileStoreFlushService flushService;
     
     // Optional callbacks for integration
-    private HeadUpdateCallback headUpdateCallback;
+    private WriteApplicationService.HeadUpdateCallback headUpdateCallback;
     private SSEEventCallback sseEventCallback;
-    private DurabilityCallback durabilityCallback;
+    private WriteApplicationService.DurabilityCallback durabilityCallback;
     
     /**
      * Create a new DeleteApplicationService.
@@ -87,7 +87,7 @@ public class DeleteApplicationService {
     // Callback Setters
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
-    public void setHeadUpdateCallback(HeadUpdateCallback callback) {
+    public void setHeadUpdateCallback(WriteApplicationService.HeadUpdateCallback callback) {
         this.headUpdateCallback = callback;
     }
     
@@ -95,7 +95,7 @@ public class DeleteApplicationService {
         this.sseEventCallback = callback;
     }
 
-    public void setDurabilityCallback(DurabilityCallback callback) {
+    public void setDurabilityCallback(WriteApplicationService.DurabilityCallback callback) {
         this.durabilityCallback = callback;
     }
     
@@ -187,7 +187,7 @@ public class DeleteApplicationService {
             if (!pathExists) {
                 log.warn("⚠️  Delete skipped - path doesn't exist: {}", path);
                 // Not an error - idempotent delete (already gone)
-                flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+                flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
                 return null;
             }
             
@@ -202,14 +202,14 @@ public class DeleteApplicationService {
             } else {
                 log.warn("⚠️  Target node doesn't exist: {} (idempotent delete)", targetNodeName);
                 // Not an error - already deleted
-                flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+                flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
                 return null;
             }
             
             // Commit the deletion (deterministic on all nodes)
             MutationApplySupport.mergeReplicated(
                 nodeStore, rootBuilder, "aeron-replication-delete", auditMetadata, "Failed to commit delete");
-            flushService.onChangeApplied(buildDurabilityCallback(proposalId));
+            flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
             
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
@@ -250,25 +250,9 @@ public class DeleteApplicationService {
         }
     }
 
-    private Runnable buildDurabilityCallback(String proposalId) {
-        if (durabilityCallback == null || proposalId == null || proposalId.isEmpty()) {
-            return null;
-        }
-        String appliedHead = fileStore.getHead().getRecordId().toString10();
-        return () -> durabilityCallback.onDurable(proposalId, appliedHead);
-    }
-
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // Callback Interfaces
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Callback for HEAD updates.
-     */
-    @FunctionalInterface
-    public interface HeadUpdateCallback {
-        void updateHead(String newHead);
-    }
     
     /**
      * Callback for SSE events.
@@ -278,11 +262,4 @@ public class DeleteApplicationService {
         void emitContentDelete(String path, String wallet, String org, String signature);
     }
 
-    /**
-     * Callback for durability confirmation (ADR 026).
-     */
-    public interface DurabilityCallback {
-        void onDurable(String proposalId, String durableHead);
-        void onFailure(String proposalId, String error);
-    }
 }
