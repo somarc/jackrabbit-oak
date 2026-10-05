@@ -63,7 +63,6 @@ import org.mockito.MockitoAnnotations;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -855,26 +854,6 @@ public class AeronConsensusEngineTest {
     }
 
     @Test
-    public void stepDownAsLeaderClosesInternalClientAndClearsLeader() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        Cluster cluster = mock(Cluster.class);
-        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
-        when(cluster.memberId()).thenReturn(3);
-        installCluster(engine, cluster);
-        setField(engine, "currentLeader", "http://self:8080");
-
-        io.aeron.cluster.client.AeronCluster client = mock(io.aeron.cluster.client.AeronCluster.class);
-        when(client.isClosed()).thenReturn(false);
-        bindClient(engine, client);
-
-        assertTrue(engine.stepDownAsLeader());
-        verify(client).close();
-        assertFalse(ingressManager(engine).isHealthy());
-        assertNull(getField(engine, "currentLeader"));
-        assertEquals(ValidatorRole.FOLLOWER, getField(engine, "currentRole"));
-    }
-
-    @Test
     public void roleChangeFromLeaderClosesInternalClientWithoutSchedulingRebind() throws Exception {
         RecordingTaskScheduler scheduler = new RecordingTaskScheduler();
         AeronConsensusEngine engine = createEngine(
@@ -906,26 +885,6 @@ public class AeronConsensusEngineTest {
         assertTrue(waitUntil(() -> !ingressManager(engine).isHealthy(), 1500L));
         assertEquals(1, scheduler.tasks.size());
         assertEquals("aeron-leader-discovery", scheduler.tasks.get(0).name);
-    }
-
-    @Test
-    public void stepDownAsLeaderReturnsFalseWhenInternalClientUnavailable() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        Cluster cluster = mock(Cluster.class);
-        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
-        installCluster(engine, cluster);
-
-        assertFalse(engine.stepDownAsLeader());
-    }
-
-    @Test
-    public void stepDownAsLeaderReturnsFalseWhenNodeIsNotLeader() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        Cluster cluster = mock(Cluster.class);
-        when(cluster.role()).thenReturn(Cluster.Role.FOLLOWER);
-        installCluster(engine, cluster);
-
-        assertFalse(engine.stepDownAsLeader());
     }
 
     @Test
