@@ -166,12 +166,6 @@ public class AeronConsensusEngine implements ClusteredService {
     private volatile long publishedClusterTime = -1L;
     private IdleStrategy idleStrategy;
     
-    // ✈️ AERON NATIVE: Ingress channel URI for client connections
-    // For distributed cluster communication, we use UDP
-    // Using default term length (128MB) for production WAN compatibility
-    // Sufficient for high-throughput, concurrent write workloads
-    private String ingressChannelUri = "aeron:udp";
-    
     // ✈️ AERON NATIVE: Media driver directory name (needed for client connections)
     private String aeronDirectoryName = null;
     
@@ -313,19 +307,6 @@ public class AeronConsensusEngine implements ClusteredService {
             org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
         this(fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore,
             AeronEngineComponentFactory.createSnapshotService(),
-            new AeronBackgroundCoordinator());
-    }
-
-    AeronConsensusEngine(
-            FileStore fileStore,
-            NodeStore nodeStore,
-            String selfUrl,
-            List<String> peerUrls,
-            org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet,
-            String storeDirectory,
-            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore,
-            SnapshotService snapshotService) {
-        this(fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore, snapshotService,
             new AeronBackgroundCoordinator());
     }
 
@@ -538,26 +519,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * ✈️ AERON NATIVE: Set ingress channel URI for client connections.
-     * 
-     * This is the channel URI that clients use to connect to the cluster's ingress.
-     * For distributed cluster communication, UDP is required for multi-node Raft consensus.
-     * 
-     * @param ingressChannelUri The ingress channel URI (e.g., "aeron:udp" or "aeron:udp?endpoint=localhost:8010")
-     */
-    public void setIngressChannelUri(String ingressChannelUri) {
-        this.ingressChannelUri = ingressChannelUri;
-        log.info("✈️  Ingress channel URI set: {}", ingressChannelUri);
-    }
-    
-    /**
-     * ✈️ AERON NATIVE: Get ingress channel URI.
-     */
-    public String getIngressChannelUri() {
-        return ingressChannelUri;
-    }
-    
-    /**
      * ✈️ AERON NATIVE: Set media driver directory name for client connections.
      * This is required when creating Aeron clients to connect to the cluster's media driver.
      */
@@ -568,59 +529,6 @@ public class AeronConsensusEngine implements ClusteredService {
     
     public String getAeronDirectoryName() {
         return aeronDirectoryName;
-    }
-    
-    /**
-     * Start the Aeron Cluster consensus engine.
-     * 
-     * This initializes Aeron Cluster with Raft consensus and begins
-     * participating in the consensus network.
-     */
-    public void start() {
-        try {
-            log.info("🔧 Initializing Aeron Cluster...");
-            
-            // Aeron Cluster initialization is handled by AeronClusterLauncher
-            // which configures: cluster nodes, Raft parameters, message handlers, state machine
-            
-            // Start background timer for checking pending HEAD broadcasts
-            // This ensures broadcasts happen even when no new writes arrive
-            // No background head broadcast timer in deterministic consensus mode.
-            
-            log.info("Aeron Consensus Engine started - Status: Ready");
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to start Aeron Consensus Engine", e);
-            throw new RuntimeException("Aeron Cluster initialization failed", e);
-        }
-    }
-    
-    /**
-     * Stop the Aeron Cluster consensus engine.
-     */
-    public void stop() {
-        log.info("🛑 Stopping Aeron Consensus Engine...");
-        
-        // Stop background timer
-        // No head broadcast timer to stop in deterministic consensus mode.
-        if (beaconClient != null) {
-            beaconClient.stopBackgroundPolling();
-        }
-        backgroundCoordinator.close();
-        
-        // Aeron Cluster components are closed by AeronClusterLauncher.close()
-        // which handles: MediaDriver, Archive, ConsensusModule, ClusteredService
-        // }
-        // 
-        // if (cluster != null) {
-        //     try {
-        //         cluster.close();
-        //     } catch (Exception e) {
-        //         log.warn("Error closing Aeron cluster", e);
-        //     }
-        // }
-        
-        log.info("✅ Aeron Consensus Engine stopped");
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -867,19 +775,6 @@ public class AeronConsensusEngine implements ClusteredService {
                 AeronException.Category.FATAL));
     }
 
-    /**
-     * ✈️ AERON NATIVE: Send write proposal through Aeron ingress channel for replication.
-     * 
-     * This method sends the write proposal through Aeron's ingress channel, which
-     * automatically replicates it to all cluster members via Raft consensus.
-     * 
-     * @param walletAddress Ethereum wallet address
-     * @param path Write path
-     * @param contentType Content type
-     * @param message Message content
-     * @param signature Signature
-     * @return true if sent successfully, false otherwise
-     */
     /**
      * Create internal AeronCluster client lazily (on first write attempt).
      * This avoids timeout issues during cluster startup.
@@ -1652,18 +1547,6 @@ public class AeronConsensusEngine implements ClusteredService {
             encoded.buffer, encoded.totalLength, messageType, INGRESS_CLIENT_REQUEST_WAIT_MS);
     }
     
-    /**
-     * Escape JSON string (simple implementation).
-     */
-    private String escapeJson(String str) {
-        if (str == null) return "";
-        return str.replace("\\", "\\\\")
-                  .replace("\"", "\\\"")
-                  .replace("\n", "\\n")
-                  .replace("\r", "\\r")
-                  .replace("\t", "\\t");
-    }
-    
     @Override
     public void onTimerEvent(long correlationId, long timestamp) {
         publishPosition(cluster.logPosition(), timestamp);
@@ -1789,11 +1672,6 @@ public class AeronConsensusEngine implements ClusteredService {
 
         internalIngressClientManager.close();
         backgroundCoordinator.close();
-        
-        // Cleanup resources
-        if (beaconClient != null) {
-            // Stop Ethereum epoch polling
-        }
     }
     
     /**
@@ -2034,16 +1912,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
 
     /**
-     * Extract URL from Aeron endpoint string.
-    /**
-     * Get current leader URL.
-     * 
-     * ✈️ AERON CLUSTER SOURCE OF TRUTH:
-     * - If we're the leader, return self
-     * - Otherwise, query Aeron Cluster's /v1/aeron/cluster-state API from peers
-     * - This ensures consistency with Aeron's internal Raft state
-     */
-    /**
      * Get current leader URL.
      * 
      * ✈️ AERON NATIVE: Uses cluster.clusterMembers() to find leader directly from Aeron.
@@ -2160,29 +2028,6 @@ public class AeronConsensusEngine implements ClusteredService {
     public int getLeaderMemberId() {
         return clusterStateView.resolveLeaderMemberId(
             publishedRole, cluster != null ? cluster.memberId() : -1, currentLeader);
-    }
-    
-    /**
-     * Discover leader using tracked state + cache, minimizing HTTP queries to peers.
-     * 
-     * ✈️ AERON CLUSTER SOURCE OF TRUTH:
-     * 1. PRIMARY: Use tracked currentLeader (set by onRoleChange) - NO HTTP calls!
-     * 2. SECONDARY: Check cache (10s TTL)
-     * 3. FALLBACK: Query /v1/aeron/cluster-state from peers (only during initial formation)
-     * 
-     * ⚡ PERFORMANCE: Once cluster is formed and leader discovered, essentially zero cost.
-     * 
-     * ✅ REFACTORED: Delegates to LeaderDiscoveryService for leader discovery.
-     */
-    private String discoverLeaderFromAeronClusterState() {
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // STEP 1: Use tracked currentLeader (set by onRoleChange)
-        if (currentLeader != null && currentLeader.equals(selfUrl)) {
-            return currentLeader;
-        }
-        
-        // ✅ REFACTORED: Delegate to LeaderDiscoveryService
-        return leaderDiscoveryService.discoverLeader(publishedRole);
     }
     
     /**
@@ -2605,10 +2450,6 @@ public class AeronConsensusEngine implements ClusteredService {
         healthService.markHeartbeat();
     }
     
-    private boolean isHeartbeatStale() {
-        return healthService.isHeartbeatStale();
-    }
-
     private static PeerProbeMode parsePeerProbeMode() {
         String raw = System.getProperty("oak.health.peerProbeMode");
         if (raw == null || raw.isEmpty()) {

@@ -19,7 +19,6 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 import java.lang.reflect.Field;
 
 import io.aeron.cluster.service.Cluster;
-import org.junit.After;
 import org.junit.Test;
 
 import static io.aeron.cluster.service.Cluster.Role.CANDIDATE;
@@ -32,25 +31,18 @@ import static org.mockito.Mockito.when;
 
 public class AeronHealthServiceTest {
 
-    @After
-    public void tearDown() {
-        System.clearProperty("oak.cluster.heartbeat.maxAgeMs");
-    }
-
     @Test
-    public void heartbeatAgeAndStalenessRespectConfiguredThreshold() throws Exception {
+    public void heartbeatAgeTracksLastMark() throws Exception {
         AeronHealthService service = new AeronHealthService();
-        System.setProperty("oak.cluster.heartbeat.maxAgeMs", "10");
         setLastHeartbeatTime(service, System.currentTimeMillis() - 1000);
 
         assertTrue(service.getLastHeartbeatTime() > 0);
         assertTrue(service.getHeartbeatAgeMs() >= 1000);
-        assertTrue(service.isHeartbeatStale());
 
         service.markHeartbeat();
 
         assertTrue(service.getLastHeartbeatTime() > 0);
-        assertFalse(service.isHeartbeatStale());
+        assertTrue(service.getHeartbeatAgeMs() < 1000);
     }
 
     @Test

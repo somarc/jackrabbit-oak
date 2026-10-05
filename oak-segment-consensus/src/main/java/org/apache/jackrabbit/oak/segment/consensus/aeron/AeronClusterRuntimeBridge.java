@@ -24,7 +24,6 @@ import org.slf4j.LoggerFactory;
 final class AeronClusterRuntimeBridge {
 
     private static final Logger log = LoggerFactory.getLogger(AeronClusterRuntimeBridge.class);
-    private static final String CLIENT_INGRESS_CHANNEL = "aeron:udp";
 
     interface HealthMonitorFactory {
         MediaDriverHealthMonitor create(io.aeron.Aeron aeron);
@@ -63,10 +62,8 @@ final class AeronClusterRuntimeBridge {
         boolean ingressConfigured = false;
         if (clusteredService instanceof AeronConsensusEngine) {
             AeronConsensusEngine engine = (AeronConsensusEngine) clusteredService;
-            engine.setIngressChannelUri(CLIENT_INGRESS_CHANNEL);
             engine.setAeronDirectoryName(aeronDirectoryName);
             ingressConfigured = true;
-            log.info("✈️  Client ingress channel configured: {} (UDP for distributed cluster)", CLIENT_INGRESS_CHANNEL);
             log.info("✈️  Aeron directory configured: {}", aeronDirectoryName);
         }
 

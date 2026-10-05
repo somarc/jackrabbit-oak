@@ -34,7 +34,6 @@ import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
-import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -272,17 +271,6 @@ public class AeronConsensusEngineTest {
         Optional<Map<String, Object>> tx = engine.getTransactionRecord("tx-1");
         assertTrue(tx.isPresent());
         assertEquals("TIMED_OUT", tx.get().get("status"));
-    }
-
-    @Test
-    public void stopStopsBeaconClientPollingWhenPresent() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
-        setField(engine, "beaconClient", beaconClient);
-
-        engine.stop();
-
-        verify(beaconClient).stopBackgroundPolling();
     }
 
     @Test

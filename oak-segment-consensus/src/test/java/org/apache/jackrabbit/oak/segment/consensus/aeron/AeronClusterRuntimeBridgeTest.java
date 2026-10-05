@@ -49,7 +49,6 @@ public class AeronClusterRuntimeBridgeTest {
         assertTrue(result.healthMonitorStarted);
         assertTrue(result.ingressConfigured);
         assertTrue(result.startupResetScheduled);
-        verify(engine).setIngressChannelUri("aeron:udp");
         verify(engine).setAeronDirectoryName("aeron-dir");
         verify(failureCoordinator).scheduleSuccessfulStartupReset();
     }
