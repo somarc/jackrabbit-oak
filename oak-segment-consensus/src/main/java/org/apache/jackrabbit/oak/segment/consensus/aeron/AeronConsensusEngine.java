@@ -909,78 +909,6 @@ public class AeronConsensusEngine implements ClusteredService {
             && sendEncodedMessage(encoded, "TX " + label, null);
     }
     
-    public boolean sendWriteThroughIngress(String walletAddress, String path, 
-                                           String contentType, String message, String signature) {
-        return sendWriteThroughIngressWithId(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            null,
-            MutationAuditMetadata.write(null, null, null, null, null, null, null)
-        );
-    }
-    
-    public boolean sendWriteThroughIngressWithId(String walletAddress, String path, 
-                                                 String contentType, String message, String signature,
-                                                 String ipfsCid, String proposalId) {
-        return sendWriteThroughIngressWithId(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            ipfsCid,
-            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
-        );
-    }
-
-    public boolean sendWriteThroughIngressWithId(String walletAddress, String path,
-                                                 String contentType, String message, String signature,
-                                                 String ipfsCid, MutationAuditMetadata auditMetadata) {
-        return sendThroughIngress("write", () -> ingressWritePayloadBuilder.buildWriteProposal(
-            walletAddress, path, contentType, message, signature, getIngressTerm(), ipfsCid,
-            normalizeAuditMetadata(auditMetadata, MutationAuditMetadata.Operation.WRITE)), 1);
-    }
-    
-    /**
-     * Send a write proposal with binary metadata through Aeron ingress.
-     * This overload includes blobId and mimeType for eager binary uploads.
-     */
-    public boolean sendWriteThroughIngress(String walletAddress, String path, 
-                                           String contentType, String message, String signature,
-                                           String blobId, String mimeType) {
-        return sendWriteThroughIngress(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            blobId,
-            mimeType,
-            null,
-            MutationAuditMetadata.write(null, null, null, null, null, null, null)
-        );
-    }
-    
-    public boolean sendWriteThroughIngress(String walletAddress, String path,
-                                           String contentType, String message, String signature,
-                                           String blobId, String mimeType,
-                                           String ipfsCid, String proposalId) {
-        return sendWriteThroughIngress(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            blobId,
-            mimeType,
-            ipfsCid,
-            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
-        );
-    }
-
     public boolean sendWriteThroughIngress(String walletAddress, String path,
                                            String contentType, String message, String signature,
                                            String blobId, String mimeType,
@@ -997,33 +925,6 @@ public class AeronConsensusEngine implements ClusteredService {
         }, 1);
     }
     
-    /**
-     * Send a DELETE proposal through Aeron ingress for consensus replication.
-     * Same flow as writes, just different template ID and simpler JSON.
-     * 
-     * @param walletAddress Ethereum wallet address of content owner
-     * @param path Content path to delete
-     * @param signature Transaction signature
-     * @return true if successfully sent
-     */
-    public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature) {
-        return sendDeleteThroughIngress(
-            walletAddress,
-            path,
-            signature,
-            MutationAuditMetadata.delete(null, null, null, null, null, null, null)
-        );
-    }
-    
-    public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature, String proposalId) {
-        return sendDeleteThroughIngress(
-            walletAddress,
-            path,
-            signature,
-            MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null)
-        );
-    }
-
     public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature,
                                             MutationAuditMetadata auditMetadata) {
         boolean sent = sendThroughIngress("delete", () -> {

@@ -684,13 +684,13 @@ public class AeronConsensusEngineTest {
         AeronConsensusEngine engine = createEngine();
         io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
 
-        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/a", "sig-1", "p-0"));
+        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/a", "sig-1", deleteAudit("p-0")));
         assertFalse(captureOffer(client).json.contains("\"term\""));
 
         applyTermEvent(engine, 3);
         client = installHealthyClient(engine, Cluster.Role.LEADER);
 
-        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/b", "sig-2", "p-1"));
+        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/b", "sig-2", deleteAudit("p-1")));
         assertTrue(captureOffer(client).json.contains("\"term\":3"));
     }
 
@@ -993,7 +993,7 @@ public class AeronConsensusEngineTest {
         io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
         applyTermEvent(engine, 4);
 
-        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/site", "sig-1", "proposal-2"));
+        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/site", "sig-1", deleteAudit("proposal-2")));
 
         CapturedOffer offer = captureOffer(client);
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL, offer.templateId);
@@ -1009,7 +1009,7 @@ public class AeronConsensusEngineTest {
         io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
         applyTermEvent(engine, 9);
 
-        assertTrue(engine.sendWriteThroughIngressWithId(
+        assertTrue(sendWrite(engine, 
             "0xabc",
             "/content/write",
             "page",
@@ -1043,7 +1043,7 @@ public class AeronConsensusEngineTest {
             "blob-99",
             "image/png",
             "cid-2",
-            "proposal-4"
+            writeAudit("proposal-4")
         ));
 
         CapturedOffer offer = captureOffer(client);
@@ -1081,7 +1081,7 @@ public class AeronConsensusEngineTest {
             .thenReturn(AeronInternalClusterClientConnector.ConnectAttemptResult.success(healthyClient));
         setField(engine, "internalClusterClientConnector", connector);
 
-        assertTrue(engine.sendWriteThroughIngressWithId(
+        assertTrue(sendWrite(engine, 
             "0xabc",
             "/content/write",
             "page",
@@ -1105,7 +1105,7 @@ public class AeronConsensusEngineTest {
         AeronInternalClusterClientConnector connector =
             (AeronInternalClusterClientConnector) getField(engine, "internalClusterClientConnector");
 
-        assertFalse(engine.sendWriteThroughIngressWithId(
+        assertFalse(sendWrite(engine, 
             "0xabc", "/content/write", "page", "{}", "sig-2", null, "proposal-bp"));
 
         Thread.sleep(50L);
@@ -1593,5 +1593,16 @@ public class AeronConsensusEngineTest {
             this.templateId = templateId;
             this.json = json;
         }
+    }
+
+    private static boolean sendWrite(AeronConsensusEngine engine, String walletAddress, String path,
+                                     String contentType, String message, String signature, String ipfsCid,
+                                     String proposalId) {
+        return engine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature, null, null,
+            ipfsCid, writeAudit(proposalId));
+    }
+
+    private static MutationAuditMetadata deleteAudit(String proposalId) {
+        return MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null);
     }
 }
