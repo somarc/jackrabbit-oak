@@ -46,9 +46,6 @@ import java.util.Map;
  */
 public class HealthHandler {
     private static final Logger log = LoggerFactory.getLogger(HealthHandler.class);
-    private static final long OPS_HEALTH_SNAPSHOT_TTL_MS = 1000L;
-    private static final long OPS_RUNTIME_SNAPSHOT_TTL_MS = 1000L;
-    private static final long OPS_STORAGE_SNAPSHOT_TTL_MS = 5000L;
     
     private final FileStore fileStore;
     private final NodeStore nodeStore;
@@ -56,15 +53,9 @@ public class HealthHandler {
     private final ServerContext context;
     private final Map<String, ?> registeredClients;
     private final Map<String, ?> registeredValidators;
-    private final Object opsHealthSnapshotLock = new Object();
-    private final Object opsRuntimeSnapshotLock = new Object();
-    private final Object opsStorageSnapshotLock = new Object();
-    private volatile Map<String, Object> cachedOpsHealthSnapshotData;
-    private volatile long cachedOpsHealthSnapshotSourceTimestampMs;
-    private volatile Map<String, Object> cachedOpsRuntimeSnapshotData;
-    private volatile long cachedOpsRuntimeSnapshotSourceTimestampMs;
-    private volatile Map<String, Object> cachedOpsStorageSnapshotData;
-    private volatile long cachedOpsStorageSnapshotSourceTimestampMs;
+    private final OpsSnapshotCache opsHealthSnapshot = new OpsSnapshotCache(1000L, log);
+    private final OpsSnapshotCache opsRuntimeSnapshot = new OpsSnapshotCache(1000L, log);
+    private final OpsSnapshotCache opsStorageSnapshot = new OpsSnapshotCache(5000L, log);
     
     public HealthHandler(
             FileStore fileStore,
@@ -445,56 +436,10 @@ public class HealthHandler {
      */
     public void handleGetOpsHealthSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (opsHealthSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedOpsHealthSnapshotData != null
-                    && cachedOpsHealthSnapshotSourceTimestampMs > 0
-                    && (now - cachedOpsHealthSnapshotSourceTimestampMs) <= OPS_HEALTH_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedOpsHealthSnapshotData;
-                    sourceTimestampMs = cachedOpsHealthSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = buildOpsHealthData();
-                    sourceTimestampMs = now;
-                    cachedOpsHealthSnapshotData = data;
-                    cachedOpsHealthSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
-            }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsEnvelope(
-                "ops.v1", OPS_HEALTH_SNAPSHOT_TTL_MS, data, sourceTimestampMs, servedAtMs, stalenessMs, false, null, fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops health snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedOpsHealthSnapshotData != null && cachedOpsHealthSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedOpsHealthSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsEnvelope(
-                    "ops.v1",
-                    OPS_HEALTH_SNAPSHOT_TTL_MS,
-                    cachedOpsHealthSnapshotData,
-                    cachedOpsHealthSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-
+        opsHealthSnapshot.serve(response, "ops.v1", false, "health", this::buildOpsHealthData, e -> {
             response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
             response.getWriter().write(buildUnavailableOpsPayload("ops.v1"));
-        }
+        });
     }
 
     /**
@@ -503,64 +448,10 @@ public class HealthHandler {
      */
     public void handleGetOpsRuntimeSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (opsRuntimeSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedOpsRuntimeSnapshotData != null
-                    && cachedOpsRuntimeSnapshotSourceTimestampMs > 0
-                    && (now - cachedOpsRuntimeSnapshotSourceTimestampMs) <= OPS_RUNTIME_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedOpsRuntimeSnapshotData;
-                    sourceTimestampMs = cachedOpsRuntimeSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = buildOpsRuntimeData();
-                    sourceTimestampMs = now;
-                    cachedOpsRuntimeSnapshotData = data;
-                    cachedOpsRuntimeSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
-            }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsEnvelope(
-                "ops.runtime.v1",
-                OPS_RUNTIME_SNAPSHOT_TTL_MS,
-                data,
-                sourceTimestampMs,
-                servedAtMs,
-                stalenessMs,
-                false,
-                null,
-                fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops runtime snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedOpsRuntimeSnapshotData != null && cachedOpsRuntimeSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedOpsRuntimeSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsEnvelope(
-                    "ops.runtime.v1",
-                    OPS_RUNTIME_SNAPSHOT_TTL_MS,
-                    cachedOpsRuntimeSnapshotData,
-                    cachedOpsRuntimeSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-
+        opsRuntimeSnapshot.serve(response, "ops.runtime.v1", false, "runtime", this::buildOpsRuntimeData, e -> {
             response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
             response.getWriter().write(buildUnavailableOpsPayload("ops.runtime.v1"));
-        }
+        });
     }
 
     /**
@@ -569,64 +460,10 @@ public class HealthHandler {
      */
     public void handleGetOpsStorageSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (opsStorageSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedOpsStorageSnapshotData != null
-                    && cachedOpsStorageSnapshotSourceTimestampMs > 0
-                    && (now - cachedOpsStorageSnapshotSourceTimestampMs) <= OPS_STORAGE_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedOpsStorageSnapshotData;
-                    sourceTimestampMs = cachedOpsStorageSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = buildOpsStorageData();
-                    sourceTimestampMs = now;
-                    cachedOpsStorageSnapshotData = data;
-                    cachedOpsStorageSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
-            }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsEnvelope(
-                "ops.storage.v1",
-                OPS_STORAGE_SNAPSHOT_TTL_MS,
-                data,
-                sourceTimestampMs,
-                servedAtMs,
-                stalenessMs,
-                false,
-                null,
-                fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops storage snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedOpsStorageSnapshotData != null && cachedOpsStorageSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedOpsStorageSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsEnvelope(
-                    "ops.storage.v1",
-                    OPS_STORAGE_SNAPSHOT_TTL_MS,
-                    cachedOpsStorageSnapshotData,
-                    cachedOpsStorageSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-
+        opsStorageSnapshot.serve(response, "ops.storage.v1", false, "storage", this::buildOpsStorageData, e -> {
             response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
             response.getWriter().write(buildUnavailableOpsPayload("ops.storage.v1"));
-        }
+        });
     }
 
     private Map<String, Object> buildOpsHealthData() {
@@ -1029,30 +866,6 @@ public class HealthHandler {
             context.authoritativeNodeStore != null && context.authoritativeNodeStore != context.nodeStore
         );
         return sharding;
-    }
-
-    private String buildOpsEnvelope(String contractVersion,
-                                    long ttlMs,
-                                    Object data,
-                                    long sourceTimestampMs,
-                                    long servedAtMs,
-                                    long stalenessMs,
-                                    boolean degraded,
-                                    String degradedReason,
-                                    boolean cacheHit) {
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("contractVersion", contractVersion);
-        payload.put("sourceTimestampMs", sourceTimestampMs);
-        payload.put("servedAtMs", servedAtMs);
-        payload.put("stalenessMs", stalenessMs);
-        payload.put("degraded", degraded);
-        payload.put("degradedReason", degradedReason);
-        Map<String, Object> cache = new HashMap<>();
-        cache.put("hit", cacheHit);
-        cache.put("ttlMs", ttlMs);
-        payload.put("cache", cache);
-        payload.put("data", data);
-        return JsonOutputUtil.toJson(payload);
     }
 
     private String buildUnavailableOpsPayload(String contractVersion) {

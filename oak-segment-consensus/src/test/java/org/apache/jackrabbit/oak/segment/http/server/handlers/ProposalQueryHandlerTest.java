@@ -498,8 +498,11 @@ public class ProposalQueryHandlerTest {
     }
 
     private static void ageQueueSnapshotCache(ProposalQueryHandler handler) throws Exception {
-        Field field = ProposalQueryHandler.class.getDeclaredField("cachedQueueStatsSourceTimestampMs");
+        Field cacheField = ProposalQueryHandler.class.getDeclaredField("queueSnapshot");
+        cacheField.setAccessible(true);
+        Object cache = cacheField.get(handler);
+        Field field = OpsSnapshotCache.class.getDeclaredField("sourceTimestampMs");
         field.setAccessible(true);
-        field.setLong(handler, System.currentTimeMillis() - 5000L);
+        field.setLong(cache, System.currentTimeMillis() - 5000L);
     }
 }

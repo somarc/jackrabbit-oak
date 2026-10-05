@@ -420,7 +420,7 @@ public class HealthHandlerTest {
         HttpServletResponse initialResponse = responseWithBody(initialBody);
         handler.handleGetOpsHealthSnapshot(initialResponse);
 
-        setLongField(handler, "cachedOpsHealthSnapshotSourceTimestampMs", System.currentTimeMillis() - 5_000L);
+        ageSnapshotCache(handler, "opsHealthSnapshot", System.currentTimeMillis() - 5_000L);
 
         AeronConsensusEngine brokenEngine = mock(AeronConsensusEngine.class);
         when(brokenEngine.isClusterHealthy()).thenThrow(new RuntimeException("boom"));
@@ -544,9 +544,11 @@ public class HealthHandlerTest {
         return response;
     }
 
-    private static void setLongField(Object target, String fieldName, long value) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
+    private static void ageSnapshotCache(Object handler, String cacheField, long sourceTimestampMs) throws Exception {
+        Field field = handler.getClass().getDeclaredField(cacheField);
         field.setAccessible(true);
-        field.setLong(target, value);
+        Field timestamp = OpsSnapshotCache.class.getDeclaredField("sourceTimestampMs");
+        timestamp.setAccessible(true);
+        timestamp.setLong(field.get(handler), sourceTimestampMs);
     }
 }

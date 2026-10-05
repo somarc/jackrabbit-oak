@@ -43,15 +43,10 @@ import java.util.Set;
 public class AeronApiHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AeronApiHandler.class);
-    private static final long OPS_SNAPSHOT_TTL_MS = 1000L;
 
     private final ServerContext context;
-    private final Object clusterSnapshotLock = new Object();
-    private final Object replicationSnapshotLock = new Object();
-    private volatile Map<String, Object> cachedClusterSnapshotData;
-    private volatile long cachedClusterSnapshotSourceTimestampMs;
-    private volatile Map<String, Object> cachedReplicationSnapshotData;
-    private volatile long cachedReplicationSnapshotSourceTimestampMs;
+    private final OpsSnapshotCache clusterSnapshot = new OpsSnapshotCache(1000L, log);
+    private final OpsSnapshotCache replicationSnapshot = new OpsSnapshotCache(1000L, log);
 
     public AeronApiHandler(ServerContext context) {
         this.context = context;
@@ -699,55 +694,13 @@ public class AeronApiHandler {
      */
     public void handleGetOpsClusterSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (clusterSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedClusterSnapshotData != null
-                    && cachedClusterSnapshotSourceTimestampMs > 0
-                    && (now - cachedClusterSnapshotSourceTimestampMs) <= OPS_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedClusterSnapshotData;
-                    sourceTimestampMs = cachedClusterSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = getClusterStateData();
-                    if (data == null) {
-                        throw new IllegalStateException("Aeron Cluster consensus not configured");
-                    }
-                    sourceTimestampMs = now;
-                    cachedClusterSnapshotData = data;
-                    cachedClusterSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
+        clusterSnapshot.serve(response, "ops.v1", false, "cluster", () -> {
+            Map<String, Object> data = getClusterStateData();
+            if (data == null) {
+                throw new IllegalStateException("Aeron Cluster consensus not configured");
             }
-
-                long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsSnapshotEnvelope(
-                data, sourceTimestampMs, servedAtMs, stalenessMs, false, null, fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops cluster snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedClusterSnapshotData != null && cachedClusterSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedClusterSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsSnapshotEnvelope(
-                    cachedClusterSnapshotData,
-                    cachedClusterSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage());
-        }
+            return data;
+        }, e -> sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage()));
     }
 
     /**
@@ -756,55 +709,13 @@ public class AeronApiHandler {
      */
     public void handleGetOpsReplicationSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
-        long servedAtMs = System.currentTimeMillis();
-
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (replicationSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedReplicationSnapshotData != null
-                    && cachedReplicationSnapshotSourceTimestampMs > 0
-                    && (now - cachedReplicationSnapshotSourceTimestampMs) <= OPS_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedReplicationSnapshotData;
-                    sourceTimestampMs = cachedReplicationSnapshotSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = getReplicationLagData();
-                    if (data == null) {
-                        throw new IllegalStateException("Replication lag not applicable (cluster not initialized)");
-                    }
-                    sourceTimestampMs = now;
-                    cachedReplicationSnapshotData = data;
-                    cachedReplicationSnapshotSourceTimestampMs = sourceTimestampMs;
-                }
+        replicationSnapshot.serve(response, "ops.v1", false, "replication", () -> {
+            Map<String, Object> data = getReplicationLagData();
+            if (data == null) {
+                throw new IllegalStateException("Replication lag not applicable (cluster not initialized)");
             }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(buildOpsSnapshotEnvelope(
-                data, sourceTimestampMs, servedAtMs, stalenessMs, false, null, fromCache));
-        } catch (Exception e) {
-            log.warn("Error building ops replication snapshot, attempting stale fallback: {}", e.getMessage());
-            if (cachedReplicationSnapshotData != null && cachedReplicationSnapshotSourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - cachedReplicationSnapshotSourceTimestampMs);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(buildOpsSnapshotEnvelope(
-                    cachedReplicationSnapshotData,
-                    cachedReplicationSnapshotSourceTimestampMs,
-                    servedAtMs,
-                    stalenessMs,
-                    true,
-                    "STALE_CACHE_FALLBACK",
-                    true));
-                return;
-            }
-            sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage());
-        }
+            return data;
+        }, e -> sendError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage()));
     }
     
     /**
@@ -812,27 +723,5 @@ public class AeronApiHandler {
      */
     private void sendError(HttpServletResponse response, int statusCode, String message) throws IOException {
         ApiErrorUtil.sendJsonError(response, statusCode, message);
-    }
-
-    private String buildOpsSnapshotEnvelope(Object data,
-                                            long sourceTimestampMs,
-                                            long servedAtMs,
-                                            long stalenessMs,
-                                            boolean degraded,
-                                            String degradedReason,
-                                            boolean cacheHit) {
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("contractVersion", "ops.v1");
-        payload.put("sourceTimestampMs", sourceTimestampMs);
-        payload.put("servedAtMs", servedAtMs);
-        payload.put("stalenessMs", stalenessMs);
-        payload.put("degraded", degraded);
-        payload.put("degradedReason", degradedReason);
-        Map<String, Object> cache = new HashMap<>();
-        cache.put("hit", cacheHit);
-        cache.put("ttlMs", OPS_SNAPSHOT_TTL_MS);
-        payload.put("cache", cache);
-        payload.put("data", data);
-        return JsonOutputUtil.toJson(payload);
     }
 }

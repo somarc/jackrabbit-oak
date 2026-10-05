@@ -37,12 +37,9 @@ import java.util.Map;
 public class ProposalQueryHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ProposalQueryHandler.class);
-    private static final long OPS_QUEUE_SNAPSHOT_TTL_MS = 1000L;
 
     private final ServerContext context;
-    private final Object queueSnapshotLock = new Object();
-    private volatile Map<String, Object> cachedQueueStatsData;
-    private volatile long cachedQueueStatsSourceTimestampMs;
+    private final OpsSnapshotCache queueSnapshot = new OpsSnapshotCache(1000L, log);
 
     public ProposalQueryHandler(ServerContext context) {
         this.context = context;
@@ -297,77 +294,13 @@ public class ProposalQueryHandler {
     public void handleGetOpsQueueSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
 
-        long servedAtMs = System.currentTimeMillis();
-
         if (context.proposalQueueManager == null) {
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
             return;
         }
 
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
-
-            synchronized (queueSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedQueueStatsData != null
-                    && cachedQueueStatsSourceTimestampMs > 0
-                    && (now - cachedQueueStatsSourceTimestampMs) <= OPS_QUEUE_SNAPSHOT_TTL_MS;
-
-                if (cacheValid) {
-                    data = cachedQueueStatsData;
-                    sourceTimestampMs = cachedQueueStatsSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = context.proposalQueueManager.getQueueStats();
-                    sourceTimestampMs = now;
-                    cachedQueueStatsData = data;
-                    cachedQueueStatsSourceTimestampMs = sourceTimestampMs;
-                }
-            }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("contractVersion", "ops.v1");
-            payload.put("sourceTimestampMs", sourceTimestampMs);
-            payload.put("servedAtMs", servedAtMs);
-            payload.put("stalenessMs", stalenessMs);
-            payload.put("degraded", false);
-            payload.put("degradedReason", null);
-            Map<String, Object> cache = new LinkedHashMap<>();
-            cache.put("hit", fromCache);
-            cache.put("ttlMs", OPS_QUEUE_SNAPSHOT_TTL_MS);
-            payload.put("cache", cache);
-            payload.put("data", data);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
-        } catch (Exception e) {
-            log.warn("Error building ops queue snapshot, attempting stale fallback: {}", e.getMessage());
-
-            Map<String, Object> staleData = cachedQueueStatsData;
-            long sourceTimestampMs = cachedQueueStatsSourceTimestampMs;
-            if (staleData != null && sourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("contractVersion", "ops.v1");
-                payload.put("sourceTimestampMs", sourceTimestampMs);
-                payload.put("servedAtMs", servedAtMs);
-                payload.put("stalenessMs", stalenessMs);
-                payload.put("degraded", true);
-                payload.put("degradedReason", "STALE_CACHE_FALLBACK");
-                Map<String, Object> cache = new LinkedHashMap<>();
-                cache.put("hit", true);
-                cache.put("ttlMs", OPS_QUEUE_SNAPSHOT_TTL_MS);
-                payload.put("cache", cache);
-                payload.put("data", staleData);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(JsonOutputUtil.toJson(payload));
-                return;
-            }
-
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
-        }
+        queueSnapshot.serve(response, "ops.v1", true, "queue", context.proposalQueueManager::getQueueStats,
+            e -> ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage()));
     }
 
     private static String extractPathSegment(String path, int segmentIndex, String requiredSuffix) {
