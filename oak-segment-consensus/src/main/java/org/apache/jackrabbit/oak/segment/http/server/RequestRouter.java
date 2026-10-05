@@ -465,24 +465,6 @@ public class RequestRouter implements AutoCloseable {
                 return;
             }
             
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // Mock Epoch Control API (only works in MOCK mode)
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            if ("/api/mock/advance-epoch".equals(path) && "POST".equals(method)) {
-                handleMockAdvanceEpoch(request, response);
-                return;
-            }
-            
-            if ("/api/mock/set-epoch-offset".equals(path) && "POST".equals(method)) {
-                handleMockSetEpochOffset(request, response);
-                return;
-            }
-            
-            if ("/api/mock/epoch-status".equals(path) && "GET".equals(method)) {
-                handleMockEpochStatus(request, response);
-                return;
-            }
-            
             // HEAD endpoint - returns JSON with committedHead vs latestHead
             if ("/v1/head".equals(path) && "GET".equals(method)) {
                 response.setContentType("application/json");
@@ -873,75 +855,5 @@ public class RequestRouter implements AutoCloseable {
         context.eventBroadcaster = null;
         context.uploadSessionManager = null;
         context.cidMappingService = null;
-    }
-    
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // MOCK EPOCH CONTROL HANDLERS
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Compatibility stub for removed synthetic mock epoch control.
-     *
-     * <p>POST /api/mock/advance-epoch?epochs=N now returns 410 Gone.</p>
-     */
-    private void handleMockAdvanceEpoch(jakarta.servlet.http.HttpServletRequest request, 
-                                        jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
-        ApiErrorUtil.sendJsonError(
-            response,
-            HttpServletResponse.SC_GONE,
-            "Synthetic mock epoch control was removed by ADR 080. Mock mode now uses Sepolia chain context."
-        );
-    }
-    
-    /**
-     * Compatibility stub for removed synthetic mock epoch control.
-     *
-     * <p>POST /api/mock/set-epoch-offset?offset=N now returns 410 Gone.</p>
-     */
-    private void handleMockSetEpochOffset(jakarta.servlet.http.HttpServletRequest request, 
-                                          jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
-        ApiErrorUtil.sendJsonError(
-            response,
-            HttpServletResponse.SC_GONE,
-            "Synthetic mock epoch control was removed by ADR 080. Mock mode now uses Sepolia chain context."
-        );
-    }
-    
-    /**
-     * Sepolia-backed epoch status view retained for compatibility in mock mode.
-     */
-    private void handleMockEpochStatus(jakarta.servlet.http.HttpServletRequest request, 
-                                       jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
-        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig config = 
-            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
-        
-        response.setContentType("application/json");
-        
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"mode\":\"").append(FormatUtils.escapeJson(config.getMode().toString())).append("\",");
-        
-        if (context.proposalQueueManager != null) {
-            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient =
-                context.proposalQueueManager.getBeaconClient();
-            if (beaconClient != null) {
-                java.util.Map<String, Object> health = beaconClient.getHealthStatus();
-                json.append("\"currentEpoch\":").append(beaconClient.getCachedCurrentEpoch()).append(",");
-                json.append("\"finalizedEpoch\":").append(beaconClient.getCachedFinalizedEpoch()).append(",");
-                json.append("\"fresh\":").append(beaconClient.isEpochDataFresh()).append(",");
-                json.append("\"timeSinceUpdateMs\":").append(beaconClient.getMillisSinceLastUpdate());
-                
-                if (config.getMode() == org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.Mode.MOCK) {
-                    json.append(",\"chainContext\":\"Sepolia\"");
-                }
-            } else {
-                json.append("\"error\":\"BeaconChainClient not available\"");
-            }
-        } else {
-            json.append("\"error\":\"ProposalQueueManager or EpochQueue not available\"");
-        }
-        
-        json.append("}");
-        response.getWriter().write(json.toString());
     }
 }
