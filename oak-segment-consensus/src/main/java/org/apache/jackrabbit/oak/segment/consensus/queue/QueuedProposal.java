@@ -73,7 +73,6 @@ public class QueuedProposal implements java.io.Serializable {
     public QueuedProposal(
             String proposalId,
             String ethereumTxHash,
-            Object unused, // For compatibility, not used
             long timestamp,
             long timeoutTimestamp,
             ProposalState state) {

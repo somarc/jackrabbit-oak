@@ -240,7 +240,6 @@ final class ProposalPersistenceStore {
             QueuedProposal proposal = new QueuedProposal(
                 proposalId,
                 ethereumTxHash,
-                null,
                 timestamp,
                 timeoutTimestamp,
                 state

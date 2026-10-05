@@ -1368,7 +1368,7 @@ public class ProposalQueueManagerOptimized {
                                               ValidatorEarningsTracker.PaymentTier tier) {
         long now = System.currentTimeMillis();
         QueuedProposal proposal = new QueuedProposal(
-            proposalId, ethereumTxHash, null, now, now + confirmationTimeoutMs, ProposalState.PENDING);
+            proposalId, ethereumTxHash, now, now + confirmationTimeoutMs, ProposalState.PENDING);
         proposal.setWalletAddress(walletAddress);
         proposal.setPath(path);
         proposal.setSignature(signature);

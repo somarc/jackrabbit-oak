@@ -179,7 +179,7 @@ public class AeronIngressWritePayloadBuilderTest {
     }
 
     private static QueuedProposal proposal(String proposalId) {
-        return new QueuedProposal(proposalId, "0xtx", null, 1L, 2L, ProposalState.PENDING);
+        return new QueuedProposal(proposalId, "0xtx", 1L, 2L, ProposalState.PENDING);
     }
 
     private static void assertPayloadMatches(AeronEncodedMessage encoded) {

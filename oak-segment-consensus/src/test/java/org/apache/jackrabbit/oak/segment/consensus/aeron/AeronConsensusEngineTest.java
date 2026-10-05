@@ -1469,7 +1469,7 @@ public class AeronConsensusEngineTest {
     }
 
     private static QueuedProposal proposal(String proposalId) {
-        return new QueuedProposal(proposalId, "0xtx", null, 1L, 2L, ProposalState.PENDING);
+        return new QueuedProposal(proposalId, "0xtx", 1L, 2L, ProposalState.PENDING);
     }
 
     private static final class RecordingTaskScheduler implements AeronBackgroundCoordinator.TaskScheduler {

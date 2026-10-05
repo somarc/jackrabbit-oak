@@ -99,7 +99,7 @@ public class AdaptivePackingBufferConcurrencyTest {
     }
 
     private static QueuedProposal proposal(String id) {
-        QueuedProposal proposal = new QueuedProposal(id, "0xtx-" + id, null, 1L, 30_001L, ProposalState.VERIFIED);
+        QueuedProposal proposal = new QueuedProposal(id, "0xtx-" + id, 1L, 30_001L, ProposalState.VERIFIED);
         proposal.setWalletAddress("0xwallet");
         proposal.setPath("/oak-chain/aa/bb/cc/0xwallet/content/" + id);
         proposal.setEpoch(1L);
