@@ -1335,22 +1335,6 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testNgrokRouteReturnsSelfUrl() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            context.selfUrl = "https://public.ngrok.app";
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/v1/ngrok-url");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("https://public.ngrok.app"));
-        });
-    }
-
-    @Test
     public void testAeronValidatorIdentitiesRouteReturnsIdentityPayload() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();

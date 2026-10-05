@@ -603,11 +603,6 @@ public class RequestRouter implements AutoCloseable {
                 return;
             }
             
-            if ("/v1/ngrok-url".equals(path) && "GET".equals(method)) {
-                peerDiscoveryHandler.handleNgrokUrl(response);
-                return;
-            }
-            
             // Blockchain configuration endpoint
             if ("/v1/blockchain/config".equals(path) && "GET".equals(method)) {
                 new BlockchainConfigApiHandler(context).handle(response);

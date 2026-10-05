@@ -94,18 +94,6 @@ public class PeerDiscoveryHandlerTest {
         assertTrue(json.contains("\"status\":\"READY\""));
     }
 
-    @Test
-    public void testHandleNgrokUrlReturnsSelfUrl() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-        PeerDiscoveryHandler handler = new PeerDiscoveryHandler(newContext("https://public.ngrok.app"));
-
-        handler.handleNgrokUrl(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        assertTrue(body.toString().contains("https://public.ngrok.app"));
-    }
-
     private static ServerContext newContext(String selfUrl) {
         return new ServerContext(
             mock(FileStore.class),

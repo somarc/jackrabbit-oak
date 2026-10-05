@@ -234,16 +234,6 @@ public class PeerDiscoveryHandler {
     }
     
     /**
-     * Handle GET /v1/ngrok-url - Get public ngrok URL (text)
-     */
-    public void handleNgrokUrl(HttpServletResponse response) throws IOException {
-        response.setContentType("text/plain");
-        response.setStatus(HttpServletResponse.SC_OK);
-        // selfUrl is set from CONSENSUS_SELF_URL which includes ngrok URL
-        response.getWriter().write(context.selfUrl != null ? context.selfUrl : "");
-    }
-    
-    /**
      * Generate a deterministic 0x address from validator URL.
      * This ensures all validators have 0x address format even without registration.
      * Uses SHA-256 hash of URL to generate a deterministic address.

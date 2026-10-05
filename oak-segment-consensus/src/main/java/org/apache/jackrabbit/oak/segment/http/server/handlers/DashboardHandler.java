@@ -180,7 +180,6 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "GET", "/v1/wallets/content?wallet=0x...", "Wallet content query", "Wallets", null);
         addInternalIndexEntry(endpoints, "POST|PUT", "/v1/register-client", "Register client", "Registration", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/peers", "Peer list", "Registration", null);
-        addInternalIndexEntry(endpoints, "GET", "/v1/ngrok-url", "Current ngrok URL", "Registration", null);
         addSourceIndexEntry(endpoints, "GET", "/v1/blockchain/config", "Blockchain mode config", "Configuration", "blockchain.config.v1", "/ops/v1/blockchain/config");
 
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/cluster-state", "Aeron cluster state", "Aeron", "/v1/ops/snapshots/cluster");
