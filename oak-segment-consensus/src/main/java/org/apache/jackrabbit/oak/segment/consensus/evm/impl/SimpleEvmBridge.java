@@ -30,6 +30,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -277,21 +278,12 @@ public class SimpleEvmBridge implements EvmBridge {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(String.valueOf(proposalId).getBytes(StandardCharsets.UTF_8));
-            return "0x" + toHex(hash);
+            return "0x" + HexFormat.of().formatHex(hash);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 must be available for mock transaction synthesis", e);
         }
     }
 
-    private static String toHex(byte[] bytes) {
-        StringBuilder hex = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) {
-            hex.append(Character.forDigit((value >>> 4) & 0xF, 16));
-            hex.append(Character.forDigit(value & 0xF, 16));
-        }
-        return hex.toString();
-    }
-    
     /**
      * Check if the bridge is running.
      *
