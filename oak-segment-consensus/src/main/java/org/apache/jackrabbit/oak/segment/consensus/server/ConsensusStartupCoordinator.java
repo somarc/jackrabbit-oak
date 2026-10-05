@@ -91,7 +91,6 @@ final class ConsensusStartupCoordinator {
 
         boolean observeElections = aeronConfig != null && aeronConfig.observeElections();
         boolean logClusterStateDetails = aeronConfig != null && aeronConfig.logClusterStateDetails();
-        String beaconApiUrl = GlobalStoreRuntimeConfigUtil.resolveBeaconApiUrl(aeronConfig);
 
         AeronClusterStartupResult startupResult = clusterService.startCluster(
             context.fileStore,
@@ -112,7 +111,6 @@ final class ConsensusStartupCoordinator {
             context.httpServer,
             context.wallet,
             context.storeDirectory,
-            beaconApiUrl,
             context.clusterWalletAddress,
             startupResult.getHostnames()
         );

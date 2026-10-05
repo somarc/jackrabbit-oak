@@ -382,14 +382,6 @@ public class OsgiConfigApiHandler {
             "expert-only",
             "Delete Aeron runtime dirs during startup",
             "aeron.delete.dirs.on.startup"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.beacon_api_url",
-            "string",
-            "https://beaconcha.in/api",
-            "startup-only",
-            "guarded",
-            "Beacon API base URL",
-            "ethereum.beacon.api.url"));
 
         schema.add(schemaEntry(
             "proposalQueueTuning.max_message_batch",

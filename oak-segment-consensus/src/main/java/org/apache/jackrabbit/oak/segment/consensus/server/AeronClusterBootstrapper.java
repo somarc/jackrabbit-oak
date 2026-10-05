@@ -103,9 +103,7 @@ public final class AeronClusterBootstrapper {
             new AeronConsensusEngine(fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore);
         aeronEngine.setClusterMemberCount(hostnamesList.size());
 
-        // Initialize Ethereum integration if configured
-        String beaconApiUrl = System.getProperty("ethereum.beacon.api.url", "https://beaconcha.in/api");
-        aeronEngine.initializeEthereumIntegration(beaconApiUrl);
+        aeronEngine.initializeEthereumIntegration();
 
         // Create cluster base directory
         File clusterBaseDir = bootstrapPlan.clusterBaseDir;

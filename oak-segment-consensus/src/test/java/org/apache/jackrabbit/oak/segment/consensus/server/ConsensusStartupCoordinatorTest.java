@@ -64,7 +64,6 @@ public class ConsensusStartupCoordinatorTest {
         when(config.peerUrls()).thenReturn(new String[] {"http://validator-1:8090", "http://validator-2:8090"});
         when(config.observeElections()).thenReturn(true);
         when(config.logClusterStateDetails()).thenReturn(true);
-        when(config.beaconApiUrl()).thenReturn("https://beacon.example");
 
         AeronClusterService clusterService = mock(AeronClusterService.class);
         AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
@@ -123,7 +122,6 @@ public class ConsensusStartupCoordinatorTest {
             testContext.httpServer,
             testContext.wallet,
             "/tmp/test-store",
-            "https://beacon.example",
             "0xcluster",
             Arrays.asList("validator-0", "validator-1", "validator-2")
         );
@@ -141,7 +139,6 @@ public class ConsensusStartupCoordinatorTest {
         when(config.peerUrls()).thenReturn(new String[0]);
         when(config.observeElections()).thenReturn(false);
         when(config.logClusterStateDetails()).thenReturn(false);
-        when(config.beaconApiUrl()).thenReturn("https://beacon.example");
 
         AeronClusterService clusterService = mock(AeronClusterService.class);
         when(testContext.componentFactory.createAeronClusterService()).thenReturn(clusterService);

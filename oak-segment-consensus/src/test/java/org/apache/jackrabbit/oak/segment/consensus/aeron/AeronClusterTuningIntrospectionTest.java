@@ -64,7 +64,6 @@ public class AeronClusterTuningIntrospectionTest {
         System.setProperty("oak.cluster.reconnect.maxAttempts", "7");
         System.setProperty("oak.health.peerProbeMode", "http");
         System.setProperty("aeron.delete.dirs.on.startup", "true");
-        System.setProperty("ethereum.beacon.api.url", "https://example.test/api");
 
         Map<String, Object> values = AeronClusterTuningIntrospection.effectiveValues();
 
@@ -89,7 +88,7 @@ public class AeronClusterTuningIntrospectionTest {
         assertEquals(7, values.get("reconnect_max_attempts"));
         assertEquals("http", values.get("peer_probe_mode"));
         assertEquals(true, values.get("delete_aeron_dirs_on_startup"));
-        assertEquals("https://example.test/api", values.get("beacon_api_url"));
+        assertFalse(values.containsKey("beacon_api_url"));
     }
 
     @Test
@@ -111,7 +110,6 @@ public class AeronClusterTuningIntrospectionTest {
         assertEquals(0L, values.get("heartbeat_max_age_ms"));
         assertEquals(0L, values.get("reachability_cache_ms"));
         assertEquals(false, values.get("delete_aeron_dirs_on_startup"));
-        assertEquals("https://beaconcha.in/api", values.get("beacon_api_url"));
         assertFalse((Boolean) values.get("self_url_configured"));
         assertEquals(0, values.get("peer_urls_count"));
         assertEquals("osgi-config-admin", AeronClusterTuningIntrospection.source());
@@ -154,7 +152,6 @@ public class AeronClusterTuningIntrospectionTest {
         System.clearProperty("oak.cluster.reconnect.maxAttempts");
         System.clearProperty("oak.health.peerProbeMode");
         System.clearProperty("aeron.delete.dirs.on.startup");
-        System.clearProperty("ethereum.beacon.api.url");
     }
 
     private static void resetSourceRegistry() throws Exception {

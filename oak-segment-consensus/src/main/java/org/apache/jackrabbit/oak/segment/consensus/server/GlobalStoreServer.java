@@ -22,7 +22,6 @@ import java.io.IOException;
 
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
-import org.apache.jackrabbit.oak.segment.consensus.eth.EpochListener;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -95,7 +94,6 @@ public class GlobalStoreServer {
     private Closeable readViewResources;
     private org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     private SegmentHttpServer httpServer;
-    private EpochListener epochListener;
     private ValidatorBootstrap bootstrap;
     private org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService aeronClusterService;
@@ -401,16 +399,6 @@ public class GlobalStoreServer {
                 log.info("✅ Aeron Cluster stopped");
             } catch (Exception e) {
                 log.warn("Error stopping Aeron Cluster: {}", e.getMessage());
-            }
-        }
-        
-        // Stop Ethereum epoch listener
-        if (epochListener != null) {
-            try {
-                epochListener.stop();
-                log.info("✅ Epoch listener stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping epoch listener: {}", e.getMessage());
             }
         }
         

@@ -92,7 +92,7 @@ public class AeronClusterServiceTest {
             Arrays.asList("http://validator-1:8090", "http://validator-2:8090"));
 
         assertEquals("2", System.getProperty("aeron.cluster.nodeId"));
-        assertEquals("https://beacon.example", System.getProperty("ethereum.beacon.api.url"));
+        assertNull(System.getProperty("ethereum.beacon.api.url"));
         assertEquals("staging", System.getProperty("oak.cluster.environment"));
         assertEquals("15", System.getProperty("oak.cluster.session.timeout.minutes"));
         assertEquals("2000", System.getProperty("oak.cluster.media.driver.timeout.ms"));
@@ -151,7 +151,6 @@ public class AeronClusterServiceTest {
         when(config.peerUrls()).thenReturn(new String[] {"http://validator-1:8090", "http://validator-2:8090"});
         when(config.observeElections()).thenReturn(false);
         when(config.logClusterStateDetails()).thenReturn(true);
-        when(config.beaconApiUrl()).thenReturn("https://beacon.example");
         when(config.clusterEnvironment()).thenReturn("staging");
         when(config.sessionTimeoutMinutes()).thenReturn(15);
         when(config.mediaDriverTimeoutMs()).thenReturn(2000);
