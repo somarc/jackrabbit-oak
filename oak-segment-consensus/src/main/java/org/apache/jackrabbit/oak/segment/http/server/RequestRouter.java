@@ -18,10 +18,30 @@ package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeaderDiscoveryService;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
-import org.apache.jackrabbit.oak.segment.http.server.handlers.*;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.AeronApiHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.BinaryUploadHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.BlockchainConfigApiHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.CidApiHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.ConsensusApiHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.ConsensusStatusHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.DashboardHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.DeleteProposalHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.EventStreamHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.ExplorerApiHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.ExplorerApiV1Handler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.FileHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.FragmentationApiHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.GcCostHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.HealthHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.MetricsHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.OsgiConfigApiHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.PeerDiscoveryHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.ProposalQueryHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.RegistrationHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.WalletQueryHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.WriteProposalHandler;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
-import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,43 +49,41 @@ import org.slf4j.LoggerFactory;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Central request router that delegates HTTP requests to appropriate handlers.
  * 
- * <p>This class replaces the large if-else chain in SegmentHttpServer with
- * a cleaner routing mechanism that delegates to specialized handler classes.</p>
+ * <p>Routes are declared once in the constructor. Exact routes are keyed by
+ * {@code "METHOD path"} (or by bare path when any method is accepted); prefix
+ * routes are tried in declaration order only when no exact route matches.
+ * Public routes are served before rate limiting, authentication and the
+ * quarantine check.</p>
  */
 public class RequestRouter implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(RequestRouter.class);
     static final String CONFIG_CONSOLE_PATH = "/console/configMgr";
 
-    private final HealthHandler healthHandler;
-    private final MetricsHandler metricsHandler;
-    private final FileHandler fileHandler;
-    private final ExplorerApiHandler explorerApiHandler;
-    private final DashboardHandler dashboardHandler;
-    private final ExplorerApiV1Handler explorerApiV1Handler;
+    @FunctionalInterface
+    private interface Handler {
+        void handle(HttpServletRequest request, HttpServletResponse response, String path) throws Exception;
+    }
+
+    private record PrefixRoute(String method, String prefix, Handler handler) {
+    }
+
+    private final Map<String, Handler> publicRoutes = new HashMap<>();
+    private final Map<String, Handler> routes = new HashMap<>();
+    private final List<PrefixRoute> prefixRoutes = new ArrayList<>();
+
     private final ConsensusApiHandler consensusApiHandler;
-    private final WriteProposalHandler writeProposalHandler;
-    private final DeleteProposalHandler deleteProposalHandler;
-    private final ConsensusStatusHandler consensusStatusHandler;
-    private final ProposalQueryHandler proposalQueryHandler;
-    private final GcCostHandler gcCostHandler;
-    private final WalletQueryHandler walletQueryHandler;
-    private final RegistrationHandler registrationHandler;
-    private final PeerDiscoveryHandler peerDiscoveryHandler;
-    private final AeronApiHandler aeronApiHandler;
-    private final FragmentationApiHandler fragmentationApiHandler;
-    private final BinaryUploadHandler binaryUploadHandler;
-    private final CidApiHandler cidApiHandler;
-    private final EventStreamHandler eventStreamHandler;
-    private final OsgiConfigApiHandler osgiConfigApiHandler;
     private final EventBroadcaster eventBroadcaster;
     private final org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager;
+    private final BinaryUploadHandler binaryUploadHandler;
     private final AuthTokenValidator authValidator;
     private final RateLimiter rateLimiter;
     private final boolean browserUiEnabled;
@@ -79,7 +97,7 @@ public class RequestRouter implements AutoCloseable {
         this.browserUiEnabled = RuntimeConfigValueResolver.readBoolean("oak.http.browser.ui.enabled", true);
         
         // Initialize all handlers
-        this.healthHandler = new HealthHandler(
+        HealthHandler healthHandler = new HealthHandler(
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
@@ -87,35 +105,35 @@ public class RequestRouter implements AutoCloseable {
             context.registeredValidators,
             context
         );
-        this.metricsHandler = new MetricsHandler(
+        MetricsHandler metricsHandler = new MetricsHandler(
             context.aeronConsensusEngine,
             context.storeDirectory,
             context.registeredClients,
             context.registeredValidators,
             context
         );
-        this.fileHandler = new FileHandler(
+        FileHandler fileHandler = new FileHandler(
             context.fileStore,
             context.storeDirectory
         );
-        this.explorerApiHandler = ExplorerApiHandler.withBlobStoreSupplier(
+        ExplorerApiHandler explorerApiHandler = ExplorerApiHandler.withBlobStoreSupplier(
             context.nodeStore,
             context.storeDirectory,
             () -> context.blobStore
         );
-        this.dashboardHandler = new DashboardHandler(context);
-        this.explorerApiV1Handler = new ExplorerApiV1Handler(context);
+        DashboardHandler dashboardHandler = new DashboardHandler(context);
+        ExplorerApiV1Handler explorerApiV1Handler = new ExplorerApiV1Handler(context);
         this.consensusApiHandler = new ConsensusApiHandler(context);
-        this.writeProposalHandler = new WriteProposalHandler(context);
-        this.deleteProposalHandler = new DeleteProposalHandler(context);
-        this.consensusStatusHandler = new ConsensusStatusHandler(context);
-        this.proposalQueryHandler = new ProposalQueryHandler(context);
-        this.gcCostHandler = new GcCostHandler(context);
-        this.walletQueryHandler = new WalletQueryHandler(context);
-        this.registrationHandler = new RegistrationHandler(context);
-        this.peerDiscoveryHandler = new PeerDiscoveryHandler(context);
-        this.aeronApiHandler = new AeronApiHandler(context);
-        this.fragmentationApiHandler = new FragmentationApiHandler(context);
+        WriteProposalHandler writeProposalHandler = new WriteProposalHandler(context);
+        DeleteProposalHandler deleteProposalHandler = new DeleteProposalHandler(context);
+        ConsensusStatusHandler consensusStatusHandler = new ConsensusStatusHandler(context);
+        ProposalQueryHandler proposalQueryHandler = new ProposalQueryHandler(context);
+        GcCostHandler gcCostHandler = new GcCostHandler(context);
+        WalletQueryHandler walletQueryHandler = new WalletQueryHandler(context);
+        RegistrationHandler registrationHandler = new RegistrationHandler(context);
+        PeerDiscoveryHandler peerDiscoveryHandler = new PeerDiscoveryHandler(context);
+        AeronApiHandler aeronApiHandler = new AeronApiHandler(context);
+        FragmentationApiHandler fragmentationApiHandler = new FragmentationApiHandler(context);
         
         // Binary upload handler (ADR 020 - lazy upload on confirmation)
         this.uploadSessionManager = new org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager();
@@ -125,13 +143,196 @@ public class RequestRouter implements AutoCloseable {
         context.setUploadSessionManager(uploadSessionManager);
         
         // CID API handler (Oak ↔ IPFS CID mapping)
-        this.cidApiHandler = new CidApiHandler(context);
+        CidApiHandler cidApiHandler = new CidApiHandler(context);
         
         // SSE Event Broadcaster and Handler (ADR 036)
         this.eventBroadcaster = new EventBroadcaster();
-        this.eventStreamHandler = new EventStreamHandler(context, eventBroadcaster);
-        this.osgiConfigApiHandler = new OsgiConfigApiHandler();
+        EventStreamHandler eventStreamHandler = new EventStreamHandler(context, eventBroadcaster);
+        OsgiConfigApiHandler osgiConfigApiHandler = new OsgiConfigApiHandler();
         context.setEventBroadcaster(eventBroadcaster); // Make available to other components
+
+        // Health checks: public (monitoring/load balancers), no rate limit, auth or quarantine gate
+        publicGet("/health", (req, res, path) -> healthHandler.handleHealth(res));
+        publicGet("/health/local", (req, res, path) -> healthHandler.handleLocalHealth(res));
+        publicGet("/health/deep", (req, res, path) -> healthHandler.handleDeepHealth(res));
+        publicGet("/health/cluster", (req, res, path) -> healthHandler.handleClusterHealth(res));
+        publicGet("/v1/ops/snapshots/health", (req, res, path) -> healthHandler.handleGetOpsHealthSnapshot(res));
+        publicGet("/v1/ops/snapshots/runtime", (req, res, path) -> healthHandler.handleGetOpsRuntimeSnapshot(res));
+        publicGet("/v1/ops/snapshots/storage", (req, res, path) -> healthHandler.handleGetOpsStorageSnapshot(res));
+
+        // Dashboard and UI
+        get("/", (req, res, path) -> dashboardHandler.handleDashboard(res));
+        get("/dashboard", (req, res, path) -> dashboardHandler.handleDashboard(res));
+        get("/explorer", (req, res, path) -> dashboardHandler.handleExplorerUI(res));
+        get("/api-browser", (req, res, path) -> dashboardHandler.handleApiBrowserUI(res));
+        get(CONFIG_CONSOLE_PATH, (req, res, path) -> dashboardHandler.handleConfigConsole(res));
+        get("/v1/index", (req, res, path) -> dashboardHandler.handleApiIndex(res));
+
+        get("/v1/config/osgi", (req, res, path) -> osgiConfigApiHandler.handleEffectiveConfig(res));
+        get("/v1/config/osgi/schema", (req, res, path) -> osgiConfigApiHandler.handleConfigSchema(res));
+        get("/v1/config/osgi/sources", (req, res, path) -> osgiConfigApiHandler.handleConfigSources(res));
+        get("/v1/config/osgi/coverage", (req, res, path) -> osgiConfigApiHandler.handleCoverage(res));
+        get("/v1/config/osgi/delta", (req, res, path) -> osgiConfigApiHandler.handleDelta(res));
+
+        // File serving and segments
+        get("/journal.log", (req, res, path) -> fileHandler.handleFile(req, res, "journal.log", "text/plain"));
+        any("/manifest", (req, res, path) -> {
+            String method = req.getMethod();
+            if ("HEAD".equals(method)) {
+                fileHandler.handleFileHead(res, "manifest", "text/plain");
+            } else if ("GET".equals(method)) {
+                fileHandler.handleFile(req, res, "manifest", "text/plain");
+            } else {
+                sendMethodNotAllowed(res);
+            }
+        });
+        get("/gc.log", (req, res, path) -> fileHandler.handleFile(req, res, "gc.log", "text/plain"));
+        prefix(null, "/segments/", (req, res, path) -> {
+            String segmentId = path.substring("/segments/".length());
+            String method = req.getMethod();
+            if ("HEAD".equals(method)) {
+                fileHandler.handleSegmentHead(res, segmentId);
+            } else if ("GET".equals(method)) {
+                fileHandler.handleSegmentGet(req, res, segmentId);
+            } else {
+                sendMethodNotAllowed(res);
+            }
+        });
+
+        // Explorer, blob and CID APIs
+        get("/api/explore", (req, res, path) -> {
+            String nodePath = req.getParameter("path");
+            explorerApiHandler.handleExploreNode(res, nodePath != null ? nodePath : "/");
+        });
+        get("/api/segments/recent", (req, res, path) -> explorerApiHandler.handleRecentSegments(res));
+        get("/api/segments/tars", (req, res, path) -> explorerApiHandler.handleTarFiles(res));
+        prefix("GET", "/api/blob/", (req, res, path) ->
+            explorerApiHandler.handleBlobStream(req, res, path.substring("/api/blob/".length())));
+        get("/api/cid/stats", (req, res, path) -> cidApiHandler.handleStats(req, res));
+        prefix("GET", "/api/cid/gateway/", (req, res, path) -> cidApiHandler.handleGatewayRedirect(req, res));
+        prefix("GET", "/api/cid/reverse/", (req, res, path) -> cidApiHandler.handleReverseLookup(req, res));
+        prefix("GET", "/api/cid/", (req, res, path) -> cidApiHandler.handleGetCid(req, res));
+
+        // SSE Event Streaming API (ADR 036)
+        get("/v1/ops/events/stream", (req, res, path) -> eventStreamHandler.handleOpsEventStream(req, res));
+        get("/v1/events/stream", (req, res, path) -> eventStreamHandler.handleEventStream(req, res));
+        get("/v1/events/recent", (req, res, path) -> eventStreamHandler.handleRecentEvents(req, res));
+        get("/v1/events/stats", (req, res, path) -> eventStreamHandler.handleStats(req, res));
+
+        get("/api/metrics", (req, res, path) -> metricsHandler.handleMetrics(res));
+        get("/metrics", (req, res, path) -> metricsHandler.handlePrometheusMetrics(res));
+
+        // Explorer v1
+        get("/v1/explorer/summary", (req, res, path) -> explorerApiV1Handler.handleSummary(res));
+        get("/v1/explorer/release-flow", (req, res, path) -> explorerApiV1Handler.handleReleaseFlow(res));
+        prefix("GET", "/v1/explorer/proposals/", (req, res, path) ->
+            explorerApiV1Handler.handleProposalById(res, path.substring("/v1/explorer/proposals/".length())));
+        prefix("GET", "/v1/explorer/wallets/", (req, res, path) ->
+            explorerApiV1Handler.handleWalletByAddress(res, path.substring("/v1/explorer/wallets/".length())));
+        get("/v1/explorer/content/nav", (req, res, path) -> explorerApiV1Handler.handleContentNav(res));
+        prefix("GET", "/v1/explorer/content/clusters/", (req, res, path) -> {
+            if (!handleContentCluster(explorerApiV1Handler, req, res, path)) {
+                sendNotFound(req, res, path);
+            }
+        });
+
+        // Proposals and binary upload (ADR 020)
+        post("/v1/propose-write", (req, res, path) -> {
+            logShardRoute(req);
+            writeProposalHandler.handleProposeWrite(req, res);
+        });
+        post("/v1/propose-delete", (req, res, path) -> deleteProposalHandler.handleDeleteProposal(req, res));
+        post("/v1/binary/declare-intent", (req, res, path) -> binaryUploadHandler.handleDeclareIntent(req, res));
+        prefix("GET", "/v1/binary/check-intent/", (req, res, path) -> binaryUploadHandler.handleCheckIntent(req, res));
+        post("/v1/binary/complete-upload", (req, res, path) -> binaryUploadHandler.handleCompleteUpload(req, res));
+
+        get("/v1/head", (req, res, path) -> handleHead(res));
+        get("/v1/consensus/status", (req, res, path) -> consensusStatusHandler.handleGetConsensusStatus(res));
+        get("/v1/consensus/leader", (req, res, path) -> consensusStatusHandler.handleGetConsensusLeader(
+            "true".equals(req.getParameter(LeaderDiscoveryService.LOCAL_ONLY_PARAM)), res));
+
+        get("/v1/wallets/stats", (req, res, path) -> walletQueryHandler.handleWalletStats(req, res));
+        get("/v1/wallets/content", (req, res, path) -> walletQueryHandler.handleWalletContent(req, res));
+        get("/v1/gc/estimate", (req, res, path) -> gcCostHandler.handleGCCostEstimate(req, res));
+
+        prefix("GET", "/v1/ops/operations/", (req, res, path) -> proposalQueryHandler.handleGetOperationStatus(req, res));
+        get("/v1/ops/snapshots/queue", (req, res, path) -> proposalQueryHandler.handleGetOpsQueueSnapshot(res));
+        prefix("GET", "/v1/settlement/proposals/", (req, res, path) ->
+            proposalQueryHandler.handleGetSettlementByProposalId(req, res));
+        prefix("GET", "/v1/settlement/transactions/", (req, res, path) ->
+            proposalQueryHandler.handleGetSettlementByTransactionHash(req, res));
+        get("/v1/ops/snapshots/cluster", (req, res, path) -> aeronApiHandler.handleGetOpsClusterSnapshot(res));
+        get("/v1/ops/snapshots/replication", (req, res, path) -> aeronApiHandler.handleGetOpsReplicationSnapshot(res));
+        prefix("GET", "/v1/proposals/", (req, res, path) -> {
+            if (path.endsWith("/status")) {
+                proposalQueryHandler.handleGetProposalStatus(req, res);
+            } else {
+                sendNotFound(req, res, path);
+            }
+        });
+        get("/v1/proposals/pending/count", (req, res, path) -> proposalQueryHandler.handleGetPendingCount(res));
+        get("/v1/proposals/queue/stats", (req, res, path) -> proposalQueryHandler.handleGetQueueStats(res));
+        get("/v1/proposals/release-flow", (req, res, path) -> proposalQueryHandler.handleGetProposalReleaseFlow(res));
+
+        post("/v1/register-client", (req, res, path) -> registrationHandler.handleClientRegistration(req, res));
+        route("PUT", "/v1/register-client", (req, res, path) -> registrationHandler.handleClientRegistration(req, res));
+        get("/v1/peers", (req, res, path) -> peerDiscoveryHandler.handlePeerList(res));
+        get("/v1/blockchain/config", (req, res, path) -> new BlockchainConfigApiHandler(context).handle(res));
+
+        // Aeron Cluster-specific endpoints (ADR 025: replication lag)
+        get("/v1/aeron/cluster-state", (req, res, path) -> aeronApiHandler.handleClusterState(res));
+        get("/v1/aeron/validator-identities", (req, res, path) -> aeronApiHandler.handleValidatorIdentities(res));
+        get("/v1/aeron/raft-metrics", (req, res, path) -> aeronApiHandler.handleRaftMetrics(res));
+        get("/v1/aeron/node-status", (req, res, path) -> aeronApiHandler.handleNodeStatus(req, res));
+        get("/v1/aeron/leadership-history", (req, res, path) -> aeronApiHandler.handleLeadershipHistory(req, res));
+        get("/v1/aeron/replication-lag", (req, res, path) -> aeronApiHandler.handleReplicationLag(res));
+
+        // Fragmentation, GC and GC accounts
+        get("/v1/fragmentation/metrics", (req, res, path) -> fragmentationApiHandler.handleGetAllMetrics(req, res));
+        prefix("GET", "/v1/fragmentation/metrics/", (req, res, path) -> fragmentationApiHandler.handleGetEntityMetrics(
+            req, res, path.substring("/v1/fragmentation/metrics/".length())));
+        get("/v1/fragmentation/top", (req, res, path) -> fragmentationApiHandler.handleGetTopFragmented(req, res));
+        get("/v1/gc/status", (req, res, path) -> fragmentationApiHandler.handleGetGcStatus(req, res));
+        get("/v1/compaction/proposals", (req, res, path) -> fragmentationApiHandler.handleGetCompactionProposals(req, res));
+        post("/v1/propose-gc", (req, res, path) -> fragmentationApiHandler.handleProposeGC(req, res));
+        post("/v1/gc/execute", (req, res, path) -> fragmentationApiHandler.handleExecuteGC(req, res));
+        post("/v1/gc/vote", (req, res, path) -> fragmentationApiHandler.handleVoteGC(req, res));
+        prefix(null, "/v1/gc/account/", (req, res, path) -> {
+            if (!handleGcAccount(fragmentationApiHandler, req, res, path)) {
+                sendNotFound(req, res, path);
+            }
+        });
+        post("/v1/gc/trigger", (req, res, path) -> fragmentationApiHandler.handleTriggerGC(req, res));
+    }
+
+    private void publicGet(String path, Handler handler) {
+        register(publicRoutes, "GET " + path, handler);
+    }
+
+    private void get(String path, Handler handler) {
+        route("GET", path, handler);
+    }
+
+    private void post(String path, Handler handler) {
+        route("POST", path, handler);
+    }
+
+    private void route(String method, String path, Handler handler) {
+        register(routes, method + " " + path, handler);
+    }
+
+    private void any(String path, Handler handler) {
+        register(routes, path, handler);
+    }
+
+    private void prefix(String method, String prefix, Handler handler) {
+        prefixRoutes.add(new PrefixRoute(method, prefix, handler));
+    }
+
+    private static void register(Map<String, Handler> table, String key, Handler handler) {
+        if (table.put(key, handler) != null) {
+            throw new IllegalStateException("Duplicate route: " + key);
+        }
     }
 
     /**
@@ -153,40 +354,9 @@ public class RequestRouter implements AutoCloseable {
         String method = request.getMethod();
         
         try {
-            // Health checks (always public - needed for monitoring/load balancers)
-            // Skip rate limiting for health checks
-            if ("/health".equals(path) && "GET".equals(method)) {
-                healthHandler.handleHealth(response);
-                return;
-            }
-
-            if ("/health/local".equals(path) && "GET".equals(method)) {
-                healthHandler.handleLocalHealth(response);
-                return;
-            }
-            
-            if ("/health/deep".equals(path) && "GET".equals(method)) {
-                healthHandler.handleDeepHealth(response);
-                return;
-            }
-            
-            if ("/health/cluster".equals(path) && "GET".equals(method)) {
-                healthHandler.handleClusterHealth(response);
-                return;
-            }
-
-            if ("/v1/ops/snapshots/health".equals(path) && "GET".equals(method)) {
-                healthHandler.handleGetOpsHealthSnapshot(response);
-                return;
-            }
-
-            if ("/v1/ops/snapshots/runtime".equals(path) && "GET".equals(method)) {
-                healthHandler.handleGetOpsRuntimeSnapshot(response);
-                return;
-            }
-
-            if ("/v1/ops/snapshots/storage".equals(path) && "GET".equals(method)) {
-                healthHandler.handleGetOpsStorageSnapshot(response);
+            Handler handler = publicRoutes.get(method + " " + path);
+            if (handler != null) {
+                handler.handle(request, response, path);
                 return;
             }
             
@@ -209,14 +379,6 @@ public class RequestRouter implements AutoCloseable {
                 return;
             }
             
-            // Dashboard and UI
-            if ("/".equals(path) || "/dashboard".equals(path)) {
-                if ("GET".equals(method)) {
-                    dashboardHandler.handleDashboard(response);
-                    return;
-                }
-            }
-
             if (isBrowserUiRoute(path) && !browserUiEnabled) {
                 ApiErrorUtil.sendJsonError(
                     response,
@@ -226,531 +388,12 @@ public class RequestRouter implements AutoCloseable {
                 return;
             }
             
-            if ("/explorer".equals(path) && "GET".equals(method)) {
-                dashboardHandler.handleExplorerUI(response);
-                return;
-            }
-            
-            if ("/api-browser".equals(path) && "GET".equals(method)) {
-                dashboardHandler.handleApiBrowserUI(response);
-                return;
-            }
-
-            if (CONFIG_CONSOLE_PATH.equals(path) && "GET".equals(method)) {
-                dashboardHandler.handleConfigConsole(response);
-                return;
-            }
-
-            if ("/v1/index".equals(path) && "GET".equals(method)) {
-                dashboardHandler.handleApiIndex(response);
-                return;
-            }
-
-            if ("/v1/config/osgi".equals(path) && "GET".equals(method)) {
-                osgiConfigApiHandler.handleEffectiveConfig(response);
-                return;
-            }
-
-            if ("/v1/config/osgi/schema".equals(path) && "GET".equals(method)) {
-                osgiConfigApiHandler.handleConfigSchema(response);
-                return;
-            }
-
-            if ("/v1/config/osgi/sources".equals(path) && "GET".equals(method)) {
-                osgiConfigApiHandler.handleConfigSources(response);
-                return;
-            }
-
-            if ("/v1/config/osgi/coverage".equals(path) && "GET".equals(method)) {
-                osgiConfigApiHandler.handleCoverage(response);
-                return;
-            }
-
-            if ("/v1/config/osgi/delta".equals(path) && "GET".equals(method)) {
-                osgiConfigApiHandler.handleDelta(response);
-                return;
-            }
-            
-            // File serving
-            if ("/journal.log".equals(path) && "GET".equals(method)) {
-                fileHandler.handleFile(request, response, "journal.log", "text/plain");
-                return;
-            }
-            
-            if ("/manifest".equals(path)) {
-                if ("HEAD".equals(method)) {
-                    fileHandler.handleFileHead(response, "manifest", "text/plain");
-                } else if ("GET".equals(method)) {
-                    fileHandler.handleFile(request, response, "manifest", "text/plain");
-                } else {
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Method not allowed");
-                }
-                return;
-            }
-            
-            if ("/gc.log".equals(path) && "GET".equals(method)) {
-                fileHandler.handleFile(request, response, "gc.log", "text/plain");
-                return;
-            }
-            
-            // Segments
-            if (path != null && path.startsWith("/segments/")) {
-                String segmentId = path.substring("/segments/".length());
-                if ("HEAD".equals(method)) {
-                    fileHandler.handleSegmentHead(response, segmentId);
-                } else if ("GET".equals(method)) {
-                    fileHandler.handleSegmentGet(request, response, segmentId);
-                } else {
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Method not allowed");
-                }
-                return;
-            }
-            
-            // Explorer API
-            if ("/api/explore".equals(path) && "GET".equals(method)) {
-                String nodePath = request.getParameter("path");
-                explorerApiHandler.handleExploreNode(response, nodePath != null ? nodePath : "/");
-                return;
-            }
-            
-            if ("/api/segments/recent".equals(path) && "GET".equals(method)) {
-                explorerApiHandler.handleRecentSegments(response);
-                return;
-            }
-            
-            if ("/api/segments/tars".equals(path) && "GET".equals(method)) {
-                explorerApiHandler.handleTarFiles(response);
-                return;
-            }
-            
-            // Blob streaming API - serve binaries directly from Oak BlobStore
-            if (path.startsWith("/api/blob/") && "GET".equals(method)) {
-                String blobId = path.substring("/api/blob/".length());
-                explorerApiHandler.handleBlobStream(request, response, blobId);
-                return;
-            }
-            
-            // CID API (Oak blob ID ↔ IPFS CID mapping)
-            if ("/api/cid/stats".equals(path) && "GET".equals(method)) {
-                cidApiHandler.handleStats(request, response);
-                return;
-            }
-            if (path.startsWith("/api/cid/gateway/") && "GET".equals(method)) {
-                cidApiHandler.handleGatewayRedirect(request, response);
-                return;
-            }
-            if (path.startsWith("/api/cid/reverse/") && "GET".equals(method)) {
-                cidApiHandler.handleReverseLookup(request, response);
-                return;
-            }
-            if (path.startsWith("/api/cid/") && "GET".equals(method)) {
-                cidApiHandler.handleGetCid(request, response);
-                return;
-            }
-            
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // SSE Event Streaming API (ADR 036)
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            if ("/v1/ops/events/stream".equals(path) && "GET".equals(method)) {
-                eventStreamHandler.handleOpsEventStream(request, response);
-                return;
-            }
-
-            if ("/v1/events/stream".equals(path) && "GET".equals(method)) {
-                eventStreamHandler.handleEventStream(request, response);
-                return;
-            }
-            
-            if ("/v1/events/recent".equals(path) && "GET".equals(method)) {
-                eventStreamHandler.handleRecentEvents(request, response);
-                return;
-            }
-            
-            if ("/v1/events/stats".equals(path) && "GET".equals(method)) {
-                eventStreamHandler.handleStats(request, response);
-                return;
-            }
-            
-            // Metrics
-            if ("/api/metrics".equals(path) && "GET".equals(method)) {
-                metricsHandler.handleMetrics(response);
-                return;
-            }
-            
-            if ("/metrics".equals(path) && "GET".equals(method)) {
-                metricsHandler.handlePrometheusMetrics(response);
-                return;
-            }
-            
-            // Consensus API
-            if ("/v1/explorer/summary".equals(path) && "GET".equals(method)) {
-                explorerApiV1Handler.handleSummary(response);
-                return;
-            }
-
-            if ("/v1/explorer/release-flow".equals(path) && "GET".equals(method)) {
-                explorerApiV1Handler.handleReleaseFlow(response);
-                return;
-            }
-
-            if (path.startsWith("/v1/explorer/proposals/") && "GET".equals(method)) {
-                String proposalId = path.substring("/v1/explorer/proposals/".length());
-                explorerApiV1Handler.handleProposalById(response, proposalId);
-                return;
-            }
-
-            if (path.startsWith("/v1/explorer/wallets/") && "GET".equals(method)) {
-                String walletAddress = path.substring("/v1/explorer/wallets/".length());
-                explorerApiV1Handler.handleWalletByAddress(response, walletAddress);
-                return;
-            }
-
-            if ("/v1/explorer/content/nav".equals(path) && "GET".equals(method)) {
-                explorerApiV1Handler.handleContentNav(response);
-                return;
-            }
-
-            if (path.startsWith("/v1/explorer/content/clusters/") && "GET".equals(method)) {
-                String clusterPath = path.substring("/v1/explorer/content/clusters/".length());
-                int separator = clusterPath.indexOf('/');
-                if (separator > 0 && separator < clusterPath.length() - 1) {
-                    String clusterId = clusterPath.substring(0, separator);
-                    String action = clusterPath.substring(separator + 1);
-                    String requestedPath = request.getParameter("path");
-                    if ("tree".equals(action)) {
-                        explorerApiV1Handler.handleContentTree(response, clusterId, requestedPath,
-                            parseIntParameter(request.getParameter("offset"), 0),
-                            parseIntParameter(request.getParameter("limit"), ExplorerApiV1Handler.DEFAULT_TREE_PAGE_SIZE));
-                        return;
-                    }
-                    if ("node".equals(action)) {
-                        explorerApiV1Handler.handleContentNode(response, clusterId, requestedPath);
-                        return;
-                    }
-                    if ("provenance".equals(action)) {
-                        explorerApiV1Handler.handleContentProvenance(response, clusterId, requestedPath);
-                        return;
-                    }
-                }
-            }
-
-            if ("/v1/propose-write".equals(path) && "POST".equals(method)) {
-                // Phase 1: Optional shard routing logging (for demonstration)
-                // Phase 2: Will actually forward requests to correct shard
-                if (context.shardRouter != null) {
-                    String walletAddress = request.getParameter("walletAddress");
-                    if (walletAddress == null || walletAddress.isEmpty()) {
-                        walletAddress = request.getParameter("wallet"); // Fallback
-                    }
-                    if (walletAddress != null && !walletAddress.isEmpty()) {
-                        try {
-                            String leaderUrl = context.shardRouter.routeRequest(walletAddress);
-                            if (leaderUrl != null) {
-                                log.debug("🔀 Shard routing: wallet {} → leader {}", walletAddress, leaderUrl);
-                                // Phase 1: Log routing decision (all requests still process locally)
-                                // Phase 2: Forward to leaderUrl if different from selfUrl
-                            }
-                        } catch (Exception e) {
-                            log.debug("Shard routing check failed: {}", e.getMessage());
-                        }
-                    }
-                }
-                writeProposalHandler.handleProposeWrite(request, response);
-                return;
-            }
-            
-            // Delete Proposal API
-            if ("/v1/propose-delete".equals(path) && "POST".equals(method)) {
-                deleteProposalHandler.handleDeleteProposal(request, response);
-                return;
-            }
-            
-            // Binary Upload API (ADR 020 - Lazy upload on confirmation)
-            if ("/v1/binary/declare-intent".equals(path) && "POST".equals(method)) {
-                binaryUploadHandler.handleDeclareIntent(request, response);
-                return;
-            }
-            
-            if (path.startsWith("/v1/binary/check-intent/") && "GET".equals(method)) {
-                binaryUploadHandler.handleCheckIntent(request, response);
-                return;
-            }
-            
-            if ("/v1/binary/complete-upload".equals(path) && "POST".equals(method)) {
-                binaryUploadHandler.handleCompleteUpload(request, response);
-                return;
-            }
-            
-            // HEAD endpoint - returns JSON with committedHead vs latestHead
-            if ("/v1/head".equals(path) && "GET".equals(method)) {
-                response.setContentType("application/json");
-                response.setStatus(HttpServletResponse.SC_OK);
-                
-                StringBuilder json = new StringBuilder();
-                json.append("{\n");
-                
-                // 🔄 CRITICAL: Get HEAD from AeronConsensusEngine first (tracks latest HEAD correctly)
-                // Fallback to FileStore only if Aeron engine not available
-                String latestHead = null;
-                String committedHead = null;
-                int latestEpochSeen = -1;
-                int committedEpoch = -1;
-                
-                if (context.aeronConsensusEngine != null) {
-                    // Get tracked HEAD values from AeronConsensusEngine (most accurate)
-                    latestHead = context.aeronConsensusEngine.getLatestHead();
-                    committedHead = context.aeronConsensusEngine.getCommittedHead();
-                    latestEpochSeen = context.aeronConsensusEngine.getLatestEpochSeen();
-                    committedEpoch = context.aeronConsensusEngine.getLastCommittedEpoch();
-                }
-                
-                // Fallback to FileStore HEAD if Aeron engine not available or latestHead not set
-                if (latestHead == null || latestHead.isEmpty()) {
-                    latestHead = context.fileStore.getHead().getRecordId().toString10();
-                }
-                
-                json.append("  \"latestHead\": \"").append(FormatUtils.escapeJson(latestHead)).append("\",\n");
-                if (committedHead == null || committedHead.isEmpty()) {
-                    json.append("  \"committedHead\": null");
-                } else {
-                    json.append("  \"committedHead\": \"").append(FormatUtils.escapeJson(committedHead)).append("\"");
-                }
-                
-                if (latestEpochSeen >= 0) {
-                    json.append(",\n  \"latestEpochSeen\": ").append(latestEpochSeen);
-                }
-                if (committedEpoch >= 0) {
-                    json.append(",\n  \"committedEpoch\": ").append(committedEpoch);
-                }
-                
-                json.append("\n}\n");
-                response.getWriter().write(json.toString());
-                return;
-            }
-            
-            if ("/v1/consensus/status".equals(path) && "GET".equals(method)) {
-                consensusStatusHandler.handleGetConsensusStatus(response);
-                return;
-            }
-
-            if ("/v1/consensus/leader".equals(path) && "GET".equals(method)) {
-                consensusStatusHandler.handleGetConsensusLeader(
-                    "true".equals(request.getParameter(LeaderDiscoveryService.LOCAL_ONLY_PARAM)), response);
-                return;
-            }
-            
-            // Query APIs
-            if ("/v1/wallets/stats".equals(path) && "GET".equals(method)) {
-                walletQueryHandler.handleWalletStats(request, response);
-                return;
-            }
-            
-            if ("/v1/wallets/content".equals(path) && "GET".equals(method)) {
-                walletQueryHandler.handleWalletContent(request, response);
-                return;
-            }
-            
-            // GC Cost Estimation
-            if ("/v1/gc/estimate".equals(path) && "GET".equals(method)) {
-                gcCostHandler.handleGCCostEstimate(request, response);
-                return;
-            }
-            
-            // Proposal Queue Status
-            if (path.startsWith("/v1/ops/operations/") && "GET".equals(method)) {
-                proposalQueryHandler.handleGetOperationStatus(request, response);
-                return;
-            }
-
-            if ("/v1/ops/snapshots/queue".equals(path) && "GET".equals(method)) {
-                proposalQueryHandler.handleGetOpsQueueSnapshot(response);
-                return;
-            }
-
-            if (path.startsWith("/v1/settlement/proposals/") && "GET".equals(method)) {
-                proposalQueryHandler.handleGetSettlementByProposalId(request, response);
-                return;
-            }
-
-            if (path.startsWith("/v1/settlement/transactions/") && "GET".equals(method)) {
-                proposalQueryHandler.handleGetSettlementByTransactionHash(request, response);
-                return;
-            }
-
-            if ("/v1/ops/snapshots/cluster".equals(path) && "GET".equals(method)) {
-                aeronApiHandler.handleGetOpsClusterSnapshot(response);
-                return;
-            }
-
-            if ("/v1/ops/snapshots/replication".equals(path) && "GET".equals(method)) {
-                aeronApiHandler.handleGetOpsReplicationSnapshot(response);
-                return;
-            }
-
-            if (path.startsWith("/v1/proposals/") && path.endsWith("/status") && "GET".equals(method)) {
-                proposalQueryHandler.handleGetProposalStatus(request, response);
-                return;
-            }
-            
-            if ("/v1/proposals/pending/count".equals(path) && "GET".equals(method)) {
-                proposalQueryHandler.handleGetPendingCount(response);
-                return;
-            }
-
-            if ("/v1/proposals/queue/stats".equals(path) && "GET".equals(method)) {
-                proposalQueryHandler.handleGetQueueStats(response);
-                return;
-            }
-
-            if ("/v1/proposals/release-flow".equals(path) && "GET".equals(method)) {
-                proposalQueryHandler.handleGetProposalReleaseFlow(response);
-                return;
-            }
-            
-            // Registration
-            if ("/v1/register-client".equals(path) && ("POST".equals(method) || "PUT".equals(method))) {
-                registrationHandler.handleClientRegistration(request, response);
-                return;
-            }
-            
-            // Peer discovery
-            if ("/v1/peers".equals(path) && "GET".equals(method)) {
-                peerDiscoveryHandler.handlePeerList(response);
-                return;
-            }
-            
-            // Blockchain configuration endpoint
-            if ("/v1/blockchain/config".equals(path) && "GET".equals(method)) {
-                new BlockchainConfigApiHandler(context).handle(response);
-                return;
-            }
-            
-            // Aeron Cluster-specific endpoints
-            if ("/v1/aeron/cluster-state".equals(path) && "GET".equals(method)) {
-                aeronApiHandler.handleClusterState(response);
-                return;
-            }
-
-            if ("/v1/aeron/validator-identities".equals(path) && "GET".equals(method)) {
-                aeronApiHandler.handleValidatorIdentities(response);
-                return;
-            }
-            
-            if ("/v1/aeron/raft-metrics".equals(path) && "GET".equals(method)) {
-                aeronApiHandler.handleRaftMetrics(response);
-                return;
-            }
-            
-            if ("/v1/aeron/node-status".equals(path) && "GET".equals(method)) {
-                aeronApiHandler.handleNodeStatus(request, response);
-                return;
-            }
-            
-            if ("/v1/aeron/leadership-history".equals(path) && "GET".equals(method)) {
-                aeronApiHandler.handleLeadershipHistory(request, response);
-                return;
-            }
-            
-            // ✅ ADR 025: Replication lag monitoring endpoint
-            if ("/v1/aeron/replication-lag".equals(path) && "GET".equals(method)) {
-                aeronApiHandler.handleReplicationLag(response);
-                return;
-            }
-            
-            // Fragmentation & GC Metrics API
-            if ("/v1/fragmentation/metrics".equals(path) && "GET".equals(method)) {
-                fragmentationApiHandler.handleGetAllMetrics(request, response);
-                return;
-            }
-            
-            if (path != null && path.startsWith("/v1/fragmentation/metrics/") && "GET".equals(method)) {
-                String walletAddress = path.substring("/v1/fragmentation/metrics/".length());
-                fragmentationApiHandler.handleGetEntityMetrics(request, response, walletAddress);
-                return;
-            }
-            
-            if ("/v1/fragmentation/top".equals(path) && "GET".equals(method)) {
-                fragmentationApiHandler.handleGetTopFragmented(request, response);
-                return;
-            }
-            
-            if ("/v1/gc/status".equals(path) && "GET".equals(method)) {
-                fragmentationApiHandler.handleGetGcStatus(request, response);
-                return;
-            }
-            
-            if ("/v1/compaction/proposals".equals(path) && "GET".equals(method)) {
-                fragmentationApiHandler.handleGetCompactionProposals(request, response);
-                return;
-            }
-            
-            if ("/v1/propose-gc".equals(path) && "POST".equals(method)) {
-                fragmentationApiHandler.handleProposeGC(request, response);
-                return;
-            }
-            
-            if ("/v1/gc/execute".equals(path) && "POST".equals(method)) {
-                fragmentationApiHandler.handleExecuteGC(request, response);
-                return;
-            }
-
-            if ("/v1/gc/vote".equals(path) && "POST".equals(method)) {
-                fragmentationApiHandler.handleVoteGC(request, response);
-                return;
-            }
-            
-            // GC Account Management
-            if (path != null && path.startsWith("/v1/gc/account/")) {
-                // Extract wallet address from path
-                String remaining = path.substring("/v1/gc/account/".length());
-                
-                // Check for sub-paths
-                if (remaining.contains("/pay") && "POST".equals(method)) {
-                    String walletAddress = remaining.substring(0, remaining.indexOf("/pay"));
-                    fragmentationApiHandler.handlePayGCDebt(request, response, walletAddress);
-                    return;
-                } else if (remaining.contains("/set-limit") && "POST".equals(method)) {
-                    String walletAddress = remaining.substring(0, remaining.indexOf("/set-limit"));
-                    fragmentationApiHandler.handleSetDebtLimit(request, response, walletAddress);
-                    return;
-                } else if (remaining.contains("/execute-pending") && "POST".equals(method)) {
-                    String walletAddress = remaining.substring(0, remaining.indexOf("/execute-pending"));
-                    fragmentationApiHandler.handleExecutePendingDebt(request, response, walletAddress);
-                    return;
-                } else if ("GET".equals(method) && !remaining.contains("/")) {
-                    // GET /v1/gc/account/{walletAddress}
-                    fragmentationApiHandler.handleGetGCAccount(request, response, remaining);
-                    return;
-                }
-            }
-            
-            // Manual GC trigger endpoint (for testing)
-            if ("/v1/gc/trigger".equals(path) && "POST".equals(method)) {
-                fragmentationApiHandler.handleTriggerGC(request, response);
-                return;
-            }
-            
-            // Not found - log with context
-            String remoteAddr = request.getRemoteAddr();
-            String userAgent = request.getHeader("User-Agent");
-            
-            // Filter out known invalid requests (Composum Browser, etc.) - log at debug level
-            if (path != null && (path.startsWith("/bin/") || path.startsWith("/system/") || path.startsWith("/content/"))) {
-                // These are Sling/AEM endpoints, not validator endpoints - suppress noise
-                log.debug("⚠️  Invalid request (Sling/AEM endpoint on validator): {} {} FROM {} [UA: {}]", 
-                    method, path, remoteAddr, userAgent != null ? userAgent : "unknown");
+            handler = findRoute(method, path);
+            if (handler != null) {
+                handler.handle(request, response, path);
             } else {
-                // Unknown endpoint - log at info level
-                log.info("⚠️  404 Not Found: {} {} FROM {} [UA: {}]", 
-                    method, path, remoteAddr, userAgent != null ? userAgent : "unknown");
+                sendNotFound(request, response, path);
             }
-            
-            if (isApiPath(path)) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Not found");
-            } else {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND);
-            }
-            
         } catch (Exception e) {
             log.error("Error routing request: " + path, e);
             if (isApiPath(path)) {
@@ -759,6 +402,150 @@ public class RequestRouter implements AutoCloseable {
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
             }
         }
+    }
+
+    private Handler findRoute(String method, String path) {
+        Handler handler = routes.get(method + " " + path);
+        if (handler == null) {
+            handler = routes.get(path);
+        }
+        if (handler != null) {
+            return handler;
+        }
+        for (PrefixRoute route : prefixRoutes) {
+            if (path.startsWith(route.prefix()) && (route.method() == null || route.method().equals(method))) {
+                return route.handler();
+            }
+        }
+        return null;
+    }
+
+    private void sendNotFound(HttpServletRequest request, HttpServletResponse response, String path) throws IOException {
+        String method = request.getMethod();
+        String remoteAddr = request.getRemoteAddr();
+        String userAgent = request.getHeader("User-Agent");
+
+        // Sling/AEM endpoints are not validator endpoints - suppress noise
+        if (path != null && (path.startsWith("/bin/") || path.startsWith("/system/") || path.startsWith("/content/"))) {
+            log.debug("⚠️  Invalid request (Sling/AEM endpoint on validator): {} {} FROM {} [UA: {}]",
+                method, path, remoteAddr, userAgent != null ? userAgent : "unknown");
+        } else {
+            log.info("⚠️  404 Not Found: {} {} FROM {} [UA: {}]",
+                method, path, remoteAddr, userAgent != null ? userAgent : "unknown");
+        }
+
+        if (isApiPath(path)) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Not found");
+        } else {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND);
+        }
+    }
+
+    private static void sendMethodNotAllowed(HttpServletResponse response) throws IOException {
+        ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Method not allowed");
+    }
+
+    private static boolean handleContentCluster(ExplorerApiV1Handler explorerApiV1Handler, HttpServletRequest request,
+                                                HttpServletResponse response, String path) throws IOException {
+        String clusterPath = path.substring("/v1/explorer/content/clusters/".length());
+        int separator = clusterPath.indexOf('/');
+        if (separator <= 0 || separator >= clusterPath.length() - 1) {
+            return false;
+        }
+        String clusterId = clusterPath.substring(0, separator);
+        String action = clusterPath.substring(separator + 1);
+        String requestedPath = request.getParameter("path");
+        if ("tree".equals(action)) {
+            explorerApiV1Handler.handleContentTree(response, clusterId, requestedPath,
+                parseIntParameter(request.getParameter("offset"), 0),
+                parseIntParameter(request.getParameter("limit"), ExplorerApiV1Handler.DEFAULT_TREE_PAGE_SIZE));
+            return true;
+        }
+        if ("node".equals(action)) {
+            explorerApiV1Handler.handleContentNode(response, clusterId, requestedPath);
+            return true;
+        }
+        if ("provenance".equals(action)) {
+            explorerApiV1Handler.handleContentProvenance(response, clusterId, requestedPath);
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean handleGcAccount(FragmentationApiHandler fragmentationApiHandler, HttpServletRequest request,
+                                           HttpServletResponse response, String path) throws IOException {
+        String remaining = path.substring("/v1/gc/account/".length());
+        String method = request.getMethod();
+        if (remaining.contains("/pay") && "POST".equals(method)) {
+            fragmentationApiHandler.handlePayGCDebt(request, response, remaining.substring(0, remaining.indexOf("/pay")));
+        } else if (remaining.contains("/set-limit") && "POST".equals(method)) {
+            fragmentationApiHandler.handleSetDebtLimit(request, response, remaining.substring(0, remaining.indexOf("/set-limit")));
+        } else if (remaining.contains("/execute-pending") && "POST".equals(method)) {
+            fragmentationApiHandler.handleExecutePendingDebt(request, response,
+                remaining.substring(0, remaining.indexOf("/execute-pending")));
+        } else if ("GET".equals(method) && !remaining.contains("/")) {
+            fragmentationApiHandler.handleGetGCAccount(request, response, remaining);
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    // Phase 1: shard routing is logged only; all requests still process locally.
+    private void logShardRoute(HttpServletRequest request) {
+        if (context.shardRouter == null) {
+            return;
+        }
+        String walletAddress = request.getParameter("walletAddress");
+        if (walletAddress == null || walletAddress.isEmpty()) {
+            walletAddress = request.getParameter("wallet");
+        }
+        if (walletAddress != null && !walletAddress.isEmpty()) {
+            try {
+                String leaderUrl = context.shardRouter.routeRequest(walletAddress);
+                if (leaderUrl != null) {
+                    log.debug("🔀 Shard routing: wallet {} → leader {}", walletAddress, leaderUrl);
+                }
+            } catch (Exception e) {
+                log.debug("Shard routing check failed: {}", e.getMessage());
+            }
+        }
+    }
+
+    // HEAD from AeronConsensusEngine (tracks latest HEAD correctly), FileStore as fallback.
+    private void handleHead(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        response.setStatus(HttpServletResponse.SC_OK);
+
+        String latestHead = null;
+        String committedHead = null;
+        int latestEpochSeen = -1;
+        int committedEpoch = -1;
+        if (context.aeronConsensusEngine != null) {
+            latestHead = context.aeronConsensusEngine.getLatestHead();
+            committedHead = context.aeronConsensusEngine.getCommittedHead();
+            latestEpochSeen = context.aeronConsensusEngine.getLatestEpochSeen();
+            committedEpoch = context.aeronConsensusEngine.getLastCommittedEpoch();
+        }
+        if (latestHead == null || latestHead.isEmpty()) {
+            latestHead = context.fileStore.getHead().getRecordId().toString10();
+        }
+
+        StringBuilder json = new StringBuilder("{\n");
+        json.append("  \"latestHead\": \"").append(FormatUtils.escapeJson(latestHead)).append("\",\n");
+        if (committedHead == null || committedHead.isEmpty()) {
+            json.append("  \"committedHead\": null");
+        } else {
+            json.append("  \"committedHead\": \"").append(FormatUtils.escapeJson(committedHead)).append("\"");
+        }
+        if (latestEpochSeen >= 0) {
+            json.append(",\n  \"latestEpochSeen\": ").append(latestEpochSeen);
+        }
+        if (committedEpoch >= 0) {
+            json.append(",\n  \"committedEpoch\": ").append(committedEpoch);
+        }
+        json.append("\n}\n");
+        response.getWriter().write(json.toString());
     }
 
     private static int parseIntParameter(String value, int fallback) {
