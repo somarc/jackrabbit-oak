@@ -49,6 +49,12 @@ public class RequestRouter implements AutoCloseable {
     private final DashboardHandler dashboardHandler;
     private final ExplorerApiV1Handler explorerApiV1Handler;
     private final ConsensusApiHandler consensusApiHandler;
+    private final WriteProposalHandler writeProposalHandler;
+    private final DeleteProposalHandler deleteProposalHandler;
+    private final ConsensusStatusHandler consensusStatusHandler;
+    private final ProposalQueryHandler proposalQueryHandler;
+    private final GcCostHandler gcCostHandler;
+    private final WalletQueryHandler walletQueryHandler;
     private final RegistrationHandler registrationHandler;
     private final PeerDiscoveryHandler peerDiscoveryHandler;
     private final AeronApiHandler aeronApiHandler;
@@ -99,6 +105,12 @@ public class RequestRouter implements AutoCloseable {
         this.dashboardHandler = new DashboardHandler(context);
         this.explorerApiV1Handler = new ExplorerApiV1Handler(context);
         this.consensusApiHandler = new ConsensusApiHandler(context);
+        this.writeProposalHandler = new WriteProposalHandler(context);
+        this.deleteProposalHandler = new DeleteProposalHandler(context);
+        this.consensusStatusHandler = new ConsensusStatusHandler(context);
+        this.proposalQueryHandler = new ProposalQueryHandler(context);
+        this.gcCostHandler = new GcCostHandler(context);
+        this.walletQueryHandler = new WalletQueryHandler(context);
         this.registrationHandler = new RegistrationHandler(context);
         this.peerDiscoveryHandler = new PeerDiscoveryHandler(context);
         this.aeronApiHandler = new AeronApiHandler(context);
@@ -437,13 +449,13 @@ public class RequestRouter implements AutoCloseable {
                         }
                     }
                 }
-                consensusApiHandler.handleProposeWrite(request, response);
+                writeProposalHandler.handleProposeWrite(request, response);
                 return;
             }
             
             // Delete Proposal API
             if ("/v1/propose-delete".equals(path) && "POST".equals(method)) {
-                consensusApiHandler.handleDeleteProposal(request, response);
+                deleteProposalHandler.handleDeleteProposal(request, response);
                 return;
             }
             
@@ -511,51 +523,51 @@ public class RequestRouter implements AutoCloseable {
             }
             
             if ("/v1/consensus/status".equals(path) && "GET".equals(method)) {
-                consensusApiHandler.handleGetConsensusStatus(response);
+                consensusStatusHandler.handleGetConsensusStatus(response);
                 return;
             }
 
             if ("/v1/consensus/leader".equals(path) && "GET".equals(method)) {
-                consensusApiHandler.handleGetConsensusLeader(
+                consensusStatusHandler.handleGetConsensusLeader(
                     "true".equals(request.getParameter(LeaderDiscoveryService.LOCAL_ONLY_PARAM)), response);
                 return;
             }
             
             // Query APIs
             if ("/v1/wallets/stats".equals(path) && "GET".equals(method)) {
-                consensusApiHandler.handleWalletStats(request, response);
+                walletQueryHandler.handleWalletStats(request, response);
                 return;
             }
             
             if ("/v1/wallets/content".equals(path) && "GET".equals(method)) {
-                consensusApiHandler.handleWalletContent(request, response);
+                walletQueryHandler.handleWalletContent(request, response);
                 return;
             }
             
             // GC Cost Estimation
             if ("/v1/gc/estimate".equals(path) && "GET".equals(method)) {
-                consensusApiHandler.handleGCCostEstimate(request, response);
+                gcCostHandler.handleGCCostEstimate(request, response);
                 return;
             }
             
             // Proposal Queue Status
             if (path.startsWith("/v1/ops/operations/") && "GET".equals(method)) {
-                consensusApiHandler.handleGetOperationStatus(request, response);
+                proposalQueryHandler.handleGetOperationStatus(request, response);
                 return;
             }
 
             if ("/v1/ops/snapshots/queue".equals(path) && "GET".equals(method)) {
-                consensusApiHandler.handleGetOpsQueueSnapshot(response);
+                proposalQueryHandler.handleGetOpsQueueSnapshot(response);
                 return;
             }
 
             if (path.startsWith("/v1/settlement/proposals/") && "GET".equals(method)) {
-                consensusApiHandler.handleGetSettlementByProposalId(request, response);
+                proposalQueryHandler.handleGetSettlementByProposalId(request, response);
                 return;
             }
 
             if (path.startsWith("/v1/settlement/transactions/") && "GET".equals(method)) {
-                consensusApiHandler.handleGetSettlementByTransactionHash(request, response);
+                proposalQueryHandler.handleGetSettlementByTransactionHash(request, response);
                 return;
             }
 
@@ -570,22 +582,22 @@ public class RequestRouter implements AutoCloseable {
             }
 
             if (path.startsWith("/v1/proposals/") && path.endsWith("/status") && "GET".equals(method)) {
-                consensusApiHandler.handleGetProposalStatus(request, response);
+                proposalQueryHandler.handleGetProposalStatus(request, response);
                 return;
             }
             
             if ("/v1/proposals/pending/count".equals(path) && "GET".equals(method)) {
-                consensusApiHandler.handleGetPendingCount(response);
+                proposalQueryHandler.handleGetPendingCount(response);
                 return;
             }
 
             if ("/v1/proposals/queue/stats".equals(path) && "GET".equals(method)) {
-                consensusApiHandler.handleGetQueueStats(response);
+                proposalQueryHandler.handleGetQueueStats(response);
                 return;
             }
 
             if ("/v1/proposals/release-flow".equals(path) && "GET".equals(method)) {
-                consensusApiHandler.handleGetProposalReleaseFlow(response);
+                proposalQueryHandler.handleGetProposalReleaseFlow(response);
                 return;
             }
             
