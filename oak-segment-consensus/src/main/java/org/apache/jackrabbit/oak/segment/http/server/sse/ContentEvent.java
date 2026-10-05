@@ -16,7 +16,10 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.sse;
 
-import static org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils.escapeJson;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Content event for SSE streaming (ADR 036).
@@ -146,44 +149,35 @@ public class ContentEvent {
         return contentType;
     }
 
+    /** Ordered event fields: id, type and timestamp always, the others only when set. */
+    public Map<String, Object> toMap() {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", id);
+        map.put("type", type.getValue());
+        putIfSet(map, "action", getAction());
+        putIfSet(map, "path", path);
+        putIfSet(map, "wallet", wallet);
+        putIfSet(map, "organization", organization);
+        map.put("timestamp", timestamp);
+        putIfSet(map, "message", message);
+        putIfSet(map, "ipfsCid", ipfsCid);
+        putIfSet(map, "signature", signature);
+        putIfSet(map, "size", size);
+        putIfSet(map, "contentType", contentType);
+        return map;
+    }
+
+    private static void putIfSet(Map<String, Object> map, String key, Object value) {
+        if (value != null) {
+            map.put(key, value);
+        }
+    }
+
     /**
      * Convert to JSON string.
      */
     public String toJson() {
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"id\":\"").append(escapeJson(id)).append("\",");
-        json.append("\"type\":\"").append(type.getValue()).append("\",");
-        if (action != null) {
-            json.append("\"action\":\"").append(action.getValue()).append("\",");
-        }
-        if (path != null) {
-            json.append("\"path\":\"").append(escapeJson(path)).append("\",");
-        }
-        if (wallet != null) {
-            json.append("\"wallet\":\"").append(escapeJson(wallet)).append("\",");
-        }
-        if (organization != null) {
-            json.append("\"organization\":\"").append(escapeJson(organization)).append("\",");
-        }
-        json.append("\"timestamp\":").append(timestamp);
-        if (message != null) {
-            json.append(",\"message\":\"").append(escapeJson(message)).append("\"");
-        }
-        if (ipfsCid != null) {
-            json.append(",\"ipfsCid\":\"").append(escapeJson(ipfsCid)).append("\"");
-        }
-        if (signature != null) {
-            json.append(",\"signature\":\"").append(escapeJson(signature)).append("\"");
-        }
-        if (size != null) {
-            json.append(",\"size\":").append(size);
-        }
-        if (contentType != null) {
-            json.append(",\"contentType\":\"").append(escapeJson(contentType)).append("\"");
-        }
-        json.append("}");
-        return json.toString();
+        return JsonOutputUtil.toJson(toMap());
     }
 
     /**
