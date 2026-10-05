@@ -103,10 +103,6 @@ public class AeronClusterService {
         return this.startupResult;
     }
 
-    public AeronClusterStartupResult getStartupResult() {
-        return startupResult;
-    }
-
     public void shutdown() {
         if (startupResult != null && startupResult.getLauncher() != null) {
             try {

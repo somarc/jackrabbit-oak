@@ -33,7 +33,6 @@ import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ReplicatedDurability;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
-import org.apache.jackrabbit.oak.segment.consensus.util.SegmentReplicator;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -134,7 +133,6 @@ public class AeronConsensusEngine implements ClusteredService {
     private final String selfUrl;
     private final List<String> peerUrls;
     private final org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
-    private final SegmentReplicator replicator;
     private final String storeDirectory;
     private final org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager backpressureManager;
     private final DurabilityTally durabilityTally = new DurabilityTally(this::getTotalMemberCount);
@@ -252,9 +250,6 @@ public class AeronConsensusEngine implements ClusteredService {
     private volatile long leaderLogPosition = -1; // Track leader's position for lag calculation
     private volatile long leaderLogPositionObservedAtMs = 0L;
     
-    // Track validator join times (for probation, if needed)
-    private final Map<String, Long> validatorJoinTimes = new ConcurrentHashMap<>();
-    
     // Map node IDs to URLs for leader lookup
     private final Map<Integer, String> nodeIdToUrl = new ConcurrentHashMap<>();
     
@@ -314,7 +309,6 @@ public class AeronConsensusEngine implements ClusteredService {
         this.peerUrls = peerUrls;
         this.wallet = wallet;
         this.storeDirectory = storeDirectory;
-        this.replicator = new SegmentReplicator(fileStore);
         this.backpressureManager = new org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager();
         this.transactionLifecycleManager = new TransactionLifecycleManager();
         this.peerProbeMode = parsePeerProbeMode();
@@ -1513,59 +1507,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Pull segments for a specific HEAD from the leader.
-     * Called by followers when they receive a HEAD update broadcast.
-     * 
-     * @param headStr The HEAD RecordId to replicate
-     * @param leaderUrl The URL of the leader validator
-     * @return Number of segments replicated
-     * @throws Exception if replication fails
-     */
-    public int pullSegmentsForHead(String headStr, String leaderUrl) throws Exception {
-        log.info("Pulling segments for HEAD from leader: {} (HEAD: {}...)", 
-            leaderUrl, headStr.substring(0, Math.min(16, headStr.length())));
-        
-        int segmentCount = replicator.fetchMissingSegmentsForHead(headStr, leaderUrl);
-        
-        log.info("Replicated {} segments for HEAD", segmentCount);
-        
-        // Update HEAD after fetching segments (like syncGenesisFromPeer pattern)
-        try {
-            org.apache.jackrabbit.oak.segment.RecordId newHead = 
-                org.apache.jackrabbit.oak.segment.RecordId.fromString(
-                    fileStore.getSegmentIdProvider(), 
-                    headStr
-                );
-            
-            // Use CAS (compare-and-set) to update HEAD (Cold Standby pattern)
-            org.apache.jackrabbit.oak.segment.RecordId currentHead = fileStore.getHead().getRecordId();
-            boolean updated = fileStore.getRevisions().setHead(currentHead, newHead);
-            
-            if (updated) {
-                log.info("Updated HEAD to match leader (CAS success)");
-                fileStore.flush();
-                headStateService.updateLatestHead(headStr);
-            } else {
-                log.warn("HEAD CAS failed - current HEAD has changed (may have advanced)");
-                org.apache.jackrabbit.oak.segment.RecordId actualHead = fileStore.getHead().getRecordId();
-                if (actualHead.toString().equals(headStr)) {
-                    log.info("HEAD already matches target (no update needed)");
-                    headStateService.updateLatestHead(headStr);
-                } else {
-                    log.debug("Current HEAD: {}...", actualHead.toString().substring(0, Math.min(16, actualHead.toString().length())));
-                    headStateService.updateLatestHead(actualHead.toString10());
-                }
-            }
-            
-        } catch (Exception e) {
-            log.error("Failed to update HEAD after replication: {}. Segments replicated but HEAD may not match leader", e.getMessage());
-            throw e; // Re-throw so caller knows sync may be incomplete
-        }
-        
-        return segmentCount;
-    }
-    
-    /**
      * Get this validator's wallet address (Ethereum address).
      * 
      * @return Wallet address (0x... format) or null if wallet not initialized
@@ -1728,14 +1669,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Get current node's member ID in the cluster.
-     * @return Member ID (0-based node index) or -1 if cluster not initialized
-     */
-    public int getMemberId() {
-        return cluster != null ? cluster.memberId() : -1;
-    }
-    
-    /**
      * Get cluster size (number of nodes configured).
      * @return Number of nodes in cluster
      */
@@ -1866,14 +1799,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Get non-voting followers (validators on probation).
-     */
-    public List<String> getNonVotingFollowers() {
-        // PRODUCTION_HARDENING: Implement probation logic for newly joined validators
-        return new java.util.ArrayList<>();
-    }
-    
-    /**
      * NEW GENESIS ARCHITECTURE: Create genesis via Aeron consensus.
      * 
      * This is called when the leader detects an empty store after cluster formation.
@@ -1925,13 +1850,6 @@ public class AeronConsensusEngine implements ClusteredService {
         genesisInitializer.initializeGenesisContent(
             AeronGenesisInitializer.GenesisProposal.create(timestamp, bootstrapValidator), logPosition);
         genesisVerified = genesisInitializer.verifyExistingGenesis();
-    }
-    
-    /**
-     * Get validator join times for probation tracking.
-     */
-    public Map<String, Long> getValidatorJoinTimes() {
-        return new java.util.HashMap<>(validatorJoinTimes);
     }
     
     /**
