@@ -52,7 +52,7 @@ public class ShardRouter {
     private static final int READ_TIMEOUT_MS = 3000;
     
     private final ShardDirectory shardDirectory;
-    private final ShardingStrategy strategy;
+    private final WalletShardingStrategy strategy;
     
     /**
      * Cache of current leader per shard (with TTL).
@@ -66,7 +66,7 @@ public class ShardRouter {
      * @param shardDirectory Shard directory (maps shardId → peerUrls)
      * @param strategy Sharding strategy (computes shardId from wallet)
      */
-    public ShardRouter(ShardDirectory shardDirectory, ShardingStrategy strategy) {
+    public ShardRouter(ShardDirectory shardDirectory, WalletShardingStrategy strategy) {
         if (shardDirectory == null) {
             throw new IllegalArgumentException("ShardDirectory cannot be null");
         }
@@ -271,7 +271,7 @@ public class ShardRouter {
      * 
      * @return Sharding strategy
      */
-    public ShardingStrategy getStrategy() {
+    public WalletShardingStrategy getStrategy() {
         return strategy;
     }
     

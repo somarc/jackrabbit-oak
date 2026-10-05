@@ -20,7 +20,6 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.WalletShardingStrategy;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -56,7 +55,7 @@ public class ShardRouterInitializerTest {
 
         ShardRouter shardRouter = context.shardRouter;
         assertNotNull(shardRouter);
-        assertEquals(1, ((WalletShardingStrategy) shardRouter.getStrategy()).getNumShards());
+        assertEquals(1, shardRouter.getStrategy().getNumShards());
         assertEquals(1, shardRouter.getShardDirectory().getNumShards());
         assertEquals(
             Arrays.asList("http://node-a:8080", "http://node-b:8081"),
@@ -85,8 +84,8 @@ public class ShardRouterInitializerTest {
 
         ShardRouter shardRouter = context.shardRouter;
         assertNotNull(shardRouter);
-        assertEquals(4, ((WalletShardingStrategy) shardRouter.getStrategy()).getNumShards());
-        assertTrue(((WalletShardingStrategy) shardRouter.getStrategy()).isPowerOfTwo());
+        assertEquals(4, shardRouter.getStrategy().getNumShards());
+        assertTrue(shardRouter.getStrategy().isPowerOfTwo());
         assertEquals(1, shardRouter.getShardDirectory().getNumShards());
     }
 
@@ -114,6 +113,6 @@ public class ShardRouterInitializerTest {
             "not-a-number"
         );
 
-        assertEquals(1, ((WalletShardingStrategy) context.shardRouter.getStrategy()).getNumShards());
+        assertEquals(1, context.shardRouter.getStrategy().getNumShards());
     }
 }
