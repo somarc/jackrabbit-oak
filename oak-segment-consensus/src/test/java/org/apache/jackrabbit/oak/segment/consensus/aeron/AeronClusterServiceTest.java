@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
 import org.apache.jackrabbit.oak.segment.consensus.server.AeronClusterStartupResult;
 import org.junit.After;
 import org.junit.Test;
@@ -24,7 +25,6 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -79,7 +79,7 @@ public class AeronClusterServiceTest {
         assertEquals(Arrays.asList("http://validator-1:8090", "http://validator-2:8090"), snapshot.peerUrls);
         assertFalse(snapshot.observeElections);
         assertTrue(snapshot.logClusterStateDetails);
-        assertEquals("osgi-config-admin", AeronClusterTuningSourceRegistry.getSource());
+        assertEquals("osgi-config-admin", AeronClusterTuningIntrospection.source());
     }
 
     @Test
@@ -183,11 +183,7 @@ public class AeronClusterServiceTest {
         field.set(target, value);
     }
 
-    @SuppressWarnings("unchecked")
-    private static void resetTuningSource() throws Exception {
-        Field field = AeronClusterTuningSourceRegistry.class.getDeclaredField("SOURCE");
-        field.setAccessible(true);
-        AtomicReference<String> source = (AtomicReference<String>) field.get(null);
-        source.set("system-properties");
+    private static void resetTuningSource() {
+        RuntimePropertySourceRegistry.markSource(AeronClusterTuningIntrospection.COMPONENT, "system-properties");
     }
 }

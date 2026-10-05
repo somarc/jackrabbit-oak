@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
 import org.apache.jackrabbit.oak.segment.consensus.server.AeronClusterBootstrapper;
 import org.apache.jackrabbit.oak.segment.consensus.server.AeronClusterStartupResult;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
@@ -56,7 +57,7 @@ public class AeronClusterService {
     protected void activate(AeronClusterConfig config) {
         this.config = config;
         AeronClusterRuntimeRegistry.update(config);
-        AeronClusterTuningSourceRegistry.markOsgiSource();
+        RuntimePropertySourceRegistry.markSource(AeronClusterTuningIntrospection.COMPONENT, "osgi-config-admin");
         logConfiguration("Activated");
     }
 
@@ -64,7 +65,7 @@ public class AeronClusterService {
     protected void modified(AeronClusterConfig config) {
         this.config = config;
         AeronClusterRuntimeRegistry.update(config);
-        AeronClusterTuningSourceRegistry.markOsgiSource();
+        RuntimePropertySourceRegistry.markSource(AeronClusterTuningIntrospection.COMPONENT, "osgi-config-admin");
         logConfiguration("Modified");
     }
 

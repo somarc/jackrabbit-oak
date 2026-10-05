@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -23,6 +25,8 @@ import java.util.Map;
  * Read-only introspection helpers for effective Aeron cluster tuning.
  */
 public final class AeronClusterTuningIntrospection {
+
+    static final String COMPONENT = "aeronClusterTuning";
 
     private AeronClusterTuningIntrospection() {
     }
@@ -63,7 +67,7 @@ public final class AeronClusterTuningIntrospection {
     }
 
     public static String source() {
-        return AeronClusterTuningSourceRegistry.getSource();
+        return RuntimePropertySourceRegistry.getSource(COMPONENT, "system-properties");
     }
 
     private static int readInt(String key, int defaultValue) {

@@ -223,7 +223,7 @@ public class BlockchainConfig {
      * Read string configuration (env var > system property > default).
      */
     private String readStringConfig(String envVar, String sysProp, String defaultValue) {
-        String osgiOverride = BlockchainConfigOverrideRegistry.get(sysProp);
+        String osgiOverride = RuntimePropertyOverrideRegistry.get(sysProp);
         if (osgiOverride != null && !osgiOverride.isEmpty()) {
             return osgiOverride;
         }

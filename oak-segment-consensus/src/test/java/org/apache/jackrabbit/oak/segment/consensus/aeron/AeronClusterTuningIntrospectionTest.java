@@ -16,10 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import java.lang.reflect.Field;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
 import org.junit.After;
 import org.junit.Test;
 
@@ -100,7 +99,7 @@ public class AeronClusterTuningIntrospectionTest {
         System.setProperty("oak.cluster.heartbeat.maxAgeMs", "bad");
         System.setProperty("oak.cluster.reachability.cacheMs", " ");
         System.setProperty("aeron.delete.dirs.on.startup", " ");
-        AeronClusterTuningSourceRegistry.markOsgiSource();
+        RuntimePropertySourceRegistry.markSource(AeronClusterTuningIntrospection.COMPONENT, "osgi-config-admin");
 
         Map<String, Object> values = AeronClusterTuningIntrospection.effectiveValues();
 
@@ -157,11 +156,7 @@ public class AeronClusterTuningIntrospectionTest {
         System.clearProperty("ethereum.beacon.api.url");
     }
 
-    private static void resetSourceRegistry() throws Exception {
-        Field field = AeronClusterTuningSourceRegistry.class.getDeclaredField("SOURCE");
-        field.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        AtomicReference<String> source = (AtomicReference<String>) field.get(null);
-        source.set("system-properties");
+    private static void resetSourceRegistry() {
+        RuntimePropertySourceRegistry.markSource(AeronClusterTuningIntrospection.COMPONENT, "system-properties");
     }
 }
