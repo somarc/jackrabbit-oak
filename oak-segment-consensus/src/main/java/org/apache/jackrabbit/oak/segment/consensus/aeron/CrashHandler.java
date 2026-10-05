@@ -29,7 +29,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Handles crashes and errors in Aeron Cluster components.
@@ -54,13 +53,9 @@ public class CrashHandler {
     private static final String FORCE_BOOTSTRAP_MARKER = "node-force-bootstrap";
     
     private final File baseDir;
-    private final int nodeId;
-    private final AtomicBoolean shutdownScheduled = new AtomicBoolean(false);
-    private volatile boolean startupSuccessful = false;
     
     public CrashHandler(File baseDir, int nodeId) {
         this.baseDir = baseDir;
-        this.nodeId = nodeId;
     }
     
     /**
@@ -202,7 +197,6 @@ public class CrashHandler {
     public void reset() {
         deleteCrashMarker();
         deleteForceBootstrapMarker();
-        startupSuccessful = true;
         log.info("✅ Crash markers reset - startup successful");
     }
     
@@ -357,19 +351,5 @@ public class CrashHandler {
             return CRASH_MARKER_PREFIX + getCurrentCrashCount();
         }
         return "None";
-    }
-    
-    /**
-     * Check if shutdown has been scheduled (prevents multiple shutdown attempts).
-     */
-    public boolean isShutdownScheduled() {
-        return shutdownScheduled.get();
-    }
-    
-    /**
-     * Mark shutdown as scheduled.
-     */
-    public void markShutdownScheduled() {
-        shutdownScheduled.set(true);
     }
 }

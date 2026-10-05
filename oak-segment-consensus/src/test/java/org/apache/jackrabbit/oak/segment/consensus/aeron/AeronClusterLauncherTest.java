@@ -173,7 +173,9 @@ public class AeronClusterLauncherTest {
             new File("."),
             mock(ClusteredService.class),
             mock(AeronClusterAddressResolver.class),
-            mock(AeronClusterErrorPolicy.class)
+            mock(AeronClusterErrorPolicy.class),
+            AeronClusterLauncher.LaunchInvoker.DEFAULT,
+            AeronClusterLauncher.ContainerLaunchInvoker.DEFAULT
         );
 
         assertEquals(AeronClusterLauncher.getPortBase(), launcher.getClusterBasePort());
