@@ -203,44 +203,6 @@ public class BeaconChainClient {
         return h;
     }
 
-    // ── legacy EpochData API ──────────────────────────────────────────────────
-
-    @Deprecated
-    public EpochData getLatestFinalizedEpoch() throws Exception {
-        return getEpochDetails(cachedFinalizedEpoch);
-    }
-
-    public EpochData getEpochDetails(long epochNumber) {
-        EpochData d = new EpochData();
-        d.epochNumber         = epochNumber;
-        d.timestamp           = System.currentTimeMillis();
-        d.finalized           = (epochNumber <= cachedFinalizedEpoch);
-        d.epochsBehindCurrent = (int) (cachedCurrentEpoch - epochNumber);
-        d.blocksProposed      = 32;
-        d.blocksSkipped       = 0;
-        d.attestations        = 150;
-        d.totalValidators     = 2_127_176L;
-        d.activeValidators    = 2_126_153L;
-        d.slashings           = 0;
-        d.deposits            = 0;
-        d.voluntaryExits      = 0;
-        return d;
-    }
-
-    // ── stub compat (ADR 080 removed synthetic mock epoch control) ────────────
-
-    public boolean setMockEpochOffset(long offset) {
-        log.warn("Synthetic mock epoch control removed by ADR 080");
-        return false;
-    }
-
-    public boolean advanceMockEpoch(int epochs) {
-        log.warn("Synthetic mock epoch control removed by ADR 080");
-        return false;
-    }
-
-    public long getMockEpochOffset() { return 0L; }
-
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private static String modeToApiUrl(BlockchainConfig.Mode mode) {
