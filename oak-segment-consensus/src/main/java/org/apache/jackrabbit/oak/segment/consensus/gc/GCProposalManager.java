@@ -61,24 +61,6 @@ public class GCProposalManager {
     private final java.util.concurrent.ScheduledExecutorService scheduledExecutor; // Scheduled executor for retries
     
     public GCProposalManager(FileStore fileStore, GCCostEstimator gcCostEstimator, 
-                            FragmentationTracker fragmentationTracker, int totalValidators) {
-        this(fileStore, gcCostEstimator, fragmentationTracker, null, totalValidators, () -> 0, () -> true);
-    }
-    
-    public GCProposalManager(FileStore fileStore, GCCostEstimator gcCostEstimator, 
-                            FragmentationTracker fragmentationTracker, int totalValidators,
-                            java.util.function.Supplier<Integer> executorIdSupplier) {
-        this(fileStore, gcCostEstimator, fragmentationTracker, null, totalValidators, executorIdSupplier, () -> true);
-    }
-    
-    public GCProposalManager(FileStore fileStore, GCCostEstimator gcCostEstimator, 
-                            FragmentationTracker fragmentationTracker, int totalValidators,
-                            java.util.function.Supplier<Integer> executorIdSupplier,
-                            java.util.function.Supplier<Boolean> isLeaderSupplier) {
-        this(fileStore, gcCostEstimator, fragmentationTracker, null, totalValidators, executorIdSupplier, isLeaderSupplier);
-    }
-    
-    public GCProposalManager(FileStore fileStore, GCCostEstimator gcCostEstimator, 
                             FragmentationTracker fragmentationTracker, EvmBridge evmBridge, int totalValidators,
                             java.util.function.Supplier<Integer> executorIdSupplier,
                             java.util.function.Supplier<Boolean> isLeaderSupplier) {
