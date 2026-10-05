@@ -1264,46 +1264,9 @@ public class ProposalQueueManagerOptimized {
     }
     
     /**
-     * Queue a new proposal for verification and adaptive release.
-     * This overload calculates the current submission epoch automatically.
-     * 
-     * @param proposalId Unique proposal ID
-     * @param ethereumTxHash Ethereum transaction hash (optional)
-     * @param walletAddress Ethereum wallet address
-     * @param path Content path
-     * @param contentType Content type
-     * @param message Content message
-     * @param signature Transaction signature
-     * @return The queued proposal
-     */
-    public QueuedProposal queueProposal(
-            String proposalId,
-            String ethereumTxHash,
-            String walletAddress,
-            String path,
-            String contentType,
-            String message,
-            String signature) {
-        // Calculate current epoch automatically
-        long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD, null,
-            null, null, null);
-    }
-    
-    /**
-     * Queue a new proposal for verification and adaptive release using the default compatibility tier.
-     * This overload captures the current submission epoch for compatibility overlays.
-     * 
-     * @param proposalId Unique proposal ID
-     * @param ethereumTxHash Ethereum transaction hash (optional)
-     * @param walletAddress Ethereum wallet address
-     * @param path Content path
-     * @param contentType Content type
-     * @param message Content message
-     * @param signature Transaction signature
-     * @param intentToken Intent token for lazy binary upload (optional, ADR 020)
-     * @return The queued proposal
+     * Queue a write proposal for verification and adaptive release (standard tier).
+     *
+     * @param intentToken intent token for lazy binary upload (optional, ADR 020)
      */
     public QueuedProposal queueProposal(
             String proposalId,
@@ -1317,22 +1280,8 @@ public class ProposalQueueManagerOptimized {
             String blobId,
             String mimeType,
             String ipfsCid) {
-        long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(
-            proposalId,
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            ethereumTxHash,
-            currentEpoch,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            intentToken,
-            blobId,
-            mimeType,
-            ipfsCid
-        );
+        return queueProposal(proposalId, ethereumTxHash, walletAddress, path, contentType, message, signature,
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD, intentToken, blobId, mimeType, ipfsCid);
     }
 
     public QueuedProposal queueProposal(
@@ -1345,131 +1294,47 @@ public class ProposalQueueManagerOptimized {
             String signature,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
             String intentToken) {
-        long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch,
+        return queueProposal(proposalId, ethereumTxHash, walletAddress, path, contentType, message, signature,
             tier, intentToken, null, null, null);
     }
 
-    public QueuedProposal queueProposal(
-            String proposalId,
-            String ethereumTxHash,
-            String walletAddress,
-            String path,
-            String contentType,
-            String message,
-            String signature,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
-            String intentToken,
-            String blobId,
-            String mimeType,
-            String ipfsCid) {
-        long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch,
-            tier, intentToken, blobId, mimeType, ipfsCid);
-    }
-    
     /**
-     * Queue a new proposal for verification and adaptive release.
-     * 
-     * @param proposalId Unique proposal ID
-     * @param walletAddress Ethereum wallet address
-     * @param path Content path
-     * @param contentType Content type
-     * @param message Content message
-     * @param signature Transaction signature
-     * @param ethereumTxHash Ethereum transaction hash (optional)
-     * @param epoch Ethereum epoch when transaction was seen (for compatibility overlays)
-     * @param tier Compatibility payment tier retained for older persistence/reporting overlays
-     * @param intentToken Intent token for lazy binary upload (optional, ADR 020)
-     * @return The queued proposal
+     * Queue a write proposal for verification and adaptive release; the submission epoch is captured for
+     * compatibility overlays.
      */
     public QueuedProposal queueProposal(
             String proposalId,
+            String ethereumTxHash,
             String walletAddress,
             String path,
             String contentType,
             String message,
             String signature,
-            String ethereumTxHash,
-            long epoch,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
-            String intentToken) {
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, epoch,
-            tier, intentToken, null, null, null);
-    }
-
-    public QueuedProposal queueProposal(
-            String proposalId,
-            String walletAddress,
-            String path,
-            String contentType,
-            String message,
-            String signature,
-            String ethereumTxHash,
-            long epoch,
             org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
             String intentToken,
             String blobId,
             String mimeType,
             String ipfsCid) {
+        long epoch = resolveCurrentEpoch();
         CanonicalGenesisContent.requireMutable(walletAddress, path);
         enforceAdmissionCapacity();
         long pendingCount = getPendingCount();
-        long now = System.currentTimeMillis();
-        QueuedProposal proposal = new QueuedProposal(
-            proposalId,
-            ethereumTxHash,
-            null, // unused compatibility parameter
-            now,
-            now + confirmationTimeoutMs,
-            ProposalState.PENDING
-        );
-        
-        // Set wallet-based write fields
-        proposal.setWalletAddress(walletAddress);
-        proposal.setPath(path);
+        QueuedProposal proposal = newPendingProposal(proposalId, ethereumTxHash, walletAddress, path, signature, epoch, tier);
         proposal.setContentType(contentType);
-        proposal.setSignature(signature);
-        proposal.setEpoch(epoch);
-        proposal.setTier(tier);
-        proposal.setIntentToken(intentToken); // Set intent token for lazy binary upload (ADR 020)
+        proposal.setIntentToken(intentToken);
         proposal.setBlobId(blobId);
         proposal.setMimeType(mimeType);
         proposal.setIpfsCid(ipfsCid);
-        proposal.setDurabilityState(DurabilityState.PENDING, null, null);
         attachPayloadState(proposal, message, pendingCount);
-        
-        // Add to tracking map.
-        allProposals.put(proposalId, proposal);
-        
-        // Register wallet BEFORE enqueue for mock mode to avoid verifier race.
-        registerProposalWalletMapping(proposal);
-
-        // Queue after mapping is available to verifier.
-        unverifiedQueue.offer(proposal);
-        
+        admit(proposal);
         log.debug("📥 Queued proposal {} for EVM verification in epoch {} (queue size: {})",
             proposalId, epoch, unverifiedQueue.size());
-        long persistStart = System.nanoTime();
-        persistProposals();
-        long persistNanos = System.nanoTime() - persistStart;
-        enqueuePersistNanos.addAndGet(persistNanos);
-        enqueuePersistCount.incrementAndGet();
-        enqueuePersistLastMs.set(persistNanos / 1_000_000L);
-        
+        persistOnEnqueue();
         return proposal;
     }
-    
+
     /**
-     * Queue a DELETE proposal for verification and adaptive release.
-     * Deletes flow through same pipeline as writes, just with different type.
-     * 
-     * @param proposalId Unique proposal ID
-     * @param ethereumTxHash Ethereum transaction hash (required)
-     * @param walletAddress Ethereum wallet address
-     * @param path Content path to delete
-     * @param signature Transaction signature
-     * @return The queued proposal
+     * Queue a DELETE proposal; deletes flow through the same pipeline as writes.
      */
     public QueuedProposal queueDeleteProposal(
             String proposalId,
@@ -1477,14 +1342,7 @@ public class ProposalQueueManagerOptimized {
             String walletAddress,
             String path,
             String signature) {
-        return queueDeleteProposal(
-            proposalId,
-            ethereumTxHash,
-            walletAddress,
-            path,
-            signature,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD
-        );
+        return queueDeleteProposal(proposalId, ethereumTxHash, walletAddress, path, signature, org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
     }
 
     public QueuedProposal queueDeleteProposal(
@@ -1497,49 +1355,49 @@ public class ProposalQueueManagerOptimized {
         CanonicalGenesisContent.requireMutable(walletAddress, path);
         enforceAdmissionCapacity();
         long currentEpoch = resolveCurrentEpoch();
-        
-        long now = System.currentTimeMillis();
-        QueuedProposal proposal = new QueuedProposal(
-            proposalId,
-            ethereumTxHash,
-            null, // unused compatibility parameter
-            now,
-            now + confirmationTimeoutMs,
-            ProposalState.PENDING
-        );
-        
-        // Set DELETE-specific fields
-        proposal.setType(QueuedProposal.ProposalType.DELETE); // Mark as DELETE
-        proposal.setWalletAddress(walletAddress);
-        proposal.setPath(path);
-        proposal.setContentType("delete"); // Special marker for deletes
-        proposal.setMessage(""); // Not needed for deletes
-        proposal.setSignature(signature);
-        proposal.setEpoch(currentEpoch);
-        proposal.setTier(tier);
-        proposal.setDurabilityState(DurabilityState.PENDING, null, null);
-        
-        // Add to tracking map.
-        allProposals.put(proposalId, proposal);
-        
-        // Register wallet BEFORE enqueue for mock mode to avoid verifier race.
-        registerProposalWalletMapping(proposal);
-
-        // Queue after mapping is available to verifier.
-        unverifiedQueue.offer(proposal);
-        
+        QueuedProposal proposal =
+            newPendingProposal(proposalId, ethereumTxHash, walletAddress, path, signature, currentEpoch, tier);
+        proposal.setType(QueuedProposal.ProposalType.DELETE);
+        proposal.setContentType("delete");
+        proposal.setMessage("");
+        admit(proposal);
         log.info("🗑️  Queued DELETE proposal {} for EVM verification in epoch {} (path: {}, queue size: {})",
             proposalId, currentEpoch, path, unverifiedQueue.size());
+        persistOnEnqueue();
+        return proposal;
+    }
+
+    private QueuedProposal newPendingProposal(String proposalId, String ethereumTxHash, String walletAddress,
+                                              String path, String signature, long epoch,
+                                              org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+        long now = System.currentTimeMillis();
+        QueuedProposal proposal = new QueuedProposal(
+            proposalId, ethereumTxHash, null, now, now + confirmationTimeoutMs, ProposalState.PENDING);
+        proposal.setWalletAddress(walletAddress);
+        proposal.setPath(path);
+        proposal.setSignature(signature);
+        proposal.setEpoch(epoch);
+        proposal.setTier(tier);
+        proposal.setDurabilityState(DurabilityState.PENDING, null, null);
+        return proposal;
+    }
+
+    /** Track the proposal, register its wallet before enqueue (mock-mode verifier race), then enqueue. */
+    private void admit(QueuedProposal proposal) {
+        allProposals.put(proposal.getProposalId(), proposal);
+        registerProposalWalletMapping(proposal);
+        unverifiedQueue.offer(proposal);
+    }
+
+    private void persistOnEnqueue() {
         long persistStart = System.nanoTime();
         persistProposals();
         long persistNanos = System.nanoTime() - persistStart;
         enqueuePersistNanos.addAndGet(persistNanos);
         enqueuePersistCount.incrementAndGet();
         enqueuePersistLastMs.set(persistNanos / 1_000_000L);
-        
-        return proposal;
     }
-    
+
     /**
      * Get proposal status.
      */
