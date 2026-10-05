@@ -53,7 +53,6 @@ public class RequestRouter implements AutoCloseable {
     private final PeerDiscoveryHandler peerDiscoveryHandler;
     private final AeronApiHandler aeronApiHandler;
     private final FragmentationApiHandler fragmentationApiHandler;
-    private final LeaderConsensusHandler leaderConsensusHandler;
     private final BinaryUploadHandler binaryUploadHandler;
     private final CidApiHandler cidApiHandler;
     private final EventStreamHandler eventStreamHandler;
@@ -106,7 +105,6 @@ public class RequestRouter implements AutoCloseable {
         this.peerDiscoveryHandler = new PeerDiscoveryHandler(context);
         this.aeronApiHandler = new AeronApiHandler(context);
         this.fragmentationApiHandler = new FragmentationApiHandler(context);
-        this.leaderConsensusHandler = new LeaderConsensusHandler(context);
         
         // Binary upload handler (ADR 020 - lazy upload on confirmation)
         this.uploadSessionManager = new org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager();
@@ -551,12 +549,6 @@ public class RequestRouter implements AutoCloseable {
             
             if ("/v1/wallets/content".equals(path) && "GET".equals(method)) {
                 consensusApiHandler.handleWalletContent(request, response);
-                return;
-            }
-            
-            // Follower HEAD update endpoint (used by leader to broadcast HEAD to followers)
-            if ("/v1/follower/head-update".equals(path) && "POST".equals(method)) {
-                leaderConsensusHandler.handleFollowerHeadUpdate(request, response);
                 return;
             }
             

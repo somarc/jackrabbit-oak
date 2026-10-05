@@ -1261,30 +1261,6 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testFollowerHeadUpdateRouteReplicatesHead() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
-            when(engine.isLeader()).thenReturn(false);
-            when(engine.getCurrentLeader()).thenReturn("http://127.0.0.1:8090");
-            when(engine.pullSegmentsForHead("abc:r1", "http://localhost:8090")).thenReturn(4);
-            context.aeronConsensusEngine = engine;
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/v1/follower/head-update");
-            when(request.getReader()).thenReturn(new java.io.BufferedReader(
-                new java.io.StringReader("{\"head\":\"abc:r1\",\"epoch\":\"12\",\"leaderUrl\":\"http://localhost:8090\"}")
-            ));
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"success\":true"));
-            assertTrue(body.toString().contains("\"segmentCount\":4"));
-        });
-    }
-
-    @Test
     public void testJournalRouteStreamsFileContents() throws Exception {
         withRoutingProperties(true, () -> {
             Path storeDirectory = Files.createTempDirectory("router-journal");

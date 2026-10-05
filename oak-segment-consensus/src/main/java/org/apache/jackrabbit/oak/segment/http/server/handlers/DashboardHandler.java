@@ -189,7 +189,6 @@ public class DashboardHandler {
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/node-status?nodeId=0", "Per-node status", "Aeron", "/v1/ops/snapshots/runtime");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/leadership-history?limit=10", "Leadership history", "Aeron", "/ops/v1/events/recent");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/replication-lag", "Replication lag", "Aeron", "/v1/ops/snapshots/replication");
-        addInternalIndexEntry(endpoints, "POST", "/v1/follower/head-update", "Follower head update (internal)", "Aeron", null);
 
         addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/health", "Ops health snapshot", "Ops Snapshots", "ops.v1", "/ops/v1/health");
         addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/runtime", "Ops runtime snapshot", "Ops Snapshots", "ops.runtime.v1", "/ops/v1/runtime/*");
