@@ -180,27 +180,6 @@ final class ValidatorLoggingBootstrap {
         return Paths.get(System.getProperty(PROP_LOG_DIR)).resolve(System.getProperty(PROP_LOG_FILE));
     }
 
-    static final class BootstrapResult {
-        private final boolean externalConfiguration;
-        private final Path logDir;
-        private final Path logFile;
-
-        BootstrapResult(boolean externalConfiguration, Path logDir, Path logFile) {
-            this.externalConfiguration = externalConfiguration;
-            this.logDir = logDir;
-            this.logFile = logFile;
-        }
-
-        boolean isExternalConfiguration() {
-            return externalConfiguration;
-        }
-
-        Path getLogDir() {
-            return logDir;
-        }
-
-        Path getLogFile() {
-            return logFile;
-        }
+    record BootstrapResult(boolean externalConfiguration, Path logDir, Path logFile) {
     }
 }

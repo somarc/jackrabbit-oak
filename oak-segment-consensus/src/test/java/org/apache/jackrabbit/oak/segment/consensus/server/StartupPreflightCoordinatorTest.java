@@ -53,10 +53,10 @@ public class StartupPreflightCoordinatorTest {
                 .prepare(storeDir.toString(), 8090, aeronConfig(new String[0]));
 
         assertTrue(Files.isDirectory(storeDir));
-        assertTrue(result.isDirectoryEmpty());
+        assertTrue(result.directoryEmpty());
         assertFalse(result.needsBootstrapBeforeBuild());
-        assertEquals("", result.getVerifiedBootstrapPrimaryHost());
-        assertEquals(0, result.getVerifiedBootstrapPrimaryPort());
+        assertEquals("", result.verifiedBootstrapPrimaryHost());
+        assertEquals(0, result.verifiedBootstrapPrimaryPort());
     }
 
     @Test
@@ -83,10 +83,10 @@ public class StartupPreflightCoordinatorTest {
                 return false;
             })).prepare(storeDir.toString(), 8090, aeronConfig(new String[] {"http://validator-1:8090"}));
 
-        assertFalse(result.isDirectoryEmpty());
+        assertFalse(result.directoryEmpty());
         assertFalse(result.needsBootstrapBeforeBuild());
-        assertEquals("", result.getVerifiedBootstrapPrimaryHost());
-        assertEquals(0, result.getVerifiedBootstrapPrimaryPort());
+        assertEquals("", result.verifiedBootstrapPrimaryHost());
+        assertEquals(0, result.verifiedBootstrapPrimaryPort());
     }
 
     @Test
@@ -99,10 +99,10 @@ public class StartupPreflightCoordinatorTest {
                 url -> "http://validator-1:8090/health".equals(url)
             )).prepare(storeDir.toString(), 8090, aeronConfig(new String[] {"http://validator-1:8090"}));
 
-        assertTrue(result.isDirectoryEmpty());
+        assertTrue(result.directoryEmpty());
         assertTrue(result.needsBootstrapBeforeBuild());
-        assertEquals("validator-1", result.getVerifiedBootstrapPrimaryHost());
-        assertEquals(8091, result.getVerifiedBootstrapPrimaryPort());
+        assertEquals("validator-1", result.verifiedBootstrapPrimaryHost());
+        assertEquals(8091, result.verifiedBootstrapPrimaryPort());
     }
 
     @Test
@@ -117,10 +117,10 @@ public class StartupPreflightCoordinatorTest {
                 url -> "http://bootstrap-node:9000/health".equals(url)
             )).prepare(storeDir.toString(), 8090, aeronConfig(new String[0]));
 
-        assertTrue(result.isDirectoryEmpty());
+        assertTrue(result.directoryEmpty());
         assertTrue(result.needsBootstrapBeforeBuild());
-        assertEquals("bootstrap-node", result.getVerifiedBootstrapPrimaryHost());
-        assertEquals(9001, result.getVerifiedBootstrapPrimaryPort());
+        assertEquals("bootstrap-node", result.verifiedBootstrapPrimaryHost());
+        assertEquals(9001, result.verifiedBootstrapPrimaryPort());
     }
 
     private static AeronClusterConfig aeronConfig(String[] peerUrls) {

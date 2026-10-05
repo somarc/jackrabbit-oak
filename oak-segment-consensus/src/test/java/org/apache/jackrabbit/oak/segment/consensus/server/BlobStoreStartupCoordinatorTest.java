@@ -78,8 +78,8 @@ public class BlobStoreStartupCoordinatorTest {
         BlobStoreStartupCoordinator.StartupResult result =
             coordinator.initialize(storeDir, config, componentFactory);
 
-        assertEquals("ipfs", result.getBlobStoreType());
-        assertSame(blobStore, result.getBlobStore());
+        assertEquals("ipfs", result.blobStoreType());
+        assertSame(blobStore, result.blobStore());
     }
 
     @Test
@@ -96,8 +96,8 @@ public class BlobStoreStartupCoordinatorTest {
         BlobStoreStartupCoordinator.StartupResult result =
             coordinator.initialize(storeDir, config, componentFactory);
 
-        assertEquals("ipfs", result.getBlobStoreType());
-        assertSame(blobStore, result.getBlobStore());
+        assertEquals("ipfs", result.blobStoreType());
+        assertSame(blobStore, result.blobStore());
         verify(componentFactory).createIpfsBlobStore("/ip4/10.0.0.7/tcp/5001", storeDir);
     }
 

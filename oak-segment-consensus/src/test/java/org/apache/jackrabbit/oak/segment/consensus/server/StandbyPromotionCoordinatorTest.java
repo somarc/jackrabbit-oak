@@ -55,8 +55,8 @@ public class StandbyPromotionCoordinatorTest {
         );
 
         assertNotNull(target);
-        assertEquals("bootstrap-node", target.getHost());
-        assertEquals(9001, target.getPort());
+        assertEquals("bootstrap-node", target.host());
+        assertEquals(9001, target.port());
     }
 
     @Test
@@ -69,8 +69,8 @@ public class StandbyPromotionCoordinatorTest {
         );
 
         assertNotNull(target);
-        assertEquals("validator-1", target.getHost());
-        assertEquals(8091, target.getPort());
+        assertEquals("validator-1", target.host());
+        assertEquals(8091, target.port());
     }
 
     @Test
@@ -158,9 +158,9 @@ public class StandbyPromotionCoordinatorTest {
             true,
             true
         );
-        assertSame(clusterService, deferredStartup.getAeronClusterService());
-        assertSame(startupResult, deferredStartup.getStartupResult());
-        assertSame(launcher, deferredStartup.getStartupResult().getLauncher());
+        assertSame(clusterService, deferredStartup.aeronClusterService());
+        assertSame(startupResult, deferredStartup.startupResult());
+        assertSame(launcher, deferredStartup.startupResult().getLauncher());
     }
 
     @Test
@@ -223,8 +223,8 @@ public class StandbyPromotionCoordinatorTest {
             false,
             false
         );
-        assertSame(clusterService, deferredStartup.getAeronClusterService());
-        assertSame(launcher, deferredStartup.getStartupResult().getLauncher());
+        assertSame(clusterService, deferredStartup.aeronClusterService());
+        assertSame(launcher, deferredStartup.startupResult().getLauncher());
     }
 
     @Test

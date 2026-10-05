@@ -31,9 +31,9 @@ final class BootstrapModeCoordinator {
     private static final Logger log = LoggerFactory.getLogger(BootstrapModeCoordinator.class);
 
     Resolution resolve(StartupContext context) {
-        List<String> aeronPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(context.getAeronConfig());
+        List<String> aeronPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(context.aeronConfig());
         ValidatorBootstrap bootstrap =
-            context.getComponentFactory().createValidatorBootstrap(context.getFileStore(), context.getStandbyPort());
+            context.componentFactory().createValidatorBootstrap(context.fileStore(), context.standbyPort());
         BootstrapMode detectedMode = BootstrapMode.PRIMARY;
         boolean aeronClusterDeferred = false;
         String bootstrapPrimaryHost = "";
@@ -47,18 +47,18 @@ final class BootstrapModeCoordinator {
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             aeronClusterDeferred = true;
-            bootstrapPrimaryHost = context.getVerifiedBootstrapPrimaryHost();
-            bootstrapPrimaryPort = context.getVerifiedBootstrapPrimaryPort();
+            bootstrapPrimaryHost = context.verifiedBootstrapPrimaryHost();
+            bootstrapPrimaryPort = context.verifiedBootstrapPrimaryPort();
 
             if (bootstrapPrimaryHost.isEmpty()) {
                 bootstrapPrimaryHost = RuntimeConfigValueResolver.readString("bootstrap.primary.host", "");
-                bootstrapPrimaryPort = resolveConfiguredStandbyPort(context.getPort());
+                bootstrapPrimaryPort = resolveConfiguredStandbyPort(context.port());
             }
 
             if (bootstrapPrimaryHost.isEmpty() && !aeronPeers.isEmpty()) {
-                BootstrapTarget firstPeer = resolveFirstPeer(aeronPeers.get(0), context.getPort());
-                bootstrapPrimaryHost = firstPeer.getHost();
-                bootstrapPrimaryPort = firstPeer.getPort();
+                BootstrapTarget firstPeer = resolveFirstPeer(aeronPeers.get(0), context.port());
+                bootstrapPrimaryHost = firstPeer.host();
+                bootstrapPrimaryPort = firstPeer.port();
                 log.info("   Using first peer as bootstrap primary: {}:{}",
                     bootstrapPrimaryHost, bootstrapPrimaryPort);
             }
@@ -72,7 +72,7 @@ final class BootstrapModeCoordinator {
                 log.info("   Bootstrap mode: STANDBY (will sync Oak FileStore, then start Aeron Cluster)");
                 log.info("   Bootstrap primary: {}:{}", bootstrapPrimaryHost, bootstrapPrimaryPort);
             }
-        } else if (context.isDirectoryEmpty()) {
+        } else if (context.directoryEmpty()) {
             log.info("✈️  AERON MODE: Empty store detected");
             log.info("   Starting Aeron Cluster in parallel with peers");
             log.info("   Genesis will be created by elected leader via consensus");
@@ -118,136 +118,28 @@ final class BootstrapModeCoordinator {
         return new BootstrapTarget(host, standbyPort);
     }
 
-    static final class StartupContext {
-        private final boolean directoryEmpty;
-        private final boolean needsBootstrapBeforeBuild;
-        private final FileStore fileStore;
-        private final int port;
-        private final int standbyPort;
-        private final String verifiedBootstrapPrimaryHost;
-        private final int verifiedBootstrapPrimaryPort;
-        private final AeronClusterConfig aeronConfig;
-        private final GlobalStoreServerComponentFactory componentFactory;
-
-        StartupContext(boolean directoryEmpty,
-                       boolean needsBootstrapBeforeBuild,
-                       FileStore fileStore,
-                       int port,
-                       int standbyPort,
-                       String verifiedBootstrapPrimaryHost,
-                       int verifiedBootstrapPrimaryPort,
-                       AeronClusterConfig aeronConfig,
-                       GlobalStoreServerComponentFactory componentFactory) {
-            this.directoryEmpty = directoryEmpty;
-            this.needsBootstrapBeforeBuild = needsBootstrapBeforeBuild;
-            this.fileStore = fileStore;
-            this.port = port;
-            this.standbyPort = standbyPort;
-            this.verifiedBootstrapPrimaryHost = verifiedBootstrapPrimaryHost != null ? verifiedBootstrapPrimaryHost : "";
-            this.verifiedBootstrapPrimaryPort = verifiedBootstrapPrimaryPort;
-            this.aeronConfig = aeronConfig;
-            this.componentFactory = componentFactory;
-        }
-
-        boolean isDirectoryEmpty() {
-            return directoryEmpty;
-        }
-
-        boolean needsBootstrapBeforeBuild() {
-            return needsBootstrapBeforeBuild;
-        }
-
-        FileStore getFileStore() {
-            return fileStore;
-        }
-
-        int getPort() {
-            return port;
-        }
-
-        int getStandbyPort() {
-            return standbyPort;
-        }
-
-        String getVerifiedBootstrapPrimaryHost() {
-            return verifiedBootstrapPrimaryHost;
-        }
-
-        int getVerifiedBootstrapPrimaryPort() {
-            return verifiedBootstrapPrimaryPort;
-        }
-
-        AeronClusterConfig getAeronConfig() {
-            return aeronConfig;
-        }
-
-        GlobalStoreServerComponentFactory getComponentFactory() {
-            return componentFactory;
+    record StartupContext(boolean directoryEmpty,
+                          boolean needsBootstrapBeforeBuild,
+                          FileStore fileStore,
+                          int port,
+                          int standbyPort,
+                          String verifiedBootstrapPrimaryHost,
+                          int verifiedBootstrapPrimaryPort,
+                          AeronClusterConfig aeronConfig,
+                          GlobalStoreServerComponentFactory componentFactory) {
+        StartupContext {
+            verifiedBootstrapPrimaryHost = verifiedBootstrapPrimaryHost != null ? verifiedBootstrapPrimaryHost : "";
         }
     }
 
-    static final class Resolution {
-        private final BootstrapMode detectedMode;
-        private final ValidatorBootstrap bootstrap;
-        private final boolean aeronClusterDeferred;
-        private final List<String> aeronPeerUrls;
-        private final String bootstrapPrimaryHost;
-        private final int bootstrapPrimaryPort;
-
-        Resolution(BootstrapMode detectedMode,
-                   ValidatorBootstrap bootstrap,
-                   boolean aeronClusterDeferred,
-                   List<String> aeronPeerUrls,
-                   String bootstrapPrimaryHost,
-                   int bootstrapPrimaryPort) {
-            this.detectedMode = detectedMode;
-            this.bootstrap = bootstrap;
-            this.aeronClusterDeferred = aeronClusterDeferred;
-            this.aeronPeerUrls = aeronPeerUrls;
-            this.bootstrapPrimaryHost = bootstrapPrimaryHost;
-            this.bootstrapPrimaryPort = bootstrapPrimaryPort;
-        }
-
-        BootstrapMode getDetectedMode() {
-            return detectedMode;
-        }
-
-        ValidatorBootstrap getBootstrap() {
-            return bootstrap;
-        }
-
-        boolean isAeronClusterDeferred() {
-            return aeronClusterDeferred;
-        }
-
-        List<String> getAeronPeerUrls() {
-            return aeronPeerUrls;
-        }
-
-        String getBootstrapPrimaryHost() {
-            return bootstrapPrimaryHost;
-        }
-
-        int getBootstrapPrimaryPort() {
-            return bootstrapPrimaryPort;
-        }
+    record Resolution(BootstrapMode detectedMode,
+                      ValidatorBootstrap bootstrap,
+                      boolean aeronClusterDeferred,
+                      List<String> aeronPeerUrls,
+                      String bootstrapPrimaryHost,
+                      int bootstrapPrimaryPort) {
     }
 
-    private static final class BootstrapTarget {
-        private final String host;
-        private final int port;
-
-        private BootstrapTarget(String host, int port) {
-            this.host = host;
-            this.port = port;
-        }
-
-        private String getHost() {
-            return host;
-        }
-
-        private int getPort() {
-            return port;
-        }
+    private record BootstrapTarget(String host, int port) {
     }
 }

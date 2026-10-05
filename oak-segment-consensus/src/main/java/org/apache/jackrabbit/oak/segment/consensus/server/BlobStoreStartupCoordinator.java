@@ -20,7 +20,6 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Properties;
 
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
 import com.amazonaws.services.s3.AmazonS3;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
@@ -123,16 +122,6 @@ final class BlobStoreStartupCoordinator {
         }
     }
 
-    static final class StartupResult {
-        private final String blobStoreType;
-        private final BlobStore blobStore;
-
-        StartupResult(String blobStoreType, BlobStore blobStore) {
-            this.blobStoreType = blobStoreType;
-            this.blobStore = blobStore;
-        }
-
-        String getBlobStoreType() { return blobStoreType; }
-        BlobStore getBlobStore() { return blobStore; }
+    record StartupResult(String blobStoreType, BlobStore blobStore) {
     }
 }

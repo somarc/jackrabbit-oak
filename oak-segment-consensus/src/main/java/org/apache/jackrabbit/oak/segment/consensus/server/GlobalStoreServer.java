@@ -145,16 +145,16 @@ public class GlobalStoreServer {
         
         WalletStartupCoordinator.StartupResult walletStartup =
             walletStartupCoordinator.initialize(storeDirectory, components());
-        this.wallet = walletStartup.getWallet();
-        final String finalClusterWallet = walletStartup.getClusterWalletAddress();
+        this.wallet = walletStartup.wallet();
+        final String finalClusterWallet = walletStartup.clusterWalletAddress();
         
         StartupPreflightCoordinator.PreflightResult preflight =
             startupPreflightCoordinator.prepare(storeDirectory, port, currentAeronConfig());
-        File storeDir = preflight.getStoreDir();
-        boolean directoryIsEmpty = preflight.isDirectoryEmpty();
+        File storeDir = preflight.storeDir();
+        boolean directoryIsEmpty = preflight.directoryEmpty();
         boolean needsBootstrapBeforeBuild = preflight.needsBootstrapBeforeBuild();
-        String verifiedBootstrapPrimaryHost = preflight.getVerifiedBootstrapPrimaryHost();
-        int verifiedBootstrapPrimaryPort = preflight.getVerifiedBootstrapPrimaryPort();
+        String verifiedBootstrapPrimaryHost = preflight.verifiedBootstrapPrimaryHost();
+        int verifiedBootstrapPrimaryPort = preflight.verifiedBootstrapPrimaryPort();
         
         // Bootstrap mode (needs to be accessible throughout method)
         BootstrapMode detectedMode = BootstrapMode.PRIMARY;  // Default
@@ -195,12 +195,12 @@ public class GlobalStoreServer {
                     currentAeronConfig(),
                     components()
                 );
-            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = infrastructure.getBlobStore();
+            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = infrastructure.blobStore();
             this.blobStore = blobStore; // Store reference for genesis image upload
-            this.fileStore = infrastructure.getFileStore();
-            this.nodeStore = infrastructure.getNodeStore();
-            this.readViewResources = infrastructure.getReadViewResources();
-            this.httpServer = infrastructure.getHttpServer();
+            this.fileStore = infrastructure.fileStore();
+            this.nodeStore = infrastructure.nodeStore();
+            this.readViewResources = infrastructure.readViewResources();
+            this.httpServer = infrastructure.httpServer();
             String selfUrl = this.httpServer.getContext().selfUrl;
             
             // If bootstrap is needed, mark for immediate sync (before any other initialization)
@@ -236,8 +236,8 @@ public class GlobalStoreServer {
                     components()
                 )
             );
-            detectedMode = bootstrapResolution.getDetectedMode();
-            bootstrap = bootstrapResolution.getBootstrap();
+            detectedMode = bootstrapResolution.detectedMode();
+            bootstrap = bootstrapResolution.bootstrap();
             
             // ✈️ AERON-ONLY: Handle STANDBY bootstrap (sync FileStore, then start Aeron Cluster)
             if (detectedMode == BootstrapMode.STANDBY) {
@@ -245,8 +245,8 @@ public class GlobalStoreServer {
                     new StandbyModeStartupCoordinator.StartupContext(
                         port,
                         storeDirectory,
-                        bootstrapResolution.getBootstrapPrimaryHost(),
-                        bootstrapResolution.getBootstrapPrimaryPort(),
+                        bootstrapResolution.bootstrapPrimaryHost(),
+                        bootstrapResolution.bootstrapPrimaryPort(),
                         currentAeronConfig(),
                         bootstrap,
                         fileStore,
@@ -257,8 +257,8 @@ public class GlobalStoreServer {
                         aeronClusterService,
                         components(),
                         deferredStartup -> {
-                            aeronClusterService = deferredStartup.getAeronClusterService();
-                            aeronClusterLauncher = deferredStartup.getStartupResult().getLauncher();
+                            aeronClusterService = deferredStartup.aeronClusterService();
+                            aeronClusterLauncher = deferredStartup.startupResult().getLauncher();
                         }
                     )
                 );
@@ -312,8 +312,8 @@ public class GlobalStoreServer {
                 )
             );
 
-        this.aeronClusterService = activation.getAeronClusterService();
-        this.aeronClusterLauncher = activation.getLauncher();
+        this.aeronClusterService = activation.aeronClusterService();
+        this.aeronClusterLauncher = activation.launcher();
         
         // SEPOLIA_PHASE: Smart Contract Event Listener
         // This is where we'll listen to OakNetwork.sol contract events:

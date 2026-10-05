@@ -63,12 +63,12 @@ public class BootstrapModeCoordinatorTest {
             )
         );
 
-        assertEquals(BootstrapMode.STANDBY, resolution.getDetectedMode());
-        assertSame(bootstrap, resolution.getBootstrap());
-        assertTrue(resolution.isAeronClusterDeferred());
-        assertEquals("validator-1", resolution.getBootstrapPrimaryHost());
-        assertEquals(8091, resolution.getBootstrapPrimaryPort());
-        assertEquals(2, resolution.getAeronPeerUrls().size());
+        assertEquals(BootstrapMode.STANDBY, resolution.detectedMode());
+        assertSame(bootstrap, resolution.bootstrap());
+        assertTrue(resolution.aeronClusterDeferred());
+        assertEquals("validator-1", resolution.bootstrapPrimaryHost());
+        assertEquals(8091, resolution.bootstrapPrimaryPort());
+        assertEquals(2, resolution.aeronPeerUrls().size());
     }
 
     @Test
@@ -95,9 +95,9 @@ public class BootstrapModeCoordinatorTest {
             )
         );
 
-        assertEquals(BootstrapMode.STANDBY, resolution.getDetectedMode());
-        assertEquals("bootstrap-node", resolution.getBootstrapPrimaryHost());
-        assertEquals(9001, resolution.getBootstrapPrimaryPort());
+        assertEquals(BootstrapMode.STANDBY, resolution.detectedMode());
+        assertEquals("bootstrap-node", resolution.bootstrapPrimaryHost());
+        assertEquals(9001, resolution.bootstrapPrimaryPort());
     }
 
     @Test
@@ -121,9 +121,9 @@ public class BootstrapModeCoordinatorTest {
             )
         );
 
-        assertEquals(BootstrapMode.STANDBY, resolution.getDetectedMode());
-        assertEquals("validator-7", resolution.getBootstrapPrimaryHost());
-        assertEquals(8091, resolution.getBootstrapPrimaryPort());
+        assertEquals(BootstrapMode.STANDBY, resolution.detectedMode());
+        assertEquals("validator-7", resolution.bootstrapPrimaryHost());
+        assertEquals(8091, resolution.bootstrapPrimaryPort());
     }
 
     @Test
@@ -147,11 +147,11 @@ public class BootstrapModeCoordinatorTest {
             )
         );
 
-        assertEquals(BootstrapMode.GENESIS, resolution.getDetectedMode());
-        assertSame(bootstrap, resolution.getBootstrap());
-        assertTrue(resolution.isAeronClusterDeferred());
-        assertEquals("", resolution.getBootstrapPrimaryHost());
-        assertEquals(8091, resolution.getBootstrapPrimaryPort());
+        assertEquals(BootstrapMode.GENESIS, resolution.detectedMode());
+        assertSame(bootstrap, resolution.bootstrap());
+        assertTrue(resolution.aeronClusterDeferred());
+        assertEquals("", resolution.bootstrapPrimaryHost());
+        assertEquals(8091, resolution.bootstrapPrimaryPort());
     }
 
     @Test
@@ -189,12 +189,12 @@ public class BootstrapModeCoordinatorTest {
             )
         );
 
-        assertEquals(BootstrapMode.PRIMARY, emptyStoreResolution.getDetectedMode());
-        assertSame(bootstrap, emptyStoreResolution.getBootstrap());
-        assertFalse(emptyStoreResolution.isAeronClusterDeferred());
-        assertEquals(BootstrapMode.PRIMARY, existingStoreResolution.getDetectedMode());
-        assertSame(bootstrap, existingStoreResolution.getBootstrap());
-        assertFalse(existingStoreResolution.isAeronClusterDeferred());
+        assertEquals(BootstrapMode.PRIMARY, emptyStoreResolution.detectedMode());
+        assertSame(bootstrap, emptyStoreResolution.bootstrap());
+        assertFalse(emptyStoreResolution.aeronClusterDeferred());
+        assertEquals(BootstrapMode.PRIMARY, existingStoreResolution.detectedMode());
+        assertSame(bootstrap, existingStoreResolution.bootstrap());
+        assertFalse(existingStoreResolution.aeronClusterDeferred());
         verify(componentFactory, times(2)).createValidatorBootstrap(fileStore, 8091);
     }
 

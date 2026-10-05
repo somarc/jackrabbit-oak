@@ -58,8 +58,8 @@ final class ServerInfrastructureInitializer {
 
         BlobStoreStartupCoordinator.StartupResult blobStoreStartup =
             blobStoreStartupCoordinator.initialize(storeDir, storageConfig, componentFactory);
-        BlobStore blobStore = blobStoreStartup.getBlobStore();
-        String blobStoreType = blobStoreStartup.getBlobStoreType();
+        BlobStore blobStore = blobStoreStartup.blobStore();
+        String blobStoreType = blobStoreStartup.blobStoreType();
 
         ServerStorageRuntime storageRuntime = StorageBackendFactory.createStorageRuntime(storeDir, blobStore, storageConfig);
         FileStore fileStore = storageRuntime.fileStore();
@@ -261,64 +261,13 @@ final class ServerInfrastructureInitializer {
         };
     }
 
-    static final class InitializationResult {
-        private final String blobStoreType;
-        private final BlobStore blobStore;
-        private final FileStore fileStore;
-        private final NodeStore nodeStore;
-        private final NodeStore readViewNodeStore;
-        private final Closeable readViewResources;
-        private final SegmentHttpServer httpServer;
-        private final GCCostEstimator gcCostEstimator;
-
-        InitializationResult(String blobStoreType,
-                             BlobStore blobStore,
-                             FileStore fileStore,
-                             NodeStore nodeStore,
-                             NodeStore readViewNodeStore,
-                             Closeable readViewResources,
-                             SegmentHttpServer httpServer,
-                             GCCostEstimator gcCostEstimator) {
-            this.blobStoreType = blobStoreType;
-            this.blobStore = blobStore;
-            this.fileStore = fileStore;
-            this.nodeStore = nodeStore;
-            this.readViewNodeStore = readViewNodeStore;
-            this.readViewResources = readViewResources;
-            this.httpServer = httpServer;
-            this.gcCostEstimator = gcCostEstimator;
-        }
-
-        String getBlobStoreType() {
-            return blobStoreType;
-        }
-
-        BlobStore getBlobStore() {
-            return blobStore;
-        }
-
-        FileStore getFileStore() {
-            return fileStore;
-        }
-
-        NodeStore getNodeStore() {
-            return nodeStore;
-        }
-
-        NodeStore getReadViewNodeStore() {
-            return readViewNodeStore;
-        }
-
-        Closeable getReadViewResources() {
-            return readViewResources;
-        }
-
-        SegmentHttpServer getHttpServer() {
-            return httpServer;
-        }
-
-        GCCostEstimator getGcCostEstimator() {
-            return gcCostEstimator;
-        }
+    record InitializationResult(String blobStoreType,
+                                BlobStore blobStore,
+                                FileStore fileStore,
+                                NodeStore nodeStore,
+                                NodeStore readViewNodeStore,
+                                Closeable readViewResources,
+                                SegmentHttpServer httpServer,
+                                GCCostEstimator gcCostEstimator) {
     }
 }

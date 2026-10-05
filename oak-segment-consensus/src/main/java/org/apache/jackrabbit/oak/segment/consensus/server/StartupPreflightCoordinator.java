@@ -172,43 +172,10 @@ final class StartupPreflightCoordinator {
         }
     }
 
-    static final class PreflightResult {
-        private final File storeDir;
-        private final boolean directoryEmpty;
-        private final boolean needsBootstrapBeforeBuild;
-        private final String verifiedBootstrapPrimaryHost;
-        private final int verifiedBootstrapPrimaryPort;
-
-        PreflightResult(File storeDir,
-                        boolean directoryEmpty,
-                        boolean needsBootstrapBeforeBuild,
-                        String verifiedBootstrapPrimaryHost,
-                        int verifiedBootstrapPrimaryPort) {
-            this.storeDir = storeDir;
-            this.directoryEmpty = directoryEmpty;
-            this.needsBootstrapBeforeBuild = needsBootstrapBeforeBuild;
-            this.verifiedBootstrapPrimaryHost = verifiedBootstrapPrimaryHost;
-            this.verifiedBootstrapPrimaryPort = verifiedBootstrapPrimaryPort;
-        }
-
-        File getStoreDir() {
-            return storeDir;
-        }
-
-        boolean isDirectoryEmpty() {
-            return directoryEmpty;
-        }
-
-        boolean needsBootstrapBeforeBuild() {
-            return needsBootstrapBeforeBuild;
-        }
-
-        String getVerifiedBootstrapPrimaryHost() {
-            return verifiedBootstrapPrimaryHost;
-        }
-
-        int getVerifiedBootstrapPrimaryPort() {
-            return verifiedBootstrapPrimaryPort;
-        }
+    record PreflightResult(File storeDir,
+                           boolean directoryEmpty,
+                           boolean needsBootstrapBeforeBuild,
+                           String verifiedBootstrapPrimaryHost,
+                           int verifiedBootstrapPrimaryPort) {
     }
 }

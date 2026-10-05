@@ -110,40 +110,14 @@ final class BootstrapPreflightPlanner {
         boolean isReachable(String healthUrl);
     }
 
-    static final class Decision {
-        private final boolean needsBootstrapBeforeBuild;
-        private final boolean hasVerifiedReachablePeers;
-        private final String verifiedBootstrapPrimaryHost;
-        private final int verifiedBootstrapPrimaryPort;
-
-        private Decision(boolean needsBootstrapBeforeBuild,
-                         boolean hasVerifiedReachablePeers,
-                         String verifiedBootstrapPrimaryHost,
-                         int verifiedBootstrapPrimaryPort) {
-            this.needsBootstrapBeforeBuild = needsBootstrapBeforeBuild;
-            this.hasVerifiedReachablePeers = hasVerifiedReachablePeers;
-            this.verifiedBootstrapPrimaryHost = verifiedBootstrapPrimaryHost;
-            this.verifiedBootstrapPrimaryPort = verifiedBootstrapPrimaryPort;
-        }
-
+    record Decision(boolean needsBootstrapBeforeBuild,
+                    boolean hasVerifiedReachablePeers,
+                    String verifiedBootstrapPrimaryHost,
+                    int verifiedBootstrapPrimaryPort) {
         static Decision notRequired() {
             return new Decision(false, false, "", 0);
         }
 
-        boolean needsBootstrapBeforeBuild() {
-            return needsBootstrapBeforeBuild;
-        }
-
-        boolean hasVerifiedReachablePeers() {
-            return hasVerifiedReachablePeers;
-        }
-
-        String verifiedBootstrapPrimaryHost() {
-            return verifiedBootstrapPrimaryHost;
-        }
-
-        int verifiedBootstrapPrimaryPort() {
-            return verifiedBootstrapPrimaryPort;
-        }
+    
     }
 }
