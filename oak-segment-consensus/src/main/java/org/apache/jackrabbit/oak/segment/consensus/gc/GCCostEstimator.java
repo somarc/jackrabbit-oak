@@ -50,7 +50,7 @@ public class GCCostEstimator {
     
     private final FileStore fileStore;
     private final TarFiles tarFiles;
-    private BigDecimal usdcPerMB;
+    private final BigDecimal usdcPerMB;
     
     /**
      * Create estimator with default USDC rate ($0.10 per MB).
@@ -348,26 +348,5 @@ public class GCCostEstimator {
             log.debug("Unable to resolve FileStore directory via reflection", e);
         }
         return null;
-    }
-    
-    /**
-     * Set USDC per MB rate (for dynamic pricing).
-     * 
-     * <p>Future: Pull from Ethereum gas oracle via Web3j.
-     * 
-     * @param usdcPerMB New USDC cost per MB
-     */
-    public void setUsdcPerMB(BigDecimal usdcPerMB) {
-        this.usdcPerMB = usdcPerMB;
-        log.info("Updated USDC rate to {} per MB", usdcPerMB);
-    }
-    
-    /**
-     * Get current USDC per MB rate.
-     * 
-     * @return Current USDC cost per MB
-     */
-    public BigDecimal getUsdcPerMB() {
-        return usdcPerMB;
     }
 }
