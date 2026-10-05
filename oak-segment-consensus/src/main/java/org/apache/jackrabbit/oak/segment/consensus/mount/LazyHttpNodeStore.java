@@ -29,6 +29,7 @@ import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.apache.jackrabbit.oak.spi.state.ProxyNodeStore;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -96,19 +97,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
      * @param mountName Mount name for logging
      */
     public LazyHttpNodeStore(String endpoint, String mountName) {
-        this(endpoint, mountName, 5000, 30000);
-    }
-    
-    /**
-     * Create a lazy HTTP-backed NodeStore with custom timeouts.
-     *
-     * @param endpoint HTTP endpoint URL
-     * @param mountName Mount name for logging
-     * @param connectTimeoutMs Connection timeout in milliseconds
-     * @param readTimeoutMs Read timeout in milliseconds
-     */
-    public LazyHttpNodeStore(String endpoint, String mountName, long connectTimeoutMs, long readTimeoutMs) {
-        this(endpoint, mountName, connectTimeoutMs, readTimeoutMs, new CircuitBreaker(mountName), LazyHttpNodeStore::createRemoteNodeStore);
+        this(endpoint, mountName, 5000, 30000, new CircuitBreaker(mountName), LazyHttpNodeStore::createRemoteNodeStore);
     }
 
     LazyHttpNodeStore(String endpoint,
@@ -495,7 +484,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
         return new RefreshingRemoteNodeStore(endpoint, mountName);
     }
 
-    private static final class RefreshingRemoteNodeStore implements RefreshingNodeStore, Closeable {
+    private static final class RefreshingRemoteNodeStore extends ProxyNodeStore implements RefreshingNodeStore, Closeable {
         private static final long MIN_REFRESH_INTERVAL_MS = 1_000L;
 
         private final HttpPersistence persistence;
@@ -538,75 +527,8 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
         }
 
         @Override
-        @NotNull
-        public NodeState getRoot() {
-            return nodeStore.getRoot();
-        }
-
-        @Override
-        @NotNull
-        public NodeState merge(@NotNull NodeBuilder builder,
-                               @NotNull CommitHook commitHook,
-                               @NotNull CommitInfo info) throws CommitFailedException {
-            return nodeStore.merge(builder, commitHook, info);
-        }
-
-        @Override
-        @NotNull
-        public NodeState rebase(@NotNull NodeBuilder builder) {
-            return nodeStore.rebase(builder);
-        }
-
-        @Override
-        public NodeState reset(@NotNull NodeBuilder builder) {
-            return nodeStore.reset(builder);
-        }
-
-        @Override
-        @NotNull
-        public Blob createBlob(InputStream inputStream) throws IOException {
-            return nodeStore.createBlob(inputStream);
-        }
-
-        @Override
-        @Nullable
-        public Blob getBlob(@NotNull String reference) {
-            return nodeStore.getBlob(reference);
-        }
-
-        @Override
-        @NotNull
-        public String checkpoint(long lifetime, @NotNull Map<String, String> properties) {
-            return nodeStore.checkpoint(lifetime, properties);
-        }
-
-        @Override
-        @NotNull
-        public String checkpoint(long lifetime) {
-            return nodeStore.checkpoint(lifetime);
-        }
-
-        @Override
-        @NotNull
-        public Map<String, String> checkpointInfo(@NotNull String checkpoint) {
-            return nodeStore.checkpointInfo(checkpoint);
-        }
-
-        @Override
-        @NotNull
-        public Iterable<String> checkpoints() {
-            return nodeStore.checkpoints();
-        }
-
-        @Override
-        @Nullable
-        public NodeState retrieve(@NotNull String checkpoint) {
-            return nodeStore.retrieve(checkpoint);
-        }
-
-        @Override
-        public boolean release(@NotNull String checkpoint) {
-            return nodeStore.release(checkpoint);
+        protected NodeStore getNodeStore() {
+            return nodeStore;
         }
 
         @Override
