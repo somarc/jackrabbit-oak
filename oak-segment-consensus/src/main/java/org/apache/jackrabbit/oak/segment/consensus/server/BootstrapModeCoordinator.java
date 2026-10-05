@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
-import java.util.Collections;
 import java.util.List;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
@@ -32,10 +31,6 @@ final class BootstrapModeCoordinator {
     private static final Logger log = LoggerFactory.getLogger(BootstrapModeCoordinator.class);
 
     Resolution resolve(StartupContext context) {
-        if (!context.isAeronMode()) {
-            return new Resolution(BootstrapMode.PRIMARY, null, false, Collections.emptyList(), "", 0);
-        }
-
         List<String> aeronPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(context.getAeronConfig());
         ValidatorBootstrap bootstrap =
             context.getComponentFactory().createValidatorBootstrap(context.getFileStore(), context.getStandbyPort());
@@ -124,7 +119,6 @@ final class BootstrapModeCoordinator {
     }
 
     static final class StartupContext {
-        private final boolean aeronMode;
         private final boolean directoryEmpty;
         private final boolean needsBootstrapBeforeBuild;
         private final FileStore fileStore;
@@ -135,8 +129,7 @@ final class BootstrapModeCoordinator {
         private final AeronClusterConfig aeronConfig;
         private final GlobalStoreServerComponentFactory componentFactory;
 
-        StartupContext(boolean aeronMode,
-                       boolean directoryEmpty,
+        StartupContext(boolean directoryEmpty,
                        boolean needsBootstrapBeforeBuild,
                        FileStore fileStore,
                        int port,
@@ -145,7 +138,6 @@ final class BootstrapModeCoordinator {
                        int verifiedBootstrapPrimaryPort,
                        AeronClusterConfig aeronConfig,
                        GlobalStoreServerComponentFactory componentFactory) {
-            this.aeronMode = aeronMode;
             this.directoryEmpty = directoryEmpty;
             this.needsBootstrapBeforeBuild = needsBootstrapBeforeBuild;
             this.fileStore = fileStore;
@@ -155,10 +147,6 @@ final class BootstrapModeCoordinator {
             this.verifiedBootstrapPrimaryPort = verifiedBootstrapPrimaryPort;
             this.aeronConfig = aeronConfig;
             this.componentFactory = componentFactory;
-        }
-
-        boolean isAeronMode() {
-            return aeronMode;
         }
 
         boolean isDirectoryEmpty() {

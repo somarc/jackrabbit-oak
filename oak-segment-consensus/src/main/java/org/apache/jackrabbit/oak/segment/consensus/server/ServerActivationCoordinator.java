@@ -55,7 +55,6 @@ final class ServerActivationCoordinator {
         ConsensusStartupCoordinator.StartupOutcome consensusStartup = consensusStartupStarter.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 context.getPort(),
-                context.isAeronMode(),
                 isStandbyMode,
                 context.getFileStore(),
                 context.getNodeStore(),
@@ -130,7 +129,6 @@ final class ServerActivationCoordinator {
 
     static final class ActivationContext {
         private final int port;
-        private final boolean aeronMode;
         private final BootstrapMode detectedMode;
         private final FileStore fileStore;
         private final NodeStore nodeStore;
@@ -145,7 +143,6 @@ final class ServerActivationCoordinator {
         private final ValidatorBootstrap bootstrap;
 
         ActivationContext(int port,
-                          boolean aeronMode,
                           BootstrapMode detectedMode,
                           FileStore fileStore,
                           NodeStore nodeStore,
@@ -159,7 +156,6 @@ final class ServerActivationCoordinator {
                           String clusterWalletAddress,
                           ValidatorBootstrap bootstrap) {
             this.port = port;
-            this.aeronMode = aeronMode;
             this.detectedMode = detectedMode;
             this.fileStore = fileStore;
             this.nodeStore = nodeStore;
@@ -176,10 +172,6 @@ final class ServerActivationCoordinator {
 
         int getPort() {
             return port;
-        }
-
-        boolean isAeronMode() {
-            return aeronMode;
         }
 
         BootstrapMode getDetectedMode() {

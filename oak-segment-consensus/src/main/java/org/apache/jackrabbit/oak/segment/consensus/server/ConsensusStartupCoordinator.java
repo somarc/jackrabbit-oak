@@ -45,8 +45,7 @@ final class ConsensusStartupCoordinator {
         String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(context.port, aeronConfig);
         List<String> peerUrls = resolvePeerUrls(aeronConfig, peersConfig);
 
-        boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled)
-            && (context.aeronMode || !peersConfig.isEmpty());
+        boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled);
         if (aeronConfig != null && !aeronConfig.enabled()) {
             enableConsensus = false;
         }
@@ -69,10 +68,6 @@ final class ConsensusStartupCoordinator {
                 selfUrl,
                 peerUrls
             );
-        }
-
-        if (!context.aeronMode) {
-            throw new IllegalStateException("Aeron mode validation failed - this should not happen");
         }
 
         log.info("Initializing Consensus Engine...");
@@ -143,7 +138,6 @@ final class ConsensusStartupCoordinator {
 
     static final class StartupContext {
         private final int port;
-        private final boolean aeronMode;
         private final boolean standbyMode;
         private final FileStore fileStore;
         private final NodeStore nodeStore;
@@ -157,7 +151,6 @@ final class ConsensusStartupCoordinator {
         private final AeronClusterConfig aeronConfig;
 
         StartupContext(int port,
-                       boolean aeronMode,
                        boolean standbyMode,
                        FileStore fileStore,
                        NodeStore nodeStore,
@@ -170,7 +163,6 @@ final class ConsensusStartupCoordinator {
                        String clusterWalletAddress,
                        AeronClusterConfig aeronConfig) {
             this.port = port;
-            this.aeronMode = aeronMode;
             this.standbyMode = standbyMode;
             this.fileStore = fileStore;
             this.nodeStore = nodeStore;

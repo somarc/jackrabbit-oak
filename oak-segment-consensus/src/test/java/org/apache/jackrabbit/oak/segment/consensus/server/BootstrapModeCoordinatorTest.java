@@ -53,7 +53,6 @@ public class BootstrapModeCoordinatorTest {
             new BootstrapModeCoordinator.StartupContext(
                 true,
                 true,
-                true,
                 fileStore,
                 8090,
                 8091,
@@ -86,7 +85,6 @@ public class BootstrapModeCoordinatorTest {
             new BootstrapModeCoordinator.StartupContext(
                 true,
                 true,
-                true,
                 fileStore,
                 8090,
                 8091,
@@ -113,7 +111,6 @@ public class BootstrapModeCoordinatorTest {
             new BootstrapModeCoordinator.StartupContext(
                 true,
                 true,
-                true,
                 fileStore,
                 8090,
                 8091,
@@ -138,7 +135,6 @@ public class BootstrapModeCoordinatorTest {
 
         BootstrapModeCoordinator.Resolution resolution = new BootstrapModeCoordinator().resolve(
             new BootstrapModeCoordinator.StartupContext(
-                true,
                 true,
                 true,
                 fileStore,
@@ -169,7 +165,6 @@ public class BootstrapModeCoordinatorTest {
         BootstrapModeCoordinator.Resolution emptyStoreResolution = coordinator.resolve(
             new BootstrapModeCoordinator.StartupContext(
                 true,
-                true,
                 false,
                 fileStore,
                 8090,
@@ -182,7 +177,6 @@ public class BootstrapModeCoordinatorTest {
         );
         BootstrapModeCoordinator.Resolution existingStoreResolution = coordinator.resolve(
             new BootstrapModeCoordinator.StartupContext(
-                true,
                 false,
                 false,
                 fileStore,

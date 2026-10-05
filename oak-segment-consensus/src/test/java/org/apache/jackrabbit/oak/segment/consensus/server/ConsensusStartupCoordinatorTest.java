@@ -98,7 +98,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                true,
                 false,
                 testContext.fileStore,
                 testContext.nodeStore,
@@ -169,7 +168,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                true,
                 false,
                 testContext.fileStore,
                 testContext.nodeStore,
@@ -201,7 +199,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                true,
                 true,
                 testContext.fileStore,
                 testContext.nodeStore,
@@ -236,7 +233,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                true,
                 false,
                 testContext.fileStore,
                 testContext.nodeStore,

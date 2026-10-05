@@ -34,14 +34,13 @@ final class BootstrapPreflightPlanner {
         this.peerHealthProbe = peerHealthProbe;
     }
 
-    Decision plan(boolean isAeronMode,
-                  boolean directoryIsEmpty,
+    Decision plan(boolean directoryIsEmpty,
                   List<String> aeronPeers,
                   String bootstrapPrimaryHost,
                   String bootstrapPrimaryPort,
                   boolean standbyBootstrapEnabled,
                   int fallbackStandbyPort) {
-        if (!isAeronMode || !directoryIsEmpty) {
+        if (!directoryIsEmpty) {
             return Decision.notRequired();
         }
 

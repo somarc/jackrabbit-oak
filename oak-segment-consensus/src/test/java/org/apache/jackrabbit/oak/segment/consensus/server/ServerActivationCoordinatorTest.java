@@ -158,7 +158,6 @@ public class ServerActivationCoordinatorTest {
                                                                             AeronClusterLauncher existingLauncher) {
         return new ServerActivationCoordinator.ActivationContext(
             8090,
-            true,
             detectedMode,
             mock(FileStore.class),
             mock(NodeStore.class),

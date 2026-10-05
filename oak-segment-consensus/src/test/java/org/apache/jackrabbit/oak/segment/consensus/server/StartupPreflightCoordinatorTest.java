@@ -53,7 +53,6 @@ public class StartupPreflightCoordinatorTest {
                 .prepare(storeDir.toString(), 8090, aeronConfig(new String[0]));
 
         assertTrue(Files.isDirectory(storeDir));
-        assertTrue(result.isAeronMode());
         assertTrue(result.isDirectoryEmpty());
         assertFalse(result.needsBootstrapBeforeBuild());
         assertEquals("", result.getVerifiedBootstrapPrimaryHost());

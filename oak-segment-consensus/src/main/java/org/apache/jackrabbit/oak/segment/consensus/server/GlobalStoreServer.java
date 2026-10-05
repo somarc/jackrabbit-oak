@@ -151,7 +151,6 @@ public class GlobalStoreServer {
         StartupPreflightCoordinator.PreflightResult preflight =
             startupPreflightCoordinator.prepare(storeDirectory, port, currentAeronConfig());
         File storeDir = preflight.getStoreDir();
-        boolean isAeronMode = preflight.isAeronMode();
         boolean directoryIsEmpty = preflight.isDirectoryEmpty();
         boolean needsBootstrapBeforeBuild = preflight.needsBootstrapBeforeBuild();
         String verifiedBootstrapPrimaryHost = preflight.getVerifiedBootstrapPrimaryHost();
@@ -226,7 +225,6 @@ public class GlobalStoreServer {
             // ===========================================================================
             BootstrapModeCoordinator.Resolution bootstrapResolution = bootstrapModeCoordinator.resolve(
                 new BootstrapModeCoordinator.StartupContext(
-                    isAeronMode,
                     directoryIsEmpty,
                     needsBootstrapBeforeBuild,
                     fileStore,
@@ -299,7 +297,6 @@ public class GlobalStoreServer {
             serverActivationCoordinator.activate(
                 new ServerActivationCoordinator.ActivationContext(
                     port,
-                    isAeronMode,
                     detectedMode,
                     fileStore,
                     nodeStore,
