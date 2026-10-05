@@ -26,7 +26,6 @@ import org.apache.jackrabbit.oak.segment.consensus.mount.ValidatorReadViewBuilde
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
@@ -76,8 +75,6 @@ public interface GlobalStoreServerComponentFactory {
     CidMappingService createCidMappingService(Path storeDir) throws Exception;
 
     FragmentationTracker createFragmentationTracker();
-
-    WalletStorageMetrics createWalletStorageMetrics(FileStore fileStore);
 
     GCProposalManager createGCProposalManager(FileStore fileStore,
                                               GCCostEstimator gcCostEstimator,

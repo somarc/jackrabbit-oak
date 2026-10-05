@@ -67,10 +67,8 @@ public class ServerContext {
     public volatile org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob periodicGCJob;
     public volatile ProposalQueueManagerOptimized proposalQueueManager;
     public volatile FragmentationTracker fragmentationTracker;
-    public volatile org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics;
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
     public volatile ShardRouter shardRouter; // Optional - for sharded routing
-    public volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker validatorEarningsTracker;
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager; // ADR 020 lazy binary upload
     public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
     public volatile org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore; // For eager binary uploads
@@ -263,11 +261,6 @@ public class ServerContext {
         log.info("✅ Fragmentation Tracker initialized");
     }
     
-    public void setWalletStorageMetrics(org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics) {
-        this.walletStorageMetrics = walletStorageMetrics;
-        log.info("✅ Wallet Storage Metrics initialized");
-    }
-    
     public void setGCProposalManager(GCProposalManager gcProposalManager) {
         this.gcProposalManager = gcProposalManager;
         log.info("✅ GC Proposal Manager initialized");
@@ -276,11 +269,6 @@ public class ServerContext {
     public void setShardRouter(ShardRouter shardRouter) {
         this.shardRouter = shardRouter;
         log.info("✅ Shard Router initialized");
-    }
-    
-    public void setValidatorEarningsTracker(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker validatorEarningsTracker) {
-        this.validatorEarningsTracker = validatorEarningsTracker;
-        log.info("✅ Validator Earnings Tracker initialized");
     }
     
     public void setUploadSessionManager(org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager) {

@@ -208,9 +208,6 @@ public class ServerInfrastructureInitializerTest {
             mock(org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService.class)
         );
         when(factory.createFragmentationTracker()).thenReturn(fragmentationTracker);
-        when(factory.createWalletStorageMetrics(fileStore)).thenReturn(
-            mock(org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics.class)
-        );
         when(factory.createGCProposalManager(any(), any(), any(), any(), anyInt(), any(), any())).thenReturn(gcProposalManager);
         when(factory.createGCAccountManager()).thenReturn(gcAccountManager);
         when(factory.createPeriodicGCJob(gcAccountManager)).thenReturn(periodicGCJob);

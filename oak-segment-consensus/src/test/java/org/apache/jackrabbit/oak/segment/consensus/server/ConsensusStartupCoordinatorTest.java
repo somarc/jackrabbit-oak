@@ -124,8 +124,7 @@ public class ConsensusStartupCoordinatorTest {
             testContext.wallet,
             "/tmp/test-store",
             "https://beacon.example",
-            "0xcluster",
-            Arrays.asList("validator-0", "validator-1", "validator-2")
+            "0xcluster"
         );
     }
 

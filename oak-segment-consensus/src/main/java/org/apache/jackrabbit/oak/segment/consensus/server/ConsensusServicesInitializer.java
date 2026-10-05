@@ -16,14 +16,12 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
-import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge;
@@ -49,7 +47,6 @@ final class ConsensusServicesInitializer {
     private final EvmBridgeFactory evmBridgeFactory;
     private final BeaconChainClientFactory beaconChainClientFactory;
     private final ProposalQueueManagerFactory proposalQueueManagerFactory;
-    private final ValidatorEarningsTrackerFactory validatorEarningsTrackerFactory;
     private final RuntimeConfigReader runtimeConfigReader;
 
     ConsensusServicesInitializer() {
@@ -59,7 +56,6 @@ final class ConsensusServicesInitializer {
                 : new EventDrivenEvmBridge(blockchainConfig.getNetwork(), blockchainConfig.getContractAddress(), false),
             BeaconChainClient::new,
             ProposalQueueManagerOptimized::new,
-            ValidatorEarningsTracker::new,
             RuntimeConfigValueResolver::readString);
     }
 
@@ -68,13 +64,11 @@ final class ConsensusServicesInitializer {
             EvmBridgeFactory evmBridgeFactory,
             BeaconChainClientFactory beaconChainClientFactory,
             ProposalQueueManagerFactory proposalQueueManagerFactory,
-            ValidatorEarningsTrackerFactory validatorEarningsTrackerFactory,
             RuntimeConfigReader runtimeConfigReader) {
         this.blockchainConfigSupplier = blockchainConfigSupplier;
         this.evmBridgeFactory = evmBridgeFactory;
         this.beaconChainClientFactory = beaconChainClientFactory;
         this.proposalQueueManagerFactory = proposalQueueManagerFactory;
-        this.validatorEarningsTrackerFactory = validatorEarningsTrackerFactory;
         this.runtimeConfigReader = runtimeConfigReader;
     }
 
@@ -83,8 +77,7 @@ final class ConsensusServicesInitializer {
                     EthereumWallet wallet,
                     String storeDirectory,
                     String beaconApiUrl,
-                    String finalClusterWallet,
-                    List<String> hostnamesList) {
+                    String finalClusterWallet) {
         // Initialize Proposal Queue Manager (for Ethereum confirmation tracking)
         BlockchainConfig blockchainConfig = blockchainConfigSupplier.get();
         validateBlockchainRuntime(blockchainConfig);
@@ -129,13 +122,6 @@ final class ConsensusServicesInitializer {
         context.evmBridge = evmBridge;
         log.info("✅ Proposal Queue Manager initialized (adaptive packing/release + 3-checkpoint security)");
 
-        // Initialize Validator Earnings Tracker (economic simulation)
-        List<String> validatorWallets = buildValidatorWallets(wallet.getWalletAddress(), hostnamesList);
-        ValidatorEarningsTracker earningsTracker = validatorEarningsTrackerFactory.create(validatorWallets);
-        context.setValidatorEarningsTracker(earningsTracker);
-        log.info("   ✅ Validator Earnings Tracker initialized ({} validators)", validatorWallets.size());
-        log.info("   - Self wallet: {}", wallet.getWalletAddress());
-
         context.validatorWalletAddress = wallet.getWalletAddress();
         context.clusterWalletAddress = finalClusterWallet;
         log.info("   - Payments routed to cluster wallet: {}", finalClusterWallet);
@@ -179,17 +165,6 @@ final class ConsensusServicesInitializer {
                 "Chain-backed modes require a deployed Oak payment contract address; example and zero-address defaults are not valid for v1."
             );
         }
-    }
-
-    static List<String> buildValidatorWallets(String selfWalletAddress, List<String> hostnamesList) {
-        List<String> validatorWallets = new ArrayList<>();
-        validatorWallets.add(selfWalletAddress);
-
-        int expectedValidators = hostnamesList != null ? hostnamesList.size() : 1;
-        for (int i = 1; i < expectedValidators; i++) {
-            validatorWallets.add("0x" + String.format("%040x", i));
-        }
-        return validatorWallets;
     }
 
     private static BackpressureManager resolveBackpressureManager(AeronConsensusEngine aeronEngine) {
@@ -387,10 +362,6 @@ final class ConsensusServicesInitializer {
                                              BackpressureManager backpressureManager,
                                              BeaconChainClient beaconClient,
                                              String proposalPersistenceDir);
-    }
-
-    interface ValidatorEarningsTrackerFactory {
-        ValidatorEarningsTracker create(List<String> validatorWallets);
     }
 
     interface RuntimeConfigReader {

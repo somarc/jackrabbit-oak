@@ -28,7 +28,6 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
@@ -76,7 +75,6 @@ final class ServerInfrastructureInitializer {
         SegmentHttpServer httpServer = initializeHttpServer(storeDir, port, aeronConfig, componentFactory,
             blobStore, blobStoreType, fileStore, readViewNodeStore, authoritativeNodeStore, gcCostEstimator);
         FragmentationTracker fragmentationTracker = initializeFragmentationTracker(httpServer, componentFactory);
-        initializeWalletStorageMetrics(httpServer, fileStore, componentFactory);
         initializeGcConsensusSupport(httpServer, aeronConfig, componentFactory, fileStore, gcCostEstimator,
             fragmentationTracker);
 
@@ -174,23 +172,6 @@ final class ServerInfrastructureInitializer {
             log.warn("⚠️  Failed to initialize Fragmentation Tracker: {}", e.getMessage());
             log.warn("   Fragmentation tracking will not be available");
             return null;
-        }
-    }
-
-    private void initializeWalletStorageMetrics(SegmentHttpServer httpServer,
-                                                FileStore fileStore,
-                                                GlobalStoreServerComponentFactory componentFactory) {
-        log.info("Initializing Wallet Storage Metrics...");
-        try {
-            WalletStorageMetrics walletStorageMetrics = componentFactory.createWalletStorageMetrics(fileStore);
-            httpServer.getContext().setWalletStorageMetrics(walletStorageMetrics);
-            log.info("✅ Wallet Storage Metrics initialized");
-            log.info("   - Tracks per-wallet storage ownership %");
-            log.info("   - Calculates storage tax and delete tax");
-            log.info("   - Monitors capacity (2 TB upper bound)");
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to initialize Wallet Storage Metrics: {}", e.getMessage());
-            log.warn("   Storage metrics will not be available");
         }
     }
 

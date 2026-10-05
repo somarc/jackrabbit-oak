@@ -113,8 +113,7 @@ final class ConsensusStartupCoordinator {
             context.wallet,
             context.storeDirectory,
             beaconApiUrl,
-            context.clusterWalletAddress,
-            startupResult.getHostnames()
+            context.clusterWalletAddress
         );
 
         log.info("✅ Aeron Cluster Consensus engine initialized");
