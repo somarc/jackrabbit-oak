@@ -23,7 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Tracks Aeron client sessions and handles reconnect triggers.
+ * Marks the heartbeat on Aeron client session open/close.
  */
 @Component(service = AeronSessionManager.class)
 public class AeronSessionManager {
@@ -31,12 +31,9 @@ public class AeronSessionManager {
     private static final Logger log = LoggerFactory.getLogger(AeronSessionManager.class);
 
     private final Runnable heartbeatCallback;
-    private final java.util.function.Consumer<String> reconnectCallback;
 
-    public AeronSessionManager(Runnable heartbeatCallback,
-                               java.util.function.Consumer<String> reconnectCallback) {
+    public AeronSessionManager(Runnable heartbeatCallback) {
         this.heartbeatCallback = heartbeatCallback;
-        this.reconnectCallback = reconnectCallback;
     }
 
     public void onSessionOpen(ClientSession session, long timestamp) {
@@ -50,9 +47,6 @@ public class AeronSessionManager {
         log.info("Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
         if (heartbeatCallback != null) {
             heartbeatCallback.run();
-        }
-        if (closeReason == CloseReason.TIMEOUT && reconnectCallback != null) {
-            reconnectCallback.accept("session_timeout");
         }
     }
 }

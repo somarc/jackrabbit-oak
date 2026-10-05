@@ -253,7 +253,6 @@ public class AeronConsensusEngine implements ClusteredService {
     private final long reachabilityCacheMs;
     private final int reachabilityConnectTimeoutMs;
     private final int reachabilityReadTimeoutMs;
-    private final int reconnectMaxAttempts;
     
     // ✅ ADR 025: Replication lag monitoring
     private volatile long leaderLogPosition = -1; // Track leader's position for lag calculation
@@ -293,11 +292,6 @@ public class AeronConsensusEngine implements ClusteredService {
     // Reachability cache
     private volatile long lastReachabilityCheckMs = 0;
     private volatile int lastReachableCount = 1;
-    
-    // Session auto-reconnect
-    private final Object reconnectLock = new Object();
-    private volatile java.util.concurrent.ScheduledExecutorService reconnectScheduler;
-    private volatile boolean reconnectInProgress = false;
     
     /**
      * Create Aeron-based consensus engine.
@@ -358,7 +352,6 @@ public class AeronConsensusEngine implements ClusteredService {
         this.reachabilityCacheMs = Long.getLong("oak.cluster.reachability.cacheMs", 5000L);
         this.reachabilityConnectTimeoutMs = Integer.getInteger("oak.cluster.reachability.connectTimeoutMs", 1500);
         this.reachabilityReadTimeoutMs = Integer.getInteger("oak.cluster.reachability.readTimeoutMs", 1500);
-        this.reconnectMaxAttempts = Integer.getInteger("oak.cluster.reconnect.maxAttempts", 5);
         
         // Build node ID to URL mapping (will be populated when cluster starts)
         // This allows us to map Aeron Cluster leaderMemberId to validator URL
@@ -487,7 +480,7 @@ public class AeronConsensusEngine implements ClusteredService {
         this.ingressHandler = AeronEngineComponentFactory.createIngressHandler(
             messageCodec, messageDispatcher, this::markHeartbeat, this::applyGenesisCreation
         );
-        this.sessionManager = AeronEngineComponentFactory.createSessionManager(this::markHeartbeat, null);
+        this.sessionManager = AeronEngineComponentFactory.createSessionManager(this::markHeartbeat);
         this.leaderTracker = AeronEngineComponentFactory.createLeaderTracker(leaderDiscoveryService);
         
         log.info("Aeron Consensus Engine initializing - Consensus: Aeron Cluster (Raft), Self: {}, Peers: {}, Wallet: {}", 
@@ -610,7 +603,6 @@ public class AeronConsensusEngine implements ClusteredService {
         
         // Stop background timer
         // No head broadcast timer to stop in deterministic consensus mode.
-        stopReconnectScheduler();
         if (beaconClient != null) {
             beaconClient.stopBackgroundPolling();
         }
@@ -2827,103 +2819,6 @@ public class AeronConsensusEngine implements ClusteredService {
         }
     }
     
-    private void scheduleReconnect(String reason) {
-        synchronized (reconnectLock) {
-            if (reconnectScheduler == null) {
-                reconnectScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                    Thread t = new Thread(r, "aeron-reconnect");
-                    t.setDaemon(true);
-                    return t;
-                });
-            }
-            if (reconnectInProgress) {
-                return;
-            }
-            reconnectInProgress = true;
-            reconnectScheduler.execute(() -> attemptReconnect(reason));
-        }
-    }
-    
-    private void attemptReconnect(String reason) {
-        attemptReconnectInternal(
-            reason,
-            reconnectMaxAttempts,
-            attempt -> Math.min(1000L * (1L << attempt), 30000L),
-            this::ensureInternalClusterClient,
-            this::sleepBackoff
-        );
-    }
-
-    void attemptReconnectForTest(
-            String reason,
-            int maxAttempts,
-            java.util.function.IntToLongFunction backoffMsFn,
-            Runnable ensureClientAction,
-            java.util.function.LongPredicate sleepFn) {
-        attemptReconnectInternal(reason, maxAttempts, backoffMsFn, ensureClientAction, sleepFn);
-    }
-
-    private void attemptReconnectInternal(
-            String reason,
-            int maxAttempts,
-            java.util.function.IntToLongFunction backoffMsFn,
-            Runnable ensureClientAction,
-            java.util.function.LongPredicate sleepFn) {
-        int boundedAttempts = Math.max(1, maxAttempts);
-        try {
-            log.warn("🔄 Attempting Aeron cluster reconnect (reason: {})", reason);
-            for (int attempt = 1; attempt <= boundedAttempts; attempt++) {
-                if (isInternalClusterClientHealthy()) {
-                    log.info("✅ Internal cluster client healthy, reconnect not needed");
-                    return;
-                }
-
-                ensureClientAction.run();
-
-                if (isInternalClusterClientHealthy()) {
-                    log.info("✅ Reconnected to cluster on attempt {}", attempt);
-                    return;
-                }
-
-                if (attempt >= boundedAttempts) {
-                    continue;
-                }
-                long backoffMs = backoffMsFn.applyAsLong(attempt);
-                log.warn("⚠️  Reconnect attempt {} failed - retrying in {}ms", attempt, backoffMs);
-                if (!sleepFn.test(backoffMs)) {
-                    return;
-                }
-            }
-            log.error("❌ Failed to reconnect after {} attempts", boundedAttempts);
-        } finally {
-            reconnectInProgress = false;
-        }
-    }
-
-    private boolean isInternalClusterClientHealthy() {
-        return internalIngressClientManager.isHealthy();
-    }
-
-    private boolean sleepBackoff(long backoffMs) {
-        try {
-            Thread.sleep(backoffMs);
-            return true;
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
-    }
-    
-    private void stopReconnectScheduler() {
-        synchronized (reconnectLock) {
-            if (reconnectScheduler != null) {
-                reconnectScheduler.shutdownNow();
-                reconnectScheduler = null;
-                reconnectInProgress = false;
-            }
-        }
-    }
-
     /** Called from service callbacks only. */
     private void publishPosition(long logPosition, long clusterTime) {
         publishedLogPosition = logPosition;

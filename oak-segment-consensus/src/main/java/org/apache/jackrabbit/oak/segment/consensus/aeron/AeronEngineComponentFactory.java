@@ -72,9 +72,8 @@ final class AeronEngineComponentFactory {
         return handler;
     }
 
-    static AeronSessionManager createSessionManager(Runnable heartbeatCallback,
-                                                    java.util.function.Consumer<String> reconnectCallback) {
-        return new AeronSessionManager(heartbeatCallback, reconnectCallback);
+    static AeronSessionManager createSessionManager(Runnable heartbeatCallback) {
+        return new AeronSessionManager(heartbeatCallback);
     }
 
     static AeronHealthService createHealthService() {
