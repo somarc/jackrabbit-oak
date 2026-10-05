@@ -200,7 +200,7 @@ public class ServerInfrastructureInitializerTest {
         when(factory.createIpfsBlobStore(anyString(), eq(tempFolder.getRoot()))).thenReturn(blobStore);
         storageFactory.when(() -> StorageBackendFactory.createStorageRuntime(eq(tempFolder.getRoot()), eq(blobStore),
             any(org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig.class)))
-            .thenReturn(new ServerStorageRuntime(fileStore, nodeStore));
+            .thenReturn(new ServerStorageRuntime(fileStore, nodeStore, nodeStore, null));
         when(factory.extractTarFiles(fileStore)).thenReturn(tarFiles);
         when(factory.createGCCostEstimator(eq(fileStore), eq(tarFiles), any(BigDecimal.class))).thenReturn(gcCostEstimator);
         when(factory.createHttpServer(tempFolder.getRoot(), 8090, fileStore, nodeStore)).thenReturn(httpServer);

@@ -62,10 +62,10 @@ final class ServerInfrastructureInitializer {
         String blobStoreType = blobStoreStartup.getBlobStoreType();
 
         ServerStorageRuntime storageRuntime = StorageBackendFactory.createStorageRuntime(storeDir, blobStore, storageConfig);
-        FileStore fileStore = storageRuntime.getFileStore();
-        NodeStore authoritativeNodeStore = storageRuntime.getAuthoritativeNodeStore();
-        NodeStore readViewNodeStore = storageRuntime.getReadViewNodeStore();
-        Closeable readViewResources = storageRuntime.getReadViewResources();
+        FileStore fileStore = storageRuntime.fileStore();
+        NodeStore authoritativeNodeStore = storageRuntime.authoritativeNodeStore();
+        NodeStore readViewNodeStore = storageRuntime.readViewNodeStore();
+        Closeable readViewResources = storageRuntime.readViewResources();
 
         log.info("✅ Oak FileStore initialized");
         log.info("   - Store version: {}", fileStore.getHead().getRecordId());
