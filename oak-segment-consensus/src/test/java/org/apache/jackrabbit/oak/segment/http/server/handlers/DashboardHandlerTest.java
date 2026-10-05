@@ -368,6 +368,32 @@ public class DashboardHandlerTest {
         assertSharedHeader(renderDashboard(handler), "/", "Dashboard");
         assertSharedHeader(renderExplorer(handler), "/explorer", "CRX/OC");
         assertSharedHeader(renderApiBrowser(handler), "/api-browser", "API Browser");
+        assertTrue(renderDashboard(handler).contains("href=\"/console/configMgr\" class=\"nav-link\">Config</a>"));
+    }
+
+    @Test
+    public void testHandleConfigConsoleRendersEveryDeclaredConfigurationReadOnly() throws Exception {
+        String html = renderConfigConsole(new DashboardHandler(newContext()));
+
+        assertTrue(html.contains("<h1>Blockchain AEM Web Console<br>Configuration</h1>"));
+        assertTrue(html.contains("aria-current=\"page\">Configuration</a>"));
+        assertTrue(html.contains("org.apache.jackrabbit.oak.segment.consensus.config.NodeRuntimeTuningService"));
+        assertTrue(html.contains("org.apache.jackrabbit.oak.segment.consensus.server.lifecycle.ValidatorLifecycleManager"));
+        assertTrue(html.contains("Configuration Admin Service is not running."));
+        assertTrue(html.contains("<th colspan=\"2\">Configuration Information</th>"));
+        assertFalse(html.contains("{{"));
+        assertFalse(html.contains("<form"));
+        assertFalse(html.contains("<input type=\"text\""));
+    }
+
+    private static String renderConfigConsole(DashboardHandler handler) throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+        handler.handleConfigConsole(response);
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setContentType("text/html; charset=UTF-8");
+        return body.toString();
     }
 
     private static String renderDashboard(DashboardHandler handler) throws Exception {

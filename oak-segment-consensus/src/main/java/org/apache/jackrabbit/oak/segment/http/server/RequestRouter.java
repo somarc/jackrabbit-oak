@@ -41,6 +41,7 @@ import java.util.Map;
 public class RequestRouter implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(RequestRouter.class);
+    static final String CONFIG_CONSOLE_PATH = "/console/configMgr";
 
     private final HealthHandler healthHandler;
     private final MetricsHandler metricsHandler;
@@ -232,6 +233,11 @@ public class RequestRouter implements AutoCloseable {
             
             if ("/api-browser".equals(path) && "GET".equals(method)) {
                 dashboardHandler.handleApiBrowserUI(response);
+                return;
+            }
+
+            if (CONFIG_CONSOLE_PATH.equals(path) && "GET".equals(method)) {
+                dashboardHandler.handleConfigConsole(response);
                 return;
             }
 
@@ -784,7 +790,8 @@ public class RequestRouter implements AutoCloseable {
             return false;
         }
         return "/explorer".equals(path)
-            || "/api-browser".equals(path);
+            || "/api-browser".equals(path)
+            || CONFIG_CONSOLE_PATH.equals(path);
     }
 
     private boolean isRateLimitExempt(String path, String method) {

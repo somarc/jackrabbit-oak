@@ -61,12 +61,8 @@ public class BeaconChainClient {
      * Production constructor. Reads {@code BEACON_LOCAL_NODE_URL} /
      * {@code beacon.local.node.url} for an optional higher-priority local
      * beacon node in chain-backed modes. Mock mode never performs Beacon HTTP.
-     *
-     * @param beaconApiUrl ignored — mode-specific URL is derived internally;
-     *                     parameter kept for binary compatibility with
-     *                     {@code ConsensusServicesInitializer.BeaconChainClientFactory}
      */
-    public BeaconChainClient(String beaconApiUrl) {
+    public BeaconChainClient() {
         this(BlockchainConfig.getInstance().getMode());
     }
 

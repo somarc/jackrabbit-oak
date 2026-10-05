@@ -129,7 +129,6 @@ public class AeronClusterService {
         log.info("  peerUrls: {}", Arrays.toString(config.peerUrls()));
         log.info("  observeElections: {}", config.observeElections());
         log.info("  logClusterStateDetails: {}", config.logClusterStateDetails());
-        log.info("  beaconApiUrl: {}", config.beaconApiUrl());
         log.info("  clusterEnvironment: {}", config.clusterEnvironment());
         log.info("  sessionTimeoutMinutes: {}", config.sessionTimeoutMinutes());
         log.info("  mediaDriverTimeoutMs: {}", config.mediaDriverTimeoutMs());
@@ -153,10 +152,6 @@ public class AeronClusterService {
         }
 
         System.setProperty("aeron.cluster.nodeId", Integer.toString(config.nodeId()));
-
-        if (config.beaconApiUrl() != null && !config.beaconApiUrl().isEmpty()) {
-            System.setProperty("ethereum.beacon.api.url", config.beaconApiUrl());
-        }
         applyOptionalConfigProperties();
 
         String existingHostnames = RuntimeConfigValueResolver.readString("aeron.cluster.hostnames", "");

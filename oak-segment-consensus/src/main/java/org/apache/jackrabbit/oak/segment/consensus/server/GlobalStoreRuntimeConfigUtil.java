@@ -72,11 +72,4 @@ final class GlobalStoreRuntimeConfigUtil {
         }
         return peers;
     }
-
-    static String resolveBeaconApiUrl(AeronClusterConfig config) {
-        if (config != null && config.beaconApiUrl() != null && !config.beaconApiUrl().trim().isEmpty()) {
-            return config.beaconApiUrl().trim();
-        }
-        return RuntimeConfigValueResolver.readString("ethereum.beacon.api.url", "https://beaconcha.in/api");
-    }
 }

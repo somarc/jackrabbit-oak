@@ -93,8 +93,9 @@ public final class AeronClusterRuntimeRegistry {
             this.logClusterStateDetails = logClusterStateDetails;
         }
 
+        /** No OSGi config: the standalone runtime treats a null AeronClusterConfig as disabled with no election observation. */
         private static Snapshot empty() {
-            return new Snapshot(true, 0, null, Collections.emptyList(), true, false);
+            return new Snapshot(false, 0, null, Collections.emptyList(), false, false);
         }
     }
 }

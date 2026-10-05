@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceR
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Read-only introspection helpers for effective Aeron cluster tuning.
@@ -49,6 +50,12 @@ public final class AeronClusterTuningIntrospection {
         values.put("cluster_base_port", readInt(AeronClusterTopology.PORT_BASE_PROPERTY, AeronClusterTopology.getPortBase()));
         values.put("cluster_environment", readString("oak.cluster.environment", ""));
         values.put("session_timeout_minutes", readInt("oak.cluster.session.timeout.minutes", 0));
+        values.put("effective_session_timeout_seconds",
+            TimeUnit.NANOSECONDS.toSeconds(AeronClusterLauncher.resolveSessionTimeoutConfig().timeoutNs));
+        values.put("snapshot_interval_ms",
+            Long.getLong(SnapshotTrigger.INTERVAL_MS_PROPERTY, SnapshotTrigger.DEFAULT_INTERVAL_MS));
+        values.put("snapshot_entry_interval",
+            Long.getLong(SnapshotTrigger.ENTRY_INTERVAL_PROPERTY, SnapshotTrigger.DEFAULT_ENTRY_INTERVAL));
         values.put("media_driver_timeout_ms", readInt("oak.cluster.media.driver.timeout.ms", 0));
         values.put("socket_send_buffer_bytes", readInt("aeron.socket.so_sndbuf", 0));
         values.put("socket_receive_buffer_bytes", readInt("aeron.socket.so_rcvbuf", 0));
@@ -62,7 +69,6 @@ public final class AeronClusterTuningIntrospection {
         values.put("max_concurrent_sessions", readInt("oak.cluster.max.concurrent.sessions", 0));
         values.put("peer_probe_mode", readString("oak.health.peerProbeMode", ""));
         values.put("delete_aeron_dirs_on_startup", readBoolean("aeron.delete.dirs.on.startup", false));
-        values.put("beacon_api_url", readString("ethereum.beacon.api.url", "https://beaconcha.in/api"));
         return values;
     }
 

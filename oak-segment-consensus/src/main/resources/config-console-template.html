@@ -1,0 +1,341 @@
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements. See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License. You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Blockchain AEM Web Console - Configuration</title>
+    <!-- Layout and palette follow the Apache Felix Web Console (webconsole.css, config.css, jQuery UI "smoothness"). -->
+    <style>
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; background: #fff; }
+        body {
+            font-family: Verdana, Arial, Helvetica, sans-serif;
+            font-size: 12px;
+            color: #222;
+        }
+        a { color: #222; }
+        code {
+            font-family: Menlo, Consolas, "Courier New", monospace;
+            font-size: 11px;
+            overflow-wrap: anywhere;
+        }
+
+        #main { width: 90%; margin-left: 5%; padding-bottom: 2em; }
+
+        /* lead: title and logo */
+        #lead { padding-top: 10px; height: 83px; display: flex; justify-content: space-between; }
+        #lead h1 { margin: 0; font-size: 26px; font-weight: bold; line-height: 1.2; }
+        #lead .logo {
+            width: 63px;
+            height: 63px;
+            display: grid;
+            place-items: center;
+            background: #0f62fe;
+            color: #fff;
+        }
+        #lead .logo svg { width: 36px; height: 36px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+
+        /* top navigation */
+        #technav {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 6px;
+            padding: 4px;
+            border: 1px solid #aaa;
+            border-radius: 4px;
+            background: #fff;
+        }
+        #technav a { padding: 3px 7px; text-decoration: none; border: 1px solid transparent; border-radius: 4px; }
+        #technav a:hover { border-color: #999; background: #dadada; }
+        #technav a.current { border-color: #aaa; background: linear-gradient(#f6f6f6, #e6e6e6); font-weight: bold; }
+        #technav .right { margin-left: auto; padding: 3px 7px; color: #555; }
+
+        /* status line (ui-state-highlight) */
+        .statline {
+            margin: .6em 0 0;
+            padding: .3em .5em;
+            border: 1px solid #fcefa1;
+            background: #fbf9ee;
+            color: #363636;
+        }
+        .statline.missing { border-color: #e2c9a3; background: #fdf3e2; }
+
+        /* header bar with filter and buttons (ui-widget-header buttonGroup) */
+        .buttonGroup {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            margin-top: .6em;
+            padding: .5em 1em;
+            border: 1px solid #aaa;
+            border-bottom: none;
+            border-radius: 4px 4px 0 0;
+            background: linear-gradient(#e8e8e8, #cccccc);
+        }
+        .filterBox { display: flex; align-items: center; gap: 4px; }
+        .filterBox input {
+            width: 260px;
+            padding: 2px 4px;
+            font: inherit;
+            color: #184054;
+            background: #f0f0f0;
+            border: 1px solid #999;
+            border-bottom-color: #ccc;
+            border-right-color: #ccc;
+        }
+        .filterClear { cursor: pointer; padding: 0 4px; font-weight: bold; color: #555; }
+        .buttonGroup .spacer { flex: 1 1 auto; }
+        button, .button {
+            padding: 2px 10px;
+            font: inherit;
+            color: #555;
+            border: 1px solid #d3d3d3;
+            border-radius: 4px;
+            background: linear-gradient(#f6f6f6, #e6e6e6 50%, #dadada);
+            cursor: pointer;
+        }
+        button:hover { border-color: #999; color: #212121; background: #dadada; }
+        button[aria-pressed="true"] { border-color: #aaa; color: #212121; background: #fff; font-weight: bold; }
+
+        /* nicetable */
+        table.nicetable { width: 100%; border-collapse: collapse; border: 1px solid #aaa; text-align: left; }
+        table.nicetable th, table.nicetable td { padding: .3em .8em; vertical-align: top; border-bottom: 1px solid #ccc; }
+        table.nicetable thead th {
+            background: linear-gradient(#f2f2f2, #dddddd);
+            font-weight: bold;
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+        }
+        table.nicetable thead th::after { content: " \21C5"; color: #888; font-weight: normal; }
+        table.nicetable thead th[aria-sort="ascending"]::after { content: " \25B2"; color: #333; }
+        table.nicetable thead th[aria-sort="descending"]::after { content: " \25BC"; color: #333; }
+        tr.config-row { cursor: pointer; }
+        tr.config-row.even, tr.detail-row.even { background: #f3f3f3; }
+        tr.config-row:hover { background: #e4ecf7; }
+        tr.config-row.open { background: #dfe7f3; }
+        .col_Name { width: 55%; }
+        .num { text-align: right; width: 6em; }
+        .num.hl { color: #b25b00; font-weight: bold; }
+        .num.drift { color: #6b4fbb; font-weight: bold; }
+        .toggle::before { content: "\25B8"; display: inline-block; width: 1.2em; color: #333; }
+        tr.open .toggle::before { content: "\25BE"; }
+        .bName { font-weight: normal; }
+        .symName { font-style: italic; color: #444; }
+        .symName::before { content: "("; }
+        .symName::after { content: ")"; }
+
+        /* expanded configuration: mirrors the configMgr editor dialog */
+        tr.detail-row > td { padding: 0 .8em .8em 2em; }
+        .editor { border: 1px solid #aaa; border-radius: 4px; background: #fff; padding: .6em .8em; }
+        .configDescription { margin: 0 0 .8em; color: #333; }
+        table.editorTable { width: 100%; border-collapse: collapse; }
+        table.editorTable td { border-bottom: 1px solid #e5e5e5; vertical-align: top; }
+        table.editorTable th {
+            text-align: left;
+            padding: .4em .5em;
+            margin-top: .5em;
+            border: 1px solid #aaa;
+            background: linear-gradient(#e8e8e8, #cccccc);
+        }
+        .minWidthCell { width: 22%; min-width: 10em; padding: .55em .5em .5em 0; font-weight: bold; }
+        .paddedCell { padding: .5em; }
+        .topPaddedText { padding-top: .35em; white-space: pre-wrap; color: #333; }
+        .pid { font-style: italic; color: #555; }
+        .pid::before { content: "("; }
+        .pid::after { content: ")"; }
+        .meta { padding-top: .25em; color: #777; font-size: 11px; }
+        .meta code { color: #555; }
+        .ro-field {
+            display: inline-block;
+            min-width: 24em;
+            max-width: 100%;
+            min-height: 1.6em;
+            padding: 2px 4px;
+            color: #184054;
+            background: #f0f0f0;
+            border: 1px solid #999;
+            border-bottom-color: #ccc;
+            border-right-color: #ccc;
+            font-family: Menlo, Consolas, "Courier New", monospace;
+            font-size: 11px;
+            overflow-wrap: anywhere;
+            vertical-align: middle;
+        }
+        .ro-field.na, .ro-field.redacted { color: #888; font-style: italic; font-family: inherit; }
+        .ro-check { color: #555; }
+        .flag { display: inline-block; margin-left: .6em; padding: 0 .4em; font-size: 11px; border-radius: 3px; vertical-align: middle; }
+        .flag.changed { border: 1px solid #fcefa1; background: #fbf9ee; color: #8a6d00; }
+        .flag.drift { border: 1px solid #d6ccef; background: #f5f2fc; color: #6b4fbb; }
+        tr.prop.declared-only .minWidthCell { color: #888; }
+        .risk-expert-only { color: #b00; }
+        .risk-guarded { color: #8a6d00; }
+
+        #footer { margin-top: 1em; color: #777; font-size: 11px; }
+        #footer a { color: #555; }
+    </style>
+</head>
+<body>
+<div id="main">
+    <div id="lead">
+        <h1>Blockchain AEM Web Console<br>Configuration</h1>
+        <a class="logo" href="/" title="Blockchain AEM validator"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg></a>
+    </div>
+    <nav id="technav" aria-label="Primary">
+        <a href="/">Main</a>
+        <a href="/explorer">CRX/OC</a>
+        <a href="/api-browser">API Browser</a>
+        <a href="/console/configMgr" class="current" aria-current="page">Configuration</a>
+        <span class="right">{{MODE_LABEL}}</span>
+    </nav>
+
+    <p class="statline {{CONFIG_ADMIN_STATE}}">{{CONFIG_ADMIN_STATLINE}}</p>
+    <p class="statline">{{CONFIG_STATLINE}}</p>
+
+    <div class="buttonGroup">
+        <div class="filterBox">
+            <input id="filter" type="search" placeholder="Name, PID, property or -D key" title="Filter configurations and properties" autocomplete="off">
+            <span id="filterClear" class="filterClear" title="Clear filter">&#x2716;</span>
+            <button id="filterApply" type="button">Apply Filter</button>
+        </div>
+        <span class="spacer"></span>
+        <button type="button" data-only="changed" aria-pressed="false">Changed only</button>
+        <button type="button" data-only="drift" aria-pressed="false">Drift only</button>
+        <button type="button" data-expand="true">Expand All</button>
+        <button type="button" data-expand="false">Collapse All</button>
+        <button type="button" onclick="location.reload()">Reload</button>
+    </div>
+    <table id="configTable" class="nicetable">
+        <thead>
+            <tr>
+                <th data-sort="text">Name</th>
+                <th data-sort="text">Source</th>
+                <th data-sort="num">Properties</th>
+                <th data-sort="num">Changed</th>
+                <th data-sort="num">Drift</th>
+                <th data-sort="text">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+{{CONFIG_ROWS}}
+        </tbody>
+    </table>
+
+    <p id="footer">
+        Read-only. Change configuration through the validator launch flags (<code>-D</code>) or environment, then restart.
+        <em>Drift</em> counts OSGi properties no runtime value reports plus runtime values with no OSGi declaration.
+        JSON: <a href="/v1/config/osgi">effective</a> &middot; <a href="/v1/config/osgi/schema">schema</a> &middot;
+        <a href="/v1/config/osgi/sources">sources</a> &middot; <a href="/v1/config/osgi/coverage">coverage</a> &middot;
+        <a href="/v1/config/osgi/delta">delta</a>
+    </p>
+</div>
+<script>
+    (function () {
+        var tbody = document.querySelector('#configTable tbody');
+        var filter = document.getElementById('filter');
+        var only = { changed: false, drift: false };
+
+        function pairs() {
+            return Array.prototype.map.call(tbody.querySelectorAll('tr.config-row'), function (row) {
+                return { row: row, detail: row.nextElementSibling };
+            });
+        }
+
+        function setOpen(pair, open) {
+            pair.row.classList.toggle('open', open);
+            pair.detail.hidden = !open;
+        }
+
+        function restripe() {
+            pairs().filter(function (p) { return !p.row.hidden; }).forEach(function (p, i) {
+                var zebra = i % 2 === 0 ? 'even' : 'odd';
+                [p.row, p.detail].forEach(function (el) {
+                    el.classList.remove('even', 'odd');
+                    el.classList.add(zebra);
+                });
+            });
+        }
+
+        function apply() {
+            var query = filter.value.trim().toLowerCase();
+            var narrowed = query || only.changed || only.drift;
+            pairs().forEach(function (p) {
+                var header = p.row.textContent.toLowerCase();
+                var visible = 0;
+                p.detail.querySelectorAll('tr.prop').forEach(function (prop) {
+                    var show = (!only.changed || prop.classList.contains('changed'))
+                        && (!only.drift || !prop.classList.contains('bound'))
+                        && (!query || header.indexOf(query) >= 0 || prop.textContent.toLowerCase().indexOf(query) >= 0);
+                    prop.hidden = !show;
+                    if (show) { visible++; }
+                });
+                p.row.hidden = narrowed && visible === 0;
+                if (p.row.hidden) {
+                    setOpen(p, false);
+                } else if (narrowed) {
+                    setOpen(p, true);
+                }
+            });
+            restripe();
+        }
+
+        tbody.addEventListener('click', function (event) {
+            var row = event.target.closest('tr.config-row');
+            if (row) {
+                setOpen({ row: row, detail: row.nextElementSibling }, !row.classList.contains('open'));
+            }
+        });
+        filter.addEventListener('input', apply);
+        document.getElementById('filterApply').addEventListener('click', apply);
+        document.getElementById('filterClear').addEventListener('click', function () { filter.value = ''; apply(); });
+        document.querySelectorAll('button[data-only]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var key = button.getAttribute('data-only');
+                only[key] = !only[key];
+                button.setAttribute('aria-pressed', String(only[key]));
+                apply();
+            });
+        });
+        document.querySelectorAll('button[data-expand]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var open = button.getAttribute('data-expand') === 'true';
+                pairs().forEach(function (p) { if (!p.row.hidden) { setOpen(p, open); } });
+            });
+        });
+        document.querySelectorAll('#configTable thead th').forEach(function (th, column) {
+            th.addEventListener('click', function () {
+                var ascending = th.getAttribute('aria-sort') !== 'ascending';
+                document.querySelectorAll('#configTable thead th').forEach(function (other) { other.removeAttribute('aria-sort'); });
+                th.setAttribute('aria-sort', ascending ? 'ascending' : 'descending');
+                var numeric = th.getAttribute('data-sort') === 'num';
+                pairs().sort(function (a, b) {
+                    var x = a.row.cells[column].textContent.trim();
+                    var y = b.row.cells[column].textContent.trim();
+                    var order = numeric ? Number(x) - Number(y) : x.localeCompare(y);
+                    return ascending ? order : -order;
+                }).forEach(function (p) { tbody.appendChild(p.row); tbody.appendChild(p.detail); });
+                restripe();
+            });
+        });
+    })();
+</script>
+</body>
+</html>

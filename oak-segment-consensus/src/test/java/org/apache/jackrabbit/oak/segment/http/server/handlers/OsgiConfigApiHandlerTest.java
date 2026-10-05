@@ -22,7 +22,10 @@ import org.junit.Test;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -34,6 +37,9 @@ public class OsgiConfigApiHandlerTest {
     private static final String PROP_VERIFIER_THREADS = "oak.proposal.verifier.threads";
     private static final String PROP_BROWSER_UI_ENABLED = "oak.http.browser.ui.enabled";
     private static final String PROP_EXTERNAL_DASHBOARD_URL = "oak.dashboard.external.url";
+    private static final String PROP_BIND_HOST = "http.bind.host";
+    private static final String PROP_SAFETY = "oak.consensus.safety.enabled";
+    private static final String PROP_SEGMENT_BACKEND = "oak.segment.backend";
 
     private final OsgiConfigApiHandler handler = new OsgiConfigApiHandler();
 
@@ -43,6 +49,9 @@ public class OsgiConfigApiHandlerTest {
         System.clearProperty(PROP_VERIFIER_THREADS);
         System.clearProperty(PROP_BROWSER_UI_ENABLED);
         System.clearProperty(PROP_EXTERNAL_DASHBOARD_URL);
+        System.clearProperty(PROP_BIND_HOST);
+        System.clearProperty(PROP_SAFETY);
+        System.clearProperty(PROP_SEGMENT_BACKEND);
     }
 
     @Test
@@ -108,6 +117,46 @@ public class OsgiConfigApiHandlerTest {
         assertTrue(json.contains("\"missingTunables\":0"));
         assertTrue(json.contains("\"extraExposedTunables\":0"));
         assertTrue(json.contains("\"coveragePercent\":100.0"));
+        assertTrue(json.contains("\"knownTunables\":" + effectiveKeyCount()));
+    }
+
+    @Test
+    public void testSchemaDefaultsMatchUnconfiguredStandaloneRuntime() {
+        Map<String, Object> effective = flatten(handler.buildComponents());
+        for (Map<String, Object> entry : handler.buildSchema()) {
+            String key = String.valueOf(entry.get("key"));
+            if (key.startsWith("aeronClusterTuning.") || key.startsWith("nodeRuntimeTuning.")) {
+                assertTrue(key, OsgiConfigApiHandler.looselyEqual(effective.get(key), entry.get("default")));
+            }
+        }
+    }
+
+    @Test
+    public void testNodeRuntimeExposesSafetyBindHostAndStorageBackends() {
+        System.setProperty(PROP_BIND_HOST, "127.0.0.1");
+        System.setProperty(PROP_SAFETY, "false");
+        System.setProperty(PROP_SEGMENT_BACKEND, "azure");
+
+        Map<String, Object> values = flatten(handler.buildComponents());
+
+        assertEquals("127.0.0.1", values.get("nodeRuntimeTuning.http_bind_host"));
+        assertEquals(false, values.get("nodeRuntimeTuning.consensus_safety_enabled"));
+        assertEquals("invalid", values.get("nodeRuntimeTuning.segment_backend"));
+        assertEquals(false, values.get("nodeRuntimeTuning.sharding_enabled"));
+    }
+
+    private int effectiveKeyCount() {
+        return flatten(handler.buildComponents()).size();
+    }
+
+    private static Map<String, Object> flatten(Map<String, Object> components) {
+        Map<String, Object> flat = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> component : components.entrySet()) {
+            for (Map.Entry<?, ?> value : ((Map<?, ?>) component.getValue()).entrySet()) {
+                flat.put(component.getKey() + "." + value.getKey(), value.getValue());
+            }
+        }
+        return flat;
     }
 
     @Test

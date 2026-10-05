@@ -126,7 +126,7 @@ public class ProposalQueueAdaptiveCapacityTest {
             "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
             true
         );
-        BeaconChainClient beaconClient = new BeaconChainClient("ignored-in-mock-mode");
+        BeaconChainClient beaconClient = new BeaconChainClient();
         bridge.start();
         beaconClient.startBackgroundPolling();
 

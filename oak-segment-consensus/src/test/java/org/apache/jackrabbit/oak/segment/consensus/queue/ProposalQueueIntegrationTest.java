@@ -76,7 +76,7 @@ public class ProposalQueueIntegrationTest {
         bridge.start();
         
         // Create Beacon Chain client (mock mode now uses Sepolia-backed chain context)
-        beaconClient = new BeaconChainClient("ignored-in-mock-mode");
+        beaconClient = new BeaconChainClient();
         beaconClient.startBackgroundPolling();
 
         createQueueManager();
@@ -140,7 +140,7 @@ public class ProposalQueueIntegrationTest {
         );
         bridge.start();
 
-        beaconClient = new BeaconChainClient("ignored-in-mock-mode");
+        beaconClient = new BeaconChainClient();
         beaconClient.startBackgroundPolling();
 
         createQueueManager();
@@ -164,7 +164,7 @@ public class ProposalQueueIntegrationTest {
         );
         bridge.start();
 
-        beaconClient = new BeaconChainClient("ignored-in-mock-mode");
+        beaconClient = new BeaconChainClient();
         beaconClient.startBackgroundPolling();
 
         createQueueManager(callback);

@@ -18,8 +18,10 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterTuningIntrospection;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfigIntrospection;
+import org.apache.jackrabbit.oak.segment.consensus.config.ConsensusSafety;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
+import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueTuningIntrospection;
 import org.apache.jackrabbit.oak.segment.http.server.AuthTokenValidator;
 import org.apache.jackrabbit.oak.segment.http.server.RateLimiter;
@@ -33,6 +35,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -181,7 +184,7 @@ public class OsgiConfigApiHandler {
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
 
-    private Map<String, Object> buildComponents() {
+    Map<String, Object> buildComponents() {
         Map<String, Object> components = new LinkedHashMap<>();
         components.put("aeronClusterTuning", AeronClusterTuningIntrospection.effectiveValues());
         components.put("proposalQueueTuning", ProposalQueueTuningIntrospection.effectiveValues());
@@ -196,7 +199,7 @@ public class OsgiConfigApiHandler {
         return components;
     }
 
-    private Map<String, Object> buildSourcesMap() {
+    Map<String, Object> buildSourcesMap() {
         Map<String, Object> sources = new LinkedHashMap<>();
         sources.put("aeronClusterTuning", AeronClusterTuningIntrospection.source());
         sources.put("proposalQueueTuning", ProposalQueueTuningIntrospection.source());
@@ -211,17 +214,17 @@ public class OsgiConfigApiHandler {
         return sources;
     }
 
-    private List<Map<String, Object>> buildSchema() {
+    List<Map<String, Object>> buildSchema() {
         List<Map<String, Object>> schema = new ArrayList<>();
 
         schema.add(schemaEntry(
             "aeronClusterTuning.enabled",
             "boolean",
-            true,
+            false,
             "startup-only",
             "guarded",
-            "Enable Aeron cluster service",
-            "osgi:AeronClusterConfig.enabled"));
+            "Enable Aeron cluster consensus",
+            "consensus.enabled"));
         schema.add(schemaEntry(
             "aeronClusterTuning.node_id",
             "int",
@@ -229,7 +232,7 @@ public class OsgiConfigApiHandler {
             "startup-only",
             "guarded",
             "Aeron cluster node id",
-            "osgi:AeronClusterConfig.nodeId"));
+            "aeron.cluster.nodeId"));
         schema.add(schemaEntry(
             "aeronClusterTuning.self_url_configured",
             "boolean",
@@ -237,7 +240,7 @@ public class OsgiConfigApiHandler {
             "startup-only",
             "guarded",
             "Whether an explicit self URL is configured",
-            "osgi:AeronClusterConfig.selfUrl"));
+            "consensus.self.url"));
         schema.add(schemaEntry(
             "aeronClusterTuning.peer_urls_count",
             "int",
@@ -245,14 +248,14 @@ public class OsgiConfigApiHandler {
             "startup-only",
             "guarded",
             "Number of configured peer URLs",
-            "osgi:AeronClusterConfig.peerUrls"));
+            "consensus.peers"));
         schema.add(schemaEntry(
             "aeronClusterTuning.observe_elections",
             "boolean",
-            true,
+            false,
             "startup-only",
             "safe",
-            "Observe elections before genesis writes",
+            "Observe elections before genesis writes (OSGi config only; off in the standalone runtime)",
             "osgi:AeronClusterConfig.observeElections"));
         schema.add(schemaEntry(
             "aeronClusterTuning.log_cluster_state_details",
@@ -268,7 +271,7 @@ public class OsgiConfigApiHandler {
             "",
             "startup-only",
             "guarded",
-            "Environment profile for Aeron timeout defaults",
+            "Environment label (dev/staging/prod), reported only",
             "oak.cluster.environment"));
         schema.add(schemaEntry(
             "aeronClusterTuning.session_timeout_minutes",
@@ -383,13 +386,37 @@ public class OsgiConfigApiHandler {
             "Delete Aeron runtime dirs during startup",
             "aeron.delete.dirs.on.startup"));
         schema.add(schemaEntry(
-            "aeronClusterTuning.beacon_api_url",
-            "string",
-            "https://beaconcha.in/api",
+            "aeronClusterTuning.cluster_base_port",
+            "int",
+            9000,
+            "startup-only",
+            "expert-only",
+            "Aeron base port; member ports are derived from it",
+            "aeron.cluster.basePort"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.effective_session_timeout_seconds",
+            "long",
+            30L,
+            "startup-only",
+            "expert-only",
+            "Effective Aeron session timeout; the seconds property takes precedence over minutes",
+            "oak.cluster.session.timeout.seconds"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.snapshot_interval_ms",
+            "long",
+            600000L,
             "startup-only",
             "guarded",
-            "Beacon API base URL",
-            "ethereum.beacon.api.url"));
+            "Leader snapshot interval by elapsed time (0 disables)",
+            "oak.aeron.snapshot.intervalMs"));
+        schema.add(schemaEntry(
+            "aeronClusterTuning.snapshot_entry_interval",
+            "long",
+            10000L,
+            "startup-only",
+            "guarded",
+            "Leader snapshot interval by applied entries (0 disables)",
+            "oak.aeron.snapshot.entryInterval"));
 
         schema.add(schemaEntry(
             "proposalQueueTuning.max_message_batch",
@@ -527,6 +554,54 @@ public class OsgiConfigApiHandler {
             "guarded",
             "Enable validator-hosted binary upload handling",
             "oak.proposal.validator.binary.upload.enabled"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.max_retry_count",
+            "int",
+            5,
+            "runtime-readable",
+            "guarded",
+            "Proposal retry ceiling",
+            "oak.proposal.max.retry.count"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.payload_inline_max_bytes",
+            "long",
+            8192L,
+            "runtime-readable",
+            "expert-only",
+            "Largest payload kept inline before spilling to disk",
+            "oak.proposal.payload.inline.max.bytes"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.payload_spill_soft_pending",
+            "long",
+            10000L,
+            "runtime-readable",
+            "expert-only",
+            "Pending-proposal count at which payloads start spilling",
+            "oak.proposal.payload.spill.soft.pending"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.payload_spill_max_bytes",
+            "long",
+            2147483648L,
+            "runtime-readable",
+            "expert-only",
+            "Spill directory byte ceiling",
+            "oak.proposal.payload.spill.max.bytes"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.hard_max_pending_proposals",
+            "long",
+            20000L,
+            "runtime-readable",
+            "expert-only",
+            "Hard pending-proposal ceiling before admission is refused",
+            "oak.proposal.hard.max.pending"));
+        schema.add(schemaEntry(
+            "proposalQueueTuning.payload_spill_dir",
+            "string",
+            "",
+            "runtime-readable",
+            "guarded",
+            "Payload spill directory (empty uses the store default)",
+            "oak.proposal.payload.spill.dir"));
 
         schema.add(schemaEntry(
             "rateLimiterTuning.enabled",
@@ -740,6 +815,31 @@ public class OsgiConfigApiHandler {
             "guarded",
             "Measured gas units for PRIORITY write path",
             "oak.blockchain.gas.write.priority"));
+        // Derived estimates; defaults are the tier base price plus 3 gwei x 74,534 gas.
+        schema.add(schemaEntry(
+            "blockchainTuning.estimated_total_wei_standard",
+            "string",
+            "1223602000000000",
+            "derived",
+            "safe",
+            "Estimated STANDARD write cost in wei (derived from gas settings)",
+            "oak.blockchain.gas.write.standard"));
+        schema.add(schemaEntry(
+            "blockchainTuning.estimated_total_wei_express",
+            "string",
+            "2223602000000000",
+            "derived",
+            "safe",
+            "Estimated EXPRESS write cost in wei (derived from gas settings)",
+            "oak.blockchain.gas.write.express"));
+        schema.add(schemaEntry(
+            "blockchainTuning.estimated_total_wei_priority",
+            "string",
+            "10223602000000000",
+            "derived",
+            "safe",
+            "Estimated PRIORITY write cost in wei (derived from gas settings)",
+            "oak.blockchain.gas.write.priority"));
 
         schema.add(schemaEntry(
             "nodeRuntimeTuning.consensus_enabled",
@@ -853,6 +953,54 @@ public class OsgiConfigApiHandler {
             "guarded",
             "Whether an explicit proposal persistence directory is configured",
             "oak.proposal.persistence.dir|OAK_PROPOSAL_PERSISTENCE_DIR"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.consensus_safety_enabled",
+            "boolean",
+            true,
+            "startup-only",
+            "expert-only",
+            "Genesis v2 consensus safety; the Aeron service refuses to start when false",
+            "oak.consensus.safety.enabled"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.http_bind_host",
+            "string",
+            "",
+            "startup-only",
+            "guarded",
+            "HTTP bind address (empty listens on all interfaces)",
+            "http.bind.host"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.segment_backend",
+            "string",
+            "local",
+            "startup-only",
+            "guarded",
+            "Segment store backend (local, azure, aws)",
+            "oak.segment.backend|OAK_SEGMENT_BACKEND"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.blob_backend",
+            "string",
+            "ipfs",
+            "startup-only",
+            "guarded",
+            "Blob store backend (ipfs, azure, aws); legacy blobstore.type is the fallback",
+            "oak.blob.backend|OAK_BLOB_BACKEND"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.sharding_enabled",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Path-prefix sharding across clusters",
+            "oak.sharding.enabled"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.wallet_passphrase_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether the validator wallet key is encrypted with a passphrase",
+            "validator.wallet.passphrase|VALIDATOR_WALLET_PASSPHRASE"));
 
         schema.add(schemaEntry(
             "runtimeUiTuning.browser_ui_enabled",
@@ -944,21 +1092,29 @@ public class OsgiConfigApiHandler {
             RuntimeConfigValueResolver.hasConfiguredValue("aeron.cluster.hostnames"));
         values.put("proposal_persistence_dir_configured",
             RuntimeConfigValueResolver.hasConfiguredValue("oak.proposal.persistence.dir", "OAK_PROPOSAL_PERSISTENCE_DIR"));
+        values.put("consensus_safety_enabled", ConsensusSafety.isEnabled());
+        values.put("http_bind_host", readString("http.bind.host", ""));
+        putStorageBackends(values);
+        values.put("sharding_enabled", readBoolean("oak.sharding.enabled", false));
+        values.put("wallet_passphrase_configured", System.getenv("VALIDATOR_WALLET_PASSPHRASE") != null
+            || System.getProperty("validator.wallet.passphrase") != null);
         return values;
     }
 
-    private Set<String> buildKnownTunables() {
-        Set<String> known = new LinkedHashSet<>();
-        for (Map<String, Object> entry : buildSchema()) {
-            Object raw = entry.get("key");
-            if (raw != null) {
-                known.add(String.valueOf(raw));
-            }
+    private static void putStorageBackends(Map<String, Object> values) {
+        try {
+            StorageBackendConfig storage = StorageBackendConfig.load();
+            values.put("segment_backend", storage.getSegmentBackend().name().toLowerCase(Locale.ROOT));
+            values.put("blob_backend", storage.getBlobBackend().name().toLowerCase(Locale.ROOT));
+        } catch (IllegalStateException e) {
+            values.put("segment_backend", "invalid");
+            values.put("blob_backend", "invalid");
         }
-        return known;
     }
-    private static boolean hasText(String value) {
-        return value != null && !value.trim().isEmpty();
+
+    /** Known tunables are the effective values the runtime reports, so schema gaps surface as missing. */
+    private Set<String> buildKnownTunables() {
+        return new LinkedHashSet<>(flattenComponents(buildComponents()).keySet());
     }
 
     private static Map<String, Object> flattenComponents(Map<String, Object> components) {
@@ -980,7 +1136,7 @@ public class OsgiConfigApiHandler {
         return flat;
     }
 
-    private static boolean looselyEqual(Object a, Object b) {
+    static boolean looselyEqual(Object a, Object b) {
         if (a == b) {
             return true;
         }
