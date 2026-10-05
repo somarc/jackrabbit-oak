@@ -30,7 +30,6 @@ import org.slf4j.LoggerFactory;
 
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -218,21 +217,8 @@ public class HealthHandler {
         }
         payload.put("cluster", cluster);
 
-        Map<String, Object> nodeStoreHealth = new HashMap<>();
-        try {
-            if (nodeStore != null) {
-                nodeStoreHealth.put("status", "UP");
-                nodeStoreHealth.put("rootExists", nodeStore.getRoot() != null);
-            } else {
-                nodeStoreHealth.put("status", "DOWN");
-                nodeStoreHealth.put("error", "NodeStore not initialized");
-                allHealthy = false;
-            }
-        } catch (Exception e) {
-            nodeStoreHealth.put("status", "DOWN");
-            nodeStoreHealth.put("error", e.getMessage());
-            allHealthy = false;
-        }
+        Map<String, Object> nodeStoreHealth = buildNodeStorePayload(new HashMap<>());
+        allHealthy &= "UP".equals(nodeStoreHealth.get("status"));
         payload.put("nodeStore", nodeStoreHealth);
 
         Map<String, Object> diskSpace = new HashMap<>();
@@ -325,29 +311,7 @@ public class HealthHandler {
         clients.put("registeredValidators", registeredValidators.size());
         payload.put("clients", clients);
 
-        Map<String, Object> blobStore = new HashMap<>();
-        if (context != null && context.blobStoreType != null) {
-            String blobStoreType = context.blobStoreType;
-            blobStore.put("type", blobStoreType);
-            if (context.blobStore != null) {
-                blobStore.put("status", "UP");
-                if ("ipfs".equalsIgnoreCase(blobStoreType)) {
-                    blobStore.put("cidMappingAvailable", context.cidMappingService != null);
-                    blobStore.put("ipfsGateway", IpfsGatewayUrls.gatewayBase());
-                    blobStore.put("ipfsLocalGateway", IpfsGatewayUrls.localGatewayBase());
-                } else {
-                    blobStore.put("note", blobStoreType + " storage configured");
-                }
-            } else {
-                blobStore.put("status", "DEGRADED");
-                blobStore.put("error", "BlobStore not initialized");
-            }
-        } else {
-            blobStore.put("type", "default");
-            blobStore.put("status", "UP");
-            blobStore.put("note", "FileDataStore (embedded)");
-        }
-        payload.put("blobStore", blobStore);
+        payload.put("blobStore", buildBlobStorePayload(new HashMap<>()));
         payload.put("sharding", buildShardingPayload());
 
         Map<String, Object> overall = new HashMap<>();
@@ -492,14 +456,15 @@ public class HealthHandler {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("storePath", storeDirectory != null ? storeDirectory.toString() : null);
         payload.put("fileStore", buildFileStorePayload());
-        payload.put("nodeStore", buildNodeStorePayload());
+        payload.put("nodeStore", buildNodeStorePayload(new LinkedHashMap<>()));
         payload.put("diskSpace", buildDiskSpacePayload());
-        payload.put("blobStore", buildBlobStorePayload());
+        payload.put("blobStore", buildBlobStorePayload(new LinkedHashMap<>()));
         List<Map<String, Object>> tarFiles = buildTarEntries();
         payload.put("tarFiles", tarFiles);
         payload.put("tarFileCount", tarFiles.size());
-        payload.put("totalTarSizeBytes", totalTarSizeBytes(tarFiles));
-        payload.put("totalTarSizeFormatted", FormatUtils.formatBytes(totalTarSizeBytes(tarFiles)));
+        long totalTarSize = totalTarSizeBytes(tarFiles);
+        payload.put("totalTarSizeBytes", totalTarSize);
+        payload.put("totalTarSizeFormatted", FormatUtils.formatBytes(totalTarSize));
         payload.put("sharding", buildShardingPayload());
         return payload;
     }
@@ -647,8 +612,7 @@ public class HealthHandler {
         return payload;
     }
 
-    private Map<String, Object> buildNodeStorePayload() {
-        Map<String, Object> payload = new LinkedHashMap<>();
+    private Map<String, Object> buildNodeStorePayload(Map<String, Object> payload) {
         try {
             if (nodeStore == null) {
                 payload.put("status", "DOWN");
@@ -685,8 +649,7 @@ public class HealthHandler {
         return diskSpace;
     }
 
-    private Map<String, Object> buildBlobStorePayload() {
-        Map<String, Object> blobStore = new LinkedHashMap<>();
+    private Map<String, Object> buildBlobStorePayload(Map<String, Object> blobStore) {
         if (context != null && context.blobStoreType != null) {
             String blobStoreType = context.blobStoreType;
             blobStore.put("type", blobStoreType);
@@ -718,39 +681,7 @@ public class HealthHandler {
         }
 
         try {
-            int totalSegments = 0;
-            Path journalPath = storeDirectory.resolve("journal.log");
-            if (Files.exists(journalPath)) {
-                totalSegments = Files.readAllLines(journalPath).size();
-            }
-
-            List<Path> tarFiles = new ArrayList<>();
-            long totalSize = 0L;
-            try (java.util.stream.Stream<Path> paths = Files.list(storeDirectory)) {
-                tarFiles = paths
-                    .filter(p -> p.toString().endsWith(".tar"))
-                    .sorted(java.util.Comparator.comparing(Path::toString))
-                    .collect(java.util.stream.Collectors.toList());
-                for (Path tarFile : tarFiles) {
-                    totalSize += Files.size(tarFile);
-                }
-            }
-
-            for (Path tarFile : tarFiles) {
-                long fileSize = Files.size(tarFile);
-                BasicFileAttributes attrs = Files.readAttributes(tarFile, BasicFileAttributes.class);
-                int estimatedSegments = totalSize > 0 ? (int) ((fileSize * totalSegments) / totalSize) : 0;
-
-                Map<String, Object> entry = new LinkedHashMap<>();
-                entry.put("name", tarFile.getFileName().toString());
-                entry.put("size", fileSize);
-                entry.put("sizeFormatted", FormatUtils.formatBytes(fileSize));
-                entry.put("segmentCount", estimatedSegments);
-                entry.put("estimatedCount", true);
-                entry.put("created", attrs.creationTime().toString());
-                entry.put("modified", attrs.lastModifiedTime().toString());
-                tarEntries.add(entry);
-            }
+            ExplorerApiHandler.addTarEntries(storeDirectory, tarEntries);
         } catch (Exception e) {
             log.warn("Error building tar inventory snapshot: {}", e.getMessage());
         }

@@ -31,12 +31,15 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Handler for explorer API endpoints (/api/explore, /api/segments/recent, /api/segments/tars).
@@ -209,49 +212,7 @@ public class ExplorerApiHandler {
         
         try {
             List<Map<String, Object>> tarEntries = new ArrayList<>();
-            
-            // Count total segments in journal
-            int totalSegments = 0;
-            Path journalPath = storeDirectory.resolve("journal.log");
-            if (Files.exists(journalPath)) {
-                List<String> journalLines = Files.readAllLines(journalPath);
-                totalSegments = journalLines.size();
-            }
-            
-            // List all .tar files and calculate total size
-            List<Path> tarFiles = new java.util.ArrayList<>();
-            long totalSize = 0;
-            try (java.util.stream.Stream<Path> paths = Files.list(storeDirectory)) {
-                tarFiles = paths
-                    .filter(p -> p.toString().endsWith(".tar"))
-                    .sorted(java.util.Comparator.comparing(Path::toString))
-                    .collect(Collectors.toList());
-                for (Path tarFile : tarFiles) {
-                    totalSize += Files.size(tarFile);
-                }
-            }
-            
-            // Build JSON entries
-            for (Path tarFile : tarFiles) {
-                String fileName = tarFile.getFileName().toString();
-                long fileSize = Files.size(tarFile);
-                java.nio.file.attribute.BasicFileAttributes attrs = 
-                    Files.readAttributes(tarFile, java.nio.file.attribute.BasicFileAttributes.class);
-                
-                // Estimate segment count based on proportional file size
-                int estimatedSegments = totalSize > 0 ? (int)((fileSize * totalSegments) / totalSize) : 0;
-                
-                Map<String, Object> entry = new LinkedHashMap<>();
-                entry.put("name", fileName);
-                entry.put("size", fileSize);
-                entry.put("sizeFormatted", FormatUtils.formatBytes(fileSize));
-                entry.put("segmentCount", estimatedSegments);
-                entry.put("estimatedCount", true);
-                entry.put("created", attrs.creationTime().toString());
-                entry.put("modified", attrs.lastModifiedTime().toString());
-                tarEntries.add(entry);
-            }
-            
+            addTarEntries(storeDirectory, tarEntries);
             JsonOutputUtil.write(response, HttpServletResponse.SC_OK, tarEntries);
             
         } catch (Exception e) {
@@ -261,6 +222,46 @@ public class ExplorerApiHandler {
         }
     }
     
+    /**
+     * Appends one entry per {@code .tar} file in {@code storeDirectory}, sorted by name, with a segment
+     * count estimated from the journal length in proportion to file size. Entries added before a failure stay.
+     */
+    static void addTarEntries(Path storeDirectory, List<Map<String, Object>> target) throws IOException {
+        int totalSegments = 0;
+        Path journalPath = storeDirectory.resolve("journal.log");
+        if (Files.exists(journalPath)) {
+            totalSegments = Files.readAllLines(journalPath).size();
+        }
+
+        List<Path> tarFiles;
+        long totalSize = 0;
+        try (Stream<Path> paths = Files.list(storeDirectory)) {
+            tarFiles = paths
+                .filter(p -> p.toString().endsWith(".tar"))
+                .sorted(Comparator.comparing(Path::toString))
+                .collect(Collectors.toList());
+            for (Path tarFile : tarFiles) {
+                totalSize += Files.size(tarFile);
+            }
+        }
+
+        for (Path tarFile : tarFiles) {
+            long fileSize = Files.size(tarFile);
+            BasicFileAttributes attrs = Files.readAttributes(tarFile, BasicFileAttributes.class);
+            int estimatedSegments = totalSize > 0 ? (int) ((fileSize * totalSegments) / totalSize) : 0;
+
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("name", tarFile.getFileName().toString());
+            entry.put("size", fileSize);
+            entry.put("sizeFormatted", FormatUtils.formatBytes(fileSize));
+            entry.put("segmentCount", estimatedSegments);
+            entry.put("estimatedCount", true);
+            entry.put("created", attrs.creationTime().toString());
+            entry.put("modified", attrs.lastModifiedTime().toString());
+            target.add(entry);
+        }
+    }
+
     /**
      * Handle GET /api/blob/{blobId} - Stream binary from Oak BlobStore.
      * 
