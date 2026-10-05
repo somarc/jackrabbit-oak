@@ -39,7 +39,6 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -89,18 +88,7 @@ public class ServerContext {
     public final Map<String, ClientRegistration> registeredClients;
     private final DurableClientRegistrationStore durableClientRegistrationStore;
     public final Map<String, ValidatorRegistration> registeredValidators;
-    public final Set<String> connectedPeers;
     public final Map<String, WriteMetadata> recentWriteMetadata;
-    
-    // Validator identity for rejoin
-    public volatile String myValidatorId;
-    public volatile String myValidatorUrl;
-    public volatile java.util.List<String> myPeerUrls;
-    
-    // Genesis tracking for proof verification
-    public volatile String genesisSegmentId;
-    public volatile String genesisHash;
-    public volatile long genesisTimestamp;
     
     public ServerContext(
             FileStore fileStore,
@@ -117,7 +105,6 @@ public class ServerContext {
         this.registeredClients = new ConcurrentHashMap<>();
         this.durableClientRegistrationStore = new DurableClientRegistrationStore(storeDirectory);
         this.registeredValidators = new ConcurrentHashMap<>();
-        this.connectedPeers = java.util.concurrent.ConcurrentHashMap.newKeySet();
         this.recentWriteMetadata = new ConcurrentHashMap<>();
         loadDurableClientRegistrations();
     }

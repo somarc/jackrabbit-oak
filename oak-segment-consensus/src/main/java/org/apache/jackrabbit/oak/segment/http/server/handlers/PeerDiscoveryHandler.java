@@ -176,22 +176,7 @@ public class PeerDiscoveryHandler {
                     }
                 }
                 
-                // Get validator ID - ALWAYS use 0x address format
-                // Priority: 1) Self wallet address, 2) Deterministic from URL (always use this for consistency)
-                String validatorId;
-                if (isSelf && context.myValidatorId != null && context.myValidatorId.startsWith("0x") && context.myValidatorId.length() == 42) {
-                    // For self, prefer stored validator ID (from wallet) if valid
-                    validatorId = context.myValidatorId;
-                } else {
-                    // Always generate deterministic 0x address from URL (ensures 0x format and consistency)
-                    // This ensures all validators have deterministic, consistent 0x addresses
-                    validatorId = generateDeterministicAddress(validatorUrl);
-                }
-                
-                // Final safety check - ensure validator ID is always 0x format
-                if (validatorId == null || !validatorId.startsWith("0x") || validatorId.length() != 42) {
-                    validatorId = generateDeterministicAddress(validatorUrl);
-                }
+                String validatorId = generateDeterministicAddress(validatorUrl);
                 
                 Map<String, Object> peer = new java.util.LinkedHashMap<>();
                 peer.put("validatorId", validatorId);

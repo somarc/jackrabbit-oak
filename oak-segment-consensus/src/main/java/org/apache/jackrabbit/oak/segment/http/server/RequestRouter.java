@@ -90,8 +90,7 @@ public class RequestRouter implements AutoCloseable {
         );
         this.fileHandler = new FileHandler(
             context.fileStore,
-            context.storeDirectory,
-            context.connectedPeers
+            context.storeDirectory
         );
         this.explorerApiHandler = ExplorerApiHandler.withBlobStoreSupplier(
             context.nodeStore,
