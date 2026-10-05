@@ -48,7 +48,24 @@ repository root and record results for the exact source under review. Run
 additional affected-module tests as appropriate. Preserve existing assertions.
 The Java 17 and Java 21 product checks are unit/package gates, not live-cluster
 proof. Changes to consensus, persistence, recovery, or shared storage require
-bounded runtime evidence under the consensus charter as well.
+bounded runtime evidence under the
+[consensus test charter](https://github.com/somarc/oak-chain-infra/blob/main/modes/mock/validators/tests/CONSENSUS-TEST-CHARTER.md)
+as well.
+
+A product PR states which of these it establishes, since a pass in one does not
+establish another:
+
+1. unit and package verification;
+2. bounded multi-validator logical-state and operation-history evidence;
+3. restart, failover, and other fault evidence;
+4. chain-backed and production evidence.
+
+Runtime evidence uses a disposable runtime root, read-only preflight, bounded
+traffic in a confirmed namespace, strict recursive logical comparison, terminal
+operation reconciliation, and preserved evidence. Faults, destructive resets,
+and mutations of a live cluster require explicit approval. Cite a JAR stamped
+with its source revision (see the
+[module README](oak-segment-consensus/README.md#build-and-test)) and its SHA-256.
 
 Upstream-sync and initial-promotion PRs must retain their merge commits: do not
 squash or rebase them. The upstream SHA, retained shared-Oak adaptations, and

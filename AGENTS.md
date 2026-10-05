@@ -267,7 +267,9 @@ via the Apache RAT plugin. Use this exact header:
   This is a unit/package gate, not live consensus or production proof.
 - **Publication:** Maven deployment is disabled by default. CI does not deploy,
   publish containers/packages, create releases, or use Apache release credentials.
-- **Live validation:** Follow the consensus test charter. Confirm runtime roots
+- **Live validation:** Follow the
+  [consensus test charter](https://github.com/somarc/oak-chain-infra/blob/main/modes/mock/validators/tests/CONSENSUS-TEST-CHARTER.md).
+  Confirm runtime roots
   and obtain explicit approval for bounded live mutations, faults, and resets.
 - **Provenance:** Supply the exact source SHA and honest dirty state when creating
   evidence-bearing artifacts; record the resulting JAR SHA-256.
