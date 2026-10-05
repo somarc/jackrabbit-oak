@@ -25,8 +25,6 @@ import org.agrona.concurrent.IdleStrategy;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -39,7 +37,7 @@ public class AeronEgressHandlerTest {
         AeronEgressHandler handler = new AeronEgressHandler();
         RecordingIdleStrategy idleStrategy = new RecordingIdleStrategy();
 
-        boolean sent = handler.offerWithRetry(
+        AeronEgressHandler.OfferResult result = handler.offerWithRetryResult(
             null,
             idleStrategy,
             mock(MutableDirectBuffer.class),
@@ -50,7 +48,7 @@ public class AeronEgressHandlerTest {
             false
         );
 
-        assertFalse(sent);
+        assertEquals(AeronEgressHandler.OfferResult.FAILED, result);
         assertEquals(0, idleStrategy.resetCalls);
         assertEquals(0, idleStrategy.idleCalls);
     }
@@ -64,7 +62,7 @@ public class AeronEgressHandlerTest {
         when(client.offer(any(MutableDirectBuffer.class), eq(0), eq(16)))
             .thenReturn(Publication.BACK_PRESSURED, 42L);
 
-        boolean sent = handler.offerWithRetry(
+        AeronEgressHandler.OfferResult result = handler.offerWithRetryResult(
             client,
             idleStrategy,
             mock(MutableDirectBuffer.class),
@@ -75,7 +73,7 @@ public class AeronEgressHandlerTest {
             true
         );
 
-        assertTrue(sent);
+        assertEquals(AeronEgressHandler.OfferResult.SENT, result);
         assertEquals(1, successCalls.get());
         assertEquals(1, idleStrategy.resetCalls);
         assertEquals(1, idleStrategy.idleCalls);
@@ -89,7 +87,7 @@ public class AeronEgressHandlerTest {
         when(client.offer(any(MutableDirectBuffer.class), eq(0), eq(16)))
             .thenReturn(Publication.BACK_PRESSURED, Publication.BACK_PRESSURED);
 
-        boolean sent = handler.offerWithRetry(
+        AeronEgressHandler.OfferResult result = handler.offerWithRetryResult(
             client,
             idleStrategy,
             mock(MutableDirectBuffer.class),
@@ -100,7 +98,7 @@ public class AeronEgressHandlerTest {
             false
         );
 
-        assertFalse(sent);
+        assertEquals(AeronEgressHandler.OfferResult.BACK_PRESSURED, result);
         assertEquals(1, idleStrategy.resetCalls);
         assertEquals(2, idleStrategy.idleCalls);
     }
@@ -113,7 +111,7 @@ public class AeronEgressHandlerTest {
         when(client.offer(any(MutableDirectBuffer.class), eq(0), eq(16)))
             .thenReturn(Publication.NOT_CONNECTED, 11L);
 
-        boolean sent = handler.offerWithRetry(
+        AeronEgressHandler.OfferResult result = handler.offerWithRetryResult(
             client,
             idleStrategy,
             mock(MutableDirectBuffer.class),
@@ -124,7 +122,7 @@ public class AeronEgressHandlerTest {
             false
         );
 
-        assertTrue(sent);
+        assertEquals(AeronEgressHandler.OfferResult.SENT, result);
         assertEquals(1, idleStrategy.resetCalls);
         assertEquals(1, idleStrategy.idleCalls);
     }
@@ -137,7 +135,7 @@ public class AeronEgressHandlerTest {
         when(client.offer(any(MutableDirectBuffer.class), eq(0), eq(16)))
             .thenReturn(Publication.NOT_CONNECTED, Publication.NOT_CONNECTED);
 
-        boolean sent = handler.offerWithRetry(
+        AeronEgressHandler.OfferResult result = handler.offerWithRetryResult(
             client,
             idleStrategy,
             mock(MutableDirectBuffer.class),
@@ -148,7 +146,7 @@ public class AeronEgressHandlerTest {
             false
         );
 
-        assertFalse(sent);
+        assertEquals(AeronEgressHandler.OfferResult.NOT_CONNECTED, result);
         assertEquals(1, idleStrategy.resetCalls);
         assertEquals(2, idleStrategy.idleCalls);
     }
@@ -160,7 +158,7 @@ public class AeronEgressHandlerTest {
         AeronCluster client = mock(AeronCluster.class);
         when(client.offer(any(MutableDirectBuffer.class), eq(0), eq(16))).thenReturn(-99L);
 
-        boolean sent = handler.offerWithRetry(
+        AeronEgressHandler.OfferResult result = handler.offerWithRetryResult(
             client,
             idleStrategy,
             mock(MutableDirectBuffer.class),
@@ -171,7 +169,7 @@ public class AeronEgressHandlerTest {
             false
         );
 
-        assertFalse(sent);
+        assertEquals(AeronEgressHandler.OfferResult.FAILED, result);
         assertEquals(1, idleStrategy.resetCalls);
         assertEquals(0, idleStrategy.idleCalls);
     }

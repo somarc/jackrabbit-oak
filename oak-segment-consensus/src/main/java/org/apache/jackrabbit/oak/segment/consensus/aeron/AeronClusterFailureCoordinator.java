@@ -37,7 +37,7 @@ final class AeronClusterFailureCoordinator {
     private final Executor executor;
     private final AtomicBoolean shutdownRequested;
     private final AtomicBoolean crashRecorded = new AtomicBoolean();
-    private final Sleeper sleeper;
+    private final AeronClusterAddressResolver.Sleeper sleeper;
     private final Runnable shutdownAction;
     private final Supplier<Runnable> shutdownCallbackSupplier;
 
@@ -59,7 +59,7 @@ final class AeronClusterFailureCoordinator {
     AeronClusterFailureCoordinator(CrashHandler crashHandler,
                                    Executor executor,
                                    AtomicBoolean shutdownRequested,
-                                   Sleeper sleeper,
+                                   AeronClusterAddressResolver.Sleeper sleeper,
                                    Runnable shutdownAction,
                                    Supplier<Runnable> shutdownCallbackSupplier) {
         this.crashHandler = crashHandler;
@@ -168,9 +168,5 @@ final class AeronClusterFailureCoordinator {
             } catch (Exception e) {
                 log.error("Error during shutdown", e);
             }
-    }
-
-    interface Sleeper {
-        void sleep(long millis) throws InterruptedException;
     }
 }
