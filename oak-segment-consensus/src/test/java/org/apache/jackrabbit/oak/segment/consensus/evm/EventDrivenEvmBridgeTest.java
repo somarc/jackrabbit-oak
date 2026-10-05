@@ -16,7 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.evm;
 
-import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.evm.impl.MockEventDrivenEvmBridge;
 import org.junit.Test;
 
 import java.math.BigInteger;
@@ -30,11 +30,9 @@ public class EventDrivenEvmBridgeTest {
     
     @Test
     public void testMockEventProcessing() throws InterruptedException {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true  // mock mode
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
         
         try {
@@ -74,7 +72,7 @@ public class EventDrivenEvmBridgeTest {
     
     @Test
     public void testPaymentNotVerified() {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge();
+        MockEventDrivenEvmBridge bridge = new MockEventDrivenEvmBridge();
         bridge.start();
         
         try {
@@ -89,11 +87,9 @@ public class EventDrivenEvmBridgeTest {
 
     @Test
     public void testSettlementDetailsByTransactionHashUseCachedEventProof() throws InterruptedException {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
 
         try {

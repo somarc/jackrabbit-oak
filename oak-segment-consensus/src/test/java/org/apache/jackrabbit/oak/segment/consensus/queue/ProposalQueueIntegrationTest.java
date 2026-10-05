@@ -19,7 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
-import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.evm.impl.MockEventDrivenEvmBridge;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -52,7 +52,7 @@ import static org.junit.Assert.*;
  */
 public class ProposalQueueIntegrationTest {
     
-    private EventDrivenEvmBridge bridge;
+    private MockEventDrivenEvmBridge bridge;
     private ProposalQueueManagerOptimized queueManager;
     private BeaconChainClient beaconClient;
     private CountDownLatch raftAppendLatch;
@@ -68,11 +68,9 @@ public class ProposalQueueIntegrationTest {
     @Before
     public void setUp() {
         // Create bridge in mock mode
-        bridge = new EventDrivenEvmBridge(
+        bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true  // mock mode
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
         
         // Create Beacon Chain client (mock mode now uses Sepolia-backed chain context)
@@ -133,11 +131,9 @@ public class ProposalQueueIntegrationTest {
             beaconClient.stopBackgroundPolling();
         }
 
-        bridge = new EventDrivenEvmBridge(
+        bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
 
         beaconClient = new BeaconChainClient();
@@ -157,11 +153,9 @@ public class ProposalQueueIntegrationTest {
             beaconClient.stopBackgroundPolling();
         }
 
-        bridge = new EventDrivenEvmBridge(
+        bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
 
         beaconClient = new BeaconChainClient();
@@ -886,11 +880,9 @@ public class ProposalQueueIntegrationTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
         Path persistenceDir = Files.createTempDirectory("proposal-restore-adaptive");
 
-        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge firstBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         firstBridge.start();
         bridge = firstBridge;
 
@@ -944,11 +936,9 @@ public class ProposalQueueIntegrationTest {
         firstBridge.stop();
 
         CountDownLatch restoredLatch = new CountDownLatch(1);
-        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge restoredBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         restoredBridge.start();
         bridge = restoredBridge;
         appendedProposalId = null;
@@ -1016,11 +1006,9 @@ public class ProposalQueueIntegrationTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
         Path persistenceDir = Files.createTempDirectory("proposal-restore-adaptive-overflow");
 
-        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge firstBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         firstBridge.start();
         bridge = firstBridge;
 
@@ -1074,11 +1062,9 @@ public class ProposalQueueIntegrationTest {
         firstBridge.stop();
 
         CountDownLatch restoredLatch = new CountDownLatch(1);
-        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge restoredBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         restoredBridge.start();
         bridge = restoredBridge;
         appendedProposalId = null;
@@ -1158,11 +1144,9 @@ public class ProposalQueueIntegrationTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
         Path persistenceDir = Files.createTempDirectory("proposal-restore-processed-pending");
 
-        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge firstBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         firstBridge.start();
         bridge = firstBridge;
 
@@ -1239,11 +1223,9 @@ public class ProposalQueueIntegrationTest {
 
         CountDownLatch restoredLatch = new CountDownLatch(1);
         final String[] restoredMessage = {null};
-        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge restoredBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         restoredBridge.start();
         bridge = restoredBridge;
 
@@ -1509,11 +1491,9 @@ public class ProposalQueueIntegrationTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
         Path persistenceDir = Files.createTempDirectory("proposal-missing-payload-restore");
 
-        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge firstBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         firstBridge.start();
         bridge = firstBridge;
 
@@ -1547,11 +1527,9 @@ public class ProposalQueueIntegrationTest {
         queueManager.stop();
         Files.delete(payloadPath);
 
-        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge restoredBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         restoredBridge.start();
         bridge = restoredBridge;
 

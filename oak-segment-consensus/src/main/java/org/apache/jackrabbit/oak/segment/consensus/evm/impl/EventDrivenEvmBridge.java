@@ -40,10 +40,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Event-driven EVM bridge that can work in mock mode (for testing) or real mode (mainnet).
+ * Event-driven EVM bridge for chain-backed modes.
  * 
- * <p>This bridge listens to WriteAuthorized events from OakWriteAuthorizationV5 contract.
- * In mock mode, events are simulated. In real mode, events come from Web3j event subscriptions.
+ * <p>This bridge listens to WriteAuthorized events from OakWriteAuthorizationV5 contract
+ * through Web3j event subscriptions.
  * 
  * <p>Event Structure (from OakWriteAuthorizationV5.sol):
  * <pre>
@@ -60,13 +60,10 @@ public class EventDrivenEvmBridge implements EvmBridge {
     
     private static final Logger log = LoggerFactory.getLogger(EventDrivenEvmBridge.class);
     
-    // Pricing constants (all in wei)
-    private static final BigInteger BASE_FEE = new BigInteger("1000000000000000"); // 0.001 ETH
     private static final BigInteger EVENT_LOOKBACK_BLOCKS = BigInteger.valueOf(10_000L);
     
     private final String networkName;
     private final String contractAddress;
-    private final boolean mockMode;
     private final OakPaymentEventParser paymentEventParser;
     private final Web3jFactory web3jFactory;
     private final ReconnectScheduler reconnectScheduler;
@@ -76,13 +73,9 @@ public class EventDrivenEvmBridge implements EvmBridge {
     private Disposable eventSubscription;
     
     // Payment proofs (proposalId -> PaymentProof)
-    private final Map<String, PaymentProof> payments = new ConcurrentHashMap<>();
-    
-    // Mock event queue (for testing)
-    private final java.util.concurrent.BlockingQueue<WriteAuthorizedEvent> mockEventQueue = 
-        new java.util.concurrent.LinkedBlockingQueue<>();
-    
-    private long currentBlock = 1000000;
+    final Map<String, PaymentProof> payments = new ConcurrentHashMap<>();
+
+    long currentBlock = 1000000;
     private boolean running = false;
 
     @FunctionalInterface
@@ -100,13 +93,11 @@ public class EventDrivenEvmBridge implements EvmBridge {
      * 
      * @param networkName Network name (e.g., "mainnet", "polygon", "sepolia")
      * @param contractAddress Contract address (0x...)
-     * @param mockMode If true, use mock events. If false, use Web3j subscriptions.
      */
-    public EventDrivenEvmBridge(@NotNull String networkName, @NotNull String contractAddress, boolean mockMode) {
+    public EventDrivenEvmBridge(@NotNull String networkName, @NotNull String contractAddress) {
         this(
             networkName,
             contractAddress,
-            mockMode,
             new OakPaymentEventParser(),
             rpcUrl -> Web3j.build(new HttpService(rpcUrl)),
             (threadName, delayMs, reconnectTask) -> {
@@ -126,23 +117,14 @@ public class EventDrivenEvmBridge implements EvmBridge {
 
     EventDrivenEvmBridge(@NotNull String networkName,
                          @NotNull String contractAddress,
-                         boolean mockMode,
                          @NotNull OakPaymentEventParser paymentEventParser,
                          @NotNull Web3jFactory web3jFactory,
                          @NotNull ReconnectScheduler reconnectScheduler) {
         this.networkName = networkName;
         this.contractAddress = contractAddress;
-        this.mockMode = mockMode;
         this.paymentEventParser = paymentEventParser;
         this.web3jFactory = web3jFactory;
         this.reconnectScheduler = reconnectScheduler;
-    }
-    
-    /**
-     * Convenience constructor for mock mode (testing).
-     */
-    public EventDrivenEvmBridge() {
-        this("sepolia", "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0", true);
     }
     
     @Override
@@ -153,13 +135,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
             return refreshProofConfirmations(existing);
         }
         
-        // In mock mode, auto-confirm proposals for testing
-        // This allows load tests to work without injecting events
-        if (mockMode) {
-            return refreshProofConfirmations(autoConfirmMockProposal(proposalId));
-        }
-
-        // In real mode, fall back to direct log query in case subscription missed event.
+        // Fall back to a direct log query in case the subscription missed the event.
         return refreshProofConfirmations(fetchPaymentFromChain(proposalId));
     }
 
@@ -174,58 +150,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
 
         PaymentProof proof = fetchPaymentByTransactionHash(transactionHash);
         return proof != null ? SettlementDetails.fromProof(getNetworkName(), proof) : null;
-    }
-    
-    /**
-     * Auto-confirm a proposal in mock mode (for testing/load testing).
-     * Creates a payment proof on-the-fly if proposalId looks valid.
-     */
-    private PaymentProof autoConfirmMockProposal(@NotNull String proposalId) {
-        // Validate proposalId format (UUID: 8-4-4-4-12 hex digits)
-        if (!proposalId.matches("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) {
-            return null; // Invalid format, don't auto-confirm
-        }
-        
-        // Check if we already created a proof for this proposal
-        PaymentProof cached = payments.get(proposalId);
-        if (cached != null) {
-            return cached;
-        }
-        
-        // Deterministic mock tx hash: the UUID's 32 hex digits right-padded to 0x + 64 hex chars
-        String mockTxHash = "0x" + proposalId.replace("-", "") + "0".repeat(32);
-        
-        // Increment block number for each new proposal (simulates block progression)
-        currentBlock++;
-        
-        PaymentProof mockProof = new SimplePaymentProof(
-            mockTxHash,
-            currentBlock,
-            "0x0000000000000000000000000000000000000000", // Mock payer address
-            contractAddress,
-            proposalId,
-            BASE_FEE.toString(), // Mock payment amount
-            null,
-            PaymentProof.ProposalKind.WRITE,
-            PaymentProof.PaymentToken.UNKNOWN,
-            0,
-            1 // 1 confirmation (just "mined")
-        );
-        
-        // Cache the proof for future lookups
-        payments.put(proposalId, mockProof);
-        
-        log.debug("🎭 Auto-confirmed mock proposal: {} (tx: {}, block: {})", 
-            proposalId, mockTxHash, currentBlock);
-        
-        return mockProof;
-    }
-    
-    /**
-     * Check if bridge is in mock mode.
-     */
-    public boolean isMockMode() {
-        return mockMode;
     }
     
     public long getCurrentBlockNumber() {
@@ -247,18 +171,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
     @Override
     public void start() {
         running = true;
-        
-        if (mockMode) {
-            log.info("🎭 EventDrivenEvmBridge started in MOCK mode (network: {}, contract: {})", 
-                networkName, contractAddress);
-            // Start mock event processor thread
-            startMockEventProcessor();
-        } else {
-            log.info("🌐 EventDrivenEvmBridge started in REAL mode (network: {}, contract: {})", 
-                networkName, contractAddress);
-            // Start Web3j event subscription
-            startWeb3jEventSubscription();
-        }
+        log.info("🌐 EventDrivenEvmBridge started (network: {}, contract: {})", networkName, contractAddress);
+        startWeb3jEventSubscription();
     }
     
     @Override
@@ -278,97 +192,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
         }
         
         log.info("EventDrivenEvmBridge stopped");
-    }
-    
-    // ========== Mock Mode (Testing) ==========
-    
-    /**
-     * Simulate a WriteAuthorized event (for testing).
-     * 
-     * <p>In mock mode, this queues an event that will be processed by the mock event processor.
-     * In real mode, events come from Web3j subscriptions.
-     * 
-     * @param proposalId Proposal ID (bytes32)
-     * @param payer Payer address (0x...)
-     * @param shardHash Shard hash (bytes32)
-     * @param amount Amount paid (uint96, in USDC 6 decimals)
-     * @param blockNumber Block number (uint32)
-     * @param txHash Transaction hash (0x...)
-     */
-    public void simulateWriteAuthorizedEvent(
-            @NotNull String proposalId,
-            @NotNull String payer,
-            @NotNull String shardHash,
-            @NotNull BigInteger amount,
-            long blockNumber,
-            @NotNull String txHash) {
-        simulateWriteAuthorizedEvent(proposalId, payer, shardHash, amount, blockNumber, txHash, null);
-    }
-
-    public void simulateWriteAuthorizedEvent(
-            @NotNull String proposalId,
-            @NotNull String payer,
-            @NotNull String shardHash,
-            @NotNull BigInteger amount,
-            long blockNumber,
-            @NotNull String txHash,
-            ValidatorEarningsTracker.PaymentTier paymentTier) {
-        
-        WriteAuthorizedEvent event = new WriteAuthorizedEvent(
-            proposalId,
-            payer,
-            shardHash,
-            amount,
-            blockNumber,
-            txHash,
-            paymentTier,
-            PaymentProof.ProposalKind.WRITE,
-            PaymentProof.PaymentToken.UNKNOWN,
-            0
-        );
-        
-        if (mockMode) {
-            mockEventQueue.offer(event);
-            log.debug("📥 Mock WriteAuthorized event queued: proposalId={}, payer={}, amount={}", 
-                proposalId, payer, amount);
-        } else {
-            log.warn("⚠️  simulateWriteAuthorizedEvent called in REAL mode - ignoring (events come from blockchain)");
-        }
-    }
-
-    /**
-     * Advance the mock chain head to simulate additional confirmations in tests.
-     */
-    public void advanceMockBlocks(long blocks) {
-        if (!mockMode || blocks <= 0) {
-            return;
-        }
-        currentBlock += blocks;
-    }
-    
-    /**
-     * Process mock events (runs in background thread).
-     */
-    private void startMockEventProcessor() {
-        Thread processorThread = new Thread(() -> {
-            while (running) {
-                try {
-                    WriteAuthorizedEvent event = mockEventQueue.poll(1, java.util.concurrent.TimeUnit.SECONDS);
-                    if (event != null) {
-                        processWriteAuthorizedEvent(event);
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                } catch (Exception e) {
-                    log.error("Error processing mock event", e);
-                }
-            }
-            log.info("Mock event processor stopped");
-        }, "MockEventProcessor");
-        processorThread.setDaemon(true);
-        processorThread.start();
-        log.info("Mock event processor started");
     }
     
     // ========== Real Mode (Mainnet) ==========
@@ -464,7 +287,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
         });
     }
 
-    private PaymentProof fetchPaymentFromChain(@NotNull String proposalId) {
+    PaymentProof fetchPaymentFromChain(@NotNull String proposalId) {
         if (web3j == null) {
             return null;
         }
@@ -593,7 +416,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
     }
 
     private long resolveLatestBlockNumber() {
-        if (!mockMode && web3j != null) {
+        if (web3j != null) {
             try {
                 long latestBlock = web3j.ethBlockNumber().send().getBlockNumber().longValue();
                 currentBlock = Math.max(currentBlock, latestBlock);
@@ -612,9 +435,9 @@ public class EventDrivenEvmBridge implements EvmBridge {
     // ========== Event Processing ==========
     
     /**
-     * Process a WriteAuthorized event (called from mock or real event source).
+     * Process a WriteAuthorized event from the Web3j subscription or a log lookup.
      */
-    private void processWriteAuthorizedEvent(WriteAuthorizedEvent event) {
+    void processWriteAuthorizedEvent(WriteAuthorizedEvent event) {
         log.info("📨 Processing WriteAuthorized event: proposalId={}, payer={}, amount={}, block={}", 
             event.proposalId, event.payer, event.amount, event.blockNumber);
         

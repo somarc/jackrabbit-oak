@@ -83,18 +83,7 @@ public class EventDrivenEvmBridgeRuntimeTest {
 
     @Test
     public void verifyPaymentAutoConfirmsMockProposalAndRefreshesConfirmations() {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
-            "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true,
-            new OakPaymentEventParser(),
-            rpcUrl -> {
-                throw new AssertionError("Web3j factory should not be used in mock mode");
-            },
-            (threadName, delayMs, reconnectTask) -> {
-                throw new AssertionError("Reconnect scheduler should not be used in mock mode");
-            }
-        );
+        MockEventDrivenEvmBridge bridge = new MockEventDrivenEvmBridge("sepolia", "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
 
         String proposalId = "123e4567-e89b-12d3-a456-426614174000";
 
@@ -118,7 +107,6 @@ public class EventDrivenEvmBridgeRuntimeTest {
         EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
             "sepolia",
             "0x1234567890abcdef1234567890abcdef12345678",
-            false,
             new OakPaymentEventParser(),
             rpcUrl -> web3j,
             (threadName, delayMs, reconnectTask) -> { }
@@ -150,7 +138,6 @@ public class EventDrivenEvmBridgeRuntimeTest {
         EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
             "sepolia",
             contractAddress,
-            false,
             new OakPaymentEventParser(),
             rpcUrl -> web3j,
             (threadName, delayMs, reconnectTask) -> { }
@@ -199,7 +186,6 @@ public class EventDrivenEvmBridgeRuntimeTest {
         EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
             "sepolia",
             contractAddress,
-            false,
             new OakPaymentEventParser(),
             rpcUrl -> web3j,
             (threadName, delayMs, reconnectTask) -> { }
@@ -227,7 +213,6 @@ public class EventDrivenEvmBridgeRuntimeTest {
         EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
             "sepolia",
             "0x1234567890abcdef1234567890abcdef12345678",
-            false,
             new OakPaymentEventParser(),
             rpcUrl -> web3j,
             (threadName, delayMs, reconnectTask) -> { }
@@ -260,7 +245,6 @@ public class EventDrivenEvmBridgeRuntimeTest {
         EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
             "sepolia",
             "0x1234567890abcdef1234567890abcdef12345678",
-            false,
             new OakPaymentEventParser(),
             rpcUrl -> {
                 factoryCalls.incrementAndGet();
