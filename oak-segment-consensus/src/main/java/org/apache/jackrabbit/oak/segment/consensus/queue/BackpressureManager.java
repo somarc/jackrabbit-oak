@@ -82,9 +82,9 @@ public class BackpressureManager {
      * Create a new backpressure manager.
      */
     public BackpressureManager() {
-        this(ProposalQueueTuningRegistry.get().getMaxPendingMessages(),
-            ProposalQueueTuningRegistry.get().getBackpressureTimeoutMs(),
-            ProposalQueueTuningRegistry.get().getBackpressureParkNanos());
+        this(ProposalQueueTuningRegistry.get().maxPendingMessages(),
+            ProposalQueueTuningRegistry.get().backpressureTimeoutMs(),
+            ProposalQueueTuningRegistry.get().backpressureParkNanos());
     }
 
     /**

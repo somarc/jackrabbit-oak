@@ -714,8 +714,8 @@ public class ProposalQueueIntegrationTest {
 
         BackpressureManager pressuredBackpressure = new BackpressureManager(
             1L,
-            tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos()
+            tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos()
         );
         pressuredBackpressure.incrementSent(2L);
 
@@ -894,8 +894,8 @@ public class ProposalQueueIntegrationTest {
         firstBridge.start();
         bridge = firstBridge;
 
-        BackpressureManager pressuredBackpressure = new BackpressureManager(1L, tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos());
+        BackpressureManager pressuredBackpressure = new BackpressureManager(1L, tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos());
         pressuredBackpressure.incrementSent(2L);
         queueManager = new ProposalQueueManagerOptimized(
             firstBridge,
@@ -987,7 +987,7 @@ public class ProposalQueueIntegrationTest {
         queueManager = new ProposalQueueManagerOptimized(
             restoredBridge,
             callback,
-            new BackpressureManager(1L, tuning.getBackpressureTimeoutMs(), tuning.getBackpressureParkNanos()),
+            new BackpressureManager(1L, tuning.backpressureTimeoutMs(), tuning.backpressureParkNanos()),
             beaconClient,
             persistenceDir.toString(),
             tuning
@@ -1026,8 +1026,8 @@ public class ProposalQueueIntegrationTest {
 
         BackpressureManager pressuredBackpressure = new BackpressureManager(
             1L,
-            tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos()
+            tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos()
         );
         pressuredBackpressure.incrementSent(2L);
         queueManager = new ProposalQueueManagerOptimized(
@@ -1085,8 +1085,8 @@ public class ProposalQueueIntegrationTest {
 
         BackpressureManager restoredBackpressure = new BackpressureManager(
             1L,
-            tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos()
+            tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos()
         );
         restoredBackpressure.incrementSent(2L);
 
@@ -1324,8 +1324,8 @@ public class ProposalQueueIntegrationTest {
             callback,
             new BackpressureManager(
                 ProposalQueueTuning.DEFAULT_MAX_PENDING_MESSAGES,
-                tuning.getBackpressureTimeoutMs(),
-                tuning.getBackpressureParkNanos()
+                tuning.backpressureTimeoutMs(),
+                tuning.backpressureParkNanos()
             ),
             beaconClient,
             null,

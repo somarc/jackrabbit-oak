@@ -16,7 +16,33 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
-final class ProposalQueueTuning {
+record ProposalQueueTuning(long confirmationTimeoutMs,
+                           int requiredConfirmations,
+                           long restoreTimeoutMs,
+                           int maxMessageBatch,
+                           int maxRetryCount,
+                           int finalizationChunkSize,
+                           long finalizationChunkDelayMs,
+                           int verifierThreads,
+                           long processedRetentionMs,
+                           boolean persistenceEnabled,
+                           long persistenceFlushIntervalMs,
+                           int persistenceFlushBatch,
+                           long maxPendingMessages,
+                           long backpressureTimeoutMs,
+                           long backpressureParkNanos,
+                           long counterRotationIntervalMs,
+                           AdaptiveReleaseMode releaseMode,
+                           boolean validatorHostedBinaryUploadEnabled,
+                           long payloadInlineMaxBytes,
+                           long payloadSpillSoftPending,
+                           long payloadSpillMaxBytes,
+                           long hardMaxPendingProposals,
+                           String payloadSpillDir) {
+    ProposalQueueTuning {
+        releaseMode = releaseMode != null ? releaseMode : AdaptiveReleaseMode.ADAPTIVE_ACTIVE;
+        payloadSpillDir = payloadSpillDir != null ? payloadSpillDir : "";
+    }
 
     static final long DEFAULT_CONFIRMATION_TIMEOUT_MS = 300_000;
     static final int DEFAULT_REQUIRED_CONFIRMATIONS = 1;
@@ -40,78 +66,6 @@ final class ProposalQueueTuning {
     static final long DEFAULT_PAYLOAD_SPILL_MAX_BYTES = 2L * 1024L * 1024L * 1024L;
     static final long DEFAULT_HARD_MAX_PENDING_PROPOSALS = DEFAULT_MAX_PENDING_MESSAGES * 2L;
     static final String DEFAULT_PAYLOAD_SPILL_DIR = "";
-
-    private final long confirmationTimeoutMs;
-    private final int requiredConfirmations;
-    private final long restoreTimeoutMs;
-    private final int maxMessageBatch;
-    private final int maxRetryCount;
-    private final int finalizationChunkSize;
-    private final long finalizationChunkDelayMs;
-    private final int verifierThreads;
-    private final long processedRetentionMs;
-    private final boolean persistenceEnabled;
-    private final long persistenceFlushIntervalMs;
-    private final int persistenceFlushBatch;
-    private final long maxPendingMessages;
-    private final long backpressureTimeoutMs;
-    private final long backpressureParkNanos;
-    private final long counterRotationIntervalMs;
-    private final AdaptiveReleaseMode releaseMode;
-    private final boolean validatorHostedBinaryUploadEnabled;
-    private final long payloadInlineMaxBytes;
-    private final long payloadSpillSoftPending;
-    private final long payloadSpillMaxBytes;
-    private final long hardMaxPendingProposals;
-    private final String payloadSpillDir;
-
-    private ProposalQueueTuning(long confirmationTimeoutMs,
-                                int requiredConfirmations,
-                                long restoreTimeoutMs,
-                                int maxMessageBatch,
-                                int maxRetryCount,
-                                int finalizationChunkSize,
-                                long finalizationChunkDelayMs,
-                                int verifierThreads,
-                                long processedRetentionMs,
-                                boolean persistenceEnabled,
-                                long persistenceFlushIntervalMs,
-                                int persistenceFlushBatch,
-                                long maxPendingMessages,
-                                long backpressureTimeoutMs,
-                                long backpressureParkNanos,
-                                long counterRotationIntervalMs,
-                                AdaptiveReleaseMode releaseMode,
-                                boolean validatorHostedBinaryUploadEnabled,
-                                long payloadInlineMaxBytes,
-                                long payloadSpillSoftPending,
-                                long payloadSpillMaxBytes,
-                                long hardMaxPendingProposals,
-                                String payloadSpillDir) {
-        this.confirmationTimeoutMs = confirmationTimeoutMs;
-        this.requiredConfirmations = requiredConfirmations;
-        this.restoreTimeoutMs = restoreTimeoutMs;
-        this.maxMessageBatch = maxMessageBatch;
-        this.maxRetryCount = maxRetryCount;
-        this.finalizationChunkSize = finalizationChunkSize;
-        this.finalizationChunkDelayMs = finalizationChunkDelayMs;
-        this.verifierThreads = verifierThreads;
-        this.processedRetentionMs = processedRetentionMs;
-        this.persistenceEnabled = persistenceEnabled;
-        this.persistenceFlushIntervalMs = persistenceFlushIntervalMs;
-        this.persistenceFlushBatch = persistenceFlushBatch;
-        this.maxPendingMessages = maxPendingMessages;
-        this.backpressureTimeoutMs = backpressureTimeoutMs;
-        this.backpressureParkNanos = backpressureParkNanos;
-        this.counterRotationIntervalMs = counterRotationIntervalMs;
-        this.releaseMode = releaseMode != null ? releaseMode : AdaptiveReleaseMode.ADAPTIVE_ACTIVE;
-        this.validatorHostedBinaryUploadEnabled = validatorHostedBinaryUploadEnabled;
-        this.payloadInlineMaxBytes = payloadInlineMaxBytes;
-        this.payloadSpillSoftPending = payloadSpillSoftPending;
-        this.payloadSpillMaxBytes = payloadSpillMaxBytes;
-        this.hardMaxPendingProposals = hardMaxPendingProposals;
-        this.payloadSpillDir = payloadSpillDir != null ? payloadSpillDir : "";
-    }
 
     static ProposalQueueTuning fromSystemProperties() {
         long confirmationTimeoutMs = Long.getLong(
@@ -262,98 +216,6 @@ final class ProposalQueueTuning {
             clampLong(config.hard_max_pending_proposals(), 1L),
             config.payload_spill_dir()
         );
-    }
-
-    long getConfirmationTimeoutMs() {
-        return confirmationTimeoutMs;
-    }
-
-    int getRequiredConfirmations() {
-        return requiredConfirmations;
-    }
-
-    long getRestoreTimeoutMs() {
-        return restoreTimeoutMs;
-    }
-
-    int getMaxMessageBatch() {
-        return maxMessageBatch;
-    }
-
-    int getMaxRetryCount() {
-        return maxRetryCount;
-    }
-
-    int getFinalizationChunkSize() {
-        return finalizationChunkSize;
-    }
-
-    long getFinalizationChunkDelayMs() {
-        return finalizationChunkDelayMs;
-    }
-
-    int getVerifierThreads() {
-        return verifierThreads;
-    }
-
-    long getProcessedRetentionMs() {
-        return processedRetentionMs;
-    }
-
-    boolean isPersistenceEnabled() {
-        return persistenceEnabled;
-    }
-
-    long getPersistenceFlushIntervalMs() {
-        return persistenceFlushIntervalMs;
-    }
-
-    int getPersistenceFlushBatch() {
-        return persistenceFlushBatch;
-    }
-
-    long getMaxPendingMessages() {
-        return maxPendingMessages;
-    }
-
-    long getBackpressureTimeoutMs() {
-        return backpressureTimeoutMs;
-    }
-
-    long getBackpressureParkNanos() {
-        return backpressureParkNanos;
-    }
-
-    long getCounterRotationIntervalMs() {
-        return counterRotationIntervalMs;
-    }
-
-    AdaptiveReleaseMode getReleaseMode() {
-        return releaseMode;
-    }
-
-    boolean isValidatorHostedBinaryUploadEnabled() {
-        return validatorHostedBinaryUploadEnabled;
-    }
-
-    long getPayloadInlineMaxBytes() {
-        return payloadInlineMaxBytes;
-    }
-
-    long getPayloadSpillSoftPending() {
-        return payloadSpillSoftPending;
-    }
-
-    long getPayloadSpillMaxBytes() {
-        return payloadSpillMaxBytes;
-    }
-
-    long getHardMaxPendingProposals() {
-        return hardMaxPendingProposals;
-    }
-
-    String getPayloadSpillDir() {
-        return payloadSpillDir;
     }
 
     private static int readIntProp(String key, int defaultValue, int minValue) {

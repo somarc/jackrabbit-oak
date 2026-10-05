@@ -177,11 +177,11 @@ final class AdaptiveReleaseGovernor {
     }
 
     static AdaptiveReleaseGovernor fromTuning(ProposalQueueTuning tuning) {
-        long baseReleaseWindow = Math.max(1L, (long) tuning.getFinalizationChunkSize() * tuning.getMaxMessageBatch());
+        long baseReleaseWindow = Math.max(1L, (long) tuning.finalizationChunkSize() * tuning.maxMessageBatch());
         long pressuredGap = Math.max(64L, baseReleaseWindow * 4L);
         long overloadedGap = Math.max(256L, pressuredGap * 4L);
-        long pressuredPending = Math.max(1L, tuning.getMaxPendingMessages() / 2L);
-        long overloadedPending = Math.max(1L, Math.max(pressuredPending + 1L, (tuning.getMaxPendingMessages() * 9L) / 10L));
+        long pressuredPending = Math.max(1L, tuning.maxPendingMessages() / 2L);
+        long overloadedPending = Math.max(1L, Math.max(pressuredPending + 1L, (tuning.maxPendingMessages() * 9L) / 10L));
         long pressuredPacking = Math.max(64L, baseReleaseWindow * 4L);
         long overloadedPacking = Math.max(256L, pressuredPacking * 4L);
         long pressuredReleaseReady = Math.max(32L, baseReleaseWindow * 2L);

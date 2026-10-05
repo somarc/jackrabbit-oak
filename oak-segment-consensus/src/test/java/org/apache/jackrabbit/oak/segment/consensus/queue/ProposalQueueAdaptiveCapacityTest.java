@@ -135,8 +135,8 @@ public class ProposalQueueAdaptiveCapacityTest {
         RaftAppendCallback callback = new CountingRaftAppendCallback(processedLatch, processedCount);
         BackpressureManager backpressureManager = new BackpressureManager(
             scenario.maxPendingMessages,
-            tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos()
+            tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos()
         );
         if (scenario.initialPendingDebt > 0L) {
             backpressureManager.incrementSent(scenario.initialPendingDebt);

@@ -264,28 +264,28 @@ public class ProposalQueueManagerOptimized {
         this.persistenceStore = createPersistenceStore(persistenceDir, resolved);
         this.payloadStore = createPayloadStore(persistenceDir, resolved);
         this.counterStateStore = createCounterStateStore(persistenceDir);
-        this.confirmationTimeoutMs = resolved.getConfirmationTimeoutMs();
-        this.requiredConfirmations = resolved.getRequiredConfirmations();
-        this.restoreTimeoutMs = resolved.getRestoreTimeoutMs();
-        this.maxMessageBatch = resolved.getMaxMessageBatch();
-        this.maxRetryCount = resolved.getMaxRetryCount();
-        this.finalizationChunkSize = resolved.getFinalizationChunkSize();
-        this.finalizationChunkDelayMs = resolved.getFinalizationChunkDelayMs();
-        this.verifierThreads = resolved.getVerifierThreads();
-        this.releaseMode = resolved.getReleaseMode();
+        this.confirmationTimeoutMs = resolved.confirmationTimeoutMs();
+        this.requiredConfirmations = resolved.requiredConfirmations();
+        this.restoreTimeoutMs = resolved.restoreTimeoutMs();
+        this.maxMessageBatch = resolved.maxMessageBatch();
+        this.maxRetryCount = resolved.maxRetryCount();
+        this.finalizationChunkSize = resolved.finalizationChunkSize();
+        this.finalizationChunkDelayMs = resolved.finalizationChunkDelayMs();
+        this.verifierThreads = resolved.verifierThreads();
+        this.releaseMode = resolved.releaseMode();
         this.adaptiveReleaseGovernor = AdaptiveReleaseGovernor.fromTuning(resolved);
-        this.processedRetentionMs = resolved.getProcessedRetentionMs();
+        this.processedRetentionMs = resolved.processedRetentionMs();
         this.processedPendingRecoveryMs = Math.min(
             this.processedRetentionMs,
             Math.max(5_000L, this.backpressureManager.getBackpressureTimeoutMs())
         );
-        this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
-        this.persistenceFlushBatch = resolved.getPersistenceFlushBatch();
-        this.counterRotationIntervalMs = resolved.getCounterRotationIntervalMs();
-        this.payloadInlineMaxBytes = resolved.getPayloadInlineMaxBytes();
-        this.payloadSpillSoftPending = resolved.getPayloadSpillSoftPending();
-        this.payloadSpillMaxBytes = resolved.getPayloadSpillMaxBytes();
-        this.hardMaxPendingProposals = resolved.getHardMaxPendingProposals();
+        this.persistenceFlushIntervalMs = resolved.persistenceFlushIntervalMs();
+        this.persistenceFlushBatch = resolved.persistenceFlushBatch();
+        this.counterRotationIntervalMs = resolved.counterRotationIntervalMs();
+        this.payloadInlineMaxBytes = resolved.payloadInlineMaxBytes();
+        this.payloadSpillSoftPending = resolved.payloadSpillSoftPending();
+        this.payloadSpillMaxBytes = resolved.payloadSpillMaxBytes();
+        this.hardMaxPendingProposals = resolved.hardMaxPendingProposals();
         restoreCounterState();
     }
     
@@ -974,7 +974,7 @@ public class ProposalQueueManagerOptimized {
     }
 
     private ProposalPersistenceStore createPersistenceStore(String persistenceDir, ProposalQueueTuning tuning) {
-        if (tuning != null && !tuning.isPersistenceEnabled()) {
+        if (tuning != null && !tuning.persistenceEnabled()) {
             log.info("Proposal queue persistence disabled via tuning (persistence_enabled=false)");
             return null;
         }
@@ -1018,8 +1018,8 @@ public class ProposalQueueManagerOptimized {
     }
 
     private java.nio.file.Path resolvePayloadSpillDirectory(String persistenceDir, ProposalQueueTuning tuning) {
-        if (tuning != null && tuning.getPayloadSpillDir() != null && !tuning.getPayloadSpillDir().trim().isEmpty()) {
-            return java.nio.file.Path.of(tuning.getPayloadSpillDir().trim());
+        if (tuning != null && tuning.payloadSpillDir() != null && !tuning.payloadSpillDir().trim().isEmpty()) {
+            return java.nio.file.Path.of(tuning.payloadSpillDir().trim());
         }
         String configured = System.getProperty("oak.proposal.payload.spill.dir");
         if (configured == null || configured.trim().isEmpty()) {
