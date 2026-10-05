@@ -317,15 +317,7 @@ public class ExplorerApiHandler {
             
             // Stream the blob
             try (java.io.OutputStream out = response.getOutputStream()) {
-                byte[] buffer = new byte[8192];
-                int bytesRead;
-                long totalBytes = 0;
-                
-                while ((bytesRead = blobStream.read(buffer)) != -1) {
-                    out.write(buffer, 0, bytesRead);
-                    totalBytes += bytesRead;
-                }
-                
+                long totalBytes = blobStream.transferTo(out);
                 out.flush();
                 log.info("✅ Streamed blob {} ({} bytes)", blobId, totalBytes);
             } finally {

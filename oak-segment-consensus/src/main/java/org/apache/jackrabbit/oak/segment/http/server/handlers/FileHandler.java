@@ -92,11 +92,7 @@ public class FileHandler {
         
         try (InputStream in = Files.newInputStream(filePath);
              OutputStream out = response.getOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int bytesRead;
-            while ((bytesRead = in.read(buffer)) != -1) {
-                out.write(buffer, 0, bytesRead);
-            }
+            in.transferTo(out);
         }
         
         log.info("📄 File GET: {} FROM {}:{} ({} bytes)", filename, remoteAddr, remotePort, fileSize);
