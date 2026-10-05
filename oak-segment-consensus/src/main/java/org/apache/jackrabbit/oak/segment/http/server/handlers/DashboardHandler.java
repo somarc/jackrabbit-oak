@@ -19,7 +19,6 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
-import org.apache.jackrabbit.oak.segment.http.server.util.DashboardDataService;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import jakarta.servlet.http.HttpServletResponse;
@@ -45,11 +44,9 @@ import java.util.Map;
 public class DashboardHandler {
     
     private final ServerContext context;
-    private final DashboardDataService dataService;
     
     public DashboardHandler(ServerContext context) {
         this.context = context;
-        this.dataService = new DashboardDataService(context);
     }
     
     /**
@@ -70,7 +67,9 @@ public class DashboardHandler {
 
         Map<String, Object> clusterState = Collections.emptyMap();
         try {
-            clusterState = dataService.getAeronClusterState();
+            clusterState = context.aeronConsensusEngine == null
+                ? null
+                : new AeronApiHandler(context).getClusterStateData();
         } catch (Exception ignored) {
             // Keep landing page available even if cluster probing fails.
         }
