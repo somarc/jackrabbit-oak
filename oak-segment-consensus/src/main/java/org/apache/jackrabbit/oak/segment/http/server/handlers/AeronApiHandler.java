@@ -44,6 +44,8 @@ public class AeronApiHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AeronApiHandler.class);
 
+    private static final String NOT_CONFIGURED = "Aeron Cluster consensus not configured";
+
     private final ServerContext context;
     private final OpsSnapshotCache clusterSnapshot = new OpsSnapshotCache(1000L, log);
     private final OpsSnapshotCache replicationSnapshot = new OpsSnapshotCache(1000L, log);
@@ -90,15 +92,13 @@ public class AeronApiHandler {
         
         // Add validator identity (wallet address and public key)
         Map<String, Object> validatorIdentity = new HashMap<>();
-        if (context.aeronConsensusEngine != null) {
-            String walletAddress = context.aeronConsensusEngine.getWalletAddress();
-            String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
-            if (walletAddress != null) {
-                validatorIdentity.put("walletAddress", walletAddress);
-            }
-            if (publicKey != null) {
-                validatorIdentity.put("publicKey", publicKey);
-            }
+        String walletAddress = context.aeronConsensusEngine.getWalletAddress();
+        String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
+        if (walletAddress != null) {
+            validatorIdentity.put("walletAddress", walletAddress);
+        }
+        if (publicKey != null) {
+            validatorIdentity.put("publicKey", publicKey);
         }
         if (!validatorIdentity.isEmpty()) {
             state.put("validatorIdentity", validatorIdentity);
@@ -155,9 +155,7 @@ public class AeronApiHandler {
         
         // Ensure consensus metrics are present
         Map<String, Object> consensus = new HashMap<>();
-        consensus.put("reachableValidators", 
-            state.containsKey("reachableCount") ? state.get("reachableCount") : 
-            context.aeronConsensusEngine.getReachableValidatorCount());
+        consensus.put("reachableValidators", state.get("reachableCount"));
         consensus.put("totalMembers", state.get("clusterMemberCount"));
         consensus.put("lastHeartbeat", context.aeronConsensusEngine.getLastHeartbeatTime());
         state.put("consensus", consensus);
@@ -200,8 +198,7 @@ public class AeronApiHandler {
     public void handleClusterState(HttpServletResponse response) throws IOException {
         Map<String, Object> state = getClusterStateData();
         if (state == null) {
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
@@ -219,8 +216,7 @@ public class AeronApiHandler {
     public void handleValidatorIdentities(HttpServletResponse response) throws IOException {
         Map<String, Object> data = getValidatorIdentitiesData();
         if (data == null) {
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
@@ -271,8 +267,7 @@ public class AeronApiHandler {
      */
     public void handleRaftMetrics(HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
@@ -311,8 +306,7 @@ public class AeronApiHandler {
      */
     public void handleNodeStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
@@ -366,8 +360,7 @@ public class AeronApiHandler {
      */
     public void handleLeadershipHistory(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
 
@@ -426,16 +419,13 @@ public class AeronApiHandler {
         for (Map<String, Object> member : members) {
             String memberUrl = (String) member.get("url");
             if (memberUrl != null && memberUrl.equals(context.selfUrl)) {
-                // This is us - add our wallet info
-                if (context.aeronConsensusEngine != null) {
-                    String walletAddress = context.aeronConsensusEngine.getWalletAddress();
-                    String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
-                    if (walletAddress != null) {
-                        member.put("walletAddress", walletAddress);
-                    }
-                    if (publicKey != null) {
-                        member.put("publicKey", publicKey);
-                    }
+                String walletAddress = context.aeronConsensusEngine.getWalletAddress();
+                String publicKey = context.aeronConsensusEngine.getPublicKeyHex();
+                if (walletAddress != null) {
+                    member.put("walletAddress", walletAddress);
+                }
+                if (publicKey != null) {
+                    member.put("publicKey", publicKey);
                 }
                 break; // Found self, no need to continue
             }
@@ -643,8 +633,7 @@ public class AeronApiHandler {
      */
     public void handleReplicationLag(HttpServletResponse response) throws IOException {
         if (context.aeronConsensusEngine == null) {
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, 
-                "Aeron Cluster consensus not configured");
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
             return;
         }
         
@@ -679,7 +668,7 @@ public class AeronApiHandler {
         clusterSnapshot.serve(response, "ops.v1", false, "cluster", () -> {
             Map<String, Object> data = getClusterStateData();
             if (data == null) {
-                throw new IllegalStateException("Aeron Cluster consensus not configured");
+                throw new IllegalStateException(NOT_CONFIGURED);
             }
             return data;
         }, e -> ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, e.getMessage()));
