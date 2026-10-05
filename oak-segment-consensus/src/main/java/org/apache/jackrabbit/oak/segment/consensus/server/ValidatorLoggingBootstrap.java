@@ -104,39 +104,35 @@ final class ValidatorLoggingBootstrap {
     }
 
     private void configureLogback(String configLocation) throws IOException {
-        configureLogback(Paths.get(configLocation).toAbsolutePath().normalize());
+        Path configPath = Paths.get(configLocation).toAbsolutePath().normalize();
+        configureLogback(configPath, configurator -> configurator.doConfigure(configPath.toString()));
     }
 
     private void configureLogback(URL configUrl) throws IOException {
-        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         try (InputStream input = configUrl.openStream()) {
-            context.reset();
-            JoranConfigurator configurator = new JoranConfigurator();
-            configurator.setContext(context);
-            configurator.doConfigure(input);
-            if (!Boolean.parseBoolean(System.getProperty(PROP_LOG_CONSOLE_ENABLED, DEFAULT_LOG_CONSOLE_ENABLED))) {
-                context.getLogger(Logger.ROOT_LOGGER_NAME).detachAppender(CONSOLE_APPENDER_NAME);
-            }
-        } catch (JoranException e) {
-            throw new IOException("Failed to configure logging from " + configUrl, e);
+            configureLogback(configUrl, configurator -> configurator.doConfigure(input));
         }
-        StatusPrinter.printInCaseOfErrorsOrWarnings(context);
     }
 
-    private void configureLogback(Path configPath) throws IOException {
+    private void configureLogback(Object source, JoranStep step) throws IOException {
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         try {
             context.reset();
             JoranConfigurator configurator = new JoranConfigurator();
             configurator.setContext(context);
-            configurator.doConfigure(configPath.toString());
+            step.apply(configurator);
             if (!Boolean.parseBoolean(System.getProperty(PROP_LOG_CONSOLE_ENABLED, DEFAULT_LOG_CONSOLE_ENABLED))) {
                 context.getLogger(Logger.ROOT_LOGGER_NAME).detachAppender(CONSOLE_APPENDER_NAME);
             }
         } catch (JoranException e) {
-            throw new IOException("Failed to configure logging from " + configPath, e);
+            throw new IOException("Failed to configure logging from " + source, e);
         }
         StatusPrinter.printInCaseOfErrorsOrWarnings(context);
+    }
+
+    @FunctionalInterface
+    private interface JoranStep {
+        void apply(JoranConfigurator configurator) throws JoranException;
     }
 
     private void installJulBridge() {
