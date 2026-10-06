@@ -22,6 +22,8 @@ import org.apache.jackrabbit.oak.spi.commit.CommitInfo
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook
 import org.apache.jackrabbit.oak.commons.PathUtils
 import org.apache.jackrabbit.oak.console.ConsoleSession
+import org.apache.jackrabbit.oak.spi.state.NodeState
+import org.apache.jackrabbit.oak.spi.state.NodeStateUtils
 import org.apache.jackrabbit.oak.spi.state.NodeStore
 import org.codehaus.groovy.tools.shell.CommandSupport
 import org.codehaus.groovy.tools.shell.Groovysh
@@ -45,11 +47,15 @@ class RemoveNodesCommand extends CommandSupport {
     static final String COMMAND_NAME = 'remove-nodes'
     static final int MIN_DELETE_DEPTH = 3
 
-    // Patterns for input parsing and classifications
+    // Patterns for input parsing and classifications.
+    // Consistency-check lines: backend blob id (FileDataStore "aa/bb/cc/<id>", S3/Azure "aabb-<rest>"), then the path.
     static final Pattern NODE_PATTERN =
-        Pattern.compile('([0-9a-f]{2}(?:[\\\\/]+)[0-9a-f]{2}(?:[\\\\/]+)[0-9a-f]{2}(?:[\\\\/]+)[0-9a-f]{64}),(.*)')
+        Pattern.compile('([0-9a-f]{2}(?:[\\\\/]+)[0-9a-f]{2}(?:[\\\\/]+)[0-9a-f]{2}(?:[\\\\/]+)[0-9a-f]{64}|[0-9a-f]{4}-[0-9a-f]{60}),(.*)')
+    // DataStoreException moved from org.apache.jackrabbit.core.data to org.apache.jackrabbit.oak.spi.blob.data in Oak 2.0
     static final Pattern MISSING_BLOB_PATTERN =
-        Pattern.compile('Warning: Missing blob at (.+?): org\\.apache\\.jackrabbit\\.core\\.data\\.DataStoreException: Record')
+        Pattern.compile('Warning: Missing blob at (.+?): org\\.apache\\.jackrabbit\\.(?:core\\.data|oak\\.spi\\.blob\\.data)\\.DataStoreException: Record')
+    // Blob length that "datastore --check-consistency --verbose" appends since Oak 1.90
+    static final Pattern LENGTH_SUFFIX = Pattern.compile(',\\d+$')
     static final String SEGMENT_NOT_FOUND_PREFIX = "Warning: Missing segment at"
     static final String NODE_UNREADABLE_PREFIX = "Warning: Unable to read node"
     static final Pattern DAM_ORIGINAL_PATTERN =
@@ -155,7 +161,7 @@ class RemoveNodesCommand extends CommandSupport {
             Matcher matcher = NODE_PATTERN.matcher(line)
             if (matcher.matches()) {
                 String blobId = matcher.group(1)
-                String path = normalizePath(matcher.group(2))
+                String path = resolveNodePath(nodeStore.getRoot(), normalizePath(matcher.group(2)))
                 deleteType = "consistency-check"
                 log("[INFO] [${deleteType}] Processing Blob ID: '${blobId}' with JCR Path: '${path}'")
                 processNodeRemovalAdvanced(nodeStore, path, deleteType)
@@ -286,6 +292,23 @@ class RemoveNodesCommand extends CommandSupport {
     static String normalizePath(String path) {
         String p = path.replaceAll(/\/+$/, "")
         return p.isEmpty() ? "/" : p
+    }
+
+    /**
+     * Maps a consistency-check path to an existing node. "datastore --check-consistency --verbose"
+     * appends ",<length>" since Oak 1.90, and "datastorecheck --verbose" names the binary property
+     * ("<node>/jcr:data") instead of its node. Returns the path unchanged if nothing matches.
+     */
+    static String resolveNodePath(NodeState root, String path) {
+        List<String> candidates = [path]
+        Matcher length = LENGTH_SUFFIX.matcher(path)
+        if (length.find()) candidates << path.substring(0, length.start())
+        for (String p : candidates) {
+            if (NodeStateUtils.getNode(root, p).exists()) return p
+            String parent = PathUtils.getParentPath(p)
+            if (NodeStateUtils.getNode(root, parent).hasProperty(PathUtils.getName(p))) return parent
+        }
+        return path
     }
 
     /**
