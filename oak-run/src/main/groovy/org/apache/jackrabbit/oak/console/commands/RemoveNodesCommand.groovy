@@ -51,9 +51,10 @@ class RemoveNodesCommand extends CommandSupport {
     // Consistency-check lines: backend blob id (FileDataStore "aa/bb/cc/<id>", S3/Azure "aabb-<rest>"), then the path.
     static final Pattern NODE_PATTERN =
         Pattern.compile('([0-9a-f]{2}(?:[\\\\/]+)[0-9a-f]{2}(?:[\\\\/]+)[0-9a-f]{2}(?:[\\\\/]+)[0-9a-f]{64}|[0-9a-f]{4}-[0-9a-f]{60}),(.*)')
-    // DataStoreException moved from org.apache.jackrabbit.core.data to org.apache.jackrabbit.oak.spi.blob.data in Oak 2.0
+    // DataStoreException moved from org.apache.jackrabbit.core.data to org.apache.jackrabbit.oak.spi.blob.data in Oak 2.0;
+    // a --read-write console wraps it ("java.io.IOException: org.apache...DataStoreException: Record ...")
     static final Pattern MISSING_BLOB_PATTERN =
-        Pattern.compile('Warning: Missing blob at (.+?): org\\.apache\\.jackrabbit\\.(?:core\\.data|oak\\.spi\\.blob\\.data)\\.DataStoreException: Record')
+        Pattern.compile('Warning: Missing blob at (.+?): (?:java\\.io\\.IOException: )?org\\.apache\\.jackrabbit\\.(?:core\\.data|oak\\.spi\\.blob\\.data)\\.DataStoreException: Record')
     // Blob length that "datastore --check-consistency --verbose" appends since Oak 1.90
     static final Pattern LENGTH_SUFFIX = Pattern.compile(',\\d+$')
     static final String SEGMENT_NOT_FOUND_PREFIX = "Warning: Missing segment at"
