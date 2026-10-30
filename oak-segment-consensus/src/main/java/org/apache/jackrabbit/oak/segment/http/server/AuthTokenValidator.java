@@ -106,9 +106,10 @@ public class AuthTokenValidator {
             return false;
         }
         
-        // Compare token (exact match, case-sensitive)
+        // Compare token (exact match, case-sensitive, constant time)
         String providedToken = authHeader.trim();
-        if (!expectedToken.equals(providedToken)) {
+        if (!java.security.MessageDigest.isEqual(expectedToken.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                providedToken.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
             log.debug("Invalid token provided");
             sendUnauthorized(response, "Invalid credentials");
             return false;
@@ -119,6 +120,13 @@ public class AuthTokenValidator {
         return true;
     }
     
+    /**
+     * Whether a token is required.
+     */
+    public boolean isEnabled() {
+        return authEnabled;
+    }
+
     /**
      * Send 401 Unauthorized response.
      */

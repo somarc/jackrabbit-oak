@@ -42,6 +42,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -183,6 +184,30 @@ public class ExplorerApiHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
         assertTrue(body.toString().contains("Blob not found: blob-404"));
+    }
+
+    @Test
+    public void testHandleBlobStreamHidesBackendFailureDetails() throws Exception {
+        BlobStore blobStore = mock(BlobStore.class);
+        when(blobStore.getInputStream("blob-missing"))
+            .thenThrow(new NullPointerException("No DataRecord found for blobId [blob-missing]"));
+        when(blobStore.getInputStream("blob-broken"))
+            .thenThrow(new IOException("IPFS read failed: Kubo /oak/ipfs/blob-index/YWJj at 10.0.0.5 refused"));
+        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), Paths.get("/tmp/store"), blobStore);
+
+        StringWriter missingBody = new StringWriter();
+        HttpServletResponse missing = responseWithBody(missingBody);
+        handler.handleBlobStream(mock(HttpServletRequest.class), missing, "blob-missing");
+        verify(missing).setStatus(HttpServletResponse.SC_NOT_FOUND);
+        assertTrue(missingBody.toString().contains("blob_not_found"));
+
+        StringWriter brokenBody = new StringWriter();
+        HttpServletResponse broken = responseWithBody(brokenBody);
+        handler.handleBlobStream(mock(HttpServletRequest.class), broken, "blob-broken");
+        verify(broken).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        assertTrue(brokenBody.toString().contains("blob_stream_failed"));
+        assertFalse(brokenBody.toString().contains("10.0.0.5"));
+        assertFalse(brokenBody.toString().contains("/oak/ipfs"));
     }
 
     @Test
