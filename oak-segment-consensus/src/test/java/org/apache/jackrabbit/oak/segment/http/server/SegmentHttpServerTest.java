@@ -122,6 +122,6 @@ public class SegmentHttpServerTest {
         FileStore fileStore = mock(FileStore.class);
         NodeStore nodeStore = mock(NodeStore.class);
         ServerContext context = new ServerContext(fileStore, nodeStore, Paths.get("/tmp"), "http://localhost:8090");
-        return new SegmentHttpServer(server, context, router, new TlsConfiguration(), fileStore, nodeStore, Paths.get("/tmp"));
+        return new SegmentHttpServer(server, context, router);
     }
 }

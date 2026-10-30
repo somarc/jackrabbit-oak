@@ -65,28 +65,6 @@ public class ValidatorBootstrap {
     }
     
     /**
-     * Check if FileStore is empty (needs bootstrap).
-     */
-    public boolean needsBootstrap() {
-        try {
-            // Check if store has segments
-            long size = fileStore.size();
-            boolean isEmpty = (size == 0);
-            
-            if (isEmpty) {
-                log.info("🌱 FileStore is empty ({} bytes) - bootstrap required", size);
-            } else {
-                log.info("✅ FileStore has data ({} MB) - skipping bootstrap", size / (1024 * 1024));
-            }
-            
-            return isEmpty;
-        } catch (Exception e) {
-            log.warn("Failed to check FileStore size", e);
-            return false;
-        }
-    }
-    
-    /**
      * Bootstrap from an existing validator (standby mode).
      * This method blocks until initial sync completes, then starts periodic sync.
      * 

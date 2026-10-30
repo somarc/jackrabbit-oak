@@ -19,9 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
-import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
-import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
-import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.evm.impl.MockEventDrivenEvmBridge;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -54,7 +52,7 @@ import static org.junit.Assert.*;
  */
 public class ProposalQueueIntegrationTest {
     
-    private EventDrivenEvmBridge bridge;
+    private MockEventDrivenEvmBridge bridge;
     private ProposalQueueManagerOptimized queueManager;
     private BeaconChainClient beaconClient;
     private CountDownLatch raftAppendLatch;
@@ -70,11 +68,9 @@ public class ProposalQueueIntegrationTest {
     @Before
     public void setUp() {
         // Create bridge in mock mode
-        bridge = new EventDrivenEvmBridge(
+        bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true  // mock mode
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
         
         // Create Beacon Chain client (mock mode now uses Sepolia-backed chain context)
@@ -88,22 +84,21 @@ public class ProposalQueueIntegrationTest {
         raftAppendLatch = new CountDownLatch(1);
         createQueueManager(new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "captured";
                 raftAppendLatch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "delete-captured";
                 raftAppendLatch.countDown();
+                return true;
             }
 
             @Override
@@ -136,11 +131,9 @@ public class ProposalQueueIntegrationTest {
             beaconClient.stopBackgroundPolling();
         }
 
-        bridge = new EventDrivenEvmBridge(
+        bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
 
         beaconClient = new BeaconChainClient();
@@ -160,11 +153,9 @@ public class ProposalQueueIntegrationTest {
             beaconClient.stopBackgroundPolling();
         }
 
-        bridge = new EventDrivenEvmBridge(
+        bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
 
         beaconClient = new BeaconChainClient();
@@ -383,12 +374,6 @@ public class ProposalQueueIntegrationTest {
 
         recreateQueueManager(new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
-                throw new AssertionError("Single-proposal test should use proposalId-aware ingress");
-            }
-
-            @Override
             public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path,
                                                    String contentType, String message, String signature,
                                                    String blobId, String mimeType, String ipfsCid,
@@ -459,12 +444,6 @@ public class ProposalQueueIntegrationTest {
         AtomicInteger attempts = new AtomicInteger();
 
         recreateQueueManager(new RaftAppendCallback() {
-            @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
-                throw new AssertionError("Priority fallback test should use proposalId-aware ingress");
-            }
-
             @Override
             public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path,
                                                    String contentType, String message, String signature,
@@ -610,22 +589,21 @@ public class ProposalQueueIntegrationTest {
 
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "captured";
                 latch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "delete-captured";
                 latch.countDown();
+                return true;
             }
 
             @Override
@@ -699,22 +677,21 @@ public class ProposalQueueIntegrationTest {
 
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "captured";
                 latch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "delete-captured";
                 latch.countDown();
+                return true;
             }
 
             @Override
@@ -731,8 +708,8 @@ public class ProposalQueueIntegrationTest {
 
         BackpressureManager pressuredBackpressure = new BackpressureManager(
             1L,
-            tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos()
+            tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos()
         );
         pressuredBackpressure.incrementSent(2L);
 
@@ -819,22 +796,21 @@ public class ProposalQueueIntegrationTest {
 
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "captured";
                 latch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "delete-captured";
                 latch.countDown();
+                return true;
             }
 
             @Override
@@ -904,16 +880,14 @@ public class ProposalQueueIntegrationTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
         Path persistenceDir = Files.createTempDirectory("proposal-restore-adaptive");
 
-        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge firstBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         firstBridge.start();
         bridge = firstBridge;
 
-        BackpressureManager pressuredBackpressure = new BackpressureManager(1L, tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos());
+        BackpressureManager pressuredBackpressure = new BackpressureManager(1L, tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos());
         pressuredBackpressure.incrementSent(2L);
         queueManager = new ProposalQueueManagerOptimized(
             firstBridge,
@@ -962,33 +936,30 @@ public class ProposalQueueIntegrationTest {
         firstBridge.stop();
 
         CountDownLatch restoredLatch = new CountDownLatch(1);
-        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge restoredBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         restoredBridge.start();
         bridge = restoredBridge;
         appendedProposalId = null;
 
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "captured";
                 restoredLatch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "delete-captured";
                 restoredLatch.countDown();
+                return true;
             }
 
             @Override
@@ -1006,7 +977,7 @@ public class ProposalQueueIntegrationTest {
         queueManager = new ProposalQueueManagerOptimized(
             restoredBridge,
             callback,
-            new BackpressureManager(1L, tuning.getBackpressureTimeoutMs(), tuning.getBackpressureParkNanos()),
+            new BackpressureManager(1L, tuning.backpressureTimeoutMs(), tuning.backpressureParkNanos()),
             beaconClient,
             persistenceDir.toString(),
             tuning
@@ -1035,18 +1006,16 @@ public class ProposalQueueIntegrationTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
         Path persistenceDir = Files.createTempDirectory("proposal-restore-adaptive-overflow");
 
-        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge firstBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         firstBridge.start();
         bridge = firstBridge;
 
         BackpressureManager pressuredBackpressure = new BackpressureManager(
             1L,
-            tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos()
+            tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos()
         );
         pressuredBackpressure.incrementSent(2L);
         queueManager = new ProposalQueueManagerOptimized(
@@ -1093,40 +1062,37 @@ public class ProposalQueueIntegrationTest {
         firstBridge.stop();
 
         CountDownLatch restoredLatch = new CountDownLatch(1);
-        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge restoredBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         restoredBridge.start();
         bridge = restoredBridge;
         appendedProposalId = null;
 
         BackpressureManager restoredBackpressure = new BackpressureManager(
             1L,
-            tuning.getBackpressureTimeoutMs(),
-            tuning.getBackpressureParkNanos()
+            tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos()
         );
         restoredBackpressure.incrementSent(2L);
 
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "captured";
                 restoredLatch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 appendedProposalId = "delete-captured";
                 restoredLatch.countDown();
+                return true;
             }
 
             @Override
@@ -1178,11 +1144,9 @@ public class ProposalQueueIntegrationTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
         Path persistenceDir = Files.createTempDirectory("proposal-restore-processed-pending");
 
-        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge firstBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         firstBridge.start();
         bridge = firstBridge;
 
@@ -1190,21 +1154,20 @@ public class ProposalQueueIntegrationTest {
         final String[] firstResolvedMessage = {null};
         RaftAppendCallback firstCallback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 firstResolvedMessage[0] = message;
                 firstLatch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 fail("Expected write replay, not delete");
+                return true;
             }
         };
 
@@ -1260,31 +1223,28 @@ public class ProposalQueueIntegrationTest {
 
         CountDownLatch restoredLatch = new CountDownLatch(1);
         final String[] restoredMessage = {null};
-        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge restoredBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         restoredBridge.start();
         bridge = restoredBridge;
 
         RaftAppendCallback restoredCallback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 restoredMessage[0] = message;
                 restoredLatch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 fail("Expected write replay, not delete");
+                return true;
             }
         };
 
@@ -1321,24 +1281,23 @@ public class ProposalQueueIntegrationTest {
 
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 int count = appendCount.incrementAndGet();
                 if (count == 2) {
                     queueManager.updateDurability(proposalId, DurabilityState.ACKED, "head-after-retry", null);
                 }
                 raftAppendLatch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 fail("Expected write replay, not delete");
+                return true;
             }
         };
 
@@ -1347,8 +1306,8 @@ public class ProposalQueueIntegrationTest {
             callback,
             new BackpressureManager(
                 ProposalQueueTuning.DEFAULT_MAX_PENDING_MESSAGES,
-                tuning.getBackpressureTimeoutMs(),
-                tuning.getBackpressureParkNanos()
+                tuning.backpressureTimeoutMs(),
+                tuning.backpressureParkNanos()
             ),
             beaconClient,
             null,
@@ -1400,18 +1359,16 @@ public class ProposalQueueIntegrationTest {
 
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String resolvedMessage, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String resolvedMessage, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 capturedMessage[0] = resolvedMessage;
                 appendedProposalId = "captured";
                 latch.countDown();
+                return true;
             }
 
-            @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String resolvedMessage, String signature, String blobId, String mimeType) {
-                appendProposal(walletAddress, path, contentType, resolvedMessage, signature);
-            }
         };
 
         queueManager = new ProposalQueueManagerOptimized(
@@ -1534,11 +1491,9 @@ public class ProposalQueueIntegrationTest {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
         Path persistenceDir = Files.createTempDirectory("proposal-missing-payload-restore");
 
-        EventDrivenEvmBridge firstBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge firstBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         firstBridge.start();
         bridge = firstBridge;
 
@@ -1572,11 +1527,9 @@ public class ProposalQueueIntegrationTest {
         queueManager.stop();
         Files.delete(payloadPath);
 
-        EventDrivenEvmBridge restoredBridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge restoredBridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         restoredBridge.start();
         bridge = restoredBridge;
 
@@ -1603,20 +1556,19 @@ public class ProposalQueueIntegrationTest {
         
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 latch.countDown();
+                return true;
             }
             
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 latch.countDown();
-            }
-            
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
-                latch.countDown();
+                return true;
             }
             
             @Override
@@ -1845,20 +1797,19 @@ public class ProposalQueueIntegrationTest {
 
         RaftAppendCallback callback = new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature) {
+            public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                   String contentType, String message, String signature,
+                                                   String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                                   MutationAuditMetadata unusedAudit) {
                 finalizedLatch.countDown();
+                return true;
             }
 
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType,
-                                       String message, String signature, String blobId, String mimeType) {
-                finalizedLatch.countDown();
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
+            public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                         String signature, MutationAuditMetadata unusedAudit) {
                 // No-op for this test
+                return true;
             }
 
             @Override
@@ -2093,20 +2044,19 @@ public class ProposalQueueIntegrationTest {
 
     private static final class NoopRaftAppendCallback implements RaftAppendCallback {
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType, String message,
-                                   String signature) {
+        public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                               String contentType, String message, String signature,
+                                               String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                               MutationAuditMetadata unusedAudit) {
             // No-op
+            return true;
         }
 
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType, String message,
-                                   String signature, String blobId, String mimeType) {
+        public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                     String signature, MutationAuditMetadata unusedAudit) {
             // No-op
-        }
-
-        @Override
-        public void appendDeleteProposal(String walletAddress, String path, String signature) {
-            // No-op
+            return true;
         }
 
         @Override

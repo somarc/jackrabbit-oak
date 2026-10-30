@@ -16,14 +16,12 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
-import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge;
@@ -49,17 +47,15 @@ final class ConsensusServicesInitializer {
     private final EvmBridgeFactory evmBridgeFactory;
     private final Supplier<BeaconChainClient> beaconChainClientFactory;
     private final ProposalQueueManagerFactory proposalQueueManagerFactory;
-    private final ValidatorEarningsTrackerFactory validatorEarningsTrackerFactory;
     private final RuntimeConfigReader runtimeConfigReader;
 
     ConsensusServicesInitializer() {
         this(BlockchainConfig::getInstance,
             blockchainConfig -> blockchainConfig.isMockMode()
                 ? new SimpleEvmBridge(blockchainConfig.getNetwork(), blockchainConfig.getContractAddress())
-                : new EventDrivenEvmBridge(blockchainConfig.getNetwork(), blockchainConfig.getContractAddress(), false),
+                : new EventDrivenEvmBridge(blockchainConfig.getNetwork(), blockchainConfig.getContractAddress()),
             BeaconChainClient::new,
             ProposalQueueManagerOptimized::new,
-            ValidatorEarningsTracker::new,
             RuntimeConfigValueResolver::readString);
     }
 
@@ -68,13 +64,11 @@ final class ConsensusServicesInitializer {
             EvmBridgeFactory evmBridgeFactory,
             Supplier<BeaconChainClient> beaconChainClientFactory,
             ProposalQueueManagerFactory proposalQueueManagerFactory,
-            ValidatorEarningsTrackerFactory validatorEarningsTrackerFactory,
             RuntimeConfigReader runtimeConfigReader) {
         this.blockchainConfigSupplier = blockchainConfigSupplier;
         this.evmBridgeFactory = evmBridgeFactory;
         this.beaconChainClientFactory = beaconChainClientFactory;
         this.proposalQueueManagerFactory = proposalQueueManagerFactory;
-        this.validatorEarningsTrackerFactory = validatorEarningsTrackerFactory;
         this.runtimeConfigReader = runtimeConfigReader;
     }
 
@@ -82,8 +76,7 @@ final class ConsensusServicesInitializer {
                     SegmentHttpServer httpServer,
                     EthereumWallet wallet,
                     String storeDirectory,
-                    String finalClusterWallet,
-                    List<String> hostnamesList) {
+                    String finalClusterWallet) {
         // Initialize Proposal Queue Manager (for Ethereum confirmation tracking)
         BlockchainConfig blockchainConfig = blockchainConfigSupplier.get();
         validateBlockchainRuntime(blockchainConfig);
@@ -127,13 +120,6 @@ final class ConsensusServicesInitializer {
         context.setProposalQueueManager(proposalQueueManager);
         context.evmBridge = evmBridge;
         log.info("✅ Proposal Queue Manager initialized (adaptive packing/release + 3-checkpoint security)");
-
-        // Initialize Validator Earnings Tracker (economic simulation)
-        List<String> validatorWallets = buildValidatorWallets(wallet.getWalletAddress(), hostnamesList);
-        ValidatorEarningsTracker earningsTracker = validatorEarningsTrackerFactory.create(validatorWallets);
-        context.setValidatorEarningsTracker(earningsTracker);
-        log.info("   ✅ Validator Earnings Tracker initialized ({} validators)", validatorWallets.size());
-        log.info("   - Self wallet: {}", wallet.getWalletAddress());
 
         context.validatorWalletAddress = wallet.getWalletAddress();
         context.clusterWalletAddress = finalClusterWallet;
@@ -180,17 +166,6 @@ final class ConsensusServicesInitializer {
         }
     }
 
-    static List<String> buildValidatorWallets(String selfWalletAddress, List<String> hostnamesList) {
-        List<String> validatorWallets = new ArrayList<>();
-        validatorWallets.add(selfWalletAddress);
-
-        int expectedValidators = hostnamesList != null ? hostnamesList.size() : 1;
-        for (int i = 1; i < expectedValidators; i++) {
-            validatorWallets.add("0x" + String.format("%040x", i));
-        }
-        return validatorWallets;
-    }
-
     private static BackpressureManager resolveBackpressureManager(AeronConsensusEngine aeronEngine) {
         BackpressureManager backpressureManager =
             aeronEngine != null ? aeronEngine.getBackpressureManager() : null;
@@ -205,92 +180,6 @@ final class ConsensusServicesInitializer {
     private static RaftAppendCallback createRaftAppendCallback(AeronConsensusEngine aeronEngine) {
         return new RaftAppendCallback() {
             @Override
-            public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposal!");
-                    return;
-                }
-                log.debug("📤 appendProposal() called - forwarding to Aeron (role: {})", aeronEngine.getCurrentRole());
-                boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() returned false!");
-                }
-            }
-
-            @Override
-            public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                             String message, String signature) {
-                tryAppendProposalWithId(proposalId, walletAddress, path, contentType, message, signature);
-            }
-
-            @Override
-            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                                   String message, String signature) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
-                    return false;
-                }
-                boolean success = aeronEngine.sendWriteThroughIngressWithId(
-                    walletAddress, path, contentType, message, signature, null, proposalId);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() returned false!");
-                }
-                return success;
-            }
-
-            @Override
-            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                                   String message, String signature, MutationAuditMetadata auditMetadata) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
-                    return false;
-                }
-                boolean success = aeronEngine.sendWriteThroughIngressWithId(
-                    walletAddress, path, contentType, message, signature, null, auditMetadata);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() returned false!");
-                }
-                return success;
-            }
-
-            @Override
-            public void appendProposal(String walletAddress, String path, String contentType, String message,
-                                       String signature, String blobId, String mimeType) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposal!");
-                    return;
-                }
-                log.debug("📤 appendProposal() with binary - blobId={} (role: {})", blobId, aeronEngine.getCurrentRole());
-                boolean success = aeronEngine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature, blobId, mimeType);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() with binary returned false!");
-                }
-            }
-
-            @Override
-            public void appendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                             String message, String signature, String blobId, String mimeType, String ipfsCid) {
-                tryAppendProposalWithId(
-                    proposalId, walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid);
-            }
-
-            @Override
-            public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
-                                                   String message, String signature, String blobId, String mimeType,
-                                                   String ipfsCid) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendProposalWithId!");
-                    return false;
-                }
-                boolean success = aeronEngine.sendWriteThroughIngress(
-                    walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid, proposalId);
-                if (!success) {
-                    log.error("❌ sendWriteThroughIngress() with binary returned false!");
-                }
-                return success;
-            }
-
-            @Override
             public boolean tryAppendProposalWithId(String proposalId, String walletAddress, String path, String contentType,
                                                    String message, String signature, String blobId, String mimeType,
                                                    String ipfsCid, MutationAuditMetadata auditMetadata) {
@@ -302,37 +191,6 @@ final class ConsensusServicesInitializer {
                     walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid, auditMetadata);
                 if (!success) {
                     log.error("❌ sendWriteThroughIngress() with binary returned false!");
-                }
-                return success;
-            }
-
-            @Override
-            public void appendDeleteProposal(String walletAddress, String path, String signature) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendDeleteProposal!");
-                    return;
-                }
-                log.debug("🗑️  appendDeleteProposal() called - forwarding to Aeron (role: {})", aeronEngine.getCurrentRole());
-                boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature);
-                if (!success) {
-                    log.error("❌ sendDeleteThroughIngress() returned false!");
-                }
-            }
-
-            @Override
-            public void appendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
-                tryAppendDeleteProposalWithId(proposalId, walletAddress, path, signature);
-            }
-
-            @Override
-            public boolean tryAppendDeleteProposalWithId(String proposalId, String walletAddress, String path, String signature) {
-                if (aeronEngine == null) {
-                    log.error("❌ aeronEngine is NULL in appendDeleteProposalWithId!");
-                    return false;
-                }
-                boolean success = aeronEngine.sendDeleteThroughIngress(walletAddress, path, signature, proposalId);
-                if (!success) {
-                    log.error("❌ sendDeleteThroughIngress() returned false!");
                 }
                 return success;
             }
@@ -353,9 +211,6 @@ final class ConsensusServicesInitializer {
 
             @Override
             public int appendProposalBatch(List<QueuedProposal> proposals) {
-                log.debug("🔥🔥🔥 OVERRIDE CALLED: appendProposalBatch() - batch size: {}, class: {}",
-                    proposals.size(), this.getClass().getName());
-
                 if (aeronEngine == null) {
                     log.error("❌ aeronEngine is NULL in appendProposalBatch!");
                     return 0;
@@ -382,10 +237,6 @@ final class ConsensusServicesInitializer {
                                              BackpressureManager backpressureManager,
                                              BeaconChainClient beaconClient,
                                              String proposalPersistenceDir);
-    }
-
-    interface ValidatorEarningsTrackerFactory {
-        ValidatorEarningsTracker create(List<String> validatorWallets);
     }
 
     interface RuntimeConfigReader {

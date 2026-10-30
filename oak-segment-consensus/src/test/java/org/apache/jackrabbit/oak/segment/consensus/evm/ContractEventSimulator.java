@@ -16,7 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.evm;
 
-import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.evm.impl.MockEventDrivenEvmBridge;
 
 import java.math.BigInteger;
 import java.util.UUID;
@@ -29,7 +29,7 @@ import java.util.UUID;
  * 
  * <p>Usage:
  * <pre>
- * EventDrivenEvmBridge bridge = new EventDrivenEvmBridge();
+ * MockEventDrivenEvmBridge bridge = new MockEventDrivenEvmBridge();
  * bridge.start();
  * 
  * ContractEventSimulator simulator = new ContractEventSimulator(bridge);
@@ -46,10 +46,10 @@ import java.util.UUID;
  */
 public class ContractEventSimulator {
     
-    private final EventDrivenEvmBridge bridge;
+    private final MockEventDrivenEvmBridge bridge;
     private long currentBlock = 1000000;
     
-    public ContractEventSimulator(EventDrivenEvmBridge bridge) {
+    public ContractEventSimulator(MockEventDrivenEvmBridge bridge) {
         this.bridge = bridge;
     }
     

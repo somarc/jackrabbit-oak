@@ -38,17 +38,17 @@ final class StandbyModeStartupCoordinator {
     private final StandbyPromotionCoordinator standbyPromotionCoordinator = new StandbyPromotionCoordinator();
 
     StartupResult initialize(StartupContext context) throws IOException {
-        String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(context.getPort(), context.getAeronConfig());
+        String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(context.port(), context.aeronConfig());
         List<String> peerUrls = Collections.unmodifiableList(
-            new ArrayList<>(GlobalStoreRuntimeConfigUtil.resolvePeerUrls(context.getAeronConfig()))
+            new ArrayList<>(GlobalStoreRuntimeConfigUtil.resolvePeerUrls(context.aeronConfig()))
         );
 
         StandbyPromotionCoordinator.BootstrapTarget bootstrapTarget =
             standbyPromotionCoordinator.resolveBootstrapTarget(
-                context.getBootstrapPrimaryHost(),
-                context.getBootstrapPrimaryPort(),
+                context.bootstrapPrimaryHost(),
+                context.bootstrapPrimaryPort(),
                 peerUrls,
-                context.getPort()
+                context.port()
             );
 
         if (bootstrapTarget == null) {
@@ -57,11 +57,11 @@ final class StandbyModeStartupCoordinator {
 
         if (!context.hasConfiguredBootstrapPrimary() && !peerUrls.isEmpty()) {
             log.info("🔍 Using first peer as bootstrap primary: {}:{}",
-                bootstrapTarget.getHost(), bootstrapTarget.getPort());
+                bootstrapTarget.host(), bootstrapTarget.port());
         }
 
         standbyPromotionCoordinator.bootstrapAndPromote(
-            context.getBootstrap(),
+            context.bootstrap(),
             bootstrapTarget,
             () -> promote(context, selfUrl, peerUrls)
         );
@@ -72,31 +72,31 @@ final class StandbyModeStartupCoordinator {
     private void promote(StartupContext context, String selfUrl, List<String> peerUrls) {
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         log.info("🎖️  PROMOTED TO PRIMARY - Oak FileStore bootstrap complete");
-        log.info("   Local HEAD: {}", context.getFileStore().getHead().getRecordId());
+        log.info("   Local HEAD: {}", context.fileStore().getHead().getRecordId());
         log.info("   Starting Aeron Cluster...");
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         try {
             log.info("✈️  Starting Aeron Cluster (Oak FileStore already synced)");
             StandbyPromotionCoordinator.DeferredAeronStartup deferredStartup =
                 standbyPromotionCoordinator.startDeferredCluster(
-                    context.getComponentFactory(),
-                    context.getAeronClusterService(),
+                    context.componentFactory(),
+                    context.aeronClusterService(),
                     new StandbyPromotionCoordinator.DeferredAeronStartupContext(
-                        context.getFileStore(),
-                        context.getNodeStore(),
-                        context.getHttpServer(),
-                        context.getWallet(),
-                        context.getStoreDirectory(),
-                        context.getBlobStore(),
+                        context.fileStore(),
+                        context.nodeStore(),
+                        context.httpServer(),
+                        context.wallet(),
+                        context.storeDirectory(),
+                        context.blobStore(),
                         selfUrl,
                         peerUrls
                     )
                 );
-            context.getDeferredStartupListener().onDeferredStartup(deferredStartup);
+            context.deferredStartupListener().onDeferredStartup(deferredStartup);
 
             log.info("Starting HTTP server (deferred from STANDBY mode)...");
-            context.getHttpServer().start();
-            log.info("✅ HTTP server started on port {}", context.getPort());
+            context.httpServer().start();
+            log.info("✅ HTTP server started on port {}", context.port());
         } catch (Exception e) {
             log.error("❌ Failed to start Aeron Cluster after promotion: {}", e.getMessage(), e);
         }
@@ -106,128 +106,27 @@ final class StandbyModeStartupCoordinator {
         void onDeferredStartup(StandbyPromotionCoordinator.DeferredAeronStartup deferredStartup);
     }
 
-    static final class StartupContext {
-        private final int port;
-        private final String storeDirectory;
-        private final String bootstrapPrimaryHost;
-        private final int bootstrapPrimaryPort;
-        private final AeronClusterConfig aeronConfig;
-        private final ValidatorBootstrap bootstrap;
-        private final FileStore fileStore;
-        private final NodeStore nodeStore;
-        private final SegmentHttpServer httpServer;
-        private final EthereumWallet wallet;
-        private final BlobStore blobStore;
-        private final AeronClusterService aeronClusterService;
-        private final GlobalStoreServerComponentFactory componentFactory;
-        private final DeferredStartupListener deferredStartupListener;
-
-        StartupContext(int port,
-                       String storeDirectory,
-                       String bootstrapPrimaryHost,
-                       int bootstrapPrimaryPort,
-                       AeronClusterConfig aeronConfig,
-                       ValidatorBootstrap bootstrap,
-                       FileStore fileStore,
-                       NodeStore nodeStore,
-                       SegmentHttpServer httpServer,
-                       EthereumWallet wallet,
-                       BlobStore blobStore,
-                       AeronClusterService aeronClusterService,
-                       GlobalStoreServerComponentFactory componentFactory,
-                       DeferredStartupListener deferredStartupListener) {
-            this.port = port;
-            this.storeDirectory = storeDirectory;
-            this.bootstrapPrimaryHost = bootstrapPrimaryHost;
-            this.bootstrapPrimaryPort = bootstrapPrimaryPort;
-            this.aeronConfig = aeronConfig;
-            this.bootstrap = bootstrap;
-            this.fileStore = fileStore;
-            this.nodeStore = nodeStore;
-            this.httpServer = httpServer;
-            this.wallet = wallet;
-            this.blobStore = blobStore;
-            this.aeronClusterService = aeronClusterService;
-            this.componentFactory = componentFactory;
-            this.deferredStartupListener = deferredStartupListener;
-        }
-
-        int getPort() {
-            return port;
-        }
-
-        String getStoreDirectory() {
-            return storeDirectory;
-        }
-
-        String getBootstrapPrimaryHost() {
-            return bootstrapPrimaryHost;
-        }
-
-        int getBootstrapPrimaryPort() {
-            return bootstrapPrimaryPort;
-        }
-
+    record StartupContext(int port,
+                          String storeDirectory,
+                          String bootstrapPrimaryHost,
+                          int bootstrapPrimaryPort,
+                          AeronClusterConfig aeronConfig,
+                          ValidatorBootstrap bootstrap,
+                          FileStore fileStore,
+                          NodeStore nodeStore,
+                          SegmentHttpServer httpServer,
+                          EthereumWallet wallet,
+                          BlobStore blobStore,
+                          AeronClusterService aeronClusterService,
+                          GlobalStoreServerComponentFactory componentFactory,
+                          DeferredStartupListener deferredStartupListener) {
         boolean hasConfiguredBootstrapPrimary() {
             return bootstrapPrimaryHost != null && !bootstrapPrimaryHost.trim().isEmpty();
         }
 
-        AeronClusterConfig getAeronConfig() {
-            return aeronConfig;
-        }
-
-        ValidatorBootstrap getBootstrap() {
-            return bootstrap;
-        }
-
-        FileStore getFileStore() {
-            return fileStore;
-        }
-
-        NodeStore getNodeStore() {
-            return nodeStore;
-        }
-
-        SegmentHttpServer getHttpServer() {
-            return httpServer;
-        }
-
-        EthereumWallet getWallet() {
-            return wallet;
-        }
-
-        BlobStore getBlobStore() {
-            return blobStore;
-        }
-
-        AeronClusterService getAeronClusterService() {
-            return aeronClusterService;
-        }
-
-        GlobalStoreServerComponentFactory getComponentFactory() {
-            return componentFactory;
-        }
-
-        DeferredStartupListener getDeferredStartupListener() {
-            return deferredStartupListener;
-        }
+    
     }
 
-    static final class StartupResult {
-        private final String selfUrl;
-        private final List<String> peerUrls;
-
-        StartupResult(String selfUrl, List<String> peerUrls) {
-            this.selfUrl = selfUrl;
-            this.peerUrls = peerUrls;
-        }
-
-        String getSelfUrl() {
-            return selfUrl;
-        }
-
-        List<String> getPeerUrls() {
-            return peerUrls;
-        }
+    record StartupResult(String selfUrl, List<String> peerUrls) {
     }
 }

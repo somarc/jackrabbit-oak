@@ -34,7 +34,7 @@ import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
-import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -63,7 +63,6 @@ import org.mockito.MockitoAnnotations;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -276,101 +275,6 @@ public class AeronConsensusEngineTest {
     }
 
     @Test
-    public void reconnectShortCircuitsWhenClientAlreadyHealthy() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        io.aeron.cluster.client.AeronCluster healthyClient = mock(io.aeron.cluster.client.AeronCluster.class);
-        when(healthyClient.isClosed()).thenReturn(false);
-        bindClient(engine, healthyClient);
-        setField(engine, "reconnectInProgress", true);
-
-        AtomicInteger ensureCalls = new AtomicInteger(0);
-        engine.attemptReconnectForTest(
-            "test",
-            3,
-            attempt -> 0L,
-            ensureCalls::incrementAndGet,
-            backoff -> {
-                fail("sleep should not be called when client is healthy");
-                return false;
-            }
-        );
-
-        assertEquals(0, ensureCalls.get());
-        assertFalse((Boolean) getField(engine, "reconnectInProgress"));
-    }
-
-    @Test
-    public void reconnectRetriesUntilClientBecomesHealthy() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        setField(engine, "reconnectInProgress", true);
-
-        AtomicInteger ensureCalls = new AtomicInteger(0);
-        List<Long> backoffs = new ArrayList<>();
-        engine.attemptReconnectForTest(
-            "test",
-            4,
-            attempt -> (long) attempt * 10L,
-            () -> {
-                int call = ensureCalls.incrementAndGet();
-                if (call == 2) {
-                    try {
-                        io.aeron.cluster.client.AeronCluster healthyClient = mock(io.aeron.cluster.client.AeronCluster.class);
-                        when(healthyClient.isClosed()).thenReturn(false);
-                        bindClient(engine, healthyClient);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                }
-            },
-            backoff -> {
-                backoffs.add(backoff);
-                return true;
-            }
-        );
-
-        assertEquals(2, ensureCalls.get());
-        assertEquals(1, backoffs.size());
-        assertEquals(Long.valueOf(10L), backoffs.get(0));
-        assertFalse((Boolean) getField(engine, "reconnectInProgress"));
-    }
-
-    @Test
-    public void reconnectExhaustionDoesNotSleepAfterFinalAttempt() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        setField(engine, "reconnectInProgress", true);
-
-        AtomicInteger ensureCalls = new AtomicInteger(0);
-        List<Long> backoffs = new ArrayList<>();
-        engine.attemptReconnectForTest(
-            "test",
-            3,
-            attempt -> (long) attempt,
-            ensureCalls::incrementAndGet,
-            backoff -> {
-                backoffs.add(backoff);
-                return true;
-            }
-        );
-
-        assertEquals(3, ensureCalls.get());
-        assertEquals(2, backoffs.size());
-        assertEquals(Long.valueOf(1L), backoffs.get(0));
-        assertEquals(Long.valueOf(2L), backoffs.get(1));
-        assertFalse((Boolean) getField(engine, "reconnectInProgress"));
-    }
-
-    @Test
-    public void stopStopsBeaconClientPollingWhenPresent() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        BeaconChainClient beaconClient = mock(BeaconChainClient.class);
-        setField(engine, "beaconClient", beaconClient);
-
-        engine.stop();
-
-        verify(beaconClient).stopBackgroundPolling();
-    }
-
-    @Test
     public void onStartRestoresSnapshotMetadataWhenTheStoreHasItsWatermark() throws Exception {
         SnapshotService snapshotService = mock(SnapshotService.class);
         Image snapshotImage = mock(Image.class);
@@ -521,9 +425,9 @@ public class AeronConsensusEngineTest {
         when(cluster.context().clusterDir()).thenReturn(clusterDirWithTerms(0L));
         engine.onStart(cluster, null);
         AeronEncodedMessage replayed = new AeronIngressWritePayloadBuilder()
-            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/old", "page", "m", "sig", null, null, "p-old");
+            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/old", "page", "m", "sig", null, null, writeAudit("p-old"));
         AeronEncodedMessage fresh = new AeronIngressWritePayloadBuilder()
-            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/new", "page", "m", "sig", null, null, "p-new");
+            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/new", "page", "m", "sig", null, null, writeAudit("p-new"));
 
         engine.onSessionMessage(mock(ClientSession.class), 1L, replayed.buffer, 0, replayed.totalLength, headerAt(512L));
         engine.onSessionMessage(mock(ClientSession.class), 2L, fresh.buffer, 0, fresh.totalLength, headerAt(640L));
@@ -547,7 +451,7 @@ public class AeronConsensusEngineTest {
         });
         setField(engine, "cluster", mock(Cluster.class));
         AeronEncodedMessage write = new AeronIngressWritePayloadBuilder()
-            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/doc", "page", "m", "sig", null, null, "p-1");
+            .buildWriteProposal("0xabc", "/oak-chain/a/b/c/doc", "page", "m", "sig", null, null, writeAudit("p-1"));
 
         try {
             engine.onSessionMessage(mock(ClientSession.class), 1L, write.buffer, 0, write.totalLength, headerAt(640L));
@@ -780,13 +684,13 @@ public class AeronConsensusEngineTest {
         AeronConsensusEngine engine = createEngine();
         io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
 
-        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/a", "sig-1", "p-0"));
+        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/a", "sig-1", deleteAudit("p-0")));
         assertFalse(captureOffer(client).json.contains("\"term\""));
 
         applyTermEvent(engine, 3);
         client = installHealthyClient(engine, Cluster.Role.LEADER);
 
-        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/b", "sig-2", "p-1"));
+        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/b", "sig-2", deleteAudit("p-1")));
         assertTrue(captureOffer(client).json.contains("\"term\":3"));
     }
 
@@ -939,26 +843,6 @@ public class AeronConsensusEngineTest {
     }
 
     @Test
-    public void stepDownAsLeaderClosesInternalClientAndClearsLeader() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        Cluster cluster = mock(Cluster.class);
-        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
-        when(cluster.memberId()).thenReturn(3);
-        installCluster(engine, cluster);
-        setField(engine, "currentLeader", "http://self:8080");
-
-        io.aeron.cluster.client.AeronCluster client = mock(io.aeron.cluster.client.AeronCluster.class);
-        when(client.isClosed()).thenReturn(false);
-        bindClient(engine, client);
-
-        assertTrue(engine.stepDownAsLeader());
-        verify(client).close();
-        assertFalse(ingressManager(engine).isHealthy());
-        assertNull(getField(engine, "currentLeader"));
-        assertEquals(ValidatorRole.FOLLOWER, getField(engine, "currentRole"));
-    }
-
-    @Test
     public void roleChangeFromLeaderClosesInternalClientWithoutSchedulingRebind() throws Exception {
         RecordingTaskScheduler scheduler = new RecordingTaskScheduler();
         AeronConsensusEngine engine = createEngine(
@@ -990,26 +874,6 @@ public class AeronConsensusEngineTest {
         assertTrue(waitUntil(() -> !ingressManager(engine).isHealthy(), 1500L));
         assertEquals(1, scheduler.tasks.size());
         assertEquals("aeron-leader-discovery", scheduler.tasks.get(0).name);
-    }
-
-    @Test
-    public void stepDownAsLeaderReturnsFalseWhenInternalClientUnavailable() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        Cluster cluster = mock(Cluster.class);
-        when(cluster.role()).thenReturn(Cluster.Role.LEADER);
-        installCluster(engine, cluster);
-
-        assertFalse(engine.stepDownAsLeader());
-    }
-
-    @Test
-    public void stepDownAsLeaderReturnsFalseWhenNodeIsNotLeader() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        Cluster cluster = mock(Cluster.class);
-        when(cluster.role()).thenReturn(Cluster.Role.FOLLOWER);
-        installCluster(engine, cluster);
-
-        assertFalse(engine.stepDownAsLeader());
     }
 
     @Test
@@ -1129,7 +993,7 @@ public class AeronConsensusEngineTest {
         io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
         applyTermEvent(engine, 4);
 
-        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/site", "sig-1", "proposal-2"));
+        assertTrue(engine.sendDeleteThroughIngress("0xabc", "/content/site", "sig-1", deleteAudit("proposal-2")));
 
         CapturedOffer offer = captureOffer(client);
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL, offer.templateId);
@@ -1145,7 +1009,7 @@ public class AeronConsensusEngineTest {
         io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
         applyTermEvent(engine, 9);
 
-        assertTrue(engine.sendWriteThroughIngressWithId(
+        assertTrue(sendWrite(engine, 
             "0xabc",
             "/content/write",
             "page",
@@ -1179,7 +1043,7 @@ public class AeronConsensusEngineTest {
             "blob-99",
             "image/png",
             "cid-2",
-            "proposal-4"
+            writeAudit("proposal-4")
         ));
 
         CapturedOffer offer = captureOffer(client);
@@ -1217,7 +1081,7 @@ public class AeronConsensusEngineTest {
             .thenReturn(AeronInternalClusterClientConnector.ConnectAttemptResult.success(healthyClient));
         setField(engine, "internalClusterClientConnector", connector);
 
-        assertTrue(engine.sendWriteThroughIngressWithId(
+        assertTrue(sendWrite(engine, 
             "0xabc",
             "/content/write",
             "page",
@@ -1241,7 +1105,7 @@ public class AeronConsensusEngineTest {
         AeronInternalClusterClientConnector connector =
             (AeronInternalClusterClientConnector) getField(engine, "internalClusterClientConnector");
 
-        assertFalse(engine.sendWriteThroughIngressWithId(
+        assertFalse(sendWrite(engine, 
             "0xabc", "/content/write", "page", "{}", "sig-2", null, "proposal-bp"));
 
         Thread.sleep(50L);
@@ -1448,8 +1312,8 @@ public class AeronConsensusEngineTest {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message,
                                    String signature, String intentToken, String blobId, String mimeType,
-                                   String ipfsCid, String proposalId) {
-                applied.add(proposalId);
+                                   String ipfsCid, MutationAuditMetadata auditMetadata) {
+                applied.add(auditMetadata.getProposalId());
             }
         });
         dispatcher.setTermProvider(engine::getCurrentTerm);
@@ -1471,7 +1335,7 @@ public class AeronConsensusEngineTest {
                     1, java.util.concurrent.TimeUnit.MILLISECONDS, 1);
             } else {
                 AeronEncodedMessage encoded = builder.buildWriteProposal(
-                    "0xabc", "/oak-chain/" + entry, "page", entry, "sig", term, null, entry);
+                    "0xabc", "/oak-chain/" + entry, "page", entry, "sig", term, null, writeAudit(entry));
                 dispatcher.dispatch(step * 100L, encoded.buffer, 0, encoded.totalLength);
             }
         }
@@ -1605,7 +1469,7 @@ public class AeronConsensusEngineTest {
     }
 
     private static QueuedProposal proposal(String proposalId) {
-        return new QueuedProposal(proposalId, "0xtx", null, 1L, 2L, ProposalState.PENDING);
+        return new QueuedProposal(proposalId, "0xtx", 1L, 2L, ProposalState.PENDING);
     }
 
     private static final class RecordingTaskScheduler implements AeronBackgroundCoordinator.TaskScheduler {
@@ -1652,6 +1516,10 @@ public class AeronConsensusEngineTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private static MutationAuditMetadata writeAudit(String proposalId) {
+        return MutationAuditMetadata.write(null, null, proposalId, null, null, null, null);
     }
 
     private static boolean waitUntil(java.util.concurrent.Callable<Boolean> condition, long timeoutMs) throws Exception {
@@ -1725,5 +1593,16 @@ public class AeronConsensusEngineTest {
             this.templateId = templateId;
             this.json = json;
         }
+    }
+
+    private static boolean sendWrite(AeronConsensusEngine engine, String walletAddress, String path,
+                                     String contentType, String message, String signature, String ipfsCid,
+                                     String proposalId) {
+        return engine.sendWriteThroughIngress(walletAddress, path, contentType, message, signature, null, null,
+            ipfsCid, writeAudit(proposalId));
+    }
+
+    private static MutationAuditMetadata deleteAudit(String proposalId) {
+        return MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null);
     }
 }

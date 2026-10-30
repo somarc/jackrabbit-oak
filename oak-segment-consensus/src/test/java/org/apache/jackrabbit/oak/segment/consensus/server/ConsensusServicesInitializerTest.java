@@ -18,14 +18,12 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import java.io.File;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
-import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager;
@@ -33,6 +31,7 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOpt
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.RaftAppendCallback;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -71,22 +70,18 @@ public class ConsensusServicesInitializerTest {
         EvmBridge evmBridge = mock(EvmBridge.class);
         BeaconChainClient beaconClient = mock(BeaconChainClient.class);
         ProposalQueueManagerOptimized proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
-        ValidatorEarningsTracker earningsTracker = mock(ValidatorEarningsTracker.class);
         BackpressureManager backpressureManager = new BackpressureManager();
         when(testContext.aeronEngine.getBackpressureManager()).thenReturn(backpressureManager);
         when(testContext.aeronEngine.getBeaconClient()).thenReturn(beaconClient);
 
         RecordingProposalQueueManagerFactory proposalFactory =
             new RecordingProposalQueueManagerFactory(proposalQueueManager);
-        RecordingValidatorEarningsTrackerFactory earningsFactory =
-            new RecordingValidatorEarningsTrackerFactory(earningsTracker);
 
         ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
             () -> blockchainConfig,
             ignored -> evmBridge,
             () -> beaconClient,
             proposalFactory,
-            earningsFactory,
             (property, env, defaultValue) -> defaultValue
         );
 
@@ -95,8 +90,7 @@ public class ConsensusServicesInitializerTest {
             testContext.httpServer,
             testContext.wallet,
             testContext.storeDir.toString(),
-            "0xcluster",
-            Arrays.asList("node-1", "node-2", "node-3")
+            "0xcluster"
         );
 
         verify(evmBridge).start();
@@ -108,18 +102,12 @@ public class ConsensusServicesInitializerTest {
 
         assertSame(proposalQueueManager, testContext.serverContext.proposalQueueManager);
         assertSame(evmBridge, testContext.serverContext.evmBridge);
-        assertSame(earningsTracker, testContext.serverContext.validatorEarningsTracker);
         assertEquals(testContext.walletAddress, testContext.serverContext.validatorWalletAddress);
         assertEquals("0xcluster", testContext.serverContext.clusterWalletAddress);
         assertSame(backpressureManager, proposalFactory.backpressureManager);
         assertSame(beaconClient, proposalFactory.beaconClient);
         assertEquals(new File(testContext.storeDir.toFile(), "proposal-queue").getAbsolutePath(),
             proposalFactory.proposalPersistenceDir);
-        assertEquals(Arrays.asList(
-            testContext.walletAddress,
-            "0x0000000000000000000000000000000000000001",
-            "0x0000000000000000000000000000000000000002"
-        ), earningsFactory.validatorWallets);
         assertNotNull(proposalFactory.raftAppendCallback);
     }
 
@@ -135,19 +123,15 @@ public class ConsensusServicesInitializerTest {
         EvmBridge evmBridge = mock(EvmBridge.class);
         BeaconChainClient beaconClient = mock(BeaconChainClient.class);
         ProposalQueueManagerOptimized proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
-        ValidatorEarningsTracker earningsTracker = mock(ValidatorEarningsTracker.class);
 
         RecordingProposalQueueManagerFactory proposalFactory =
             new RecordingProposalQueueManagerFactory(proposalQueueManager);
-        RecordingValidatorEarningsTrackerFactory earningsFactory =
-            new RecordingValidatorEarningsTrackerFactory(earningsTracker);
 
         ConsensusServicesInitializer initializer = new ConsensusServicesInitializer(
             () -> blockchainConfig,
             ignored -> evmBridge,
             () -> beaconClient,
             proposalFactory,
-            earningsFactory,
             (property, env, defaultValue) -> "/var/tmp/custom-proposals"
         );
 
@@ -156,20 +140,16 @@ public class ConsensusServicesInitializerTest {
             testContext.httpServer,
             testContext.wallet,
             testContext.storeDir.toString(),
-            "0xcluster",
-            null
+            "0xcluster"
         );
 
         assertNotNull(proposalFactory.backpressureManager);
         assertEquals("/var/tmp/custom-proposals", proposalFactory.proposalPersistenceDir);
-        assertEquals(Collections.singletonList(testContext.walletAddress), earningsFactory.validatorWallets);
 
-        proposalFactory.raftAppendCallback.appendProposal("0xwallet", "/a", "text/plain", "body", "sig");
-        proposalFactory.raftAppendCallback.appendDeleteProposal("0xwallet", "/a", "sig");
         assertFalse(proposalFactory.raftAppendCallback.tryAppendProposalWithId(
-            "proposal-1", "0xwallet", "/a", "text/plain", "body", "sig"));
+            "proposal-1", "0xwallet", "/a", "text/plain", "body", "sig", null, null, null, writeAudit("proposal-1")));
         assertFalse(proposalFactory.raftAppendCallback.tryAppendDeleteProposalWithId(
-            "proposal-2", "0xwallet", "/a", "sig"));
+            "proposal-2", "0xwallet", "/a", "sig", deleteAudit("proposal-2")));
         assertEquals(0, proposalFactory.raftAppendCallback.appendProposalBatch(Collections.<QueuedProposal>emptyList()));
     }
 
@@ -188,7 +168,6 @@ public class ConsensusServicesInitializerTest {
             () -> mock(BeaconChainClient.class),
             (evmBridge, raftAppendCallback, backpressureManager, beaconClient, proposalPersistenceDir) ->
                 mock(ProposalQueueManagerOptimized.class),
-            wallets -> mock(ValidatorEarningsTracker.class),
             (property, env, defaultValue) -> defaultValue
         );
 
@@ -198,8 +177,7 @@ public class ConsensusServicesInitializerTest {
                 testContext.httpServer,
                 testContext.wallet,
                 testContext.storeDir.toString(),
-                "0xcluster",
-                Collections.singletonList("node-1")
+                "0xcluster"
             );
             fail("Expected mainnet mode to be rejected for v1");
         } catch (IllegalStateException e) {
@@ -222,7 +200,6 @@ public class ConsensusServicesInitializerTest {
             () -> mock(BeaconChainClient.class),
             (evmBridge, raftAppendCallback, backpressureManager, beaconClient, proposalPersistenceDir) ->
                 mock(ProposalQueueManagerOptimized.class),
-            wallets -> mock(ValidatorEarningsTracker.class),
             (property, env, defaultValue) -> defaultValue
         );
 
@@ -232,8 +209,7 @@ public class ConsensusServicesInitializerTest {
                 testContext.httpServer,
                 testContext.wallet,
                 testContext.storeDir.toString(),
-                "0xcluster",
-                Collections.singletonList("node-1")
+                "0xcluster"
             );
             fail("Expected sepolia mode without RPC URL to be rejected");
         } catch (IllegalStateException e) {
@@ -256,7 +232,6 @@ public class ConsensusServicesInitializerTest {
             () -> mock(BeaconChainClient.class),
             (evmBridge, raftAppendCallback, backpressureManager, beaconClient, proposalPersistenceDir) ->
                 mock(ProposalQueueManagerOptimized.class),
-            wallets -> mock(ValidatorEarningsTracker.class),
             (property, env, defaultValue) -> defaultValue
         );
 
@@ -266,8 +241,7 @@ public class ConsensusServicesInitializerTest {
                 testContext.httpServer,
                 testContext.wallet,
                 testContext.storeDir.toString(),
-                "0xcluster",
-                Collections.singletonList("node-1")
+                "0xcluster"
             );
             fail("Expected placeholder Sepolia contract to be rejected");
         } catch (IllegalStateException e) {
@@ -282,20 +256,12 @@ public class ConsensusServicesInitializerTest {
         when(blockchainConfig.isMockMode()).thenReturn(true);
         when(blockchainConfig.getNetwork()).thenReturn("mock");
         when(blockchainConfig.getContractAddress()).thenReturn("0xabc");
-        when(testContext.aeronEngine.sendWriteThroughIngress("0xwallet", "/content", "text/plain", "body", "sig"))
-            .thenReturn(true);
-        when(testContext.aeronEngine.sendWriteThroughIngressWithId(
-            "0xwallet", "/content", "text/plain", "body", "sig", null, "proposal-1"))
-            .thenReturn(true);
+        MutationAuditMetadata writeAudit = writeAudit("proposal-2");
+        MutationAuditMetadata deleteAudit = deleteAudit("proposal-3");
         when(testContext.aeronEngine.sendWriteThroughIngress(
-            "0xwallet", "/content", "text/plain", "body", "sig", "blob-1", "image/png"))
+            "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1", writeAudit))
             .thenReturn(true);
-        when(testContext.aeronEngine.sendWriteThroughIngress(
-            "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1", "proposal-2"))
-            .thenReturn(true);
-        when(testContext.aeronEngine.sendDeleteThroughIngress("0xwallet", "/content", "sig"))
-            .thenReturn(true);
-        when(testContext.aeronEngine.sendDeleteThroughIngress("0xwallet", "/content", "sig", "proposal-3"))
+        when(testContext.aeronEngine.sendDeleteThroughIngress("0xwallet", "/content", "sig", deleteAudit))
             .thenReturn(true);
 
         ProposalQueueManagerOptimized proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
@@ -308,7 +274,6 @@ public class ConsensusServicesInitializerTest {
             ignored -> mock(EvmBridge.class),
             () -> mock(BeaconChainClient.class),
             proposalFactory,
-            wallets -> mock(ValidatorEarningsTracker.class),
             (property, env, defaultValue) -> defaultValue
         );
 
@@ -317,43 +282,28 @@ public class ConsensusServicesInitializerTest {
             testContext.httpServer,
             testContext.wallet,
             testContext.storeDir.toString(),
-            "0xcluster",
-            Collections.singletonList("node-1")
+            "0xcluster"
         );
 
         RaftAppendCallback callback = proposalFactory.raftAppendCallback;
-        callback.appendProposal("0xwallet", "/content", "text/plain", "body", "sig");
-        callback.appendProposal("0xwallet", "/content", "text/plain", "body", "sig", "blob-1", "image/png");
-        callback.appendDeleteProposal("0xwallet", "/content", "sig");
         assertTrue(callback.tryAppendProposalWithId(
-            "proposal-1", "0xwallet", "/content", "text/plain", "body", "sig"));
-        assertTrue(callback.tryAppendProposalWithId(
-            "proposal-2", "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1"));
-        assertTrue(callback.tryAppendDeleteProposalWithId("proposal-3", "0xwallet", "/content", "sig"));
+            "proposal-2", "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1",
+            writeAudit));
+        assertTrue(callback.tryAppendDeleteProposalWithId("proposal-3", "0xwallet", "/content", "sig", deleteAudit));
         assertEquals(2, callback.appendProposalBatch(proposalFactory.batchProposals));
 
-        verify(testContext.aeronEngine).sendWriteThroughIngress("0xwallet", "/content", "text/plain", "body", "sig");
-        verify(testContext.aeronEngine).sendWriteThroughIngressWithId(
-            "0xwallet", "/content", "text/plain", "body", "sig", null, "proposal-1");
         verify(testContext.aeronEngine).sendWriteThroughIngress(
-            "0xwallet", "/content", "text/plain", "body", "sig", "blob-1", "image/png");
-        verify(testContext.aeronEngine).sendWriteThroughIngress(
-            "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1", "proposal-2");
-        verify(testContext.aeronEngine).sendDeleteThroughIngress("0xwallet", "/content", "sig");
-        verify(testContext.aeronEngine).sendDeleteThroughIngress("0xwallet", "/content", "sig", "proposal-3");
+            "0xwallet", "/content", "text/plain", "body", "sig", "blob-2", "image/png", "cid-1", writeAudit);
+        verify(testContext.aeronEngine).sendDeleteThroughIngress("0xwallet", "/content", "sig", deleteAudit);
         verify(testContext.aeronEngine).sendWriteBatchThroughIngress(proposalFactory.batchProposals);
     }
 
-    @Test
-    public void testBuildValidatorWalletsAddsSyntheticPeersForClusterSize() {
-        assertEquals(Arrays.asList(
-            "0xself",
-            "0x0000000000000000000000000000000000000001",
-            "0x0000000000000000000000000000000000000002"
-        ), ConsensusServicesInitializer.buildValidatorWallets(
-            "0xself",
-            Arrays.asList("node-1", "node-2", "node-3")
-        ));
+    private static MutationAuditMetadata writeAudit(String proposalId) {
+        return MutationAuditMetadata.write(null, null, proposalId, null, null, null, null);
+    }
+
+    private static MutationAuditMetadata deleteAudit(String proposalId) {
+        return MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null);
     }
 
     private TestContext newTestContext() throws Exception {
@@ -428,20 +378,4 @@ public class ConsensusServicesInitializerTest {
         }
     }
 
-    private static final class RecordingValidatorEarningsTrackerFactory
-            implements ConsensusServicesInitializer.ValidatorEarningsTrackerFactory {
-        private final ValidatorEarningsTracker earningsTracker;
-        private final List<String> validatorWallets = new ArrayList<>();
-
-        private RecordingValidatorEarningsTrackerFactory(ValidatorEarningsTracker earningsTracker) {
-            this.earningsTracker = earningsTracker;
-        }
-
-        @Override
-        public ValidatorEarningsTracker create(List<String> validatorWallets) {
-            this.validatorWallets.clear();
-            this.validatorWallets.addAll(validatorWallets);
-            return earningsTracker;
-        }
-    }
 }

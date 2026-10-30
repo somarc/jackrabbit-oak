@@ -16,20 +16,39 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
-import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
-
 import org.agrona.concurrent.Agent;
 import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.SleepingMillisIdleStrategy;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
+import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+import org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
+import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * Optimized proposal queue manager with production throughput patterns.
@@ -75,14 +94,10 @@ public class ProposalQueueManagerOptimized {
     
     private static final Logger log = LoggerFactory.getLogger(ProposalQueueManagerOptimized.class);
     private static final long HIGH_FREQ_LOG_INTERVAL_MS = 5000;
-    private final java.util.concurrent.atomic.AtomicLong lastQueueDepthLogMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicInteger queueDepthSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
-    private final java.util.concurrent.atomic.AtomicLong lastDequeuedLogMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicInteger dequeuedSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
-    private final java.util.concurrent.atomic.AtomicLong lastBatchSentLogMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicInteger batchSentSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
-    private final java.util.concurrent.atomic.AtomicLong lastEpochQueueLogMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicInteger epochQueueSuppressed = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final RateLimitedInfoLog queueDepthLog = new RateLimitedInfoLog();
+    private final RateLimitedInfoLog dequeuedLog = new RateLimitedInfoLog();
+    private final RateLimitedInfoLog batchSentLog = new RateLimitedInfoLog();
+    private final RateLimitedInfoLog epochQueueLog = new RateLimitedInfoLog();
     // Configuration
     private final long confirmationTimeoutMs;
     private final int requiredConfirmations;
@@ -100,7 +115,7 @@ public class ProposalQueueManagerOptimized {
     private final AdaptiveReleaseGovernor adaptiveReleaseGovernor;
     
     // Queues
-    private final org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient;
+    private final BeaconChainClient beaconClient;
     private final ConcurrentLinkedQueue<QueuedProposal> unverifiedQueue = new ConcurrentLinkedQueue<>();
     private final AdaptivePackingBuffer adaptivePackingBuffer;
     private final BackpressureOverflowBuffer backpressureOverflowBuffer;
@@ -116,12 +131,12 @@ public class ProposalQueueManagerOptimized {
     private final long payloadSpillSoftPending;
     private final long payloadSpillMaxBytes;
     private final long hardMaxPendingProposals;
-    private final java.util.concurrent.atomic.AtomicLong persistencePendingChanges =
-        new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicBoolean persistenceFlushInProgress =
-        new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final AtomicLong persistencePendingChanges =
+        new AtomicLong(0);
+    private final AtomicBoolean persistenceFlushInProgress =
+        new AtomicBoolean(false);
     private volatile boolean persistenceDirty = false;
-    private java.util.concurrent.ScheduledExecutorService persistenceScheduler;
+    private ScheduledExecutorService persistenceScheduler;
     
     // Dependencies
     private final EvmBridge evmBridge;
@@ -135,25 +150,21 @@ public class ProposalQueueManagerOptimized {
     private final int verifierThreads;
     
     // Metrics: legacy compatibility tier routing
-    private final java.util.concurrent.atomic.AtomicLong priorityProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong batchedProposalsSent = new java.util.concurrent.atomic.AtomicLong(0);
+    private final AtomicLong priorityProposalsSent = new AtomicLong(0);
+    private final AtomicLong batchedProposalsSent = new AtomicLong(0);
     
     // Metrics: Persistent counters (survive proposal removal from allProposals)
-    private final java.util.concurrent.atomic.AtomicLong totalRejectedCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong totalVerifiedCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong totalFinalizedCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong lifetimeRejectedBase = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong lifetimeVerifiedBase = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong lifetimeFinalizedBase = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong lifetimePrioritySentBase = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong lifetimeBatchedSentBase = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong counterWindowStartMs =
-        new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
+    private final AtomicLong totalRejectedCount = new AtomicLong(0);
+    private final AtomicLong totalVerifiedCount = new AtomicLong(0);
+    private final AtomicLong totalFinalizedCount = new AtomicLong(0);
+    private final AtomicLong lifetimeRejectedBase = new AtomicLong(0);
+    private final AtomicLong lifetimeVerifiedBase = new AtomicLong(0);
+    private final AtomicLong lifetimeFinalizedBase = new AtomicLong(0);
+    private final AtomicLong lifetimePrioritySentBase = new AtomicLong(0);
+    private final AtomicLong lifetimeBatchedSentBase = new AtomicLong(0);
+    private final AtomicLong counterWindowStartMs =
+        new AtomicLong(System.currentTimeMillis());
     private final long counterRotationIntervalMs;
-    private final ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> finalizedByEpochAndTier =
-        new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> rejectedByEpochAndTier =
-        new ConcurrentHashMap<>();
     private final long processedRetentionMs;
     private final long processedPendingRecoveryMs;
     private volatile ReplicatedDurability replicatedDurability = ReplicatedDurability.NONE;
@@ -161,41 +172,41 @@ public class ProposalQueueManagerOptimized {
     private volatile long lastProcessedRecoveryScan = 0L;
 
     // Metrics: EVM verifier timings and outcomes (for mempool bottleneck analysis)
-    private final java.util.concurrent.atomic.AtomicLong verifierAttemptCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierSuccessCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierRequeueNoProofCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierRequeueUnconfirmedCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierRejectedCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierErrorCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierTotalNanos = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierProofNanos = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierSignatureNanos = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierAuthNanos = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierPersistNanos = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierQueueWaitMsTotal = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierQueueWaitMsMax = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierLastTotalMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierLastProofMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierLastSignatureMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierLastAuthMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong verifierLastPersistMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final AtomicLong verifierAttemptCount = new AtomicLong(0);
+    private final AtomicLong verifierSuccessCount = new AtomicLong(0);
+    private final AtomicLong verifierRequeueNoProofCount = new AtomicLong(0);
+    private final AtomicLong verifierRequeueUnconfirmedCount = new AtomicLong(0);
+    private final AtomicLong verifierRejectedCount = new AtomicLong(0);
+    private final AtomicLong verifierErrorCount = new AtomicLong(0);
+    private final AtomicLong verifierTotalNanos = new AtomicLong(0);
+    private final AtomicLong verifierProofNanos = new AtomicLong(0);
+    private final AtomicLong verifierSignatureNanos = new AtomicLong(0);
+    private final AtomicLong verifierAuthNanos = new AtomicLong(0);
+    private final AtomicLong verifierPersistNanos = new AtomicLong(0);
+    private final AtomicLong verifierQueueWaitMsTotal = new AtomicLong(0);
+    private final AtomicLong verifierQueueWaitMsMax = new AtomicLong(0);
+    private final AtomicLong verifierLastTotalMs = new AtomicLong(0);
+    private final AtomicLong verifierLastProofMs = new AtomicLong(0);
+    private final AtomicLong verifierLastSignatureMs = new AtomicLong(0);
+    private final AtomicLong verifierLastAuthMs = new AtomicLong(0);
+    private final AtomicLong verifierLastPersistMs = new AtomicLong(0);
 
     // Metrics: enqueue persistence overhead
-    private final java.util.concurrent.atomic.AtomicLong enqueuePersistNanos = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong enqueuePersistCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong enqueuePersistLastMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final AtomicLong enqueuePersistNanos = new AtomicLong(0);
+    private final AtomicLong enqueuePersistCount = new AtomicLong(0);
+    private final AtomicLong enqueuePersistLastMs = new AtomicLong(0);
 
     // Metrics: persistence flush timing (async mode)
-    private final java.util.concurrent.atomic.AtomicLong persistenceFlushNanos = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong persistenceFlushCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong persistenceFlushLastMs = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong payloadInlineRetainedCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong payloadDiskOnlyCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong payloadRestoreMissingCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong payloadOverloadRejectCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong payloadResolveCount = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong payloadResolveNanos = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.concurrent.atomic.AtomicLong payloadResolveLastMs = new java.util.concurrent.atomic.AtomicLong(0);
+    private final AtomicLong persistenceFlushNanos = new AtomicLong(0);
+    private final AtomicLong persistenceFlushCount = new AtomicLong(0);
+    private final AtomicLong persistenceFlushLastMs = new AtomicLong(0);
+    private final AtomicLong payloadInlineRetainedCount = new AtomicLong(0);
+    private final AtomicLong payloadDiskOnlyCount = new AtomicLong(0);
+    private final AtomicLong payloadRestoreMissingCount = new AtomicLong(0);
+    private final AtomicLong payloadOverloadRejectCount = new AtomicLong(0);
+    private final AtomicLong payloadResolveCount = new AtomicLong(0);
+    private final AtomicLong payloadResolveNanos = new AtomicLong(0);
+    private final AtomicLong payloadResolveLastMs = new AtomicLong(0);
     private volatile String lastAdaptiveDecisionSignature =
         AdaptiveReleaseGovernor.Decision.healthyDirect().signature();
     
@@ -211,7 +222,7 @@ public class ProposalQueueManagerOptimized {
             EvmBridge evmBridge,
             RaftAppendCallback raftAppendCallback,
             BackpressureManager backpressureManager,
-            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient) {
+            BeaconChainClient beaconClient) {
         this(evmBridge, raftAppendCallback, backpressureManager, beaconClient, null,
             ProposalQueueTuningRegistry.get());
     }
@@ -229,7 +240,7 @@ public class ProposalQueueManagerOptimized {
             EvmBridge evmBridge,
             RaftAppendCallback raftAppendCallback,
             BackpressureManager backpressureManager,
-            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient,
+            BeaconChainClient beaconClient,
             String persistenceDir) {
         this(evmBridge, raftAppendCallback, backpressureManager, beaconClient, persistenceDir,
             ProposalQueueTuningRegistry.get());
@@ -239,7 +250,7 @@ public class ProposalQueueManagerOptimized {
             EvmBridge evmBridge,
             RaftAppendCallback raftAppendCallback,
             BackpressureManager backpressureManager,
-            org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient beaconClient,
+            BeaconChainClient beaconClient,
             String persistenceDir,
             ProposalQueueTuning tuning) {
         this.evmBridge = evmBridge;
@@ -253,28 +264,28 @@ public class ProposalQueueManagerOptimized {
         this.persistenceStore = createPersistenceStore(persistenceDir, resolved);
         this.payloadStore = createPayloadStore(persistenceDir, resolved);
         this.counterStateStore = createCounterStateStore(persistenceDir);
-        this.confirmationTimeoutMs = resolved.getConfirmationTimeoutMs();
-        this.requiredConfirmations = resolved.getRequiredConfirmations();
-        this.restoreTimeoutMs = resolved.getRestoreTimeoutMs();
-        this.maxMessageBatch = resolved.getMaxMessageBatch();
-        this.maxRetryCount = resolved.getMaxRetryCount();
-        this.finalizationChunkSize = resolved.getFinalizationChunkSize();
-        this.finalizationChunkDelayMs = resolved.getFinalizationChunkDelayMs();
-        this.verifierThreads = resolved.getVerifierThreads();
-        this.releaseMode = resolved.getReleaseMode();
+        this.confirmationTimeoutMs = resolved.confirmationTimeoutMs();
+        this.requiredConfirmations = resolved.requiredConfirmations();
+        this.restoreTimeoutMs = resolved.restoreTimeoutMs();
+        this.maxMessageBatch = resolved.maxMessageBatch();
+        this.maxRetryCount = resolved.maxRetryCount();
+        this.finalizationChunkSize = resolved.finalizationChunkSize();
+        this.finalizationChunkDelayMs = resolved.finalizationChunkDelayMs();
+        this.verifierThreads = resolved.verifierThreads();
+        this.releaseMode = resolved.releaseMode();
         this.adaptiveReleaseGovernor = AdaptiveReleaseGovernor.fromTuning(resolved);
-        this.processedRetentionMs = resolved.getProcessedRetentionMs();
+        this.processedRetentionMs = resolved.processedRetentionMs();
         this.processedPendingRecoveryMs = Math.min(
             this.processedRetentionMs,
             Math.max(5_000L, this.backpressureManager.getBackpressureTimeoutMs())
         );
-        this.persistenceFlushIntervalMs = resolved.getPersistenceFlushIntervalMs();
-        this.persistenceFlushBatch = resolved.getPersistenceFlushBatch();
-        this.counterRotationIntervalMs = resolved.getCounterRotationIntervalMs();
-        this.payloadInlineMaxBytes = resolved.getPayloadInlineMaxBytes();
-        this.payloadSpillSoftPending = resolved.getPayloadSpillSoftPending();
-        this.payloadSpillMaxBytes = resolved.getPayloadSpillMaxBytes();
-        this.hardMaxPendingProposals = resolved.getHardMaxPendingProposals();
+        this.persistenceFlushIntervalMs = resolved.persistenceFlushIntervalMs();
+        this.persistenceFlushBatch = resolved.persistenceFlushBatch();
+        this.counterRotationIntervalMs = resolved.counterRotationIntervalMs();
+        this.payloadInlineMaxBytes = resolved.payloadInlineMaxBytes();
+        this.payloadSpillSoftPending = resolved.payloadSpillSoftPending();
+        this.payloadSpillMaxBytes = resolved.payloadSpillMaxBytes();
+        this.hardMaxPendingProposals = resolved.hardMaxPendingProposals();
         restoreCounterState();
     }
     
@@ -291,7 +302,7 @@ public class ProposalQueueManagerOptimized {
         restorePersistedProposals();
 
         if (persistenceStore != null && isAsyncPersistenceEnabled()) {
-            persistenceScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            persistenceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "proposal-persist-flusher");
                 t.setDaemon(true);
                 return t;
@@ -300,7 +311,7 @@ public class ProposalQueueManagerOptimized {
                 this::flushPersistedProposals,
                 persistenceFlushIntervalMs,
                 persistenceFlushIntervalMs,
-                java.util.concurrent.TimeUnit.MILLISECONDS
+                TimeUnit.MILLISECONDS
             );
         }
         agentRuntime.start(
@@ -341,14 +352,8 @@ public class ProposalQueueManagerOptimized {
     /**
      * Get the beacon client backing the epoch compatibility overlay.
      */
-    public org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient getBeaconClient() {
+    public BeaconChainClient getBeaconClient() {
         return beaconClient;
-    }
-
-    private MutationAuditMetadata refreshAuditMetadata(QueuedProposal proposal) {
-        // Audit metadata must be explicitly sourced from transaction/chain details,
-        // not reconstructed from the queue's overlay epoch state.
-        return proposal.toAuditMetadata();
     }
 
     public long getCurrentEpoch() {
@@ -362,8 +367,8 @@ public class ProposalQueueManagerOptimized {
     /**
      * Get comprehensive queue statistics for dashboard display.
      */
-    public java.util.Map<String, Object> getQueueStats() {
-        java.util.Map<String, Object> stats = new java.util.HashMap<>();
+    public Map<String, Object> getQueueStats() {
+        Map<String, Object> stats = new HashMap<>();
         long nowMs = System.currentTimeMillis();
         rotateCountersIfNeeded(nowMs);
         
@@ -375,8 +380,8 @@ public class ProposalQueueManagerOptimized {
         
         long currentEpoch = resolveCurrentEpoch();
         long finalizedEpoch = resolveFinalizedEpoch();
-        java.util.Map<String, Object> adaptiveStatsMap = adaptivePackingBuffer.getStatsMap();
-        java.util.Map<String, Object> overflowStatsMap = backpressureOverflowBuffer.getStatsMap();
+        Map<String, Object> adaptiveStatsMap = adaptivePackingBuffer.getStatsMap();
+        Map<String, Object> overflowStatsMap = backpressureOverflowBuffer.getStatsMap();
         long adaptiveVerifiedPackingBufferCount = getVerifiedPackingBufferCount();
         long verifiedPackingBufferCount = adaptiveVerifiedPackingBufferCount;
         long adaptiveWalletCount = getLongStat(adaptiveStatsMap, "walletCount");
@@ -483,7 +488,7 @@ public class ProposalQueueManagerOptimized {
         
         // Per-epoch proposal counts (for triangular pipeline visualization)
         // Group by SUBMISSION EPOCH (simpler, shows when proposals entered the queue)
-        java.util.Map<Long, Long> proposalsByEpoch = new java.util.HashMap<>();
+        Map<Long, Long> proposalsByEpoch = new HashMap<>();
         for (QueuedProposal proposal : allProposals.values()) {
             if (proposal.getState() == ProposalState.VERIFIED || proposal.getState() == ProposalState.PENDING) {
                 long epoch = proposal.getEpoch();
@@ -542,7 +547,7 @@ public class ProposalQueueManagerOptimized {
         );
         AdaptiveReleaseGovernor.Decision adaptiveDecision = adaptiveReleaseGovernor.evaluate(adaptiveSignals);
 
-        java.util.Map<String, Object> runtimeStages = new java.util.LinkedHashMap<>();
+        Map<String, Object> runtimeStages = new LinkedHashMap<>();
         runtimeStages.put("unverifiedMempoolCount", pending);
         runtimeStages.put("verifiedPackingBufferCount", verifiedPackingBufferCount);
         runtimeStages.put("adaptiveVerifiedPackingBufferCount", adaptiveVerifiedPackingBufferCount);
@@ -555,24 +560,24 @@ public class ProposalQueueManagerOptimized {
         stats.put("runtimeStageCounts", runtimeStages);
         stats.put("releaseMode", releaseMode.configValue());
         stats.put("requiredConfirmations", requiredConfirmations);
-        stats.put("adaptiveReleaseGovernorState", adaptiveDecision.getState().name());
-        stats.put("adaptiveReleaseAction", adaptiveDecision.getAction().name());
-        stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.getReasonCodes());
-        java.util.Map<String, Object> releasePolicy = new java.util.LinkedHashMap<>();
+        stats.put("adaptiveReleaseGovernorState", adaptiveDecision.state().name());
+        stats.put("adaptiveReleaseAction", adaptiveDecision.action().name());
+        stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.reasonCodes());
+        Map<String, Object> releasePolicy = new LinkedHashMap<>();
         releasePolicy.put("scheduler", "adaptive");
         releasePolicy.put("releaseMode", releaseMode.configValue());
         releasePolicy.put("requiredConfirmations", requiredConfirmations);
         releasePolicy.put("note", "Verified proposals drain through the adaptive governor. Tier-specific queue behavior is retired.");
         stats.put("releasePolicy", releasePolicy);
-        java.util.Map<String, Object> releaseFlow = new java.util.LinkedHashMap<>();
+        Map<String, Object> releaseFlow = new LinkedHashMap<>();
         releaseFlow.put("scheduler", "adaptive");
         releaseFlow.put("stages", runtimeStages);
-        java.util.Map<String, Object> governor = new java.util.LinkedHashMap<>();
-        governor.put("state", adaptiveDecision.getState().name());
-        governor.put("action", adaptiveDecision.getAction().name());
-        governor.put("reasonCodes", adaptiveDecision.getReasonCodes());
+        Map<String, Object> governor = new LinkedHashMap<>();
+        governor.put("state", adaptiveDecision.state().name());
+        governor.put("action", adaptiveDecision.action().name());
+        governor.put("reasonCodes", adaptiveDecision.reasonCodes());
         releaseFlow.put("governor", governor);
-        java.util.Map<String, Object> backpressure = new java.util.LinkedHashMap<>();
+        Map<String, Object> backpressure = new LinkedHashMap<>();
         backpressure.put("active", backpressureActive);
         backpressure.put("pendingCount", backpressurePending);
         backpressure.put("pendingRawCount", backpressurePendingRaw);
@@ -661,7 +666,7 @@ public class ProposalQueueManagerOptimized {
         return total;
     }
 
-    private long getLongStat(java.util.Map<String, Object> stats, String key) {
+    private long getLongStat(Map<String, Object> stats, String key) {
         Object value = stats.get(key);
         if (value instanceof Number) {
             return ((Number) value).longValue();
@@ -708,9 +713,9 @@ public class ProposalQueueManagerOptimized {
         if (releaseMode == AdaptiveReleaseMode.ADAPTIVE_SHADOW && !signature.equals(lastAdaptiveDecisionSignature)) {
             lastAdaptiveDecisionSignature = signature;
             log.info("ADAPTIVE_RELEASE_SHADOW state={} action={} reasons={} gap={} packing={} releaseReady={} pending={} pendingOldestMs={} pendingStalledMs={}",
-                decision.getState(),
-                decision.getAction(),
-                decision.getReasonCodes(),
+                decision.state(),
+                decision.action(),
+                decision.reasonCodes(),
                 Math.max(0L, totalVerifiedCount.get() - totalFinalizedCount.get()),
                 getVerifiedPackingBufferCount(),
                 getReleasePressureProposalCount(),
@@ -738,7 +743,7 @@ public class ProposalQueueManagerOptimized {
                                        String txHashSummary,
                                        long confirmedBlockNumber) {
         adaptivePackingBuffer.addProposal(proposal, proposal.getVerifiedTimestampMs());
-        logRateLimitedInfo(lastEpochQueueLogMs, epochQueueSuppressed,
+        epochQueueLog.info(
             "📥 Proposal added to adaptive packing buffer: {} | wallet: {} | epoch: {}",
             proposal.getProposalId().substring(0, 8),
             proposal.getWalletAddress().substring(0, 10),
@@ -777,8 +782,8 @@ public class ProposalQueueManagerOptimized {
         if (proposal == null) {
             return;
         }
-        if (evmBridge instanceof org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) {
-            ((org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge) evmBridge)
+        if (evmBridge instanceof SimpleEvmBridge) {
+            ((SimpleEvmBridge) evmBridge)
                 .registerProposalWallet(proposal.getProposalId(), proposal.getWalletAddress());
         }
     }
@@ -803,90 +808,71 @@ public class ProposalQueueManagerOptimized {
         if (batch == null || batch.isEmpty()) {
             return 0;
         }
-
-        int enqueued = 0;
         if (batch.size() > finalizationChunkSize) {
-            log.debug("📦 Large {} batch detected ({} proposals), chunking into {}s",
-                sourceLabel, batch.size(), finalizationChunkSize);
-
-            for (int i = 0; i < batch.size(); i += finalizationChunkSize) {
-                int endIdx = Math.min(i + finalizationChunkSize, batch.size());
-                List<QueuedProposal> chunk = new java.util.ArrayList<QueuedProposal>(batch.subList(i, endIdx));
-                batchQueue.offer(chunk);
-                enqueued++;
-
-                log.debug("  ↳ {} chunk {}/{}: {} proposals, wallet: {}",
-                    sourceLabel,
-                    (i / finalizationChunkSize) + 1,
-                    (batch.size() + finalizationChunkSize - 1) / finalizationChunkSize,
-                    chunk.size(),
-                    chunk.get(0).getWalletAddress());
-
-                if (finalizationChunkDelayMs > 0 && endIdx < batch.size()) {
-                    try {
-                        Thread.sleep(finalizationChunkDelayMs);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                }
-            }
-        } else {
-            batchQueue.offer(batch);
-            enqueued++;
-
-            log.info("📦 {} batch queued for Aeron: {} proposals, wallet: {}, queue depth: {}",
-                sourceLabel,
-                batch.size(),
-                batch.get(0).getWalletAddress(),
-                batchQueue.size());
+            return offerChunked(batch, sourceLabel, batchQueue::offer, finalizationChunkDelayMs,
+                "📦 Large {} batch detected ({} proposals), chunking into {}s", "chunk");
         }
-
-        return enqueued;
+        batchQueue.offer(batch);
+        log.info("📦 {} batch queued for Aeron: {} proposals, wallet: {}, queue depth: {}",
+            sourceLabel,
+            batch.size(),
+            batch.get(0).getWalletAddress(),
+            batchQueue.size());
+        return 1;
     }
 
     private int bufferOverflowBatch(List<QueuedProposal> batch, String sourceLabel) {
         if (batch == null || batch.isEmpty()) {
             return 0;
         }
-
-        int buffered = 0;
         if (batch.size() > finalizationChunkSize) {
-            log.debug("📦 Large {} batch detected ({} proposals), buffering overflow in {} chunks",
-                sourceLabel, batch.size(), finalizationChunkSize);
-
-            for (int i = 0; i < batch.size(); i += finalizationChunkSize) {
-                int endIdx = Math.min(i + finalizationChunkSize, batch.size());
-                List<QueuedProposal> chunk = new java.util.ArrayList<QueuedProposal>(batch.subList(i, endIdx));
-                backpressureOverflowBuffer.bufferBatch(chunk);
-                buffered++;
-
-                log.debug("  ↳ {} overflow chunk {}/{}: {} proposals, wallet: {}",
-                    sourceLabel,
-                    (i / finalizationChunkSize) + 1,
-                    (batch.size() + finalizationChunkSize - 1) / finalizationChunkSize,
-                    chunk.size(),
-                    chunk.get(0).getWalletAddress());
-            }
-        } else {
-            backpressureOverflowBuffer.bufferBatch(batch);
-            buffered++;
-
-            log.info("📦 {} batch buffered in overflow: {} proposals, wallet: {}, overflow depth: {}",
-                sourceLabel,
-                batch.size(),
-                batch.get(0).getWalletAddress(),
-                backpressureOverflowBuffer.getPendingBatchCount());
+            return offerChunked(batch, sourceLabel, backpressureOverflowBuffer::bufferBatch, 0L,
+                "📦 Large {} batch detected ({} proposals), buffering overflow in {} chunks", "overflow chunk");
         }
+        backpressureOverflowBuffer.bufferBatch(batch);
+        log.info("📦 {} batch buffered in overflow: {} proposals, wallet: {}, overflow depth: {}",
+            sourceLabel,
+            batch.size(),
+            batch.get(0).getWalletAddress(),
+            backpressureOverflowBuffer.getPendingBatchCount());
+        return 1;
+    }
 
-        return buffered;
+    private int offerChunked(List<QueuedProposal> batch, String sourceLabel, Consumer<List<QueuedProposal>> sink,
+                             long chunkDelayMs, String header, String chunkTag) {
+        log.debug(header, sourceLabel, batch.size(), finalizationChunkSize);
+        int chunks = 0;
+        for (int i = 0; i < batch.size(); i += finalizationChunkSize) {
+            int endIdx = Math.min(i + finalizationChunkSize, batch.size());
+            List<QueuedProposal> chunk = new ArrayList<>(batch.subList(i, endIdx));
+            sink.accept(chunk);
+            chunks++;
+
+            log.debug("  ↳ {} {} {}/{}: {} proposals, wallet: {}",
+                sourceLabel,
+                chunkTag,
+                (i / finalizationChunkSize) + 1,
+                (batch.size() + finalizationChunkSize - 1) / finalizationChunkSize,
+                chunk.size(),
+                chunk.get(0).getWalletAddress());
+
+            if (chunkDelayMs > 0 && endIdx < batch.size()) {
+                try {
+                    Thread.sleep(chunkDelayMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        return chunks;
     }
 
     private boolean shouldRouteToOverflow(AdaptiveReleaseGovernor.Decision decision) {
         if (decision == null) {
             return false;
         }
-        if (decision.getAction() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
+        if (decision.action() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
             return true;
         }
         return backpressureManager.isBackpressureActive()
@@ -897,7 +883,7 @@ public class ProposalQueueManagerOptimized {
         if (backpressureOverflowBuffer.isEmpty()) {
             return 0;
         }
-        if (decision == null || decision.getAction() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
+        if (decision == null || decision.action() == AdaptiveReleaseGovernor.ReleaseAction.THROTTLED) {
             return 0;
         }
 
@@ -906,7 +892,7 @@ public class ProposalQueueManagerOptimized {
             return 0;
         }
 
-        int maxPromotions = decision.getAction() == AdaptiveReleaseGovernor.ReleaseAction.DIRECT
+        int maxPromotions = decision.action() == AdaptiveReleaseGovernor.ReleaseAction.DIRECT
             ? maxMessageBatch
             : Math.max(1, maxMessageBatch / 2);
         int promoted = backpressureOverflowBuffer.promoteTo(batchQueue, maxPromotions, maxReleaseReadyBatches);
@@ -923,10 +909,10 @@ public class ProposalQueueManagerOptimized {
      * Build the canonical adaptive verified-release flow snapshot for operators.
      * This is the upstream source of truth for /v1/proposals/release-flow.
      */
-    public java.util.Map<String, Object> getProposalReleaseFlowStats() {
-        java.util.Map<String, Object> queueStats = getQueueStats();
+    public Map<String, Object> getProposalReleaseFlowStats() {
+        Map<String, Object> queueStats = getQueueStats();
 
-        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("contractVersion", "proposal.release-flow.v1");
         payload.put("generatedAtMs", System.currentTimeMillis());
         payload.put("source", "adaptive-release");
@@ -940,7 +926,7 @@ public class ProposalQueueManagerOptimized {
             "Verified proposals move through adaptive packing, release-ready, and overflow stages. "
                 + "Beacon epoch data is informational telemetry only and does not control release scheduling.");
 
-        java.util.Map<String, Object> releaseStages = new java.util.LinkedHashMap<>();
+        Map<String, Object> releaseStages = new LinkedHashMap<>();
         releaseStages.put("unverifiedMempoolCount", queueStats.get("pendingCount"));
         releaseStages.put("verifiedPackingBufferCount", queueStats.get("verifiedPackingBufferCount"));
         releaseStages.put("releaseReadyProposalCount", queueStats.get("releaseReadyProposalCount"));
@@ -950,7 +936,7 @@ public class ProposalQueueManagerOptimized {
         releaseStages.put("verifiedResidentProposalCount", queueStats.get("verifiedResidentProposalCount"));
         payload.put("releaseStages", releaseStages);
 
-        java.util.Map<String, Object> governor = new java.util.LinkedHashMap<>();
+        Map<String, Object> governor = new LinkedHashMap<>();
         governor.put("state", queueStats.get("adaptiveReleaseGovernorState"));
         governor.put("action", queueStats.get("adaptiveReleaseAction"));
         governor.put("reasonCodes", queueStats.get("adaptiveReleaseReasonCodes"));
@@ -961,14 +947,14 @@ public class ProposalQueueManagerOptimized {
         governor.put("pendingStalledMs", queueStats.get("backpressurePendingStalledMs"));
         payload.put("governor", governor);
 
-        java.util.Map<String, Object> packing = new java.util.LinkedHashMap<>();
+        Map<String, Object> packing = new LinkedHashMap<>();
         packing.put("walletCount", queueStats.get("adaptivePackingWalletCount"));
         packing.put("queuedProposalCountTotal", queueStats.get("adaptivePackingQueuedProposalCountTotal"));
         packing.put("drainedProposalCountTotal", queueStats.get("adaptivePackingDrainedProposalCountTotal"));
         packing.put("createdBatchCountTotal", queueStats.get("adaptivePackingCreatedBatchCountTotal"));
         payload.put("packing", packing);
 
-        java.util.Map<String, Object> overflow = new java.util.LinkedHashMap<>();
+        Map<String, Object> overflow = new LinkedHashMap<>();
         overflow.put("separateBufferEnabled", true);
         overflow.put("bufferedBatchCountTotal", queueStats.get("backpressureOverflowBufferedBatchCountTotal"));
         overflow.put("bufferedProposalCountTotal", queueStats.get("backpressureOverflowBufferedProposalCountTotal"));
@@ -976,7 +962,7 @@ public class ProposalQueueManagerOptimized {
         overflow.put("promotedProposalCountTotal", queueStats.get("backpressureOverflowPromotedProposalCountTotal"));
         payload.put("overflow", overflow);
 
-        java.util.Map<String, Object> throughput = new java.util.LinkedHashMap<>();
+        Map<String, Object> throughput = new LinkedHashMap<>();
         throughput.put("priorityProposalsSent", queueStats.get("priorityProposalsSent"));
         throughput.put("batchedProposalsSent", queueStats.get("batchedProposalsSent"));
         throughput.put("totalProposalsSent", queueStats.get("totalProposalsSent"));
@@ -987,87 +973,8 @@ public class ProposalQueueManagerOptimized {
         return payload;
     }
 
-    private String normalizeTierKey(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
-        if (tier == null) {
-            return "standard";
-        }
-        switch (tier) {
-            case PRIORITY:
-                return "priority";
-            case EXPRESS:
-                return "express";
-            case STANDARD:
-            default:
-                return "standard";
-        }
-    }
-
-    private void incrementTerminalCounter(
-            ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
-            long epoch,
-            String tier) {
-        store.computeIfAbsent(epoch, k -> new ConcurrentHashMap<>())
-            .computeIfAbsent(tier, k -> new java.util.concurrent.atomic.AtomicLong(0))
-            .incrementAndGet();
-    }
-
-    private void decrementTerminalCounter(
-            ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
-            long epoch,
-            String tier) {
-        ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong> byTier = store.get(epoch);
-        if (byTier == null) {
-            return;
-        }
-        java.util.concurrent.atomic.AtomicLong counter = byTier.get(tier);
-        if (counter == null) {
-            return;
-        }
-        counter.updateAndGet(current -> current > 0L ? current - 1L : 0L);
-    }
-
-    private long getTerminalCounter(
-            ConcurrentHashMap<Long, ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>> store,
-            long epoch,
-            String tier) {
-        ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong> byTier = store.get(epoch);
-        if (byTier == null) {
-            return 0L;
-        }
-        java.util.concurrent.atomic.AtomicLong counter = byTier.get(tier);
-        return counter == null ? 0L : counter.get();
-    }
-
-    private void recordTerminalState(QueuedProposal proposal, ProposalState terminalState) {
-        if (proposal == null) {
-            return;
-        }
-        long epoch = proposal.getEpoch();
-        String tier = normalizeTierKey(proposal.getTier());
-        if (terminalState == ProposalState.PROCESSED) {
-            incrementTerminalCounter(finalizedByEpochAndTier, epoch, tier);
-        } else if (terminalState == ProposalState.REJECTED) {
-            incrementTerminalCounter(rejectedByEpochAndTier, epoch, tier);
-        }
-    }
-
-    private void rollbackTerminalState(QueuedProposal proposal, ProposalState terminalState) {
-        if (proposal == null) {
-            return;
-        }
-        long epoch = proposal.getEpoch();
-        String tier = normalizeTierKey(proposal.getTier());
-        if (terminalState == ProposalState.PROCESSED) {
-            totalFinalizedCount.updateAndGet(current -> current > 0L ? current - 1L : 0L);
-            decrementTerminalCounter(finalizedByEpochAndTier, epoch, tier);
-        } else if (terminalState == ProposalState.REJECTED) {
-            totalRejectedCount.updateAndGet(current -> current > 0L ? current - 1L : 0L);
-            decrementTerminalCounter(rejectedByEpochAndTier, epoch, tier);
-        }
-    }
-    
     private ProposalPersistenceStore createPersistenceStore(String persistenceDir, ProposalQueueTuning tuning) {
-        if (tuning != null && !tuning.isPersistenceEnabled()) {
+        if (tuning != null && !tuning.persistenceEnabled()) {
             log.info("Proposal queue persistence disabled via tuning (persistence_enabled=false)");
             return null;
         }
@@ -1111,8 +1018,8 @@ public class ProposalQueueManagerOptimized {
     }
 
     private java.nio.file.Path resolvePayloadSpillDirectory(String persistenceDir, ProposalQueueTuning tuning) {
-        if (tuning != null && tuning.getPayloadSpillDir() != null && !tuning.getPayloadSpillDir().trim().isEmpty()) {
-            return java.nio.file.Path.of(tuning.getPayloadSpillDir().trim());
+        if (tuning != null && tuning.payloadSpillDir() != null && !tuning.payloadSpillDir().trim().isEmpty()) {
+            return java.nio.file.Path.of(tuning.payloadSpillDir().trim());
         }
         String configured = System.getProperty("oak.proposal.payload.spill.dir");
         if (configured == null || configured.trim().isEmpty()) {
@@ -1132,7 +1039,7 @@ public class ProposalQueueManagerOptimized {
         if (counterStateStore == null) {
             return;
         }
-        java.util.Map<String, Long> state = counterStateStore.load();
+        Map<String, Long> state = counterStateStore.load();
         if (state.isEmpty()) {
             return;
         }
@@ -1153,7 +1060,7 @@ public class ProposalQueueManagerOptimized {
         if (counterStateStore == null) {
             return;
         }
-        java.util.Map<String, Long> state = new java.util.HashMap<>();
+        Map<String, Long> state = new HashMap<>();
         state.put("current.rejected", totalRejectedCount.get());
         state.put("current.verified", totalVerifiedCount.get());
         state.put("current.finalized", totalFinalizedCount.get());
@@ -1327,13 +1234,6 @@ public class ProposalQueueManagerOptimized {
         return persistenceFlushIntervalMs > 0 || persistenceFlushBatch > 1;
     }
 
-    private static void updateMax(java.util.concurrent.atomic.AtomicLong max, long candidate) {
-        long prev;
-        while (candidate > (prev = max.get()) && !max.compareAndSet(prev, candidate)) {
-            // retry until updated
-        }
-    }
-
     /**
      * Stop agents and cleanup.
      */
@@ -1344,7 +1244,7 @@ public class ProposalQueueManagerOptimized {
         if (persistenceScheduler != null) {
             persistenceScheduler.shutdown();
             try {
-                persistenceScheduler.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
+                persistenceScheduler.awaitTermination(5, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
@@ -1360,46 +1260,9 @@ public class ProposalQueueManagerOptimized {
     }
     
     /**
-     * Queue a new proposal for verification and adaptive release.
-     * This overload calculates the current submission epoch automatically.
-     * 
-     * @param proposalId Unique proposal ID
-     * @param ethereumTxHash Ethereum transaction hash (optional)
-     * @param walletAddress Ethereum wallet address
-     * @param path Content path
-     * @param contentType Content type
-     * @param message Content message
-     * @param signature Transaction signature
-     * @return The queued proposal
-     */
-    public QueuedProposal queueProposal(
-            String proposalId,
-            String ethereumTxHash,
-            String walletAddress,
-            String path,
-            String contentType,
-            String message,
-            String signature) {
-        // Calculate current epoch automatically
-        long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD, null,
-            null, null, null);
-    }
-    
-    /**
-     * Queue a new proposal for verification and adaptive release using the default compatibility tier.
-     * This overload captures the current submission epoch for compatibility overlays.
-     * 
-     * @param proposalId Unique proposal ID
-     * @param ethereumTxHash Ethereum transaction hash (optional)
-     * @param walletAddress Ethereum wallet address
-     * @param path Content path
-     * @param contentType Content type
-     * @param message Content message
-     * @param signature Transaction signature
-     * @param intentToken Intent token for lazy binary upload (optional, ADR 020)
-     * @return The queued proposal
+     * Queue a write proposal for verification and adaptive release (standard tier).
+     *
+     * @param intentToken intent token for lazy binary upload (optional, ADR 020)
      */
     public QueuedProposal queueProposal(
             String proposalId,
@@ -1413,22 +1276,8 @@ public class ProposalQueueManagerOptimized {
             String blobId,
             String mimeType,
             String ipfsCid) {
-        long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(
-            proposalId,
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            ethereumTxHash,
-            currentEpoch,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            intentToken,
-            blobId,
-            mimeType,
-            ipfsCid
-        );
+        return queueProposal(proposalId, ethereumTxHash, walletAddress, path, contentType, message, signature,
+            ValidatorEarningsTracker.PaymentTier.STANDARD, intentToken, blobId, mimeType, ipfsCid);
     }
 
     public QueuedProposal queueProposal(
@@ -1439,133 +1288,49 @@ public class ProposalQueueManagerOptimized {
             String contentType,
             String message,
             String signature,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
+            ValidatorEarningsTracker.PaymentTier tier,
             String intentToken) {
-        long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch,
+        return queueProposal(proposalId, ethereumTxHash, walletAddress, path, contentType, message, signature,
             tier, intentToken, null, null, null);
     }
 
-    public QueuedProposal queueProposal(
-            String proposalId,
-            String ethereumTxHash,
-            String walletAddress,
-            String path,
-            String contentType,
-            String message,
-            String signature,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
-            String intentToken,
-            String blobId,
-            String mimeType,
-            String ipfsCid) {
-        long currentEpoch = resolveCurrentEpoch();
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, currentEpoch,
-            tier, intentToken, blobId, mimeType, ipfsCid);
-    }
-    
     /**
-     * Queue a new proposal for verification and adaptive release.
-     * 
-     * @param proposalId Unique proposal ID
-     * @param walletAddress Ethereum wallet address
-     * @param path Content path
-     * @param contentType Content type
-     * @param message Content message
-     * @param signature Transaction signature
-     * @param ethereumTxHash Ethereum transaction hash (optional)
-     * @param epoch Ethereum epoch when transaction was seen (for compatibility overlays)
-     * @param tier Compatibility payment tier retained for older persistence/reporting overlays
-     * @param intentToken Intent token for lazy binary upload (optional, ADR 020)
-     * @return The queued proposal
+     * Queue a write proposal for verification and adaptive release; the submission epoch is captured for
+     * compatibility overlays.
      */
     public QueuedProposal queueProposal(
             String proposalId,
+            String ethereumTxHash,
             String walletAddress,
             String path,
             String contentType,
             String message,
             String signature,
-            String ethereumTxHash,
-            long epoch,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
-            String intentToken) {
-        return queueProposal(proposalId, walletAddress, path, contentType, message, signature, ethereumTxHash, epoch,
-            tier, intentToken, null, null, null);
-    }
-
-    public QueuedProposal queueProposal(
-            String proposalId,
-            String walletAddress,
-            String path,
-            String contentType,
-            String message,
-            String signature,
-            String ethereumTxHash,
-            long epoch,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
+            ValidatorEarningsTracker.PaymentTier tier,
             String intentToken,
             String blobId,
             String mimeType,
             String ipfsCid) {
+        long epoch = resolveCurrentEpoch();
         CanonicalGenesisContent.requireMutable(walletAddress, path);
         enforceAdmissionCapacity();
         long pendingCount = getPendingCount();
-        long now = System.currentTimeMillis();
-        QueuedProposal proposal = new QueuedProposal(
-            proposalId,
-            ethereumTxHash,
-            null, // unused compatibility parameter
-            now,
-            now + confirmationTimeoutMs,
-            ProposalState.PENDING
-        );
-        
-        // Set wallet-based write fields
-        proposal.setWalletAddress(walletAddress);
-        proposal.setPath(path);
+        QueuedProposal proposal = newPendingProposal(proposalId, ethereumTxHash, walletAddress, path, signature, epoch, tier);
         proposal.setContentType(contentType);
-        proposal.setSignature(signature);
-        proposal.setEpoch(epoch);
-        proposal.setTier(tier);
-        proposal.setIntentToken(intentToken); // Set intent token for lazy binary upload (ADR 020)
+        proposal.setIntentToken(intentToken);
         proposal.setBlobId(blobId);
         proposal.setMimeType(mimeType);
         proposal.setIpfsCid(ipfsCid);
-        proposal.setDurabilityState(DurabilityState.PENDING, null, null);
         attachPayloadState(proposal, message, pendingCount);
-        
-        // Add to tracking map.
-        allProposals.put(proposalId, proposal);
-        
-        // Register wallet BEFORE enqueue for mock mode to avoid verifier race.
-        registerProposalWalletMapping(proposal);
-
-        // Queue after mapping is available to verifier.
-        unverifiedQueue.offer(proposal);
-        
+        admit(proposal);
         log.debug("📥 Queued proposal {} for EVM verification in epoch {} (queue size: {})",
             proposalId, epoch, unverifiedQueue.size());
-        long persistStart = System.nanoTime();
-        persistProposals();
-        long persistNanos = System.nanoTime() - persistStart;
-        enqueuePersistNanos.addAndGet(persistNanos);
-        enqueuePersistCount.incrementAndGet();
-        enqueuePersistLastMs.set(persistNanos / 1_000_000L);
-        
+        persistOnEnqueue();
         return proposal;
     }
-    
+
     /**
-     * Queue a DELETE proposal for verification and adaptive release.
-     * Deletes flow through same pipeline as writes, just with different type.
-     * 
-     * @param proposalId Unique proposal ID
-     * @param ethereumTxHash Ethereum transaction hash (required)
-     * @param walletAddress Ethereum wallet address
-     * @param path Content path to delete
-     * @param signature Transaction signature
-     * @return The queued proposal
+     * Queue a DELETE proposal; deletes flow through the same pipeline as writes.
      */
     public QueuedProposal queueDeleteProposal(
             String proposalId,
@@ -1573,14 +1338,7 @@ public class ProposalQueueManagerOptimized {
             String walletAddress,
             String path,
             String signature) {
-        return queueDeleteProposal(
-            proposalId,
-            ethereumTxHash,
-            walletAddress,
-            path,
-            signature,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD
-        );
+        return queueDeleteProposal(proposalId, ethereumTxHash, walletAddress, path, signature, ValidatorEarningsTracker.PaymentTier.STANDARD);
     }
 
     public QueuedProposal queueDeleteProposal(
@@ -1589,53 +1347,53 @@ public class ProposalQueueManagerOptimized {
             String walletAddress,
             String path,
             String signature,
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier) {
+            ValidatorEarningsTracker.PaymentTier tier) {
         CanonicalGenesisContent.requireMutable(walletAddress, path);
         enforceAdmissionCapacity();
         long currentEpoch = resolveCurrentEpoch();
-        
-        long now = System.currentTimeMillis();
-        QueuedProposal proposal = new QueuedProposal(
-            proposalId,
-            ethereumTxHash,
-            null, // unused compatibility parameter
-            now,
-            now + confirmationTimeoutMs,
-            ProposalState.PENDING
-        );
-        
-        // Set DELETE-specific fields
-        proposal.setType(QueuedProposal.ProposalType.DELETE); // Mark as DELETE
-        proposal.setWalletAddress(walletAddress);
-        proposal.setPath(path);
-        proposal.setContentType("delete"); // Special marker for deletes
-        proposal.setMessage(""); // Not needed for deletes
-        proposal.setSignature(signature);
-        proposal.setEpoch(currentEpoch);
-        proposal.setTier(tier);
-        proposal.setDurabilityState(DurabilityState.PENDING, null, null);
-        
-        // Add to tracking map.
-        allProposals.put(proposalId, proposal);
-        
-        // Register wallet BEFORE enqueue for mock mode to avoid verifier race.
-        registerProposalWalletMapping(proposal);
-
-        // Queue after mapping is available to verifier.
-        unverifiedQueue.offer(proposal);
-        
+        QueuedProposal proposal =
+            newPendingProposal(proposalId, ethereumTxHash, walletAddress, path, signature, currentEpoch, tier);
+        proposal.setType(QueuedProposal.ProposalType.DELETE);
+        proposal.setContentType("delete");
+        proposal.setMessage("");
+        admit(proposal);
         log.info("🗑️  Queued DELETE proposal {} for EVM verification in epoch {} (path: {}, queue size: {})",
             proposalId, currentEpoch, path, unverifiedQueue.size());
+        persistOnEnqueue();
+        return proposal;
+    }
+
+    private QueuedProposal newPendingProposal(String proposalId, String ethereumTxHash, String walletAddress,
+                                              String path, String signature, long epoch,
+                                              ValidatorEarningsTracker.PaymentTier tier) {
+        long now = System.currentTimeMillis();
+        QueuedProposal proposal = new QueuedProposal(
+            proposalId, ethereumTxHash, now, now + confirmationTimeoutMs, ProposalState.PENDING);
+        proposal.setWalletAddress(walletAddress);
+        proposal.setPath(path);
+        proposal.setSignature(signature);
+        proposal.setEpoch(epoch);
+        proposal.setTier(tier);
+        proposal.setDurabilityState(DurabilityState.PENDING, null, null);
+        return proposal;
+    }
+
+    /** Track the proposal, register its wallet before enqueue (mock-mode verifier race), then enqueue. */
+    private void admit(QueuedProposal proposal) {
+        allProposals.put(proposal.getProposalId(), proposal);
+        registerProposalWalletMapping(proposal);
+        unverifiedQueue.offer(proposal);
+    }
+
+    private void persistOnEnqueue() {
         long persistStart = System.nanoTime();
         persistProposals();
         long persistNanos = System.nanoTime() - persistStart;
         enqueuePersistNanos.addAndGet(persistNanos);
         enqueuePersistCount.incrementAndGet();
         enqueuePersistLastMs.set(persistNanos / 1_000_000L);
-        
-        return proposal;
     }
-    
+
     /**
      * Get proposal status.
      */
@@ -1799,8 +1557,8 @@ public class ProposalQueueManagerOptimized {
         }
     }
 
-    private java.util.List<QueuedProposal> hydrateBatchMessages(List<QueuedProposal> batch) {
-        java.util.List<QueuedProposal> hydrated = new java.util.ArrayList<>();
+    private List<QueuedProposal> hydrateBatchMessages(List<QueuedProposal> batch) {
+        List<QueuedProposal> hydrated = new ArrayList<>();
         if (batch == null || batch.isEmpty()) {
             return hydrated;
         }
@@ -1816,7 +1574,7 @@ public class ProposalQueueManagerOptimized {
         return hydrated;
     }
 
-    private void clearHydratedMessages(java.util.List<QueuedProposal> hydrated) {
+    private void clearHydratedMessages(List<QueuedProposal> hydrated) {
         if (hydrated == null || hydrated.isEmpty()) {
             return;
         }
@@ -1872,7 +1630,6 @@ public class ProposalQueueManagerOptimized {
         }
         proposal.setState(ProposalState.PROCESSED);
         totalFinalizedCount.incrementAndGet();
-        recordTerminalState(proposal, ProposalState.PROCESSED);
     }
 
     private void transitionProposalToRejected(QueuedProposal proposal, String reason) {
@@ -1883,7 +1640,6 @@ public class ProposalQueueManagerOptimized {
         proposal.setRejectionReason(reason);
         cleanupPayload(proposal);
         totalRejectedCount.incrementAndGet();
-        recordTerminalState(proposal, ProposalState.REJECTED);
     }
     
     // ============================================================================
@@ -1914,7 +1670,7 @@ public class ProposalQueueManagerOptimized {
             
             // Log queue activity periodically  
             if (queueDepth > 0) {
-                logRateLimitedInfo(lastQueueDepthLogMs, queueDepthSuppressed,
+                queueDepthLog.info(
                     "🔄 AeronSenderAgent: {} batches waiting in queue (overflow batches: {})",
                     queueDepth,
                     backpressureOverflowBuffer.getPendingBatchCount());
@@ -1928,7 +1684,7 @@ public class ProposalQueueManagerOptimized {
                 
                 batchesProcessed++;
                 QueuedProposal firstProposal = batch.get(0);
-                logRateLimitedInfo(lastDequeuedLogMs, dequeuedSuppressed,
+                dequeuedLog.info(
                     "📤 AeronSenderAgent: DEQUEUED batch {} of {} | {} proposals | wallet: {} | epoch: {} | remaining ready: {}, overflow: {}",
                     batchesProcessed, queueDepth, batch.size(),
                     firstProposal.getWalletAddress().substring(0, 10),
@@ -1963,7 +1719,7 @@ public class ProposalQueueManagerOptimized {
                     // This isolates whether the issue is queue mechanism vs templateId 106 encoding
                     if (batch.size() == 1) {
                         QueuedProposal proposal = batch.get(0);
-                        MutationAuditMetadata auditMetadata = refreshAuditMetadata(proposal);
+                        MutationAuditMetadata auditMetadata = proposal.toAuditMetadata();
                         
                         // Check proposal type: WRITE or DELETE
                         if (proposal.getType() == QueuedProposal.ProposalType.DELETE) {
@@ -1998,10 +1754,7 @@ public class ProposalQueueManagerOptimized {
                         }
                     } else {
                         // Multi-proposal batch: use templateId 106
-                        for (QueuedProposal proposal : batch) {
-                            refreshAuditMetadata(proposal);
-                        }
-                        java.util.List<QueuedProposal> hydrated = hydrateBatchMessages(batch);
+                        List<QueuedProposal> hydrated = hydrateBatchMessages(batch);
                         try {
                             log.debug("🔥 CALLING appendProposalBatch on instance of: {}", 
                                 raftAppendCallback.getClass().getName());
@@ -2021,7 +1774,7 @@ public class ProposalQueueManagerOptimized {
                         }
                         persistProposals();
                         
-                        logRateLimitedInfo(lastBatchSentLogMs, batchSentSuppressed,
+                        batchSentLog.info(
                             "✅ Batch sent to Aeron: {} proposals in 1 message (diagnostic mode: {})",
                             sent, batch.size() == 1 ? "templateId 100" : "templateId 106");
                     } else {
@@ -2181,7 +1934,7 @@ public class ProposalQueueManagerOptimized {
             return false;
         }
 
-        rollbackTerminalState(proposal, ProposalState.PROCESSED);
+        totalFinalizedCount.updateAndGet(current -> current > 0L ? current - 1L : 0L);
         proposal.markAppendedToLog();
         proposal.setState(ProposalState.VERIFIED);
         proposal.setRejectionReason(null);
@@ -2240,24 +1993,27 @@ public class ProposalQueueManagerOptimized {
         return since > 0L ? since : nowMs;
     }
 
-    private void logRateLimitedInfo(java.util.concurrent.atomic.AtomicLong lastMs,
-                                    java.util.concurrent.atomic.AtomicInteger suppressed,
-                                    String format,
-                                    Object... args) {
-        long now = System.currentTimeMillis();
-        long last = lastMs.get();
-        if ((now - last) >= HIGH_FREQ_LOG_INTERVAL_MS && lastMs.compareAndSet(last, now)) {
-            int dropped = suppressed.getAndSet(0);
-            if (dropped > 0) {
-                Object[] withMeta = java.util.Arrays.copyOf(args, args.length + 2);
-                withMeta[args.length] = dropped;
-                withMeta[args.length + 1] = HIGH_FREQ_LOG_INTERVAL_MS;
-                log.info(format + " (RATE LIMITED - suppressed {} in last {}ms)", withMeta);
+    /** INFO logging at most once per {@link #HIGH_FREQ_LOG_INTERVAL_MS}, reporting how many lines were dropped. */
+    private static final class RateLimitedInfoLog {
+        private final AtomicLong lastMs = new AtomicLong(0);
+        private final AtomicInteger suppressed = new AtomicInteger(0);
+
+        void info(String format, Object... args) {
+            long now = System.currentTimeMillis();
+            long last = lastMs.get();
+            if ((now - last) >= HIGH_FREQ_LOG_INTERVAL_MS && lastMs.compareAndSet(last, now)) {
+                int dropped = suppressed.getAndSet(0);
+                if (dropped > 0) {
+                    Object[] withMeta = Arrays.copyOf(args, args.length + 2);
+                    withMeta[args.length] = dropped;
+                    withMeta[args.length + 1] = HIGH_FREQ_LOG_INTERVAL_MS;
+                    log.info(format + " (RATE LIMITED - suppressed {} in last {}ms)", withMeta);
+                } else {
+                    log.info(format + " (RATE LIMITED)", args);
+                }
             } else {
-                log.info(format + " (RATE LIMITED)", args);
+                suppressed.incrementAndGet();
             }
-        } else {
-            suppressed.incrementAndGet();
         }
     }
     
@@ -2313,7 +2069,7 @@ public class ProposalQueueManagerOptimized {
                     // - Payment went to correct contract
                     // - Payment amount is sufficient
                     // ═══════════════════════════════════════════════════════════
-                    boolean isMockMode = org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance().isMockMode();
+                    boolean isMockMode = BlockchainConfig.getInstance().isMockMode();
                     if (!isMockMode && !proposal.getProposalId().matches("^0x[0-9a-fA-F]{64}$")) {
                         verifierRejectedCount.incrementAndGet();
                         rejectProposal(proposal,
@@ -2366,10 +2122,10 @@ public class ProposalQueueManagerOptimized {
                             continue;
                         }
 
-                        org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind expectedKind =
+                        PaymentProof.ProposalKind expectedKind =
                             proposal.getType() == QueuedProposal.ProposalType.DELETE
-                                ? org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.DELETE
-                                : org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof.ProposalKind.WRITE;
+                                ? PaymentProof.ProposalKind.DELETE
+                                : PaymentProof.ProposalKind.WRITE;
                         if (proof.getProposalKind() != expectedKind) {
                             verifierRejectedCount.incrementAndGet();
                             rejectProposal(
@@ -2441,17 +2197,17 @@ public class ProposalQueueManagerOptimized {
                             continue;
                         }
 
-                        if (!org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
+                        if (!EthereumSignatureVerifier
                             .isFullVerificationAvailable()) {
                             verifierRejectedCount.incrementAndGet();
                             rejectProposal(proposal, "Full Ethereum signature verification unavailable: "
-                                + org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
+                                + EthereumSignatureVerifier
                                     .getAvailabilityReason());
                             continue;
                         }
 
                         long signatureStartNs = System.nanoTime();
-                        boolean signatureValid = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
+                        boolean signatureValid = EthereumSignatureVerifier
                             .verifySignature(signedMessage, proposalSignature, proposal.getWalletAddress());
                         long signatureNanos = System.nanoTime() - signatureStartNs;
                         verifierSignatureNanos.addAndGet(signatureNanos);
@@ -2480,7 +2236,7 @@ public class ProposalQueueManagerOptimized {
                     
                     // Verify path belongs to wallet's shard (using WalletPathUtil for wallet-scoped paths)
                     long authStartNs = System.nanoTime();
-                    String expectedShardRoot = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.getShardRoot(proposal.getWalletAddress());
+                    String expectedShardRoot = WalletPathUtil.getShardRoot(proposal.getWalletAddress());
                     boolean ownsPath = proposal.getPath().equals(expectedShardRoot)
                         || proposal.getPath().startsWith(expectedShardRoot + "/");
                     if (!ownsPath) {
@@ -2526,7 +2282,7 @@ public class ProposalQueueManagerOptimized {
                     verifierSuccessCount.incrementAndGet();
                     long queueWaitMs = System.currentTimeMillis() - proposal.getTimestamp();
                     verifierQueueWaitMsTotal.addAndGet(queueWaitMs);
-                    updateMax(verifierQueueWaitMsMax, queueWaitMs);
+                    verifierQueueWaitMsMax.accumulateAndGet(queueWaitMs, Math::max);
                     String txHashSummary = summarizeTxHash(proof.getTransactionHash());
                     
                     routeVerifiedProposal(proposal, txHashSummary, proof.getBlockNumber());
@@ -2613,7 +2369,7 @@ public class ProposalQueueManagerOptimized {
             long now = System.currentTimeMillis();
             captureAdaptiveReleaseDecision(now);
             int workCount = 0;
-            java.util.Map<String, Object> adaptiveStats = adaptivePackingBuffer.getStatsMap();
+            Map<String, Object> adaptiveStats = adaptivePackingBuffer.getStatsMap();
             long pendingProposals = getLongStat(adaptiveStats, "pendingProposals");
             AdaptiveReleaseGovernor.Decision decision = evaluateAdaptiveReleaseDecision(now);
             workCount += promoteOverflowBatches(decision);
@@ -2633,9 +2389,9 @@ public class ProposalQueueManagerOptimized {
                     totalProposals,
                     totalChunks,
                     overflowed ? "overflow batches/chunks" : "release batches/chunks",
-                    decision.getState(),
-                    decision.getAction(),
-                    decision.getReasonCodes());
+                    decision.state(),
+                    decision.action(),
+                    decision.reasonCodes());
 
                 batchedProposalsSent.addAndGet(totalProposals);
             }
@@ -2672,7 +2428,7 @@ public class ProposalQueueManagerOptimized {
             }
         }
 
-        private void maybeLogAdaptiveHealth(long pendingCount, java.util.Map<String, Object> adaptiveStats, long now) {
+        private void maybeLogAdaptiveHealth(long pendingCount, Map<String, Object> adaptiveStats, long now) {
             if ((pendingCount <= 0 && backpressureOverflowBuffer.isEmpty()) || now % 30000 >= 1000) {
                 return;
             }

@@ -36,20 +36,6 @@ public class BackpressureManagerTest {
     }
 
     @Test
-    public void testResetClearsCounts() {
-        BackpressureManager manager = new BackpressureManager();
-
-        manager.incrementSent();
-        manager.incrementAcknowledged();
-        manager.reset();
-
-        assertEquals(0, manager.getSentCount());
-        assertEquals(0, manager.getAcknowledgedCount());
-        assertEquals(0, manager.getPendingCount());
-        assertFalse(manager.isBackpressureActive());
-    }
-
-    @Test
     public void testApplyBackpressureFastPath() throws Exception {
         BackpressureManager manager = new BackpressureManager();
 

@@ -56,7 +56,7 @@ public class LogStoreConsistencyTest {
     @After
     public void tearDown() {
         if (engine != null) {
-            engine.stop();
+            engine.onTerminate(mock(Cluster.class));
         }
     }
 

@@ -20,7 +20,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -141,13 +140,6 @@ final class AdaptivePackingBuffer {
         );
     }
 
-    void clear() {
-        pendingWalletWrites.clear();
-        totalProposalsQueued.set(0L);
-        totalProposalsDrained.set(0L);
-        totalBatchesCreated.set(0L);
-    }
-
     private void drainWallet(WalletCandidate candidate, int maxBatchesPerWallet, List<List<QueuedProposal>> batches) {
         List<QueuedProposal> proposals = candidate.getProposals();
         synchronized (proposals) {
@@ -215,7 +207,7 @@ final class AdaptivePackingBuffer {
 
         static DrainSettings forDecision(AdaptiveReleaseGovernor.Decision decision) {
             AdaptiveReleaseGovernor.GovernorState state = decision != null
-                ? decision.getState()
+                ? decision.state()
                 : AdaptiveReleaseGovernor.GovernorState.HEALTHY;
             switch (state) {
                 case OVERLOADED:

@@ -86,16 +86,14 @@ public class CrashHandlerTest {
     }
 
     @Test
-    public void markAsForceBootstrapAndShutdownSchedulingAreTracked() throws Exception {
+    public void markAsForceBootstrapIsTracked() throws Exception {
         File baseDir = temporaryFolder.newFolder("crash-markers");
         CrashHandler handler = new CrashHandler(baseDir, 1);
 
         handler.markAsForceBootstrap();
         handler.markAsForceBootstrap();
-        handler.markShutdownScheduled();
 
         assertTrue(handler.shouldForceBootstrap());
-        assertTrue(handler.isShutdownScheduled());
         assertEquals("node-force-bootstrap", handler.getState());
     }
 
@@ -119,13 +117,11 @@ public class CrashHandlerTest {
     public void resetClearsNumberedCrashMarkersToo() throws Exception {
         CrashHandler handler = new CrashHandler(temporaryFolder.newFolder("crash-reset"), 1);
         handler.handleCrash(new AeronException("boom"));
-        handler.markShutdownScheduled();
 
         handler.reset();
 
         assertFalse(handler.hasCrashed());
         assertFalse(handler.shouldForceBootstrap());
         assertEquals("None", handler.getState());
-        assertTrue(handler.isShutdownScheduled());
     }
 }

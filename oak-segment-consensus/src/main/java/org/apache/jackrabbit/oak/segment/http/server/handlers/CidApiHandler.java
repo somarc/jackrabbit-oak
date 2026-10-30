@@ -26,7 +26,6 @@ import org.slf4j.LoggerFactory;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -70,7 +69,7 @@ public class CidApiHandler {
     public void handleGetCid(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getPathInfo();
         if (path == null || path.length() < 10) {
-            sendError(response, 400, "Missing Oak blob ID in path");
+            ApiErrorUtil.sendJsonError(response, 400, "Missing Oak blob ID in path");
             return;
         }
 
@@ -78,14 +77,14 @@ public class CidApiHandler {
         String oakBlobId = path.substring(path.lastIndexOf('/') + 1);
 
         if (context.cidMappingService == null) {
-            sendError(response, 503, "CID mapping service not available");
+            ApiErrorUtil.sendJsonError(response, 503, "CID mapping service not available");
             return;
         }
 
         Optional<String> cid = context.cidMappingService.getCid(oakBlobId);
 
         if (cid.isEmpty()) {
-            sendError(response, 404, "No CID found for Oak blob ID: " + oakBlobId);
+            ApiErrorUtil.sendJsonError(response, 404, "No CID found for Oak blob ID: " + oakBlobId);
             return;
         }
 
@@ -94,7 +93,7 @@ public class CidApiHandler {
         payload.put("ipfsCid", cid.get());
         payload.put("gatewayUrl", IpfsGatewayUrls.gatewayUrl(cid.get()));
         payload.put("localUrl", IpfsGatewayUrls.localGatewayUrl(cid.get()));
-        sendJson(response, 200, JsonOutputUtil.toJson(payload));
+        JsonOutputUtil.send(response, 200, JsonOutputUtil.toJson(payload));
     }
 
     /**
@@ -103,28 +102,28 @@ public class CidApiHandler {
     public void handleReverseLookup(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getPathInfo();
         if (path == null || !path.contains("/reverse/")) {
-            sendError(response, 400, "Missing IPFS CID in path");
+            ApiErrorUtil.sendJsonError(response, 400, "Missing IPFS CID in path");
             return;
         }
 
         String ipfsCid = path.substring(path.lastIndexOf('/') + 1);
 
         if (context.cidMappingService == null) {
-            sendError(response, 503, "CID mapping service not available");
+            ApiErrorUtil.sendJsonError(response, 503, "CID mapping service not available");
             return;
         }
 
         Optional<String> oakBlobId = context.cidMappingService.getOakBlobId(ipfsCid);
 
         if (oakBlobId.isEmpty()) {
-            sendError(response, 404, "No Oak blob ID found for CID: " + ipfsCid);
+            ApiErrorUtil.sendJsonError(response, 404, "No Oak blob ID found for CID: " + ipfsCid);
             return;
         }
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("ipfsCid", ipfsCid);
         payload.put("oakBlobId", oakBlobId.get());
-        sendJson(response, 200, JsonOutputUtil.toJson(payload));
+        JsonOutputUtil.send(response, 200, JsonOutputUtil.toJson(payload));
     }
 
     /**
@@ -134,21 +133,21 @@ public class CidApiHandler {
     public void handleGatewayRedirect(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getPathInfo();
         if (path == null || !path.contains("/gateway/")) {
-            sendError(response, 400, "Missing Oak blob ID in path");
+            ApiErrorUtil.sendJsonError(response, 400, "Missing Oak blob ID in path");
             return;
         }
 
         String oakBlobId = path.substring(path.lastIndexOf('/') + 1);
 
         if (context.cidMappingService == null) {
-            sendError(response, 503, "CID mapping service not available");
+            ApiErrorUtil.sendJsonError(response, 503, "CID mapping service not available");
             return;
         }
 
         Optional<String> gatewayUrl = context.cidMappingService.getGatewayUrl(oakBlobId);
 
         if (gatewayUrl.isEmpty()) {
-            sendError(response, 404, "No CID found for Oak blob ID: " + oakBlobId);
+            ApiErrorUtil.sendJsonError(response, 404, "No CID found for Oak blob ID: " + oakBlobId);
             return;
         }
 
@@ -161,32 +160,11 @@ public class CidApiHandler {
      */
     public void handleStats(HttpServletRequest request, HttpServletResponse response) throws IOException {
         if (context.cidMappingService == null) {
-            sendError(response, 503, "CID mapping service not available");
+            ApiErrorUtil.sendJsonError(response, 503, "CID mapping service not available");
             return;
         }
 
         CidMappingService.CidMappingStats stats = context.cidMappingService.getStats();
-        sendJson(response, 200, stats.toJson());
+        JsonOutputUtil.send(response, 200, stats.toJson());
     }
-
-    /**
-     * Send JSON response.
-     */
-    private void sendJson(HttpServletResponse response, int statusCode, String json) throws IOException {
-        response.setContentType("application/json");
-        response.setCharacterEncoding("UTF-8");
-        response.setStatus(statusCode);
-
-        try (PrintWriter writer = response.getWriter()) {
-            writer.write(json);
-        }
-    }
-
-    /**
-     * Send error response.
-     */
-    private void sendError(HttpServletResponse response, int statusCode, String message) throws IOException {
-        ApiErrorUtil.sendJsonError(response, statusCode, message);
-    }
-
 }

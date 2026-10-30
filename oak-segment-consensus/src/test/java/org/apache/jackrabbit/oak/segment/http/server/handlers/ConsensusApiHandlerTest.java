@@ -127,7 +127,7 @@ public class ConsensusApiHandlerTest {
         context.aeronConsensusEngine = null;
         
         // When: Write proposal handled
-        handler.handleProposeWrite(mockRequest, mockResponse);
+        new WriteProposalHandler(context).handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 503 Service Unavailable
         assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Aeron consensus engine not configured");
@@ -141,7 +141,7 @@ public class ConsensusApiHandlerTest {
         when(mockAeronEngine.getUnhealthyReason()).thenReturn("session_closed_timeout");
         
         // When: Write proposal handled
-        handler.handleProposeWrite(mockRequest, mockResponse);
+        new WriteProposalHandler(context).handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 503 Service Unavailable with reason
         assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "session_closed_timeout");
@@ -155,7 +155,7 @@ public class ConsensusApiHandlerTest {
         when(mockAeronEngine.getUnhealthyReason()).thenReturn("no_leader_elected");
         
         // When: Delete proposal handled
-        handler.handleDeleteProposal(mockRequest, mockResponse);
+        new DeleteProposalHandler(context).handleDeleteProposal(mockRequest, mockResponse);
         
         // Then: Should return 503 Service Unavailable with reason
         assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "no_leader_elected");
@@ -175,7 +175,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("wallet")).thenReturn(null);
         
         // When: Write proposal handled
-        handler.handleProposeWrite(mockRequest, mockResponse);
+        new WriteProposalHandler(context).handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request
         assertJsonErrorContains(HttpServletResponse.SC_BAD_REQUEST, "wallet");
@@ -190,7 +190,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("walletAddress")).thenReturn("not-a-wallet");
         
         // When: Write proposal handled
-        handler.handleProposeWrite(mockRequest, mockResponse);
+        new WriteProposalHandler(context).handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request
         assertJsonErrorStatus(HttpServletResponse.SC_BAD_REQUEST);
@@ -205,7 +205,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("walletAddress")).thenReturn("0x123");
         
         // When: Write proposal handled
-        handler.handleProposeWrite(mockRequest, mockResponse);
+        new WriteProposalHandler(context).handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request
         assertJsonErrorStatus(HttpServletResponse.SC_BAD_REQUEST);
@@ -222,7 +222,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("message")).thenReturn("test");
         
         // When: Write proposal handled
-        handler.handleProposeWrite(mockRequest, mockResponse);
+        new WriteProposalHandler(context).handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Should NOT fail on wallet validation (may fail on signature)
         // Verify we got past wallet validation - error should be about signature, not wallet
@@ -246,7 +246,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("contentPath")).thenReturn("/oak-chain/test");
         
         // When: Delete proposal handled
-        handler.handleDeleteProposal(mockRequest, mockResponse);
+        new DeleteProposalHandler(context).handleDeleteProposal(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request for missing signature
         assertJsonErrorContains(HttpServletResponse.SC_BAD_REQUEST, "signature");
@@ -262,7 +262,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("contentPath")).thenReturn(null);
         
         // When: Delete proposal handled
-        handler.handleDeleteProposal(mockRequest, mockResponse);
+        new DeleteProposalHandler(context).handleDeleteProposal(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request for missing path
         assertJsonErrorContains(HttpServletResponse.SC_BAD_REQUEST, "contentPath");
@@ -277,7 +277,7 @@ public class ConsensusApiHandlerTest {
         // Given: Handler with context
         
         // When: Consensus status requested
-        handler.handleGetConsensusStatus(mockResponse);
+        new ConsensusStatusHandler(context).handleGetConsensusStatus(mockResponse);
         
         // Then: Should return JSON content type
         verify(mockResponse).setContentType("application/json");
@@ -295,7 +295,7 @@ public class ConsensusApiHandlerTest {
         context.aeronConsensusEngine = null;
         
         // When: Consensus status requested
-        handler.handleGetConsensusStatus(mockResponse);
+        new ConsensusStatusHandler(context).handleGetConsensusStatus(mockResponse);
         
         // Then: Response should include consensusType field
         String response = responseWriter.toString();
@@ -313,7 +313,7 @@ public class ConsensusApiHandlerTest {
         context.proposalQueueManager = null;
         
         // When: Pending count requested
-        handler.handleGetPendingCount(mockResponse);
+        new ProposalQueryHandler(context).handleGetPendingCount(mockResponse);
         
         // Then: Should return 503 Service Unavailable
         assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "queue");
@@ -329,7 +329,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getRequestURI()).thenReturn(null);
         
         // When: Proposal status requested
-        handler.handleGetProposalStatus(mockRequest, mockResponse);
+        new ProposalQueryHandler(context).handleGetProposalStatus(mockRequest, mockResponse);
         
         // Then: Should reject the malformed request without throwing internally
         assertJsonErrorContains(HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID");
@@ -342,7 +342,7 @@ public class ConsensusApiHandlerTest {
         context.proposalQueueManager = null;
         
         // When: Proposal status requested
-        handler.handleGetProposalStatus(mockRequest, mockResponse);
+        new ProposalQueryHandler(context).handleGetProposalStatus(mockRequest, mockResponse);
         
         // Then: Should return 503 Service Unavailable
         assertJsonErrorContains(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
@@ -366,7 +366,7 @@ public class ConsensusApiHandlerTest {
             "head-123"
         ));
 
-        handler.handleGetOperationStatus(mockRequest, mockResponse);
+        new ProposalQueryHandler(context).handleGetOperationStatus(mockRequest, mockResponse);
 
         verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
         String response = responseWriter.toString();
@@ -385,7 +385,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("wallet")).thenReturn(null);
         
         // When: Wallet stats requested
-        handler.handleWalletStats(mockRequest, mockResponse);
+        new WalletQueryHandler(context).handleWalletStats(mockRequest, mockResponse);
         
         // Then: Should return JSON content type
         verify(mockResponse).setContentType("application/json");
@@ -397,7 +397,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
         
         // When: Wallet stats requested
-        handler.handleWalletStats(mockRequest, mockResponse);
+        new WalletQueryHandler(context).handleWalletStats(mockRequest, mockResponse);
         
         // Then: Should return JSON content type
         verify(mockResponse).setContentType("application/json");
@@ -413,7 +413,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("wallet")).thenReturn(null);
         
         // When: Wallet content requested
-        handler.handleWalletContent(mockRequest, mockResponse);
+        new WalletQueryHandler(context).handleWalletContent(mockRequest, mockResponse);
         
         // Then: Should return 400 Bad Request (uses setStatus, not sendError)
         verify(mockResponse).setStatus(HttpServletResponse.SC_BAD_REQUEST);
@@ -425,7 +425,7 @@ public class ConsensusApiHandlerTest {
         when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
         
         // When: Wallet content requested
-        handler.handleWalletContent(mockRequest, mockResponse);
+        new WalletQueryHandler(context).handleWalletContent(mockRequest, mockResponse);
         
         // Then: Should set JSON content type
         verify(mockResponse).setContentType("application/json");
@@ -441,7 +441,7 @@ public class ConsensusApiHandlerTest {
         context.gcCostEstimator = null;
         
         // When: GC cost estimate requested
-        handler.handleGCCostEstimate(mockRequest, mockResponse);
+        new GcCostHandler(context).handleGCCostEstimate(mockRequest, mockResponse);
         
         // Then: Should return 503 Service Unavailable (uses setStatus, not sendError)
         verify(mockResponse).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
@@ -455,7 +455,7 @@ public class ConsensusApiHandlerTest {
         stats.put("pendingCount", 7);
         when(queueManager.getQueueStats()).thenReturn(stats);
 
-        handler.handleGetQueueStats(mockResponse);
+        new ProposalQueryHandler(context).handleGetQueueStats(mockResponse);
 
         verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
         assertTrue(responseWriter.toString().contains("\"pendingCount\":7"));
@@ -469,7 +469,7 @@ public class ConsensusApiHandlerTest {
         flow.put("releaseMode", "adaptive-active");
         when(queueManager.getProposalReleaseFlowStats()).thenReturn(flow);
 
-        handler.handleGetProposalReleaseFlow(mockResponse);
+        new ProposalQueryHandler(context).handleGetProposalReleaseFlow(mockResponse);
 
         verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
         String response = responseWriter.toString();
@@ -485,7 +485,7 @@ public class ConsensusApiHandlerTest {
         stats.put("pendingCount", 11);
         when(queueManager.getQueueStats()).thenReturn(stats);
 
-        handler.handleGetOpsQueueSnapshot(mockResponse);
+        new ProposalQueryHandler(context).handleGetOpsQueueSnapshot(mockResponse);
 
         verify(mockResponse).setStatus(HttpServletResponse.SC_OK);
         String response = responseWriter.toString();
@@ -509,7 +509,7 @@ public class ConsensusApiHandlerTest {
         when(mockAeronEngine.getUnhealthyReason()).thenReturn("test_reason");
         
         // When: Write proposal handled
-        handler.handleProposeWrite(mockRequest, mockResponse);
+        new WriteProposalHandler(context).handleProposeWrite(mockRequest, mockResponse);
         
         // Then: Rejected counter should be incremented
         assertEquals("Rejected counter should increment", 

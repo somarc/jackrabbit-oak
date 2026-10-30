@@ -20,7 +20,6 @@ import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisConte
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
-import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
@@ -35,8 +34,7 @@ import java.util.Map;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 
 /**
- * Handler for registration endpoints (`/v1/register/client`, `/v1/register/validator`, `/v1/heartbeat`).
- * This class encapsulates the logic for client and validator registration and heartbeat handling.
+ * Handler for client registration ({@code /v1/register/client}).
  */
 public class RegistrationHandler {
 
@@ -197,113 +195,4 @@ public class RegistrationHandler {
         }
     }
     
-    /**
-     * Handle POST/PUT /v1/register-validator - Validators register with each other
-     * 
-     * Parameters (JSON body or query params):
-     *   - validatorId: Unique identifier (e.g., "validator-1")
-     *   - validatorUrl: Validator's URL/address (e.g., "http://validator-1:8090")
-     */
-    public void handleValidatorRegistration(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        try {
-            // Parse JSON body or query parameters
-            String validatorId = null;
-            String validatorUrl = null;
-            
-            // Try JSON body first
-            StringBuilder json = new StringBuilder();
-            BufferedReader reader = request.getReader();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                json.append(line);
-            }
-            
-            if (json.length() > 0) {
-                String body = json.toString();
-                validatorId = JsonParser.extractField(body, "validatorId");
-                validatorUrl = JsonParser.extractField(body, "validatorUrl");
-            }
-            
-            // Fallback to query parameters
-            if (validatorId == null || validatorId.isEmpty()) {
-                validatorId = request.getParameter("validatorId");
-            }
-            if (validatorUrl == null || validatorUrl.isEmpty()) {
-                validatorUrl = request.getParameter("validatorUrl");
-            }
-            
-            // Validate required fields
-            if (validatorId == null || validatorId.isEmpty()) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Missing validatorId");
-                return;
-            }
-            if (validatorUrl == null || validatorUrl.isEmpty()) {
-                // Try to infer from request
-                String remoteAddr = request.getRemoteAddr();
-                int remotePort = request.getRemotePort();
-                validatorUrl = "http://" + remoteAddr + ":" + remotePort;
-            }
-            
-            // Don't register self
-            if (validatorUrl.equals(context.selfUrl)) {
-                response.setContentType("application/json");
-                response.setStatus(HttpServletResponse.SC_OK);
-                Map<String, Object> result = new LinkedHashMap<>();
-                result.put("success", true);
-                result.put("message", "Self-registration ignored");
-                response.getWriter().write(JsonOutputUtil.toJson(result));
-                return;
-            }
-            
-            // Register or update validator
-            ValidatorRegistration registration = context.registeredValidators.get(validatorId);
-            if (registration == null) {
-                registration = new ValidatorRegistration(validatorId, validatorUrl);
-                context.registeredValidators.put(validatorId, registration);
-                log.info("✅ New validator peer registered: {} ({})", validatorId, validatorUrl);
-            } else {
-                registration.lastSeen = System.currentTimeMillis();
-                if (!registration.validatorUrl.equals(validatorUrl)) {
-                    // Note: validatorUrl is final in ValidatorRegistration, so we can't update it
-                    // This is expected behavior - URL is set at registration time
-                    log.info("🔄 Validator peer URL changed: {} ({})", validatorId, validatorUrl);
-                } else {
-                    log.debug("Validator heartbeat: {} ({})", validatorId, validatorUrl);
-                }
-            }
-            
-            // Return success
-            response.setContentType("application/json");
-            response.setStatus(HttpServletResponse.SC_OK);
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("success", true);
-            result.put("validatorId", validatorId);
-            result.put("message", "Validator registered");
-            response.getWriter().write(JsonOutputUtil.toJson(result));
-            
-        } catch (Exception e) {
-            log.error("Failed to register validator", e);
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Registration failed: " + e.getMessage());
-        }
-    }
-    
-    /**
-     * Handle POST /v1/heartbeat - Receive heartbeat from leader
-     * 
-     * @deprecated This endpoint is deprecated. Aeron Cluster handles heartbeats internally via Raft.
-     */
-    public void handleHeartbeat(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        // Aeron Cluster handles heartbeats internally - this endpoint is deprecated
-        response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_GONE);
-        Map<String, Object> error = new LinkedHashMap<>();
-        error.put("code", "ENDPOINT_DEPRECATED");
-        error.put("message", "This endpoint is deprecated");
-        error.put("details", "Aeron Cluster handles heartbeats internally via Raft consensus");
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("success", false);
-        payload.put("error", error);
-        payload.put("timestamp", System.currentTimeMillis());
-        response.getWriter().write(JsonOutputUtil.toJson(payload));
-    }
 }

@@ -55,7 +55,6 @@ public class AeronClusterLauncher {
     private static final Logger log = LoggerFactory.getLogger(AeronClusterLauncher.class);
     
     public static final int CLIENT_FACING_PORT_OFFSET = AeronClusterTopology.CLIENT_FACING_PORT_OFFSET;
-    private static final int REPLICATION_PORT_OFFSET = 7;
     private static final int DEFAULT_CLUSTER_TERM_LENGTH_BYTES = 128 * 1024 * 1024; // 128MB
     private static final int DEFAULT_PUBLICATION_TERM_BUFFER_LENGTH_BYTES = 64 * 1024 * 1024; // 64MB
     private static final int DEFAULT_DRIVER_TIMEOUT_MS = 60000;
@@ -99,43 +98,6 @@ public class AeronClusterLauncher {
             AeronClusterAddressResolver.system(nodeId, hostnames),
             new AeronClusterErrorPolicy(),
             LaunchInvoker.DEFAULT,
-            ContainerLaunchInvoker.DEFAULT
-        );
-    }
-
-    AeronClusterLauncher(int nodeId,
-                         List<String> hostnames,
-                         File baseDir,
-                         ClusteredService clusteredService,
-                         AeronClusterAddressResolver addressResolver,
-                         AeronClusterErrorPolicy errorPolicy) {
-        this(
-            nodeId,
-            hostnames,
-            baseDir,
-            clusteredService,
-            addressResolver,
-            errorPolicy,
-            LaunchInvoker.DEFAULT,
-            ContainerLaunchInvoker.DEFAULT
-        );
-    }
-
-    AeronClusterLauncher(int nodeId,
-                         List<String> hostnames,
-                         File baseDir,
-                         ClusteredService clusteredService,
-                         AeronClusterAddressResolver addressResolver,
-                         AeronClusterErrorPolicy errorPolicy,
-                         LaunchInvoker launchInvoker) {
-        this(
-            nodeId,
-            hostnames,
-            baseDir,
-            clusteredService,
-            addressResolver,
-            errorPolicy,
-            launchInvoker,
             ContainerLaunchInvoker.DEFAULT
         );
     }
@@ -303,9 +265,8 @@ public class AeronClusterLauncher {
         
         container = launchClusteredServiceContainer(contexts);
         
-        AeronClusterRuntimeBridge.RuntimeBridgeResult runtimeBridgeResult =
+        healthMonitor =
             new AeronClusterRuntimeBridge(clusteredService).activate(container, aeronDirName, failureCoordinator);
-        healthMonitor = runtimeBridgeResult.healthMonitor;
         
         log.info("✅ Aeron Cluster launched successfully");
         log.info("   Node {} started on {}", nodeId, getHostname());
@@ -343,15 +304,6 @@ public class AeronClusterLauncher {
     }
     
     /**
-     * Wait for shutdown signal (blocks until shutdown).
-     */
-    public void awaitShutdown() {
-        if (barrier != null) {
-            barrier.await();
-        }
-    }
-    
-    /**
      * Get the Aeron directory name used by this cluster node.
      * This is needed for creating Aeron clients that connect to the cluster.
      */
@@ -366,10 +318,6 @@ public class AeronClusterLauncher {
         return AeronClusterTopology.getPortBase();
     }
 
-    public int getClusterBasePort() {
-        return getPortBase();
-    }
-    
     private String getHostname() {
         return hostnames.get(nodeId);
     }

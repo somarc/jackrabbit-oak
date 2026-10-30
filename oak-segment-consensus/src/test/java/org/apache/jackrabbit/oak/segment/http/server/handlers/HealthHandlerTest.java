@@ -57,7 +57,6 @@ public class HealthHandlerTest {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            null,
             Collections.emptyMap(),
             Collections.emptyMap(),
             context
@@ -96,7 +95,6 @@ public class HealthHandlerTest {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            engine,
             Collections.emptyMap(),
             Collections.emptyMap(),
             context
@@ -127,7 +125,6 @@ public class HealthHandlerTest {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            engine,
             Collections.emptyMap(),
             Collections.emptyMap(),
             context
@@ -354,7 +351,6 @@ public class HealthHandlerTest {
             null,
             null,
             storeDirectory,
-            engine,
             context.registeredClients,
             context.registeredValidators,
             context
@@ -420,7 +416,7 @@ public class HealthHandlerTest {
         HttpServletResponse initialResponse = responseWithBody(initialBody);
         handler.handleGetOpsHealthSnapshot(initialResponse);
 
-        setLongField(handler, "cachedOpsHealthSnapshotSourceTimestampMs", System.currentTimeMillis() - 5_000L);
+        ageSnapshotCache(handler, "opsHealthSnapshot", System.currentTimeMillis() - 5_000L);
 
         AeronConsensusEngine brokenEngine = mock(AeronConsensusEngine.class);
         when(brokenEngine.isClusterHealthy()).thenThrow(new RuntimeException("boom"));
@@ -531,7 +527,6 @@ public class HealthHandlerTest {
             context.fileStore,
             context.nodeStore,
             context.storeDirectory,
-            context.aeronConsensusEngine,
             context.registeredClients,
             context.registeredValidators,
             context
@@ -544,9 +539,11 @@ public class HealthHandlerTest {
         return response;
     }
 
-    private static void setLongField(Object target, String fieldName, long value) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
+    private static void ageSnapshotCache(Object handler, String cacheField, long sourceTimestampMs) throws Exception {
+        Field field = handler.getClass().getDeclaredField(cacheField);
         field.setAccessible(true);
-        field.setLong(target, value);
+        Field timestamp = OpsSnapshotCache.class.getDeclaredField("sourceTimestampMs");
+        timestamp.setAccessible(true);
+        timestamp.setLong(field.get(handler), sourceTimestampMs);
     }
 }

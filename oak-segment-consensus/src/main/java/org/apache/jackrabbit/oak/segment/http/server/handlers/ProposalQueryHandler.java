@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
@@ -30,6 +31,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.BiFunction;
 
 /**
  * Handler for proposal status and queue queries.
@@ -37,12 +39,9 @@ import java.util.Map;
 public class ProposalQueryHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ProposalQueryHandler.class);
-    private static final long OPS_QUEUE_SNAPSHOT_TTL_MS = 1000L;
 
     private final ServerContext context;
-    private final Object queueSnapshotLock = new Object();
-    private volatile Map<String, Object> cachedQueueStatsData;
-    private volatile long cachedQueueStatsSourceTimestampMs;
+    private final OpsSnapshotCache queueSnapshot = new OpsSnapshotCache(1000L, log);
 
     public ProposalQueryHandler(ServerContext context) {
         this.context = context;
@@ -56,36 +55,14 @@ public class ProposalQueryHandler {
         response.setContentType("application/json");
 
         try {
-            String proposalId = extractPathSegment(request.getRequestURI(), 3, "status");
-            if (proposalId == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID");
-                return;
-            }
-
-            if (context.proposalQueueManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
-                return;
-            }
-
-            ProposalStatus status = context.proposalQueueManager.getProposalStatus(proposalId);
+            ProposalStatus status = requireStatus(request, response, 3, "status", "Invalid proposal ID", "Proposal not found");
             if (status == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Proposal not found");
                 return;
             }
 
             Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("proposalId", status.getProposalId());
-            payload.put("state", status.getState().name());
-            payload.put("ethereumTxHash", status.getEthereumTxHash());
-            payload.put("timeoutTimestamp", status.getTimeoutTimestamp());
-            payload.put("confirmedBlock", status.getConfirmedBlock() != null ? status.getConfirmedBlock() : -1);
-            payload.put("rejectionReason", status.getRejectionReason());
-            payload.put("durabilityState", status.getDurabilityState() != null ? status.getDurabilityState().name() : "UNKNOWN");
-            payload.put("durabilityTimestamp", status.getDurabilityTimestamp());
-            payload.put("durabilityError", status.getDurabilityError());
-            payload.put("durableHead", status.getDurableHead());
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            putStatusFields(payload, status, status.getConfirmedBlock() != null ? status.getConfirmedBlock() : -1);
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Error getting proposal status", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -100,20 +77,8 @@ public class ProposalQueryHandler {
         response.setContentType("application/json");
 
         try {
-            String operationId = extractPathSegment(request.getRequestURI(), 4, null);
-            if (operationId == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid operation ID");
-                return;
-            }
-
-            if (context.proposalQueueManager == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
-                return;
-            }
-
-            ProposalStatus status = context.proposalQueueManager.getProposalStatus(operationId);
+            ProposalStatus status = requireStatus(request, response, 4, null, "Invalid operation ID", "Operation not found");
             if (status == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Operation not found");
                 return;
             }
 
@@ -146,8 +111,7 @@ public class ProposalQueryHandler {
             payload.put("ethereumTxHash", status.getEthereumTxHash());
             payload.put("confirmedBlock", status.getConfirmedBlock());
             payload.put("error", toOpsError(status, opsState));
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Error getting operation status", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -159,32 +123,8 @@ public class ProposalQueryHandler {
      * GET /v1/settlement/proposals/{proposalId}
      */
     public void handleGetSettlementByProposalId(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        response.setContentType("application/json");
-
-        try {
-            String proposalId = extractPathSegment(request.getRequestURI(), 4, null);
-            if (proposalId == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid proposal ID");
-                return;
-            }
-
-            if (context.evmBridge == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Settlement lookup not available");
-                return;
-            }
-
-            SettlementDetails details = context.evmBridge.getSettlementDetailsByProposalId(proposalId);
-            if (details == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Settlement details not found");
-                return;
-            }
-
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(toSettlementPayload("proposalId", proposalId, details)));
-        } catch (Exception e) {
-            log.error("Error getting settlement details by proposal id", e);
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
-        }
+        handleSettlementLookup(request, response, "proposalId", "Invalid proposal ID",
+            EvmBridge::getSettlementDetailsByProposalId, "Error getting settlement details by proposal id");
     }
 
     /**
@@ -192,12 +132,19 @@ public class ProposalQueryHandler {
      * GET /v1/settlement/transactions/{transactionHash}
      */
     public void handleGetSettlementByTransactionHash(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        handleSettlementLookup(request, response, "transactionHash", "Invalid transaction hash",
+            EvmBridge::getSettlementDetailsByTransactionHash, "Error getting settlement details by transaction hash");
+    }
+
+    private void handleSettlementLookup(HttpServletRequest request, HttpServletResponse response, String lookupType,
+                                        String invalidMessage, BiFunction<EvmBridge, String, SettlementDetails> lookup,
+                                        String errorLog) throws IOException {
         response.setContentType("application/json");
 
         try {
-            String transactionHash = extractPathSegment(request.getRequestURI(), 4, null);
-            if (transactionHash == null) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid transaction hash");
+            String lookupValue = extractPathSegment(request.getRequestURI(), 4, null);
+            if (lookupValue == null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, invalidMessage);
                 return;
             }
 
@@ -206,16 +153,15 @@ public class ProposalQueryHandler {
                 return;
             }
 
-            SettlementDetails details = context.evmBridge.getSettlementDetailsByTransactionHash(transactionHash);
+            SettlementDetails details = lookup.apply(context.evmBridge, lookupValue);
             if (details == null) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Settlement details not found");
                 return;
             }
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(toSettlementPayload("transactionHash", transactionHash, details)));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, toSettlementPayload(lookupType, lookupValue, details));
         } catch (Exception e) {
-            log.error("Error getting settlement details by transaction hash", e);
+            log.error(errorLog, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
         }
     }
@@ -236,8 +182,7 @@ public class ProposalQueryHandler {
             int count = context.proposalQueueManager.getPendingCount();
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("pendingCount", count);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Error getting pending count", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -258,8 +203,7 @@ public class ProposalQueryHandler {
             }
 
             Map<String, Object> stats = context.proposalQueueManager.getQueueStats();
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(stats));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, stats);
         } catch (Exception e) {
             log.error("Error getting queue stats", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -282,8 +226,7 @@ public class ProposalQueryHandler {
             Map<String, Object> flow = new LinkedHashMap<>(context.proposalQueueManager.getProposalReleaseFlowStats());
             flow.put("contractVersion", "release-flow.v1");
             flow.put("generatedAtMs", System.currentTimeMillis());
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(flow));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, flow);
         } catch (Exception e) {
             log.error("Error getting proposal release flow", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -297,77 +240,45 @@ public class ProposalQueryHandler {
     public void handleGetOpsQueueSnapshot(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
 
-        long servedAtMs = System.currentTimeMillis();
-
         if (context.proposalQueueManager == null) {
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
             return;
         }
 
-        try {
-            Map<String, Object> data;
-            long sourceTimestampMs;
-            boolean fromCache = false;
+        queueSnapshot.serve(response, "ops.v1", true, "queue", context.proposalQueueManager::getQueueStats,
+            e -> ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage()));
+    }
 
-            synchronized (queueSnapshotLock) {
-                long now = System.currentTimeMillis();
-                boolean cacheValid = cachedQueueStatsData != null
-                    && cachedQueueStatsSourceTimestampMs > 0
-                    && (now - cachedQueueStatsSourceTimestampMs) <= OPS_QUEUE_SNAPSHOT_TTL_MS;
+    static void putStatusFields(Map<String, Object> payload, ProposalStatus status, Object confirmedBlock) {
+        payload.put("proposalId", status.getProposalId());
+        payload.put("state", status.getState().name());
+        payload.put("ethereumTxHash", status.getEthereumTxHash());
+        payload.put("timeoutTimestamp", status.getTimeoutTimestamp());
+        payload.put("confirmedBlock", confirmedBlock);
+        payload.put("rejectionReason", status.getRejectionReason());
+        payload.put("durabilityState", status.getDurabilityState() != null ? status.getDurabilityState().name() : "UNKNOWN");
+        payload.put("durabilityTimestamp", status.getDurabilityTimestamp());
+        payload.put("durabilityError", status.getDurabilityError());
+        payload.put("durableHead", status.getDurableHead());
+    }
 
-                if (cacheValid) {
-                    data = cachedQueueStatsData;
-                    sourceTimestampMs = cachedQueueStatsSourceTimestampMs;
-                    fromCache = true;
-                } else {
-                    data = context.proposalQueueManager.getQueueStats();
-                    sourceTimestampMs = now;
-                    cachedQueueStatsData = data;
-                    cachedQueueStatsSourceTimestampMs = sourceTimestampMs;
-                }
-            }
-
-            long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("contractVersion", "ops.v1");
-            payload.put("sourceTimestampMs", sourceTimestampMs);
-            payload.put("servedAtMs", servedAtMs);
-            payload.put("stalenessMs", stalenessMs);
-            payload.put("degraded", false);
-            payload.put("degradedReason", null);
-            Map<String, Object> cache = new LinkedHashMap<>();
-            cache.put("hit", fromCache);
-            cache.put("ttlMs", OPS_QUEUE_SNAPSHOT_TTL_MS);
-            payload.put("cache", cache);
-            payload.put("data", data);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
-        } catch (Exception e) {
-            log.warn("Error building ops queue snapshot, attempting stale fallback: {}", e.getMessage());
-
-            Map<String, Object> staleData = cachedQueueStatsData;
-            long sourceTimestampMs = cachedQueueStatsSourceTimestampMs;
-            if (staleData != null && sourceTimestampMs > 0) {
-                long stalenessMs = Math.max(0L, servedAtMs - sourceTimestampMs);
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("contractVersion", "ops.v1");
-                payload.put("sourceTimestampMs", sourceTimestampMs);
-                payload.put("servedAtMs", servedAtMs);
-                payload.put("stalenessMs", stalenessMs);
-                payload.put("degraded", true);
-                payload.put("degradedReason", "STALE_CACHE_FALLBACK");
-                Map<String, Object> cache = new LinkedHashMap<>();
-                cache.put("hit", true);
-                cache.put("ttlMs", OPS_QUEUE_SNAPSHOT_TTL_MS);
-                payload.put("cache", cache);
-                payload.put("data", staleData);
-                response.setStatus(HttpServletResponse.SC_OK);
-                response.getWriter().write(JsonOutputUtil.toJson(payload));
-                return;
-            }
-
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
+    /** The proposal status named by the request path, or null after sending 400, 503 or 404. */
+    private ProposalStatus requireStatus(HttpServletRequest request, HttpServletResponse response, int segmentIndex,
+                                         String requiredSuffix, String invalidMessage, String notFoundMessage) throws IOException {
+        String id = extractPathSegment(request.getRequestURI(), segmentIndex, requiredSuffix);
+        if (id == null) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, invalidMessage);
+            return null;
         }
+        if (context.proposalQueueManager == null) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
+            return null;
+        }
+        ProposalStatus status = context.proposalQueueManager.getProposalStatus(id);
+        if (status == null) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, notFoundMessage);
+        }
+        return status;
     }
 
     private static String extractPathSegment(String path, int segmentIndex, String requiredSuffix) {

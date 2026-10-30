@@ -35,7 +35,6 @@ public class AuthTokenValidatorTest {
     public void testValidateRequestAllowsAllWhenTokenNotConfigured() throws Exception {
         withToken(null, () -> {
             AuthTokenValidator validator = new AuthTokenValidator();
-            assertFalse(validator.isAuthEnabled());
 
             boolean allowed = validator.validateRequest(mock(HttpServletRequest.class), mock(HttpServletResponse.class));
 

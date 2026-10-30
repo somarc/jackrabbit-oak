@@ -33,7 +33,6 @@ import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ReplicatedDurability;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
-import org.apache.jackrabbit.oak.segment.consensus.util.SegmentReplicator;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -46,79 +45,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Aeron Cluster-based consensus engine using proven Raft algorithm.
- * 
- * <p><strong>DISTRIBUTED ARCHITECTURE:</strong>
- * This is a distributed consensus system designed to run across multiple machines,
- * networks, and data centers. Validators communicate via UDP/IP networks and can
- * be deployed across geographically distributed infrastructure. The system is
- * NOT confined to localhost or single-machine deployments.
- * 
- * <p>This implementation leverages Aeron Cluster's battle-tested Raft consensus
- * to provide election safety, quorum requirements, log matching, and leader
- * completeness guarantees. Our unique value is the Ethereum integration layer.
- * 
- * <p><strong>Distributed Deployment:</strong>
- * <pre>
- * ┌─────────────────────────────────────────────────────────────┐
- * │         Distributed Validator Network                      │
- * │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
- * │  │ Validator-0  │  │ Validator-1  │  │ Validator-2  │   │
- * │  │ (US-East)    │  │ (EU-West)    │  │ (AP-South)   │   │
- * │  │ 10.0.1.10    │  │ 10.0.2.10    │  │ 10.0.3.10    │   │
- * │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘   │
- * │         │                  │                  │           │
- * │         └──────────────────┼──────────────────┘           │
- * │                            │                               │
- * │                    UDP/IP Network                        │
- * │              (Aeron Cluster Raft)                        │
- * └─────────────────────────────────────────────────────────────┘
- *                            │
- *                            ▼
- * ┌─────────────────────────────────────────┐
- * │     Aeron Cluster (Raft)               │
- * │  - Term-based leadership                │
- * │  - Majority quorum requirements        │
- * │  - Election safety guarantees          │
- * │  - Log matching guarantees             │
- * │  - Leader completeness                 │
- * │  - Network partition tolerance         │
- * └─────────────────────────────────────────┘
- *              │
- *              ▼
- * ┌─────────────────────────────────────────┐
- * │     Ethereum Integration Layer          │
- * │  - Epoch values from Ethereum Beacon   │
- * │  - Transaction-driven writes           │
- * │  - USDC payment validation              │
- * │  - Wallet-based sharding                │
- * └─────────────────────────────────────────┘
- * </pre>
- * 
- * <p><strong>Network Configuration:</strong>
- * <ul>
- *   <li>Validators communicate via UDP/IP (configurable endpoints)</li>
- *   <li>Peer URLs can be IP addresses, hostnames, or public URLs</li>
- *   <li>Supports deployment across multiple data centers/regions</li>
- *   <li>Network discovery via configured peer URLs</li>
- *   <li>No hard-coded localhost assumptions - fully distributed</li>
- * </ul>
- * 
- * <p><strong>Key Benefits:</strong>
- * <ul>
- *   <li>✅ Proven Raft consensus (no split-brain, guaranteed safety)</li>
- *   <li>✅ High performance (low latency, high throughput)</li>
- *   <li>✅ Distributed by design (multi-region, multi-datacenter capable)</li>
- *   <li>✅ Focus on Ethereum integration (our unique value)</li>
- *   <li>✅ Reduced complexity (less custom code to maintain)</li>
- * </ul>
- * 
- * <p><strong>Reference:</strong>
- * <ul>
- *   <li><a href="https://github.com/aeron-io/aeron">Aeron GitHub</a></li>
- *   <li><a href="https://raft.github.io/">Raft Consensus Algorithm</a></li>
- *   <li><a href="https://aeron.io/case-studies/coinbase-cloudnative-crypto-exchange-aeron-cluster/">Coinbase Case Study</a></li>
- * </ul>
+ * Oak's {@link ClusteredService} on Aeron Cluster (Raft). Writes, deletes, GC commands, durability reports and
+ * transaction boundaries reach every member through cluster ingress and are applied in log order on the service
+ * thread; ingress, leader discovery, snapshots and genesis are delegated to the collaborators wired in the
+ * constructor.
  */
 public class AeronConsensusEngine implements ClusteredService {
     
@@ -134,7 +64,6 @@ public class AeronConsensusEngine implements ClusteredService {
     private final String selfUrl;
     private final List<String> peerUrls;
     private final org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
-    private final SegmentReplicator replicator;
     private final String storeDirectory;
     private final org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager backpressureManager;
     private final DurabilityTally durabilityTally = new DurabilityTally(this::getTotalMemberCount);
@@ -142,7 +71,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final TransactionLifecycleManager transactionLifecycleManager;
     private final PeerProbeMode peerProbeMode;
     
-    // ✅ PRODUCTION REFACTOR: Service layer components (extracted from monolithic class)
+    // Service layer components (extracted from monolithic class)
     private final MessageDispatcher messageDispatcher;
     private final SnapshotService snapshotService;
     private final AeronGenesisInitializer genesisInitializer;
@@ -166,47 +95,19 @@ public class AeronConsensusEngine implements ClusteredService {
     private volatile long publishedClusterTime = -1L;
     private IdleStrategy idleStrategy;
     
-    // ✈️ AERON NATIVE: Ingress channel URI for client connections
-    // For distributed cluster communication, we use UDP
-    // Using default term length (128MB) for production WAN compatibility
-    // Sufficient for high-throughput, concurrent write workloads
-    private String ingressChannelUri = "aeron:udp";
-    
-    // ✈️ AERON NATIVE: Media driver directory name (needed for client connections)
+    // Media driver directory name (needed for client connections)
     private String aeronDirectoryName = null;
     
-    // ✈️ AERON NATIVE: Callback interface for applying replicated writes and deletes
+    // Callback interface for applying replicated writes and deletes
     public interface WriteApplicationCallback {
         default void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
                                           String signature, String intentToken, String blobId, String mimeType,
                                           String ipfsCid, MutationAuditMetadata auditMetadata) {
-            applyReplicatedWrite(
-                walletAddress,
-                path,
-                contentType,
-                message,
-                signature,
-                intentToken,
-                blobId,
-                mimeType,
-                ipfsCid,
-                auditMetadata != null ? auditMetadata.getProposalId() : null
-            );
-        }
-
-        default void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
-                                          String signature, String intentToken, String blobId, String mimeType,
-                                          String ipfsCid, String proposalId) {
             throw new UnsupportedOperationException("Write application callback must implement applyReplicatedWrite");
         }
 
         default void applyReplicatedDelete(String walletAddress, String path, String signature,
                                            MutationAuditMetadata auditMetadata) {
-            applyReplicatedDelete(walletAddress, path, signature,
-                auditMetadata != null ? auditMetadata.getProposalId() : null);
-        }
-
-        default void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId) {
             throw new UnsupportedOperationException("Write application callback must implement applyReplicatedDelete");
         }
     }
@@ -253,51 +154,30 @@ public class AeronConsensusEngine implements ClusteredService {
     private final long reachabilityCacheMs;
     private final int reachabilityConnectTimeoutMs;
     private final int reachabilityReadTimeoutMs;
-    private final int reconnectMaxAttempts;
     
     // ✅ ADR 025: Replication lag monitoring
     private volatile long leaderLogPosition = -1; // Track leader's position for lag calculation
     private volatile long leaderLogPositionObservedAtMs = 0L;
     
-    // Track validator join times (for probation, if needed)
-    private final Map<String, Long> validatorJoinTimes = new ConcurrentHashMap<>();
-    
     // Map node IDs to URLs for leader lookup
     private final Map<Integer, String> nodeIdToUrl = new ConcurrentHashMap<>();
     
-    // Write throughput tracking (for periodic summary logging)
-    private final java.util.concurrent.atomic.AtomicLong totalWritesProcessed = new java.util.concurrent.atomic.AtomicLong(0);
-    private volatile long lastSummaryLogTime = System.currentTimeMillis();
-    private volatile long lastSummaryWriteCount = 0;
-    private static final long SUMMARY_LOG_INTERVAL_MS = 10000; // Log summary every 10 seconds
     private static final long INGRESS_CLIENT_REQUEST_WAIT_MS = 3000L;
     private static final long DURABILITY_RETRY_DELAY_MS = 250L;
     private static final int MAX_DURABILITY_RETRY_ATTEMPTS = 4;
     
-    // Raft performance metrics (track consensus latency, throughput, utilization)
-    private final AeronPerformanceMetrics performanceMetrics = new AeronPerformanceMetrics();
-    
-    // Ingress timestamp tracking (for Raft latency calculation)
-    // Since Raft processes messages in order, we can use a simple FIFO queue
-    private final java.util.concurrent.ConcurrentLinkedQueue<Long> ingressTimestamps = new java.util.concurrent.ConcurrentLinkedQueue<>();
-    
-    private final AeronMessageCodec messageCodec = AeronEngineComponentFactory.createMessageCodec();
+    private final AeronMessageCodec messageCodec = new AeronMessageCodec();
     private AeronIngressHandler ingressHandler;
     private volatile boolean genesisVerified;
     /** Latched by the first node-local apply failure: health and HTTP report it while the member fail-stops. */
     private volatile Throwable applicationFailure;
-    private AeronSessionManager sessionManager;
-    private AeronHealthService healthService = AeronEngineComponentFactory.createHealthService();
-    private AeronLeaderTracker leaderTracker;
+    private final AeronSessionManager sessionManager;
+    private final AeronHealthService healthService = new AeronHealthService();
+    private final AeronLeaderTracker leaderTracker;
     
     // Reachability cache
     private volatile long lastReachabilityCheckMs = 0;
     private volatile int lastReachableCount = 1;
-    
-    // Session auto-reconnect
-    private final Object reconnectLock = new Object();
-    private volatile java.util.concurrent.ScheduledExecutorService reconnectScheduler;
-    private volatile boolean reconnectInProgress = false;
     
     /**
      * Create Aeron-based consensus engine.
@@ -318,20 +198,7 @@ public class AeronConsensusEngine implements ClusteredService {
             String storeDirectory,
             org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
         this(fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore,
-            AeronEngineComponentFactory.createSnapshotService(),
-            new AeronBackgroundCoordinator());
-    }
-
-    AeronConsensusEngine(
-            FileStore fileStore,
-            NodeStore nodeStore,
-            String selfUrl,
-            List<String> peerUrls,
-            org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet,
-            String storeDirectory,
-            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore,
-            SnapshotService snapshotService) {
-        this(fileStore, nodeStore, selfUrl, peerUrls, wallet, storeDirectory, blobStore, snapshotService,
+            new SnapshotService(),
             new AeronBackgroundCoordinator());
     }
 
@@ -351,38 +218,37 @@ public class AeronConsensusEngine implements ClusteredService {
         this.peerUrls = peerUrls;
         this.wallet = wallet;
         this.storeDirectory = storeDirectory;
-        this.replicator = AeronEngineComponentFactory.createSegmentReplicator(fileStore);
-        this.backpressureManager = AeronEngineComponentFactory.createBackpressureManager();
+        this.backpressureManager = new org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager();
         this.transactionLifecycleManager = new TransactionLifecycleManager();
         this.peerProbeMode = parsePeerProbeMode();
         this.reachabilityCacheMs = Long.getLong("oak.cluster.reachability.cacheMs", 5000L);
         this.reachabilityConnectTimeoutMs = Integer.getInteger("oak.cluster.reachability.connectTimeoutMs", 1500);
         this.reachabilityReadTimeoutMs = Integer.getInteger("oak.cluster.reachability.readTimeoutMs", 1500);
-        this.reconnectMaxAttempts = Integer.getInteger("oak.cluster.reconnect.maxAttempts", 5);
         
         // Build node ID to URL mapping (will be populated when cluster starts)
         // This allows us to map Aeron Cluster leaderMemberId to validator URL
         
-        // ✅ PRODUCTION REFACTOR: Initialize service layer components
+        // Initialize service layer components
         this.snapshotService = snapshotService != null
             ? snapshotService
-            : AeronEngineComponentFactory.createSnapshotService();
+            : new SnapshotService();
         this.genesisInitializer = new AeronGenesisInitializer(fileStore, nodeStore, blobStore);
         this.backgroundCoordinator = backgroundCoordinator != null
             ? backgroundCoordinator
             : new AeronBackgroundCoordinator();
-        this.ingressWritePayloadBuilder = AeronEngineComponentFactory.createIngressWritePayloadBuilder();
-        this.ingressControlPayloadBuilder = AeronEngineComponentFactory.createIngressControlPayloadBuilder();
+        this.ingressWritePayloadBuilder = new AeronIngressWritePayloadBuilder();
+        this.ingressControlPayloadBuilder = new AeronIngressControlPayloadBuilder();
         this.clusterStateView = new AeronClusterStateView(selfUrl, peerUrls, nodeIdToUrl, this::isSameUrlByPort);
         this.internalIngressEndpointPlanner = AeronIngressEndpointPlanner.systemFromUrls(selfUrl, peerUrls);
-        this.internalClusterClientConnector = AeronEngineComponentFactory.createInternalClusterClientConnector();
+        this.internalClusterClientConnector = new AeronInternalClusterClientConnector();
         this.internalIngressClientManager = new AeronInternalIngressClientManager(
             () -> internalClusterClientConnector,
             internalIngressEndpointPlanner,
             () -> aeronDirectoryName
         );
-        this.leaderDiscoveryService = AeronEngineComponentFactory.createLeaderDiscoveryService(nodeIdToUrl, peerUrls, selfUrl);
-        this.messageDispatcher = AeronEngineComponentFactory.createMessageDispatcher(
+        this.leaderDiscoveryService = new LeaderDiscoveryService(nodeIdToUrl, peerUrls);
+        this.leaderDiscoveryService.setSelfUrl(selfUrl);
+        this.messageDispatcher = new MessageDispatcher(
             new MessageDispatcher.WriteCallback() {
                 @Override
                 public void applyWrite(String walletAddress, String path, String contentType,
@@ -394,9 +260,7 @@ public class AeronConsensusEngine implements ClusteredService {
                         writeCallback.applyReplicatedWrite(walletAddress, path, contentType, 
                                                           message, signature, intentToken, 
                                                           blobId, mimeType, ipfsCid, auditMetadata);
-                        
-                        // Track metrics after successful write
-                        trackWriteMetrics();
+                        backpressureManager.incrementAcknowledged();
                     } else {
                         throw new IllegalStateException("Replicated write callback unavailable");
                     }
@@ -408,9 +272,7 @@ public class AeronConsensusEngine implements ClusteredService {
                     // Delegate to existing delete application logic
                     if (writeCallback != null) {
                         writeCallback.applyReplicatedDelete(walletAddress, path, signature, auditMetadata);
-                        
-                        // Track metrics after successful delete
-                        trackWriteMetrics();
+                        backpressureManager.incrementAcknowledged();
                     } else {
                         throw new IllegalStateException("Replicated delete callback unavailable");
                     }
@@ -483,12 +345,12 @@ public class AeronConsensusEngine implements ClusteredService {
             }
         });
 
-        this.headStateService = AeronEngineComponentFactory.createHeadStateService(fileStore);
-        this.ingressHandler = AeronEngineComponentFactory.createIngressHandler(
-            messageCodec, messageDispatcher, this::markHeartbeat, this::applyGenesisCreation
-        );
-        this.sessionManager = AeronEngineComponentFactory.createSessionManager(this::markHeartbeat, null);
-        this.leaderTracker = AeronEngineComponentFactory.createLeaderTracker(leaderDiscoveryService);
+        this.headStateService = new HeadStateService(fileStore);
+        this.ingressHandler = new AeronIngressHandler(messageCodec, messageDispatcher);
+        this.ingressHandler.setHeartbeatCallback(this::markHeartbeat);
+        this.ingressHandler.setGenesisCallback(this::applyGenesisCreation);
+        this.sessionManager = new AeronSessionManager(this::markHeartbeat);
+        this.leaderTracker = new AeronLeaderTracker(leaderDiscoveryService);
         
         log.info("Aeron Consensus Engine initializing - Consensus: Aeron Cluster (Raft), Self: {}, Peers: {}, Wallet: {}", 
             selfUrl, peerUrls.size(), wallet.getWalletAddress());
@@ -545,27 +407,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * ✈️ AERON NATIVE: Set ingress channel URI for client connections.
-     * 
-     * This is the channel URI that clients use to connect to the cluster's ingress.
-     * For distributed cluster communication, UDP is required for multi-node Raft consensus.
-     * 
-     * @param ingressChannelUri The ingress channel URI (e.g., "aeron:udp" or "aeron:udp?endpoint=localhost:8010")
-     */
-    public void setIngressChannelUri(String ingressChannelUri) {
-        this.ingressChannelUri = ingressChannelUri;
-        log.info("✈️  Ingress channel URI set: {}", ingressChannelUri);
-    }
-    
-    /**
-     * ✈️ AERON NATIVE: Get ingress channel URI.
-     */
-    public String getIngressChannelUri() {
-        return ingressChannelUri;
-    }
-    
-    /**
-     * ✈️ AERON NATIVE: Set media driver directory name for client connections.
+     * Set media driver directory name for client connections.
      * This is required when creating Aeron clients to connect to the cluster's media driver.
      */
     public void setAeronDirectoryName(String aeronDirectoryName) {
@@ -575,60 +417,6 @@ public class AeronConsensusEngine implements ClusteredService {
     
     public String getAeronDirectoryName() {
         return aeronDirectoryName;
-    }
-    
-    /**
-     * Start the Aeron Cluster consensus engine.
-     * 
-     * This initializes Aeron Cluster with Raft consensus and begins
-     * participating in the consensus network.
-     */
-    public void start() {
-        try {
-            log.info("🔧 Initializing Aeron Cluster...");
-            
-            // Aeron Cluster initialization is handled by AeronClusterLauncher
-            // which configures: cluster nodes, Raft parameters, message handlers, state machine
-            
-            // Start background timer for checking pending HEAD broadcasts
-            // This ensures broadcasts happen even when no new writes arrive
-            // No background head broadcast timer in deterministic consensus mode.
-            
-            log.info("Aeron Consensus Engine started - Status: Ready");
-            
-        } catch (Exception e) {
-            log.error("❌ Failed to start Aeron Consensus Engine", e);
-            throw new RuntimeException("Aeron Cluster initialization failed", e);
-        }
-    }
-    
-    /**
-     * Stop the Aeron Cluster consensus engine.
-     */
-    public void stop() {
-        log.info("🛑 Stopping Aeron Consensus Engine...");
-        
-        // Stop background timer
-        // No head broadcast timer to stop in deterministic consensus mode.
-        stopReconnectScheduler();
-        if (beaconClient != null) {
-            beaconClient.stopBackgroundPolling();
-        }
-        backgroundCoordinator.close();
-        
-        // Aeron Cluster components are closed by AeronClusterLauncher.close()
-        // which handles: MediaDriver, Archive, ConsensusModule, ClusteredService
-        // }
-        // 
-        // if (cluster != null) {
-        //     try {
-        //         cluster.close();
-        //     } catch (Exception e) {
-        //         log.warn("Error closing Aeron cluster", e);
-        //     }
-        // }
-        
-        log.info("✅ Aeron Consensus Engine stopped");
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -727,7 +515,7 @@ public class AeronConsensusEngine implements ClusteredService {
             scheduleGenesisBootstrapIfMissing("initial leader");
         }
         
-        // ✈️ AERON NATIVE: Create internal AeronCluster client for sending writes through ingress
+        // Create internal AeronCluster client for sending writes through ingress
         // This allows us to send messages from within the ClusteredService
         // Uses UDP to connect to the cluster for reliable message delivery
         if (aeronDirectoryName != null && !aeronDirectoryName.isEmpty()
@@ -788,22 +576,12 @@ public class AeronConsensusEngine implements ClusteredService {
     
     @Override
     public void onSessionOpen(ClientSession session, long timestamp) {
-        if (sessionManager != null) {
-            sessionManager.onSessionOpen(session, timestamp);
-        } else {
-            log.info("Client session opened: {} (timestamp: {})", session.id(), timestamp);
-            markHeartbeat();
-        }
+        sessionManager.onSessionOpen(session, timestamp);
     }
     
     @Override
     public void onSessionClose(ClientSession session, long timestamp, CloseReason closeReason) {
-        if (sessionManager != null) {
-            sessionManager.onSessionClose(session, timestamp, closeReason);
-        } else {
-            log.info("Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
-            markHeartbeat();
-        }
+        sessionManager.onSessionClose(session, timestamp, closeReason);
         internalIngressClientManager.handleClusterSessionClose(session.id(), closeReason);
     }
     
@@ -839,7 +617,7 @@ public class AeronConsensusEngine implements ClusteredService {
             throw applyFailStop(applicationFailure, header != null ? header.position() : -1L);
         }
         publishPosition(header.position(), timestamp);
-        // ✈️ AERON NATIVE: Handle replicated write proposals
+        // Handle replicated write proposals
         // This callback is invoked on ALL nodes after Aeron replicates the message via Raft
         // Deterministic state machine: ALL nodes process messages in same order
         try {
@@ -874,19 +652,6 @@ public class AeronConsensusEngine implements ClusteredService {
                 AeronException.Category.FATAL));
     }
 
-    /**
-     * ✈️ AERON NATIVE: Send write proposal through Aeron ingress channel for replication.
-     * 
-     * This method sends the write proposal through Aeron's ingress channel, which
-     * automatically replicates it to all cluster members via Raft consensus.
-     * 
-     * @param walletAddress Ethereum wallet address
-     * @param path Write path
-     * @param contentType Content type
-     * @param message Message content
-     * @param signature Signature
-     * @return true if sent successfully, false otherwise
-     */
     /**
      * Create internal AeronCluster client lazily (on first write attempt).
      * This avoids timeout issues during cluster startup.
@@ -1048,264 +813,37 @@ public class AeronConsensusEngine implements ClusteredService {
     }
 
     private boolean sendTransactionMessage(AeronEncodedMessage encoded, String label) {
-        if (!ensureIngressClient("transaction message (" + label + ")", INGRESS_CLIENT_REQUEST_WAIT_MS)) {
-            return false;
-        }
-        return sendEncodedMessage(
-            encoded,
-            "TX " + label,
-            () -> {
-                ingressTimestamps.offer(System.nanoTime());
-                performanceMetrics.recordMessageIngressed();
-            }
-        );
+        return ensureIngressClient("transaction message (" + label + ")", INGRESS_CLIENT_REQUEST_WAIT_MS)
+            && sendEncodedMessage(encoded, "TX " + label, null);
     }
     
-    public boolean sendWriteThroughIngress(String walletAddress, String path, 
-                                           String contentType, String message, String signature) {
-        return sendWriteThroughIngressWithId(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            null,
-            MutationAuditMetadata.write(null, null, null, null, null, null, null)
-        );
-    }
-    
-    public boolean sendWriteThroughIngressWithId(String walletAddress, String path, 
-                                                 String contentType, String message, String signature,
-                                                 String ipfsCid, String proposalId) {
-        return sendWriteThroughIngressWithId(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            ipfsCid,
-            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
-        );
-    }
-
-    public boolean sendWriteThroughIngressWithId(String walletAddress, String path,
-                                                 String contentType, String message, String signature,
-                                                 String ipfsCid, MutationAuditMetadata auditMetadata) {
-        if (cluster == null) {
-            log.error("❌ Cluster not initialized - cannot send write through ingress");
-            return false;
-        }
-        
-        if (!ensureInternalClusterClient()) {
-            log.error("❌ Internal AeronCluster client not available - cannot send write through ingress");
-            return false;
-        }
-        
-        try {
-            AeronEncodedMessage encoded =
-                ingressWritePayloadBuilder.buildWriteProposal(
-                    walletAddress,
-                    path,
-                    contentType,
-                    message,
-                    signature,
-                    getIngressTerm(),
-                    ipfsCid,
-                    normalizeAuditMetadata(auditMetadata, MutationAuditMetadata.Operation.WRITE)
-                );
-            
-            // ✈️ AERON CLUSTER: Send message through internal AeronCluster client
-            // This is the correct way to send messages - AeronCluster.offer() sends through ingress
-            // Aeron then replicates the message to ALL nodes via Raft, and onSessionMessage() is called on each node
-            
-            try {
-                boolean sent = sendEncodedMessage(
-                    encoded,
-                    "write ingress",
-                    () -> {
-                        ingressTimestamps.offer(System.nanoTime());
-                        performanceMetrics.recordMessageIngressed();
-                        backpressureManager.incrementSent();
-                    }
-                );
-                if (sent) {
-                    log.debug("✅ Write sent through AeronCluster.offer() - will replicate to all nodes via Raft");
-                }
-                return sent;
-            } catch (Exception e) {
-                log.error("❌ Exception sending write through AeronCluster client", e);
-                return false;
-            }
-            
-        } catch (Exception e) {
-            log.error("❌ Exception sending write through ingress", e);
-            return false;
-        }
-    }
-    
-    /**
-     * Send a write proposal with binary metadata through Aeron ingress.
-     * This overload includes blobId and mimeType for eager binary uploads.
-     */
-    public boolean sendWriteThroughIngress(String walletAddress, String path, 
-                                           String contentType, String message, String signature,
-                                           String blobId, String mimeType) {
-        return sendWriteThroughIngress(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            blobId,
-            mimeType,
-            null,
-            MutationAuditMetadata.write(null, null, null, null, null, null, null)
-        );
-    }
-    
-    public boolean sendWriteThroughIngress(String walletAddress, String path,
-                                           String contentType, String message, String signature,
-                                           String blobId, String mimeType,
-                                           String ipfsCid, String proposalId) {
-        return sendWriteThroughIngress(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            blobId,
-            mimeType,
-            ipfsCid,
-            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
-        );
-    }
-
     public boolean sendWriteThroughIngress(String walletAddress, String path,
                                            String contentType, String message, String signature,
                                            String blobId, String mimeType,
                                            String ipfsCid, MutationAuditMetadata auditMetadata) {
-        if (cluster == null) {
-            log.error("❌ Cluster not initialized - cannot send write through ingress");
-            return false;
-        }
-        
-        if (!ensureInternalClusterClient()) {
-            log.error("❌ Internal AeronCluster client not available - cannot send write through ingress");
-            return false;
-        }
-        
-        try {
-            AeronEncodedMessage encoded =
-                ingressWritePayloadBuilder.buildWriteProposalWithBinary(
-                    walletAddress,
-                    path,
-                    contentType,
-                    message,
-                    signature,
-                    getIngressTerm(),
-                    blobId,
-                    mimeType,
-                    ipfsCid,
-                    normalizeAuditMetadata(auditMetadata, MutationAuditMetadata.Operation.WRITE)
-                );
+        return sendThroughIngress("write (binary)", () -> {
+            AeronEncodedMessage encoded = ingressWritePayloadBuilder.buildWriteProposalWithBinary(
+                walletAddress, path, contentType, message, signature, getIngressTerm(), blobId, mimeType, ipfsCid,
+                normalizeAuditMetadata(auditMetadata, MutationAuditMetadata.Operation.WRITE));
             log.debug("📤 Sending write with binary - JSON size: {} bytes", encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH);
             if (blobId != null && !blobId.isEmpty()) {
                 log.info("📎 Including blobId in Aeron JSON: {}", blobId);
             }
-            
-            try {
-                boolean sent = sendEncodedMessage(
-                    encoded,
-                    "write (binary) ingress",
-                    () -> {
-                        ingressTimestamps.offer(System.nanoTime());
-                        performanceMetrics.recordMessageIngressed();
-                        backpressureManager.incrementSent();
-                    }
-                );
-                if (sent) {
-                    log.debug("✅ Write with binary sent through AeronCluster.offer() - blobId={}", blobId);
-                }
-                return sent;
-            } catch (Exception e) {
-                log.error("❌ Exception sending write through AeronCluster client", e);
-                return false;
-            }
-            
-        } catch (Exception e) {
-            log.error("❌ Exception sending write through ingress", e);
-            return false;
-        }
+            return encoded;
+        }, 1);
     }
     
-    /**
-     * Send a DELETE proposal through Aeron ingress for consensus replication.
-     * Same flow as writes, just different template ID and simpler JSON.
-     * 
-     * @param walletAddress Ethereum wallet address of content owner
-     * @param path Content path to delete
-     * @param signature Transaction signature
-     * @return true if successfully sent
-     */
-    public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature) {
-        return sendDeleteThroughIngress(
-            walletAddress,
-            path,
-            signature,
-            MutationAuditMetadata.delete(null, null, null, null, null, null, null)
-        );
-    }
-    
-    public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature, String proposalId) {
-        return sendDeleteThroughIngress(
-            walletAddress,
-            path,
-            signature,
-            MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null)
-        );
-    }
-
     public boolean sendDeleteThroughIngress(String walletAddress, String path, String signature,
                                             MutationAuditMetadata auditMetadata) {
-        if (cluster == null) {
-            log.error("❌ Cluster not initialized - cannot send delete through ingress");
-            return false;
+        boolean sent = sendThroughIngress("delete", () -> {
+            log.info("🗑️  SENDING DELETE through ingress: wallet={}, path={}", walletAddress, path);
+            return ingressWritePayloadBuilder.buildDeleteProposal(walletAddress, path, signature, getIngressTerm(),
+                normalizeAuditMetadata(auditMetadata, MutationAuditMetadata.Operation.DELETE));
+        }, 1);
+        if (sent) {
+            log.info("✅ DELETE sent through AeronCluster.offer() - will replicate to all nodes via Raft");
         }
-        
-        if (!ensureInternalClusterClient()) {
-            log.error("❌ Internal AeronCluster client not available - cannot send delete through ingress");
-            return false;
-        }
-        
-        log.info("🗑️  SENDING DELETE through ingress: wallet={}, path={}", walletAddress, path);
-        
-        try {
-            AeronEncodedMessage encoded =
-                ingressWritePayloadBuilder.buildDeleteProposal(
-                    walletAddress,
-                    path,
-                    signature,
-                    getIngressTerm(),
-                    normalizeAuditMetadata(auditMetadata, MutationAuditMetadata.Operation.DELETE)
-                );
-            
-            boolean sent = sendEncodedMessage(
-                encoded,
-                "delete ingress",
-                () -> {
-                    ingressTimestamps.offer(System.nanoTime());
-                    performanceMetrics.recordMessageIngressed();
-                    backpressureManager.incrementSent();
-                }
-            );
-            if (sent) {
-                log.info("✅ DELETE sent through AeronCluster.offer() - will replicate to all nodes via Raft");
-            }
-            return sent;
-        } catch (Exception e) {
-            log.error("❌ Exception sending delete through ingress", e);
-            return false;
-        }
+        return sent;
     }
     
     /**
@@ -1316,26 +854,10 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return number of proposals successfully sent (all or none for atomic batch)
      */
     public int sendWriteBatchThroughIngress(java.util.List<org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal> proposals) {
-        if (cluster == null) {
-            log.error("❌ Cluster not initialized - cannot send batch write through ingress");
-            return 0;
-        }
-        
         if (proposals == null || proposals.isEmpty()) {
             return 0;
         }
-        
-        log.debug("🔍DEBUG_BATCH [1]: sendWriteBatchThroughIngress() ENTRY - batch size: {}, role: {}", 
-            proposals.size(), publishedRole);
-        
-        if (!ensureInternalClusterClient()) {
-            log.error("❌ Internal AeronCluster client not available - cannot send batch write through ingress");
-            return 0;
-        }
-        
-        log.debug("🔍DEBUG_BATCH [4]: Building JSON batch with {} proposals", proposals.size());
-        
-        try {
+        boolean sent = sendThroughIngress("batch", () -> {
             for (org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal proposal : proposals) {
                 log.debug("🔍 Serializing proposal: path={}, blobId={}", proposal.getPath(), proposal.getBlobId());
                 if (proposal.getBlobId() != null && !proposal.getBlobId().isEmpty()) {
@@ -1345,49 +867,34 @@ public class AeronConsensusEngine implements ClusteredService {
                     log.debug("🔗 Including ipfsCid in Aeron JSON: {}", proposal.getIpfsCid());
                 }
             }
+            return ingressWritePayloadBuilder.buildWriteBatch(proposals, getIngressTerm());
+        }, proposals.size());
+        if (sent) {
+            log.debug("✅ Batch write sent through AeronCluster.offer() - {} proposals will replicate via Raft", proposals.size());
+        }
+        return sent ? proposals.size() : 0;
+    }
 
-            AeronEncodedMessage encoded =
-                ingressWritePayloadBuilder.buildWriteBatch(
-                    proposals,
-                    getIngressTerm()
-                );
-            
-            log.debug("🔍DEBUG_BATCH [5]: JSON built - size: {} bytes, first 100 chars: {}", 
-                encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH,
-                encoded.json.substring(0, Math.min(100, encoded.json.length())));
-            
-            log.debug("🔍DEBUG_BATCH [6]: Encoding SBE header - blockLength: {}, templateId: {} (WRITE_BATCH)", 
-                encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH, encoded.templateId);
-            
-            // ✈️ AERON CLUSTER: Send batch message through internal AeronCluster client
-            log.debug("🔍DEBUG_BATCH [7]: About to offer through the ingress owner - totalLength: {} bytes", encoded.totalLength);
-            
-            try {
-                boolean sent = sendEncodedMessage(
-                    encoded,
-                    "batch ingress",
-                    () -> {
-                        log.debug("🔍DEBUG_BATCH [8]: offer() SUCCESS");
-                        ingressTimestamps.offer(System.nanoTime());
-                        performanceMetrics.recordMessageIngressed();
-                        log.debug("🔍DEBUG_BATCH [11]: Tracked ingress timestamp and metrics");
-                        backpressureManager.incrementSent(proposals.size());
-                    }
-                );
-                if (!sent) {
-                    return 0;
-                }
-                log.debug("🔍DEBUG_BATCH [12]: ✅ COMPLETE - Batch sent to Aeron ingress, {} proposals will replicate via Raft", proposals.size());
-                log.debug("✅ Batch write sent through AeronCluster.offer() - {} proposals will replicate via Raft", proposals.size());
-                return proposals.size();
-            } catch (Exception e) {
-                log.error("❌ Exception sending batch write through AeronCluster client (batch size: {})", proposals.size(), e);
-                return 0;
-            }
-            
+    /**
+     * Guards, builds and offers one proposal through the internal ingress client. The payload is built only
+     * after the cluster and client checks pass; {@code proposals} is the write backpressure count on success.
+     */
+    private boolean sendThroughIngress(String what, java.util.function.Supplier<AeronEncodedMessage> payload,
+                                       long proposals) {
+        if (cluster == null) {
+            log.error("❌ Cluster not initialized - cannot send {} through ingress", what);
+            return false;
+        }
+        if (!ensureInternalClusterClient()) {
+            log.error("❌ Internal AeronCluster client not available - cannot send {} through ingress", what);
+            return false;
+        }
+        try {
+            return sendEncodedMessage(payload.get(), what + " ingress",
+                () -> backpressureManager.incrementSent(proposals));
         } catch (Exception e) {
-            log.error("❌ Exception sending batch write through ingress (batch size: {})", proposals.size(), e);
-            return 0;
+            log.error("❌ Exception sending {} through ingress", what, e);
+            return false;
         }
     }
 
@@ -1445,7 +952,6 @@ public class AeronConsensusEngine implements ClusteredService {
      * Set the GC application callback.
      * 
      * <p>Wires the callback to MessageDispatcher for delegated GC message handling.
-     * Note: The callback is not stored as a field since it's only used to wire to MessageDispatcher.
      */
     public void setGCCallback(GCApplicationCallback callback) {
         this.gcApplicationCallback = callback;
@@ -1490,32 +996,8 @@ public class AeronConsensusEngine implements ClusteredService {
     public boolean sendGCProposalThroughIngress(String proposalId, String proposerWallet, 
                                                 String targetRevision, long estimatedReclaimableSizeMB,
                                                 String estimatedCostUSDC) {
-        if (cluster == null) {
-            log.error("❌ Cluster not initialized - cannot send GC proposal through ingress");
-            return false;
-        }
-        
-        if (!ensureInternalClusterClient()) {
-            log.error("❌ Internal AeronCluster client not available - cannot send GC proposal");
-            return false;
-        }
-        
-        try {
-            return sendMessageWithRetry(
-                ingressControlPayloadBuilder.buildGcProposal(
-                    proposalId,
-                    proposerWallet,
-                    targetRevision,
-                    estimatedReclaimableSizeMB,
-                    estimatedCostUSDC
-                ),
-                "GC_PROPOSAL"
-            );
-            
-        } catch (Exception e) {
-            log.error("❌ Exception sending GC proposal through ingress", e);
-            return false;
-        }
+        return sendGc("GC_PROPOSAL", () -> ingressControlPayloadBuilder.buildGcProposal(
+            proposalId, proposerWallet, targetRevision, estimatedReclaimableSizeMB, estimatedCostUSDC));
     }
     
     /**
@@ -1529,26 +1011,7 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public boolean sendGCVoteThroughIngress(String proposalId, int validatorId, 
                                             boolean approve, String reason) {
-        if (cluster == null) {
-            log.error("❌ Cluster not initialized - cannot send GC vote through ingress");
-            return false;
-        }
-        
-        if (!ensureInternalClusterClient()) {
-            log.error("❌ Internal AeronCluster client not available - cannot send GC vote");
-            return false;
-        }
-        
-        try {
-            return sendMessageWithRetry(
-                ingressControlPayloadBuilder.buildGcVote(proposalId, validatorId, approve, reason),
-                "GC_VOTE"
-            );
-            
-        } catch (Exception e) {
-            log.error("❌ Exception sending GC vote through ingress", e);
-            return false;
-        }
+        return sendGc("GC_VOTE", () -> ingressControlPayloadBuilder.buildGcVote(proposalId, validatorId, approve, reason));
     }
     
     /**
@@ -1561,51 +1024,16 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return true if execute command was sent successfully
      */
     public boolean sendGCExecuteThroughIngress(String proposalId, int executorId) {
-        if (cluster == null) {
-            log.error("❌ Cluster not initialized - cannot send GC execute through ingress");
-            return false;
-        }
-        
-        if (!ensureInternalClusterClient()) {
-            log.error("❌ Internal AeronCluster client not available - cannot send GC execute");
-            return false;
-        }
-        
-        try {
-            return sendMessageWithRetry(
-                ingressControlPayloadBuilder.buildGcExecute(proposalId, executorId),
-                "GC_EXECUTE"
-            );
-            
-        } catch (Exception e) {
-            log.error("❌ Exception sending GC execute through ingress", e);
-            return false;
-        }
+        return sendGc("GC_EXECUTE", () -> ingressControlPayloadBuilder.buildGcExecute(proposalId, executorId));
     }
-    
-    /**
-     * Helper method to send a message through Aeron with retry logic.
-     */
-    private boolean sendMessageWithRetry(AeronEncodedMessage encoded, String messageType) {
-        try {
-            boolean sent = sendEncodedMessage(
-                encoded,
-                messageType + " ingress",
-                () -> {
-                    ingressTimestamps.offer(System.nanoTime());
-                    performanceMetrics.recordMessageIngressed();
-                    // Transaction control messages are not proposal writes; do not affect write backpressure.
-                }
-            );
-            if (sent) {
-                log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", messageType);
-            }
-            return sent;
-            
-        } catch (Exception e) {
-            log.error("❌ Exception sending {} through AeronCluster client", messageType, e);
-            return false;
+
+    /** GC control messages are not proposal writes, so they do not count toward write backpressure. */
+    private boolean sendGc(String messageType, java.util.function.Supplier<AeronEncodedMessage> payload) {
+        boolean sent = sendThroughIngress(messageType, payload, 0);
+        if (sent) {
+            log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", messageType);
         }
+        return sent;
     }
 
     private boolean ensureIngressClient(String operationDescription, long waitMs) {
@@ -1659,18 +1087,6 @@ public class AeronConsensusEngine implements ClusteredService {
             encoded.buffer, encoded.totalLength, messageType, INGRESS_CLIENT_REQUEST_WAIT_MS);
     }
     
-    /**
-     * Escape JSON string (simple implementation).
-     */
-    private String escapeJson(String str) {
-        if (str == null) return "";
-        return str.replace("\\", "\\\\")
-                  .replace("\"", "\\\"")
-                  .replace("\n", "\\n")
-                  .replace("\r", "\\r")
-                  .replace("\t", "\\t");
-    }
-    
     @Override
     public void onTimerEvent(long correlationId, long timestamp) {
         publishPosition(cluster.logPosition(), timestamp);
@@ -1682,17 +1098,13 @@ public class AeronConsensusEngine implements ClusteredService {
         }
     }
     
-    // Note: onTakeSnapshot() is implemented above (line 507) with full snapshot support
-    // Snapshot loading happens in onStart() when snapshotImage is provided
-    // There is no onLoadSnapshot() method in ClusteredService interface
-    
     @Override
     public void onRoleChange(Cluster.Role newRole) {
         publishedRole = newRole;
         log.info("Role change: {} -> {}", currentRole, newRole.name());
         markHeartbeat();
         
-        // ✈️ AERON NATIVE: Track leadership rotation history
+        // Track leadership rotation history
         // Note: onRoleChange() is called with the NEW role, so we need to track previous role
         Cluster.Role previousRole;
         // Map our ValidatorRole to Cluster.Role for history (before we update)
@@ -1718,31 +1130,25 @@ public class AeronConsensusEngine implements ClusteredService {
             selfUrl
         );
         
-        if (leaderTracker != null) {
-            leaderTracker.recordChange(
-                change.newRole,
-                change.previousRole,
-                change.term,
-                change.memberId,
-                change.memberUrl,
-                change.timestamp,
-                change.clusterTime
-            );
-            leaderTracker.invalidateCache();
-            log.debug("Leadership history: {} total changes", leaderTracker.getLeadershipHistory(0).size());
-        }
+        leaderTracker.recordChange(
+            change.newRole,
+            change.previousRole,
+            change.term,
+            change.memberId,
+            change.memberUrl,
+            change.timestamp,
+            change.clusterTime
+        );
+        leaderTracker.invalidateCache();
+        log.debug("Leadership history: {} total changes", leaderTracker.getLeadershipHistory(0).size());
         
         if (newRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Now LEADER (term: {})", currentTerm);
-            if (leaderTracker != null) {
-                leaderTracker.notifyBecameLeader(memberId);
-            }
+            leaderTracker.notifyBecameLeader(memberId);
             scheduleGenesisBootstrapIfMissing("new leader");
         } else if (previousRole == Cluster.Role.LEADER) {
             log.info("Leadership rotation: Stepped down from LEADER (term: {})", currentTerm);
-            if (leaderTracker != null) {
-                leaderTracker.notifyLostLeadership();
-            }
+            leaderTracker.notifyLostLeadership();
         }
 
         handleIngressClientRoleChange(previousRole, newRole);
@@ -1776,7 +1182,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * ✈️ AERON NATIVE: Get leadership rotation history.
+     * Get leadership rotation history.
      * 
      * Returns history of role changes tracked via onRoleChange() callbacks.
      * 
@@ -1784,9 +1190,6 @@ public class AeronConsensusEngine implements ClusteredService {
      * @return List of leadership changes, most recent first
      */
     public java.util.List<LeadershipChange> getLeadershipHistory(int limit) {
-        if (leaderTracker == null) {
-            return Collections.emptyList();
-        }
         return leaderTracker.getLeadershipHistory(limit);
     }
     
@@ -1796,11 +1199,6 @@ public class AeronConsensusEngine implements ClusteredService {
 
         internalIngressClientManager.close();
         backgroundCoordinator.close();
-        
-        // Cleanup resources
-        if (beaconClient != null) {
-            // Stop Ethereum epoch polling
-        }
     }
     
     /**
@@ -1842,7 +1240,7 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * Get current validator role (LEADER, FOLLOWER, etc.).
      * 
-     * ✈️ AERON NATIVE: Uses the role published by onStart/onRoleChange.
+     * Uses the role published by onStart/onRoleChange.
      */
     public ValidatorRole getCurrentRole() {
         Cluster.Role aeronRole = publishedRole;
@@ -1860,7 +1258,7 @@ public class AeronConsensusEngine implements ClusteredService {
     /**
      * Check if this validator is currently the leader.
      * 
-     * ✈️ AERON NATIVE: Uses the role published by onStart/onRoleChange.
+     * Uses the role published by onStart/onRoleChange.
      */
     public boolean isLeader() {
         Cluster.Role aeronRole = publishedRole;
@@ -1887,11 +1285,8 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public boolean isClusterHealthy() {
         // The ingress client belongs to its owner thread; health does not read it.
-        return !hasApplicationFailure() && genesisVerified && healthService.isClusterHealthy(
-            publishedRole,
-            this::hasQuorum,
-            () -> null
-        );
+        return !hasApplicationFailure() && genesisVerified
+            && healthService.isClusterHealthy(publishedRole, this::hasQuorum);
     }
     
     /**
@@ -1908,140 +1303,11 @@ public class AeronConsensusEngine implements ClusteredService {
         if (!genesisVerified) {
             return "canonical_genesis_not_verified";
         }
-        return healthService.getUnhealthyReason(
-            publishedRole,
-            this::hasQuorum,
-            () -> null
-        );
+        return healthService.getUnhealthyReason(publishedRole, this::hasQuorum);
     }
 
     public Map<String, Object> getInternalIngressClientDiagnostics() {
         return internalIngressClientManager.diagnostics();
-    }
-    
-    // HEAD tracking and finality-aware commits are handled by HeadStateService.
-    
-    /**
-     * Legacy API name retained for compatibility with earlier consensus designs.
-     * In deterministic Aeron consensus, this does NOT broadcast; it only updates
-     * the tracked HEAD state for health/status endpoints.
-     *
-     * @param newHeadStr The new HEAD RecordId as string
-     */
-    public void scheduleHeadBroadcast(String newHeadStr) {
-        headStateService.updateLatestHead(newHeadStr);
-    }
-    
-    /**
-     * Legacy no-op retained for compatibility with earlier batching logic.
-     * Deterministic consensus doesn't use broadcast batching.
-     */
-    public void configureHeadBroadcastBatching(int batchSizeWrites, long batchIntervalMs) {
-        log.debug("configureHeadBroadcastBatching() is a no-op (deterministic consensus)");
-    }
-    
-    /**
-     * Legacy API name retained for compatibility. In deterministic consensus this
-     * does NOT broadcast; it only updates tracked HEAD state.
-     *
-     * @param newHeadStr The new HEAD RecordId as string
-     */
-    public void broadcastHeadToFollowersImmediate(String newHeadStr) {
-        headStateService.updateLatestHead(newHeadStr);
-    }
-    
-    /**
-     * Check if we've reached a finality boundary and commit the finalized HEAD state.
-     *
-     * <p>🔄 IDEMPOTENT FINALITY BOUNDARY DETECTION:
-     * Uses exactly-once semantics: {@code if (currentFinalizedEpoch >= lastCommittedEpoch + 2)}.
-     * This ensures we only commit once per finality boundary, even if:
-     * - Polls are missed or delayed
-     * - Node restarts and catches up
-     * - Multiple epochs finalize while node was offline
-     *
-     * <p>📊 ROLLING 2-EPOCH WINDOW:
-     * This ensures all validators commit the same finality-eligible writes:
-     * - Epoch N: Writes arrive (pending finality)
-     * - Epoch N+1: Still pending finality
-     * - Epoch N+2: Reaches finality → Commit HEAD state
-     *
-     * <p>Deterministic consensus: this does not broadcast; it only updates tracked
-     * HEAD state used by health/status endpoints and finality bookkeeping.
-     *
-     * @param currentFinalizedEpoch The current finalized epoch (2 epochs behind current)
-     * @param newHeadStr The new HEAD RecordId as string (if available)
-     * @return true if finality boundary was detected and HEAD state was committed
-     */
-    public boolean checkAndBroadcastAtFinalityBoundary(int currentFinalizedEpoch, String newHeadStr) {
-        return headStateService.checkAndCommitFinalityBoundary(isLeader(), currentFinalizedEpoch, newHeadStr);
-    }
-    
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // REMOVED: broadcastHeadToFollowers() and notifyFollowersToSyncSegments()
-    // 
-    // These methods were pre-Aeron legacy code for HTTP-based HEAD broadcasting.
-    // With Aeron Cluster, HEAD consistency is handled automatically:
-    //   1. All writes go through Aeron's Raft consensus log
-    //   2. All nodes execute identical replicated writes deterministically
-    //   3. HEAD consistency is guaranteed by Raft - no manual broadcasts needed
-    //
-    // See: ADR 025 - Aeron Raft handles consistency
-    // Removed: January 2026 (tech debt cleanup)
-    // syncHeadFromLeaderOnStartup() removed - Aeron Raft handles HEAD consistency automatically
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Pull segments for a specific HEAD from the leader.
-     * Called by followers when they receive a HEAD update broadcast.
-     * 
-     * @param headStr The HEAD RecordId to replicate
-     * @param leaderUrl The URL of the leader validator
-     * @return Number of segments replicated
-     * @throws Exception if replication fails
-     */
-    public int pullSegmentsForHead(String headStr, String leaderUrl) throws Exception {
-        log.info("Pulling segments for HEAD from leader: {} (HEAD: {}...)", 
-            leaderUrl, headStr.substring(0, Math.min(16, headStr.length())));
-        
-        int segmentCount = replicator.fetchMissingSegmentsForHead(headStr, leaderUrl);
-        
-        log.info("Replicated {} segments for HEAD", segmentCount);
-        
-        // Update HEAD after fetching segments (like syncGenesisFromPeer pattern)
-        try {
-            org.apache.jackrabbit.oak.segment.RecordId newHead = 
-                org.apache.jackrabbit.oak.segment.RecordId.fromString(
-                    fileStore.getSegmentIdProvider(), 
-                    headStr
-                );
-            
-            // Use CAS (compare-and-set) to update HEAD (Cold Standby pattern)
-            org.apache.jackrabbit.oak.segment.RecordId currentHead = fileStore.getHead().getRecordId();
-            boolean updated = fileStore.getRevisions().setHead(currentHead, newHead);
-            
-            if (updated) {
-                log.info("Updated HEAD to match leader (CAS success)");
-                fileStore.flush();
-                headStateService.updateLatestHead(headStr);
-            } else {
-                log.warn("HEAD CAS failed - current HEAD has changed (may have advanced)");
-                org.apache.jackrabbit.oak.segment.RecordId actualHead = fileStore.getHead().getRecordId();
-                if (actualHead.toString().equals(headStr)) {
-                    log.info("HEAD already matches target (no update needed)");
-                    headStateService.updateLatestHead(headStr);
-                } else {
-                    log.debug("Current HEAD: {}...", actualHead.toString().substring(0, Math.min(16, actualHead.toString().length())));
-                    headStateService.updateLatestHead(actualHead.toString10());
-                }
-            }
-            
-        } catch (Exception e) {
-            log.error("Failed to update HEAD after replication: {}. Segments replicated but HEAD may not match leader", e.getMessage());
-            throw e; // Re-throw so caller knows sync may be incomplete
-        }
-        
-        return segmentCount;
     }
     
     /**
@@ -2063,7 +1329,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * ✈️ AERON NATIVE: Get native Aeron Cluster state.
+     * Get native Aeron Cluster state.
      * 
      * This exposes Aeron's internal cluster state directly using available native APIs.
      * Uses what's available from cluster object and falls back to our tracking for the rest.
@@ -2113,19 +1379,9 @@ public class AeronConsensusEngine implements ClusteredService {
     }
 
     /**
-     * Extract URL from Aeron endpoint string.
-    /**
      * Get current leader URL.
      * 
-     * ✈️ AERON CLUSTER SOURCE OF TRUTH:
-     * - If we're the leader, return self
-     * - Otherwise, query Aeron Cluster's /v1/aeron/cluster-state API from peers
-     * - This ensures consistency with Aeron's internal Raft state
-     */
-    /**
-     * Get current leader URL.
-     * 
-     * ✈️ AERON NATIVE: Uses cluster.clusterMembers() to find leader directly from Aeron.
+     * Uses cluster.clusterMembers() to find leader directly from Aeron.
      * This is the authoritative source - no HTTP API calls needed.
      * 
      * ✅ REFACTORED: Delegates to LeaderDiscoveryService for leader discovery.
@@ -2135,7 +1391,7 @@ public class AeronConsensusEngine implements ClusteredService {
             return currentLeader; // Fallback to cached value
         }
         
-        // ✈️ AERON NATIVE: If we're the leader, return self
+        // If we're the leader, return self
         if (publishedRole == Cluster.Role.LEADER) {
             return selfUrl;
         }
@@ -2210,18 +1466,10 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * ✈️ AERON NATIVE: Get Aeron Cluster instance (for accessing memberId, etc.).
+     * Get Aeron Cluster instance (for accessing memberId, etc.).
      */
     public Cluster getCluster() {
         return cluster;
-    }
-    
-    /**
-     * Get current node's member ID in the cluster.
-     * @return Member ID (0-based node index) or -1 if cluster not initialized
-     */
-    public int getMemberId() {
-        return cluster != null ? cluster.memberId() : -1;
     }
     
     /**
@@ -2239,133 +1487,6 @@ public class AeronConsensusEngine implements ClusteredService {
     public int getLeaderMemberId() {
         return clusterStateView.resolveLeaderMemberId(
             publishedRole, cluster != null ? cluster.memberId() : -1, currentLeader);
-    }
-    
-    /**
-     * Step down as leader to trigger a new election.
-     * Only works if this node is currently the leader.
-     * 
-     * <p><strong>Implementation:</strong> Uses Aeron's ConsensusModuleProxy to send
-     * a step-down request through the consensus module's control channel. This is
-     * the recommended approach for graceful leader transitions.
-     * 
-     * @return true if step-down initiated, false otherwise
-     */
-    public boolean stepDownAsLeader() {
-        if (cluster == null || publishedRole != Cluster.Role.LEADER) {
-            log.warn("Cannot step down - not currently leader (role: {})", publishedRole);
-            return false;
-        }
-        
-        try {
-            // ✈️ AERON CLUSTER: Request leadership resignation
-            // This triggers a new election among followers
-            log.info("🔄 Stepping down as leader to trigger election (current memberId: {})", 
-                cluster.memberId());
-            
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // AERON STEP-DOWN IMPLEMENTATION
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // Aeron Cluster provides two mechanisms for step-down:
-            // 
-            // 1. ConsensusModuleProxy.stepDown() - Direct API (requires control channel)
-            // 2. Session termination - Close the cluster session to trigger re-election
-            //
-            // We implement both approaches with fallback:
-            
-            boolean stepDownSuccess = false;
-            
-            // Approach 1: Try ConsensusModuleProxy if available
-            // This is the cleanest approach but requires access to the consensus module
-            try {
-                // The ConsensusModuleProxy is typically accessed through the container
-                // For now, we use the session-based approach which is more portable
-                log.debug("Attempting step-down via session termination...");
-                
-                // Approach 2: Terminate our leadership by closing the internal client
-                // This causes the cluster to detect leader absence and trigger election
-                if (internalIngressClientManager.isHealthy()) {
-                    log.info("🔄 Closing internal cluster client to trigger re-election...");
-
-                    // Close the client - this signals to the cluster that we're stepping down
-                    internalIngressClientManager.closeClientNow("leader step-down");
-                    
-                    // Update local state
-                    currentRole = ValidatorRole.FOLLOWER;
-                    currentLeader = null;
-                    
-                    // Record the step-down in leadership history
-                    recordLeadershipChange(Cluster.Role.FOLLOWER, Cluster.Role.LEADER, 
-                        currentTerm, cluster.memberId(), selfUrl);
-                    
-                    log.info("✅ Step-down initiated - cluster will elect new leader");
-                    log.info("   Previous role: LEADER");
-                    log.info("   New role: FOLLOWER (pending election)");
-                    
-                    stepDownSuccess = true;
-                }
-                
-            } catch (Exception e) {
-                log.warn("Step-down via client close failed: {}", e.getMessage());
-            }
-            
-            // If step-down succeeded, the cluster will elect a new leader
-            // We'll receive onRoleChange() callback when election completes
-            if (stepDownSuccess) {
-                log.info("🗳️  Waiting for cluster to elect new leader...");
-                return true;
-            }
-            
-            // Fallback: If we couldn't step down gracefully, log the situation
-            log.warn("⚠️  Graceful step-down not possible - cluster will detect via heartbeat timeout");
-            log.warn("   Election will occur when followers detect leader absence");
-            return false;
-            
-        } catch (Exception e) {
-            log.error("Failed to step down as leader", e);
-            return false;
-        }
-    }
-    
-    /**
-     * Record a leadership change in the history.
-     */
-    private void recordLeadershipChange(Cluster.Role newRole, Cluster.Role previousRole, 
-                                        int term, int memberId, String memberUrl) {
-        if (leaderTracker != null) {
-            leaderTracker.recordChange(
-                newRole,
-                previousRole,
-                term,
-                memberId,
-                memberUrl,
-                System.currentTimeMillis(),
-                publishedClusterTime
-            );
-        }
-    }
-    
-    /**
-     * Discover leader using tracked state + cache, minimizing HTTP queries to peers.
-     * 
-     * ✈️ AERON CLUSTER SOURCE OF TRUTH:
-     * 1. PRIMARY: Use tracked currentLeader (set by onRoleChange) - NO HTTP calls!
-     * 2. SECONDARY: Check cache (10s TTL)
-     * 3. FALLBACK: Query /v1/aeron/cluster-state from peers (only during initial formation)
-     * 
-     * ⚡ PERFORMANCE: Once cluster is formed and leader discovered, essentially zero cost.
-     * 
-     * ✅ REFACTORED: Delegates to LeaderDiscoveryService for leader discovery.
-     */
-    private String discoverLeaderFromAeronClusterState() {
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // STEP 1: Use tracked currentLeader (set by onRoleChange)
-        if (currentLeader != null && currentLeader.equals(selfUrl)) {
-            return currentLeader;
-        }
-        
-        // ✅ REFACTORED: Delegate to LeaderDiscoveryService
-        return leaderDiscoveryService.discoverLeader(publishedRole);
     }
     
     /**
@@ -2438,59 +1559,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Track metrics after a successful write/delete operation.
-     * 
-     * <p>Called from MessageDispatcher callbacks to track:
-     * <ul>
-     *   <li>Backpressure acknowledgment</li>
-     *   <li>Replication latency</li>
-     *   <li>Write throughput</li>
-     *   <li>Queue depths</li>
-     * </ul>
-     */
-    private void trackWriteMetrics() {
-        // Track acknowledgment for backpressure management
-        backpressureManager.incrementAcknowledged();
-        
-        // Track replication latency for Raft performance metrics
-        Long ingressTimestampNanos = ingressTimestamps.poll();
-        if (ingressTimestampNanos != null) {
-            performanceMetrics.recordMessageReplicated(ingressTimestampNanos);
-        } else {
-            performanceMetrics.recordMessageReplicated(System.nanoTime());
-        }
-        
-        // Track write throughput and log periodic summaries
-        long currentWriteCount = totalWritesProcessed.incrementAndGet();
-        long currentTime = System.currentTimeMillis();
-        
-        // Update queue depths for metrics
-        performanceMetrics.updateQueueDepths(0, backpressureManager.getPendingCount());
-        
-        // Log summary every 10 seconds
-        if (currentTime - lastSummaryLogTime >= SUMMARY_LOG_INTERVAL_MS) {
-            long writesInInterval = currentWriteCount - lastSummaryWriteCount;
-            long intervalSeconds = (currentTime - lastSummaryLogTime) / 1000;
-            if (intervalSeconds == 0) intervalSeconds = 1;
-            
-            double writesPerSecond = (double) writesInInterval / intervalSeconds;
-            
-            // Get Raft performance snapshot
-            AeronPerformanceMetrics.Snapshot metrics = performanceMetrics.getSnapshot();
-            
-            log.info("📊 Write Throughput: {} writes in {}s ({} writes/sec) | Total: {}", 
-                writesInInterval, intervalSeconds, String.format("%.1f", writesPerSecond),
-                currentWriteCount);
-            
-            // Log detailed Raft metrics
-            log.info(metrics.toSummaryString());
-            
-            lastSummaryLogTime = currentTime;
-            lastSummaryWriteCount = currentWriteCount;
-        }
-    }
-    
-    /**
      * Get committed HEAD (has reached finality, epoch N-2) - immutable, safe.
      * This HEAD is guaranteed to be finalized and will never change.
      */
@@ -2535,14 +1603,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Get non-voting followers (validators on probation).
-     */
-    public List<String> getNonVotingFollowers() {
-        // PRODUCTION_HARDENING: Implement probation logic for newly joined validators
-        return new java.util.ArrayList<>();
-    }
-    
-    /**
      * NEW GENESIS ARCHITECTURE: Create genesis via Aeron consensus.
      * 
      * This is called when the leader detects an empty store after cluster formation.
@@ -2564,27 +1624,11 @@ public class AeronConsensusEngine implements ClusteredService {
                 log.warn("Cannot send genesis trigger yet - internal cluster client unavailable");
                 return;
             }
-            AeronGenesisInitializer.GenesisProposal proposal =
-                AeronGenesisInitializer.GenesisProposal.create(0L, null);
-            String json = proposal.toJson();
-            byte[] jsonBytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            
-            // Encode message with GENESIS template ID
-            int blockLength = jsonBytes.length;
-            int templateId = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL;
-            
-            int totalLength = org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH + jsonBytes.length;
-            org.agrona.MutableDirectBuffer messageBuffer = new org.agrona.concurrent.UnsafeBuffer(new byte[totalLength]);
-            
-            // Encode SBE header
-            org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.encode(
-                messageBuffer, 0, blockLength, templateId);
-            
-            // Write JSON payload
-            messageBuffer.putBytes(org.apache.jackrabbit.oak.segment.consensus.aeron.SimpleMessageHeader.ENCODED_LENGTH, jsonBytes);
-            
+            AeronEncodedMessage encoded = AeronIngressPayloadSupport.encode(
+                SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL,
+                AeronGenesisInitializer.GenesisProposal.create(0L, null).toJson());
             boolean sent = internalIngressClientManager.offer(
-                messageBuffer, totalLength, "genesis ingress", INGRESS_CLIENT_REQUEST_WAIT_MS
+                encoded.buffer, encoded.totalLength, "genesis ingress", INGRESS_CLIENT_REQUEST_WAIT_MS
             ) == AeronInternalIngressClientManager.SendResult.SENT;
             if (sent) {
                 log.info("GENESIS trigger sent; creation time and bootstrap identity are assigned at replicated apply");
@@ -2610,13 +1654,6 @@ public class AeronConsensusEngine implements ClusteredService {
         genesisInitializer.initializeGenesisContent(
             AeronGenesisInitializer.GenesisProposal.create(timestamp, bootstrapValidator), logPosition);
         genesisVerified = genesisInitializer.verifyExistingGenesis();
-    }
-    
-    /**
-     * Get validator join times for probation tracking.
-     */
-    public Map<String, Long> getValidatorJoinTimes() {
-        return new java.util.HashMap<>(validatorJoinTimes);
     }
     
     /**
@@ -2667,15 +1704,6 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public org.apache.jackrabbit.oak.segment.consensus.queue.BackpressureManager getBackpressureManager() {
         return backpressureManager;
-    }
-    
-    /**
-     * Get Raft performance metrics (for monitoring and testing).
-     * 
-     * @return AeronPerformanceMetrics instance tracking consensus latency, throughput, utilization
-     */
-    public AeronPerformanceMetrics getPerformanceMetrics() {
-        return performanceMetrics;
     }
     
     /**
@@ -2788,10 +1816,6 @@ public class AeronConsensusEngine implements ClusteredService {
         healthService.markHeartbeat();
     }
     
-    private boolean isHeartbeatStale() {
-        return healthService.isHeartbeatStale();
-    }
-
     private static PeerProbeMode parsePeerProbeMode() {
         String raw = System.getProperty("oak.health.peerProbeMode");
         if (raw == null || raw.isEmpty()) {
@@ -2826,103 +1850,6 @@ public class AeronConsensusEngine implements ClusteredService {
         }
     }
     
-    private void scheduleReconnect(String reason) {
-        synchronized (reconnectLock) {
-            if (reconnectScheduler == null) {
-                reconnectScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                    Thread t = new Thread(r, "aeron-reconnect");
-                    t.setDaemon(true);
-                    return t;
-                });
-            }
-            if (reconnectInProgress) {
-                return;
-            }
-            reconnectInProgress = true;
-            reconnectScheduler.execute(() -> attemptReconnect(reason));
-        }
-    }
-    
-    private void attemptReconnect(String reason) {
-        attemptReconnectInternal(
-            reason,
-            reconnectMaxAttempts,
-            attempt -> Math.min(1000L * (1L << attempt), 30000L),
-            this::ensureInternalClusterClient,
-            this::sleepBackoff
-        );
-    }
-
-    void attemptReconnectForTest(
-            String reason,
-            int maxAttempts,
-            java.util.function.IntToLongFunction backoffMsFn,
-            Runnable ensureClientAction,
-            java.util.function.LongPredicate sleepFn) {
-        attemptReconnectInternal(reason, maxAttempts, backoffMsFn, ensureClientAction, sleepFn);
-    }
-
-    private void attemptReconnectInternal(
-            String reason,
-            int maxAttempts,
-            java.util.function.IntToLongFunction backoffMsFn,
-            Runnable ensureClientAction,
-            java.util.function.LongPredicate sleepFn) {
-        int boundedAttempts = Math.max(1, maxAttempts);
-        try {
-            log.warn("🔄 Attempting Aeron cluster reconnect (reason: {})", reason);
-            for (int attempt = 1; attempt <= boundedAttempts; attempt++) {
-                if (isInternalClusterClientHealthy()) {
-                    log.info("✅ Internal cluster client healthy, reconnect not needed");
-                    return;
-                }
-
-                ensureClientAction.run();
-
-                if (isInternalClusterClientHealthy()) {
-                    log.info("✅ Reconnected to cluster on attempt {}", attempt);
-                    return;
-                }
-
-                if (attempt >= boundedAttempts) {
-                    continue;
-                }
-                long backoffMs = backoffMsFn.applyAsLong(attempt);
-                log.warn("⚠️  Reconnect attempt {} failed - retrying in {}ms", attempt, backoffMs);
-                if (!sleepFn.test(backoffMs)) {
-                    return;
-                }
-            }
-            log.error("❌ Failed to reconnect after {} attempts", boundedAttempts);
-        } finally {
-            reconnectInProgress = false;
-        }
-    }
-
-    private boolean isInternalClusterClientHealthy() {
-        return internalIngressClientManager.isHealthy();
-    }
-
-    private boolean sleepBackoff(long backoffMs) {
-        try {
-            Thread.sleep(backoffMs);
-            return true;
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
-    }
-    
-    private void stopReconnectScheduler() {
-        synchronized (reconnectLock) {
-            if (reconnectScheduler != null) {
-                reconnectScheduler.shutdownNow();
-                reconnectScheduler = null;
-                reconnectInProgress = false;
-            }
-        }
-    }
-
     /** Called from service callbacks only. */
     private void publishPosition(long logPosition, long clusterTime) {
         publishedLogPosition = logPosition;

@@ -105,7 +105,7 @@ public class ConsensusWriteSafetyTest {
         AtomicInteger durable = new AtomicInteger();
         try (FileStoreFlushService flush = new FileStoreFlushService(fileStore)) {
             DeleteApplicationService service = new DeleteApplicationService(fileStore, store, flush);
-            service.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+            service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
                 public void onDurable(String proposalId, String head) {
                     durable.incrementAndGet();
                 }

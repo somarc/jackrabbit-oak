@@ -43,7 +43,6 @@ public class RateLimiterTest {
             assertEquals(0L, metrics.throttledRequests);
             assertEquals(0, metrics.activeClients);
             assertEquals(0, metrics.activeWallets);
-            assertEquals(0.0d, metrics.getThrottleRate(), 0.0d);
         } finally {
             limiter.shutdown();
         }
@@ -67,7 +66,6 @@ public class RateLimiterTest {
             assertEquals(1L, metrics.throttledRequests);
             assertEquals(1, metrics.activeClients);
             assertEquals(0, metrics.activeWallets);
-            assertEquals(0.5d, metrics.getThrottleRate(), 0.0d);
         } finally {
             limiter.shutdown();
         }

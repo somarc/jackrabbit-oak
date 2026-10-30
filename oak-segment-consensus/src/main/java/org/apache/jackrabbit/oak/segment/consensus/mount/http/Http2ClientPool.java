@@ -93,15 +93,6 @@ public class Http2ClientPool {
     }
     
     /**
-     * Returns the shared client instance used by this pool.
-     *
-     * @return the configured {@link HttpClient}
-     */
-    public HttpClient getHttpClient() {
-        return httpClient;
-    }
-    
-    /**
      * Fetches a binary resource and records protocol and byte counters.
      *
      * @param url the resource URL
@@ -117,13 +108,7 @@ public class Http2ClientPool {
         
         HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
         
-        // Record which protocol version the server negotiated for this request.
-        requestCount.incrementAndGet();
-        if (response.version() == HttpClient.Version.HTTP_2) {
-            http2RequestCount.incrementAndGet();
-        } else {
-            http1RequestCount.incrementAndGet();
-        }
+        recordVersion(response);
         
         byte[] body = response.body();
         totalBytesReceived.addAndGet(body.length);
@@ -151,13 +136,7 @@ public class Http2ClientPool {
         
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         
-        // Record which protocol version the server negotiated for this request.
-        requestCount.incrementAndGet();
-        if (response.version() == HttpClient.Version.HTTP_2) {
-            http2RequestCount.incrementAndGet();
-        } else {
-            http1RequestCount.incrementAndGet();
-        }
+        recordVersion(response);
         
         if (response.statusCode() != 200) {
             throw new RuntimeException("HTTP " + response.statusCode() + " for " + url);
@@ -200,13 +179,7 @@ public class Http2ClientPool {
             
             HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
             
-            requestCount.incrementAndGet();
-            if (response.version() == HttpClient.Version.HTTP_2) {
-                http2RequestCount.incrementAndGet();
-            } else {
-                http1RequestCount.incrementAndGet();
-            }
-            
+            recordVersion(response);
             return response.statusCode() == 200;
         } catch (Exception e) {
             String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
@@ -219,6 +192,15 @@ public class Http2ClientPool {
         }
     }
     
+    private void recordVersion(HttpResponse<?> response) {
+        requestCount.incrementAndGet();
+        if (response.version() == HttpClient.Version.HTTP_2) {
+            http2RequestCount.incrementAndGet();
+        } else {
+            http1RequestCount.incrementAndGet();
+        }
+    }
+
     /**
      * Returns the current counters in a log-friendly format.
      *
@@ -233,13 +215,6 @@ public class Http2ClientPool {
         
         return String.format("Requests=%d, HTTP/2=%d (%.1f%%), HTTP/1.1=%d, BytesReceived=%d", 
                              total, h2, h2Percent, h1, bytes);
-    }
-    
-    /**
-     * Log current statistics.
-     */
-    public void logStats() {
-        log.info("HTTP/2 Pool Stats: {}", getPoolStats());
     }
     
     /**

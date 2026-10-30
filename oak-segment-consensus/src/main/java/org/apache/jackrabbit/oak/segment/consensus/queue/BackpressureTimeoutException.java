@@ -28,14 +28,10 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
  * <p>Indicates the Aeron Cluster is under heavy load and cannot process writes at the current rate.
  */
 public class BackpressureTimeoutException extends RuntimeException {
-    
-    private final long pendingMessages;
-    private final long maxPendingMessages;
-    private final long timeoutMs;
-    
+
     public BackpressureTimeoutException(
-            long pendingMessages, 
-            long maxPendingMessages, 
+            long pendingMessages,
+            long maxPendingMessages,
             long timeoutMs) {
         super(String.format(
             "Backpressure timeout (%d ms): pending messages (%d) exceeded max (%d). " +
@@ -44,25 +40,5 @@ public class BackpressureTimeoutException extends RuntimeException {
             pendingMessages,
             maxPendingMessages
         ));
-        this.pendingMessages = pendingMessages;
-        this.maxPendingMessages = maxPendingMessages;
-        this.timeoutMs = timeoutMs;
-    }
-    
-    public long getPendingMessages() {
-        return pendingMessages;
-    }
-    
-    public long getMaxPendingMessages() {
-        return maxPendingMessages;
-    }
-    
-    public long getTimeoutMs() {
-        return timeoutMs;
-    }
-    
-    public boolean isRetryable() {
-        return true;
     }
 }
-

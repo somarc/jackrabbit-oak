@@ -128,7 +128,6 @@ public class AdaptivePackingBufferTest {
         QueuedProposal proposal = new QueuedProposal(
             proposalId,
             "0xtx-" + proposalId,
-            null,
             timestamp,
             timestamp + 30_000L,
             ProposalState.VERIFIED

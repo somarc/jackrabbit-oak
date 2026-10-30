@@ -20,11 +20,11 @@ import io.aeron.cluster.service.ClusteredService;
 import io.aeron.cluster.service.ClusteredServiceContainer;
 import org.junit.Test;
 
-import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class AeronClusterRuntimeBridgeTest {
@@ -41,15 +41,11 @@ public class AeronClusterRuntimeBridgeTest {
         AeronClusterFailureCoordinator failureCoordinator = mock(AeronClusterFailureCoordinator.class);
         MediaDriverHealthMonitor healthMonitor = mock(MediaDriverHealthMonitor.class);
 
-        AeronClusterRuntimeBridge.RuntimeBridgeResult result =
+        MediaDriverHealthMonitor started =
             new AeronClusterRuntimeBridge(engine, ignored -> healthMonitor)
                 .activate(container, "aeron-dir", failureCoordinator);
 
-        assertSame(healthMonitor, result.healthMonitor);
-        assertTrue(result.healthMonitorStarted);
-        assertTrue(result.ingressConfigured);
-        assertTrue(result.startupResetScheduled);
-        verify(engine).setIngressChannelUri("aeron:udp");
+        assertSame(healthMonitor, started);
         verify(engine).setAeronDirectoryName("aeron-dir");
         verify(failureCoordinator).scheduleSuccessfulStartupReset();
     }
@@ -64,13 +60,10 @@ public class AeronClusterRuntimeBridgeTest {
         ClusteredService service = mock(ClusteredService.class);
         AeronClusterFailureCoordinator failureCoordinator = mock(AeronClusterFailureCoordinator.class);
 
-        AeronClusterRuntimeBridge.RuntimeBridgeResult result =
-            new AeronClusterRuntimeBridge(service, ignored -> mock(MediaDriverHealthMonitor.class))
-                .activate(container, "ignored", failureCoordinator);
+        assertNull(new AeronClusterRuntimeBridge(service, ignored -> mock(MediaDriverHealthMonitor.class))
+            .activate(container, "ignored", failureCoordinator));
 
-        assertFalse(result.healthMonitorStarted);
-        assertFalse(result.ingressConfigured);
-        assertTrue(result.startupResetScheduled);
+        verifyNoInteractions(service);
         verify(failureCoordinator).scheduleSuccessfulStartupReset();
     }
 
@@ -85,14 +78,11 @@ public class AeronClusterRuntimeBridgeTest {
         ClusteredService service = mock(ClusteredService.class);
         AeronClusterFailureCoordinator failureCoordinator = mock(AeronClusterFailureCoordinator.class);
 
-        AeronClusterRuntimeBridge.RuntimeBridgeResult result =
-            new AeronClusterRuntimeBridge(service, ignored -> {
-                throw new IllegalStateException("boom");
-            }).activate(container, "ignored", failureCoordinator);
+        assertNull(new AeronClusterRuntimeBridge(service, ignored -> {
+            throw new IllegalStateException("boom");
+        }).activate(container, "ignored", failureCoordinator));
 
-        assertFalse(result.healthMonitorStarted);
-        assertFalse(result.ingressConfigured);
-        assertTrue(result.startupResetScheduled);
+        verifyNoInteractions(service);
         verify(failureCoordinator).scheduleSuccessfulStartupReset();
     }
 
@@ -103,12 +93,7 @@ public class AeronClusterRuntimeBridgeTest {
         when(container.context()).thenReturn(context);
         when(context.aeron()).thenReturn(null);
 
-        AeronClusterRuntimeBridge.RuntimeBridgeResult result =
-            new AeronClusterRuntimeBridge(mock(ClusteredService.class), ignored -> mock(MediaDriverHealthMonitor.class))
-                .activate(container, "ignored", null);
-
-        assertFalse(result.healthMonitorStarted);
-        assertFalse(result.ingressConfigured);
-        assertFalse(result.startupResetScheduled);
+        assertNull(new AeronClusterRuntimeBridge(mock(ClusteredService.class), ignored -> mock(MediaDriverHealthMonitor.class))
+            .activate(container, "ignored", null));
     }
 }

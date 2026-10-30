@@ -35,14 +35,13 @@ public class ValidatorLifecycleManagerTest {
     @Test
     public void testActivateRegistersServerInjectsDependenciesAndStartsThroughExecutor() throws Exception {
         ValidatorFactory factory = mock(ValidatorFactory.class);
-        ComponentRegistry registry = mock(ComponentRegistry.class);
         ShutdownHookHandler shutdownHookHandler = mock(ShutdownHookHandler.class);
         GlobalStoreServer server = mock(GlobalStoreServer.class);
         ValidatorConfig config = config(8091, "/tmp/segmentstore");
         when(factory.create(config)).thenReturn(server);
 
         AtomicReference<String> threadName = new AtomicReference<>();
-        ValidatorLifecycleManager manager = new ValidatorLifecycleManager(factory, registry, shutdownHookHandler,
+        ValidatorLifecycleManager manager = new ValidatorLifecycleManager(factory, shutdownHookHandler,
             (name, task) -> {
                 threadName.set(name);
                 task.run();
@@ -56,7 +55,6 @@ public class ValidatorLifecycleManagerTest {
         verify(factory).create(config);
         verify(server).setAeronClusterService((AeronClusterService) getField(manager, "aeronClusterService"));
         verify(server).setComponentFactory((GlobalStoreServerComponentFactory) getField(manager, "componentFactory"));
-        verify(registry).register("GlobalStoreServer", server);
         verify(shutdownHookHandler).register(server);
         verify(server).start();
         assertEquals("validator-lifecycle-start", threadName.get());
@@ -66,7 +64,6 @@ public class ValidatorLifecycleManagerTest {
     public void testDeactivateStopsServer() throws Exception {
         ValidatorLifecycleManager manager = new ValidatorLifecycleManager(
             mock(ValidatorFactory.class),
-            mock(ComponentRegistry.class),
             mock(ShutdownHookHandler.class),
             (name, task) -> { });
         GlobalStoreServer server = mock(GlobalStoreServer.class);
@@ -80,20 +77,18 @@ public class ValidatorLifecycleManagerTest {
     @Test
     public void testActivateSwallowsStartExceptionsInsideExecutor() throws Exception {
         ValidatorFactory factory = mock(ValidatorFactory.class);
-        ComponentRegistry registry = mock(ComponentRegistry.class);
         ShutdownHookHandler shutdownHookHandler = mock(ShutdownHookHandler.class);
         GlobalStoreServer server = mock(GlobalStoreServer.class);
         ValidatorConfig config = config(8092, "/tmp/segmentstore");
         when(factory.create(config)).thenReturn(server);
         doThrow(new RuntimeException("boom")).when(server).start();
 
-        ValidatorLifecycleManager manager = new ValidatorLifecycleManager(factory, registry, shutdownHookHandler,
+        ValidatorLifecycleManager manager = new ValidatorLifecycleManager(factory, shutdownHookHandler,
             (name, task) -> task.run());
 
         manager.activate(config);
 
         verify(factory).create(config);
-        verify(registry).register("GlobalStoreServer", server);
         verify(shutdownHookHandler).register(server);
         verify(server).start();
     }

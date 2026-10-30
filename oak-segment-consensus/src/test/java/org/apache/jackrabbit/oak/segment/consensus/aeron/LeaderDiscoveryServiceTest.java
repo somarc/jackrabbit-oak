@@ -69,14 +69,6 @@ public class LeaderDiscoveryServiceTest {
     }
 
     @Test
-    public void testIsSameUrlHandlesLocalhostAndIp() {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
-
-        assertTrue(service.isSameUrl("http://localhost:8090", "http://127.0.0.1:8090"));
-        assertFalse(service.isSameUrl("http://localhost:8090", "http://127.0.0.1:8091"));
-    }
-
-    @Test
     public void testBestKnownLeaderPrefersKnown() {
         LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
         service.setKnownLeader("http://leader-1:8090", 2);
@@ -195,7 +187,7 @@ public class LeaderDiscoveryServiceTest {
     }
 
     @Test
-    public void testPrivateJsonExtractionAndUrlComparisonBranches() throws Exception {
+    public void testPrivateJsonExtractionBranches() throws Exception {
         LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
 
         assertEquals("LEADER", extractJsonField(service, "{\"role\":\"LEADER\"}", "role"));
@@ -203,10 +195,6 @@ public class LeaderDiscoveryServiceTest {
         assertEquals("true", extractJsonField(service, "{\"leader\":true}", "leader"));
         assertEquals("42", extractJsonField(service, "{\"leaderId\":42}", "leaderId"));
         assertNull(extractJsonField(service, "{\"other\":1}", "role"));
-        assertTrue(service.isSameUrl("http://localhost:8090", "http://localhost:8090"));
-        assertFalse(service.isSameUrl(null, "http://localhost:8090"));
-        assertFalse(service.isSameUrl("http://localhost:8090", "http://localhost:8091"));
-        assertFalse(service.isSameUrl("http://[invalid", "http://localhost:8090"));
     }
 
     @Test

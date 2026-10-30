@@ -37,7 +37,7 @@ import java.security.NoSuchAlgorithmException;
  * <p>Note: Uses SHA-256 for hashing (consistent with existing codebase).
  * For production, consider using Keccak-256 (Ethereum standard).
  */
-public class WalletShardingStrategy implements ShardingStrategy {
+public class WalletShardingStrategy {
     
     private static final Logger log = LoggerFactory.getLogger(WalletShardingStrategy.class);
     
@@ -64,7 +64,6 @@ public class WalletShardingStrategy implements ShardingStrategy {
         }
     }
     
-    @Override
     public int getShardId(String walletAddress) {
         if (walletAddress == null || walletAddress.isEmpty()) {
             throw new IllegalArgumentException("Wallet address cannot be null or empty");
@@ -96,7 +95,6 @@ public class WalletShardingStrategy implements ShardingStrategy {
         return shardId;
     }
     
-    @Override
     public int getNumShards() {
         return numShards;
     }

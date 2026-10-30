@@ -20,6 +20,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.PrintWriter;
 
+import static org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils.escapeJson;
+
 /**
  * Standard JSON error response utility for API endpoints.
  */
@@ -77,16 +79,5 @@ public final class ApiErrorUtil {
             default:
                 return "error";
         }
-    }
-
-    private static String escapeJson(String s) {
-        if (s == null) {
-            return "";
-        }
-        return s.replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t");
     }
 }

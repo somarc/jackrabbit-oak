@@ -61,8 +61,8 @@ public class StandbyModeStartupCoordinatorTest {
         );
 
         verify(testContext.bootstrap).bootstrapFromPrimary(eq("bootstrap-node"), eq(9001), any(Runnable.class));
-        assertEquals("http://validator-0:8090", result.getSelfUrl());
-        assertEquals(Arrays.asList("http://validator-1:8090", "http://validator-2:8090"), result.getPeerUrls());
+        assertEquals("http://validator-0:8090", result.selfUrl());
+        assertEquals(Arrays.asList("http://validator-1:8090", "http://validator-2:8090"), result.peerUrls());
         verifyNoInteractions(testContext.clusterService);
     }
 
@@ -75,7 +75,7 @@ public class StandbyModeStartupCoordinatorTest {
         );
 
         verify(testContext.bootstrap).bootstrapFromPrimary(eq("validator-1"), eq(8091), any(Runnable.class));
-        assertEquals(Arrays.asList("http://validator-1:8090", "http://validator-2:8090"), result.getPeerUrls());
+        assertEquals(Arrays.asList("http://validator-1:8090", "http://validator-2:8090"), result.peerUrls());
     }
 
     @Test
@@ -128,7 +128,7 @@ public class StandbyModeStartupCoordinatorTest {
             testContext.startupContext("bootstrap-node", 9001)
         );
 
-        assertEquals("http://validator-0:8090", result.getSelfUrl());
+        assertEquals("http://validator-0:8090", result.selfUrl());
         verify(testContext.clusterService).startCluster(
             testContext.fileStore,
             testContext.nodeStore,
@@ -297,8 +297,8 @@ public class StandbyModeStartupCoordinatorTest {
                 existingService,
                 componentFactory,
                 deferredStartup -> {
-                    recordedService = deferredStartup.getAeronClusterService();
-                    recordedLauncher = deferredStartup.getStartupResult().getLauncher();
+                    recordedService = deferredStartup.aeronClusterService();
+                    recordedLauncher = deferredStartup.startupResult().getLauncher();
                 }
             );
         }

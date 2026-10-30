@@ -198,7 +198,7 @@ public class GCCostEstimatorTest {
         
         // Estimate with custom USDC rate
         BigDecimal customRate = new BigDecimal("0.25"); // $0.25 per MB
-        estimator.setUsdcPerMB(customRate);
+        estimator = new GCCostEstimator(fileStore, tarFiles, customRate);
         
         GCCostEstimate estimate = estimator.estimateCost(null);
         
@@ -290,18 +290,4 @@ public class GCCostEstimatorTest {
         // Note: Small repos might not have segments yet, so just check it completes
         assertTrue("Should have >= 0 segments", estimate.getTotalSegmentCount() >= 0);
     }
-    
-    /**
-     * Test USDC rate getter/setter.
-     */
-    @Test
-    public void testUsdcRateGetterSetter() {
-        BigDecimal newRate = new BigDecimal("0.50");
-        estimator.setUsdcPerMB(newRate);
-        
-        assertEquals("USDC rate should be updated", 
-            newRate, 
-            estimator.getUsdcPerMB());
-    }
 }
-

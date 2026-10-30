@@ -54,8 +54,8 @@ public class ReplayIdempotencyTest {
     public void writeThenDeleteThenReplayChangesNothing() {
         MemoryNodeStore store = new MemoryNodeStore();
         List<Entry> log = Arrays.asList(
-            new Entry(100, 1_000L, BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, "p-a")),
-            new Entry(200, 2_000L, BUILDER.buildDeleteProposal(WALLET, BASE + "a", "sig", TERM, "p-del")));
+            new Entry(100, 1_000L, BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, writeAudit("p-a"))),
+            new Entry(200, 2_000L, BUILDER.buildDeleteProposal(WALLET, BASE + "a", "sig", TERM, deleteAudit("p-del"))));
         new Member(store).apply(log);
         NodeState afterFirstRun = store.getRoot();
 
@@ -73,7 +73,7 @@ public class ReplayIdempotencyTest {
     public void writeWithoutProposalIdIsNotReappliedOnReplay() {
         MemoryNodeStore store = new MemoryNodeStore();
         List<Entry> log = Arrays.asList(
-            new Entry(100, 1_000L, BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, (String) null)));
+            new Entry(100, 1_000L, BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, writeAudit(null))));
         new Member(store).apply(log);
 
         Member restarted = new Member(store).restart();
@@ -89,7 +89,7 @@ public class ReplayIdempotencyTest {
         List<QueuedProposal> items = Arrays.asList(
             batchItem("p-0", BASE + "b0"), batchItem("p-1", BASE + "b1"), batchItem("p-2", BASE + "b2"));
         List<Entry> log = Arrays.asList(
-            new Entry(100, 1_000L, BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, "p-a")),
+            new Entry(100, 1_000L, BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, writeAudit("p-a"))),
             new Entry(300, 3_000L, BUILDER.buildWriteBatch(items, TERM)));
         Member crashing = new Member(store);
         crashing.crashAfterApplies = 3;
@@ -110,9 +110,9 @@ public class ReplayIdempotencyTest {
     public void sameLogLeavesIdenticalWatermarkOnEveryMember() {
         List<QueuedProposal> items = Arrays.asList(batchItem("p-0", BASE + "b0"), batchItem("p-1", BASE + "b1"));
         List<Entry> log = Arrays.asList(
-            new Entry(100, 1_000L, BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, "p-a")),
+            new Entry(100, 1_000L, BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, writeAudit("p-a"))),
             new Entry(250, 2_000L, BUILDER.buildWriteBatch(items, TERM)),
-            new Entry(400, 3_000L, BUILDER.buildDeleteProposal(WALLET, BASE + "a", "sig", TERM, "p-del")));
+            new Entry(400, 3_000L, BUILDER.buildDeleteProposal(WALLET, BASE + "a", "sig", TERM, deleteAudit("p-del"))));
         MemoryNodeStore memberA = new MemoryNodeStore();
         MemoryNodeStore memberB = new MemoryNodeStore();
 
@@ -129,9 +129,9 @@ public class ReplayIdempotencyTest {
     public void entriesAfterTheWatermarkAreStillApplied() {
         MemoryNodeStore store = new MemoryNodeStore();
         Entry first = new Entry(100, 1_000L,
-            BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, "p-a"));
+            BUILDER.buildWriteProposal(WALLET, BASE + "a", "page", "one", "sig", TERM, null, writeAudit("p-a")));
         Entry second = new Entry(200, 2_000L,
-            BUILDER.buildWriteProposal(WALLET, BASE + "b", "page", "two", "sig", TERM, null, "p-b"));
+            BUILDER.buildWriteProposal(WALLET, BASE + "b", "page", "two", "sig", TERM, null, writeAudit("p-b")));
         new Member(store).apply(Arrays.asList(first));
 
         Member restarted = new Member(store).restart();
@@ -145,6 +145,14 @@ public class ReplayIdempotencyTest {
         QueuedProposal item = ReplicatedCommandRoundTripTest.batchItem(proposalId, path, QueuedProposal.ProposalType.WRITE);
         item.setWalletAddress(WALLET);
         return item;
+    }
+
+    private static MutationAuditMetadata writeAudit(String proposalId) {
+        return MutationAuditMetadata.write(null, null, proposalId, null, null, null, null);
+    }
+
+    private static MutationAuditMetadata deleteAudit(String proposalId) {
+        return MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null);
     }
 
     private static long walletLong(MemoryNodeStore store, String property) {

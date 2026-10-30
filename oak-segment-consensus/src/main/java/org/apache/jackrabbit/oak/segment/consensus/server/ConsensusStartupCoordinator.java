@@ -45,8 +45,7 @@ final class ConsensusStartupCoordinator {
         String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(context.port, aeronConfig);
         List<String> peerUrls = resolvePeerUrls(aeronConfig, peersConfig);
 
-        boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled)
-            && (context.aeronMode || !peersConfig.isEmpty());
+        boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled);
         if (aeronConfig != null && !aeronConfig.enabled()) {
             enableConsensus = false;
         }
@@ -69,10 +68,6 @@ final class ConsensusStartupCoordinator {
                 selfUrl,
                 peerUrls
             );
-        }
-
-        if (!context.aeronMode) {
-            throw new IllegalStateException("Aeron mode validation failed - this should not happen");
         }
 
         log.info("Initializing Consensus Engine...");
@@ -111,8 +106,7 @@ final class ConsensusStartupCoordinator {
             context.httpServer,
             context.wallet,
             context.storeDirectory,
-            context.clusterWalletAddress,
-            startupResult.getHostnames()
+            context.clusterWalletAddress
         );
 
         log.info("✅ Aeron Cluster Consensus engine initialized");
@@ -140,48 +134,18 @@ final class ConsensusStartupCoordinator {
         return ServerNetworkUtil.parsePeerUrls(peersConfig);
     }
 
-    static final class StartupContext {
-        private final int port;
-        private final boolean aeronMode;
-        private final boolean standbyMode;
-        private final FileStore fileStore;
-        private final NodeStore nodeStore;
-        private final SegmentHttpServer httpServer;
-        private final EthereumWallet wallet;
-        private final String storeDirectory;
-        private final BlobStore blobStore;
-        private final AeronClusterService aeronClusterService;
-        private final GlobalStoreServerComponentFactory componentFactory;
-        private final String clusterWalletAddress;
-        private final AeronClusterConfig aeronConfig;
-
-        StartupContext(int port,
-                       boolean aeronMode,
-                       boolean standbyMode,
-                       FileStore fileStore,
-                       NodeStore nodeStore,
-                       SegmentHttpServer httpServer,
-                       EthereumWallet wallet,
-                       String storeDirectory,
-                       BlobStore blobStore,
-                       AeronClusterService aeronClusterService,
-                       GlobalStoreServerComponentFactory componentFactory,
-                       String clusterWalletAddress,
-                       AeronClusterConfig aeronConfig) {
-            this.port = port;
-            this.aeronMode = aeronMode;
-            this.standbyMode = standbyMode;
-            this.fileStore = fileStore;
-            this.nodeStore = nodeStore;
-            this.httpServer = httpServer;
-            this.wallet = wallet;
-            this.storeDirectory = storeDirectory;
-            this.blobStore = blobStore;
-            this.aeronClusterService = aeronClusterService;
-            this.componentFactory = componentFactory;
-            this.clusterWalletAddress = clusterWalletAddress;
-            this.aeronConfig = aeronConfig;
-        }
+    record StartupContext(int port,
+                          boolean standbyMode,
+                          FileStore fileStore,
+                          NodeStore nodeStore,
+                          SegmentHttpServer httpServer,
+                          EthereumWallet wallet,
+                          String storeDirectory,
+                          BlobStore blobStore,
+                          AeronClusterService aeronClusterService,
+                          GlobalStoreServerComponentFactory componentFactory,
+                          String clusterWalletAddress,
+                          AeronClusterConfig aeronConfig) {
     }
 
     enum StartupDisposition {
@@ -190,43 +154,13 @@ final class ConsensusStartupCoordinator {
         DISABLED
     }
 
-    static final class StartupOutcome {
-        private final StartupDisposition disposition;
-        private final AeronClusterService aeronClusterService;
-        private final AeronClusterLauncher launcher;
-        private final String selfUrl;
-        private final List<String> peerUrls;
-
-        StartupOutcome(StartupDisposition disposition,
-                       AeronClusterService aeronClusterService,
-                       AeronClusterLauncher launcher,
-                       String selfUrl,
-                       List<String> peerUrls) {
-            this.disposition = disposition;
-            this.aeronClusterService = aeronClusterService;
-            this.launcher = launcher;
-            this.selfUrl = selfUrl;
-            this.peerUrls = Collections.unmodifiableList(new ArrayList<>(peerUrls));
-        }
-
-        StartupDisposition getDisposition() {
-            return disposition;
-        }
-
-        AeronClusterService getAeronClusterService() {
-            return aeronClusterService;
-        }
-
-        AeronClusterLauncher getLauncher() {
-            return launcher;
-        }
-
-        String getSelfUrl() {
-            return selfUrl;
-        }
-
-        List<String> getPeerUrls() {
-            return peerUrls;
+    record StartupOutcome(StartupDisposition disposition,
+                          AeronClusterService aeronClusterService,
+                          AeronClusterLauncher launcher,
+                          String selfUrl,
+                          List<String> peerUrls) {
+        StartupOutcome {
+            peerUrls = Collections.unmodifiableList(new ArrayList<>(peerUrls));
         }
     }
 }

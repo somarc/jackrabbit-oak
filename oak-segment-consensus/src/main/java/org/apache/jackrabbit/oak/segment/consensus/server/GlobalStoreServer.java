@@ -99,7 +99,6 @@ public class GlobalStoreServer {
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService aeronClusterService;
     private GlobalStoreServerComponentFactory componentFactory;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
-    private org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator gcCostEstimator;
     private final WalletStartupCoordinator walletStartupCoordinator = new WalletStartupCoordinator();
     private final StartupPreflightCoordinator startupPreflightCoordinator = new StartupPreflightCoordinator();
     private final StandbyModeStartupCoordinator standbyModeStartupCoordinator = new StandbyModeStartupCoordinator();
@@ -146,17 +145,16 @@ public class GlobalStoreServer {
         
         WalletStartupCoordinator.StartupResult walletStartup =
             walletStartupCoordinator.initialize(storeDirectory, components());
-        this.wallet = walletStartup.getWallet();
-        final String finalClusterWallet = walletStartup.getClusterWalletAddress();
+        this.wallet = walletStartup.wallet();
+        final String finalClusterWallet = walletStartup.clusterWalletAddress();
         
         StartupPreflightCoordinator.PreflightResult preflight =
             startupPreflightCoordinator.prepare(storeDirectory, port, currentAeronConfig());
-        File storeDir = preflight.getStoreDir();
-        boolean isAeronMode = preflight.isAeronMode();
-        boolean directoryIsEmpty = preflight.isDirectoryEmpty();
+        File storeDir = preflight.storeDir();
+        boolean directoryIsEmpty = preflight.directoryEmpty();
         boolean needsBootstrapBeforeBuild = preflight.needsBootstrapBeforeBuild();
-        String verifiedBootstrapPrimaryHost = preflight.getVerifiedBootstrapPrimaryHost();
-        int verifiedBootstrapPrimaryPort = preflight.getVerifiedBootstrapPrimaryPort();
+        String verifiedBootstrapPrimaryHost = preflight.verifiedBootstrapPrimaryHost();
+        int verifiedBootstrapPrimaryPort = preflight.verifiedBootstrapPrimaryPort();
         
         // Bootstrap mode (needs to be accessible throughout method)
         BootstrapMode detectedMode = BootstrapMode.PRIMARY;  // Default
@@ -197,13 +195,12 @@ public class GlobalStoreServer {
                     currentAeronConfig(),
                     components()
                 );
-            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = infrastructure.getBlobStore();
+            org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore = infrastructure.blobStore();
             this.blobStore = blobStore; // Store reference for genesis image upload
-            this.fileStore = infrastructure.getFileStore();
-            this.nodeStore = infrastructure.getNodeStore();
-            this.readViewResources = infrastructure.getReadViewResources();
-            this.httpServer = infrastructure.getHttpServer();
-            this.gcCostEstimator = infrastructure.getGcCostEstimator();
+            this.fileStore = infrastructure.fileStore();
+            this.nodeStore = infrastructure.nodeStore();
+            this.readViewResources = infrastructure.readViewResources();
+            this.httpServer = infrastructure.httpServer();
             String selfUrl = this.httpServer.getContext().selfUrl;
             
             // If bootstrap is needed, mark for immediate sync (before any other initialization)
@@ -228,7 +225,6 @@ public class GlobalStoreServer {
             // ===========================================================================
             BootstrapModeCoordinator.Resolution bootstrapResolution = bootstrapModeCoordinator.resolve(
                 new BootstrapModeCoordinator.StartupContext(
-                    isAeronMode,
                     directoryIsEmpty,
                     needsBootstrapBeforeBuild,
                     fileStore,
@@ -240,8 +236,8 @@ public class GlobalStoreServer {
                     components()
                 )
             );
-            detectedMode = bootstrapResolution.getDetectedMode();
-            bootstrap = bootstrapResolution.getBootstrap();
+            detectedMode = bootstrapResolution.detectedMode();
+            bootstrap = bootstrapResolution.bootstrap();
             
             // ✈️ AERON-ONLY: Handle STANDBY bootstrap (sync FileStore, then start Aeron Cluster)
             if (detectedMode == BootstrapMode.STANDBY) {
@@ -249,8 +245,8 @@ public class GlobalStoreServer {
                     new StandbyModeStartupCoordinator.StartupContext(
                         port,
                         storeDirectory,
-                        bootstrapResolution.getBootstrapPrimaryHost(),
-                        bootstrapResolution.getBootstrapPrimaryPort(),
+                        bootstrapResolution.bootstrapPrimaryHost(),
+                        bootstrapResolution.bootstrapPrimaryPort(),
                         currentAeronConfig(),
                         bootstrap,
                         fileStore,
@@ -261,8 +257,8 @@ public class GlobalStoreServer {
                         aeronClusterService,
                         components(),
                         deferredStartup -> {
-                            aeronClusterService = deferredStartup.getAeronClusterService();
-                            aeronClusterLauncher = deferredStartup.getStartupResult().getLauncher();
+                            aeronClusterService = deferredStartup.aeronClusterService();
+                            aeronClusterLauncher = deferredStartup.startupResult().getLauncher();
                         }
                     )
                 );
@@ -301,7 +297,6 @@ public class GlobalStoreServer {
             serverActivationCoordinator.activate(
                 new ServerActivationCoordinator.ActivationContext(
                     port,
-                    isAeronMode,
                     detectedMode,
                     fileStore,
                     nodeStore,
@@ -317,8 +312,8 @@ public class GlobalStoreServer {
                 )
             );
 
-        this.aeronClusterService = activation.getAeronClusterService();
-        this.aeronClusterLauncher = activation.getLauncher();
+        this.aeronClusterService = activation.aeronClusterService();
+        this.aeronClusterLauncher = activation.launcher();
         
         // SEPOLIA_PHASE: Smart Contract Event Listener
         // This is where we'll listen to OakNetwork.sol contract events:
@@ -374,63 +369,27 @@ public class GlobalStoreServer {
         log.info("Shutting down global store server...");
         running = false;
         ServerContext serverContext = httpServer != null ? httpServer.getContext() : null;
-        
-        // Stop bootstrap (StandbyClientSync + StandbyServerSync)
+
         if (bootstrap != null) {
-            try {
-                bootstrap.shutdown();
-                log.info("✅ Bootstrap services stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping bootstrap: {}", e.getMessage());
-            }
+            quietly(bootstrap::shutdown, "✅ Bootstrap services stopped", "Error stopping bootstrap: {}");
         }
-        
-        // Stop Aeron Cluster launcher
         if (aeronClusterService != null) {
-            try {
-                aeronClusterService.shutdown();
-                log.info("✅ Aeron Cluster stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping Aeron Cluster: {}", e.getMessage());
-            }
+            quietly(aeronClusterService::shutdown, "✅ Aeron Cluster stopped", "Error stopping Aeron Cluster: {}");
         } else if (aeronClusterLauncher != null) {
-            try {
-                aeronClusterLauncher.shutdown();
-                log.info("✅ Aeron Cluster stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping Aeron Cluster: {}", e.getMessage());
-            }
+            quietly(aeronClusterLauncher::shutdown, "✅ Aeron Cluster stopped", "Error stopping Aeron Cluster: {}");
         }
-        
-        // Stop HTTP server
         if (httpServer != null) {
-            try {
-                httpServer.stop();
-                log.info("✅ HTTP server stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping HTTP server: {}", e.getMessage());
-            }
+            quietly(httpServer::stop, "✅ HTTP server stopped", "Error stopping HTTP server: {}");
         }
 
         shutdownManagedContext(serverContext);
 
         if (readViewResources != null) {
-            try {
-                readViewResources.close();
-                log.info("✅ Remote read-view resources closed");
-            } catch (Exception e) {
-                log.warn("Error closing remote read-view resources: {}", e.getMessage());
-            }
+            quietly(readViewResources::close, "✅ Remote read-view resources closed",
+                "Error closing remote read-view resources: {}");
         }
-        
-        // Close FileStore
         if (fileStore != null) {
-            try {
-                fileStore.close();
-                log.info("✅ FileStore closed");
-            } catch (Exception e) {
-                log.warn("Error closing FileStore: {}", e.getMessage());
-            }
+            quietly(fileStore::close, "✅ FileStore closed", "Error closing FileStore: {}");
         }
     }
 
@@ -438,59 +397,37 @@ public class GlobalStoreServer {
         if (serverContext == null) {
             return;
         }
-
         if (serverContext.proposalQueueManager != null) {
-            try {
-                serverContext.proposalQueueManager.stop();
-                log.info("✅ Proposal queue manager stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping proposal queue manager: {}", e.getMessage());
-            }
+            quietly(serverContext.proposalQueueManager::stop, "✅ Proposal queue manager stopped",
+                "Error stopping proposal queue manager: {}");
         }
-
         if (serverContext.proposalQueueManager != null && serverContext.proposalQueueManager.getBeaconClient() != null) {
-            try {
-                serverContext.proposalQueueManager.getBeaconClient().stopBackgroundPolling();
-                log.info("✅ Proposal queue BeaconChainClient stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping proposal queue BeaconChainClient: {}", e.getMessage());
-            }
+            quietly(() -> serverContext.proposalQueueManager.getBeaconClient().stopBackgroundPolling(),
+                "✅ Proposal queue BeaconChainClient stopped", "Error stopping proposal queue BeaconChainClient: {}");
         }
-
         if (serverContext.evmBridge != null) {
-            try {
-                serverContext.evmBridge.stop();
-                log.info("✅ EVM bridge stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping EVM bridge: {}", e.getMessage());
-            }
+            quietly(serverContext.evmBridge::stop, "✅ EVM bridge stopped", "Error stopping EVM bridge: {}");
         }
-
         if (serverContext.gcProposalManager != null) {
-            try {
-                serverContext.gcProposalManager.shutdown();
-                log.info("✅ GC proposal manager stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping GC proposal manager: {}", e.getMessage());
-            }
+            quietly(serverContext.gcProposalManager::shutdown, "✅ GC proposal manager stopped",
+                "Error stopping GC proposal manager: {}");
         }
-
         if (serverContext.periodicGCJob != null) {
-            try {
-                serverContext.periodicGCJob.stop();
-                log.info("✅ Periodic GC job stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping periodic GC job: {}", e.getMessage());
-            }
+            quietly(serverContext.periodicGCJob::stop, "✅ Periodic GC job stopped", "Error stopping periodic GC job: {}");
         }
-
         if (serverContext.aeronPrometheusMetrics != null) {
-            try {
-                serverContext.aeronPrometheusMetrics.close();
-                log.info("✅ Aeron Prometheus metrics stopped");
-            } catch (Exception e) {
-                log.warn("Error stopping Aeron Prometheus metrics: {}", e.getMessage());
-            }
+            quietly(serverContext.aeronPrometheusMetrics::close, "✅ Aeron Prometheus metrics stopped",
+                "Error stopping Aeron Prometheus metrics: {}");
+        }
+    }
+
+    /** Best-effort shutdown step: log success, or log the failure and carry on. */
+    private void quietly(AutoCloseable step, String stoppedMessage, String errorFormat) {
+        try {
+            step.close();
+            log.info(stoppedMessage);
+        } catch (Exception e) {
+            log.warn(errorFormat, e.getMessage());
         }
     }
 
@@ -498,13 +435,6 @@ public class GlobalStoreServer {
         return aeronClusterService != null ? aeronClusterService.getConfig() : null;
     }
 
-    /**
-     * Get the NodeStore (for testing/debugging).
-     */
-    public NodeStore getNodeStore() {
-        return nodeStore;
-    }
-    
     /**
      * Get the FileStore (for testing/debugging).
      */

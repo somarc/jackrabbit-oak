@@ -45,4 +45,10 @@ final class AeronIngressPayloadSupport {
         JsopBuilder.escape(str, escaped);
         return escaped.toString();
     }
+
+    static void appendOptional(StringBuilder json, String field, String value) {
+        if (value != null && !value.isEmpty()) {
+            json.append(",\"").append(field).append("\":\"").append(escapeJson(value)).append("\"");
+        }
+    }
 }

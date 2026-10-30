@@ -79,21 +79,6 @@ final class WalletStartupCoordinator {
         return clusterWalletAddress;
     }
 
-    static final class StartupResult {
-        private final EthereumWallet wallet;
-        private final String clusterWalletAddress;
-
-        StartupResult(EthereumWallet wallet, String clusterWalletAddress) {
-            this.wallet = wallet;
-            this.clusterWalletAddress = clusterWalletAddress;
-        }
-
-        EthereumWallet getWallet() {
-            return wallet;
-        }
-
-        String getClusterWalletAddress() {
-            return clusterWalletAddress;
-        }
+    record StartupResult(EthereumWallet wallet, String clusterWalletAddress) {
     }
 }

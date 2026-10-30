@@ -74,7 +74,6 @@ final class StartupPreflightCoordinator {
                 false
             );
             BootstrapPreflightPlanner.Decision preflightDecision = bootstrapPreflightPlanner.plan(
-                isAeronMode,
                 directoryIsEmpty,
                 aeronPeers,
                 bootstrapPrimaryHost,
@@ -100,7 +99,6 @@ final class StartupPreflightCoordinator {
 
         return new PreflightResult(
             storeDir,
-            isAeronMode,
             directoryIsEmpty,
             needsBootstrapBeforeBuild,
             verifiedBootstrapPrimaryHost,
@@ -174,50 +172,10 @@ final class StartupPreflightCoordinator {
         }
     }
 
-    static final class PreflightResult {
-        private final File storeDir;
-        private final boolean aeronMode;
-        private final boolean directoryEmpty;
-        private final boolean needsBootstrapBeforeBuild;
-        private final String verifiedBootstrapPrimaryHost;
-        private final int verifiedBootstrapPrimaryPort;
-
-        PreflightResult(File storeDir,
-                        boolean aeronMode,
-                        boolean directoryEmpty,
-                        boolean needsBootstrapBeforeBuild,
-                        String verifiedBootstrapPrimaryHost,
-                        int verifiedBootstrapPrimaryPort) {
-            this.storeDir = storeDir;
-            this.aeronMode = aeronMode;
-            this.directoryEmpty = directoryEmpty;
-            this.needsBootstrapBeforeBuild = needsBootstrapBeforeBuild;
-            this.verifiedBootstrapPrimaryHost = verifiedBootstrapPrimaryHost;
-            this.verifiedBootstrapPrimaryPort = verifiedBootstrapPrimaryPort;
-        }
-
-        File getStoreDir() {
-            return storeDir;
-        }
-
-        boolean isAeronMode() {
-            return aeronMode;
-        }
-
-        boolean isDirectoryEmpty() {
-            return directoryEmpty;
-        }
-
-        boolean needsBootstrapBeforeBuild() {
-            return needsBootstrapBeforeBuild;
-        }
-
-        String getVerifiedBootstrapPrimaryHost() {
-            return verifiedBootstrapPrimaryHost;
-        }
-
-        int getVerifiedBootstrapPrimaryPort() {
-            return verifiedBootstrapPrimaryPort;
-        }
+    record PreflightResult(File storeDir,
+                           boolean directoryEmpty,
+                           boolean needsBootstrapBeforeBuild,
+                           String verifiedBootstrapPrimaryHost,
+                           int verifiedBootstrapPrimaryPort) {
     }
 }

@@ -72,9 +72,7 @@ public class ExplorerApiV1Handler {
     public void handleSummary(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
         try {
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("contractVersion", "explorer.v1");
-            payload.put("generatedAtMs", System.currentTimeMillis());
+            Map<String, Object> payload = explorerEnvelope();
 
             Map<String, Object> cluster = new LinkedHashMap<>();
             if (context.aeronConsensusEngine != null) {
@@ -161,8 +159,7 @@ public class ExplorerApiV1Handler {
             }
             payload.put("identities", identities);
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer summary", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer summary: " + e.getMessage());
@@ -186,22 +183,10 @@ public class ExplorerApiV1Handler {
                 return;
             }
 
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("contractVersion", "explorer.v1");
-            payload.put("generatedAtMs", System.currentTimeMillis());
-            payload.put("proposalId", status.getProposalId());
-            payload.put("state", status.getState().name());
-            payload.put("ethereumTxHash", status.getEthereumTxHash());
-            payload.put("timeoutTimestamp", status.getTimeoutTimestamp());
-            payload.put("confirmedBlock", status.getConfirmedBlock());
-            payload.put("rejectionReason", status.getRejectionReason());
-            payload.put("durabilityState", status.getDurabilityState() != null ? status.getDurabilityState().name() : "UNKNOWN");
-            payload.put("durabilityTimestamp", status.getDurabilityTimestamp());
-            payload.put("durabilityError", status.getDurabilityError());
-            payload.put("durableHead", status.getDurableHead());
+            Map<String, Object> payload = explorerEnvelope();
+            ProposalQueryHandler.putStatusFields(payload, status, status.getConfirmedBlock());
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer proposal lookup {}", proposalId, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer proposal lookup: " + e.getMessage());
@@ -229,9 +214,7 @@ public class ExplorerApiV1Handler {
                 return;
             }
 
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("contractVersion", "explorer.v1");
-            payload.put("generatedAtMs", System.currentTimeMillis());
+            Map<String, Object> payload = explorerEnvelope();
             payload.put("wallet", walletAddress);
             payload.put("walletPath", String.format("/oak-chain/%s/%s/%s/%s", levels[0], levels[1], levels[2], walletAddress));
             payload.put("authority", buildWalletAuthority(walletAddress));
@@ -277,8 +260,7 @@ public class ExplorerApiV1Handler {
                 }
             }
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer wallet lookup {}", walletAddress, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer wallet lookup: " + e.getMessage());
@@ -304,8 +286,7 @@ public class ExplorerApiV1Handler {
             payload.put("mountedNeighbors", remoteClusters);
             payload.put("outerNetwork", buildOuterNetwork(remoteClusters.size()));
             payload.put("cacheHints", buildCacheHints());
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer content nav", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer content nav: " + e.getMessage());
@@ -323,27 +304,7 @@ public class ExplorerApiV1Handler {
      */
     public void handleContentTree(HttpServletResponse response, String clusterId, String requestedPath,
                                   int offset, int limit) throws IOException {
-        response.setContentType("application/json");
-        try {
-            ClusterDescriptor cluster = requireCluster(clusterId, response);
-            if (cluster == null) {
-                return;
-            }
-
-            String path = normalizeContentPath(requestedPath, cluster.browseRootPath);
-            if (!isPathAllowed(cluster, path)) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Path is outside the requested cluster scope");
-                return;
-            }
-
-            NodeState node = getNode(path);
-            if (!node.exists()) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
-                return;
-            }
-
-            Map<String, Object> payload = buildContentEnvelope(cluster, path, node);
-            payload.put("node", buildNodeSummary(path, node));
+        handleContent(response, clusterId, requestedPath, "tree", (payload, cluster, path, node) -> {
             int pageOffset = Math.max(0, offset);
             int pageLimit = Math.min(MAX_TREE_PAGE_SIZE, Math.max(1, limit));
             List<Map<String, Object>> children = buildVisibleChildren(cluster, path, node, pageOffset, pageLimit + 1);
@@ -358,68 +319,18 @@ public class ExplorerApiV1Handler {
             page.put("nextOffset", hasMore ? pageOffset + pageLimit : null);
             payload.put("children", children);
             payload.put("childrenPage", page);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
-        } catch (Exception e) {
-            log.error("Failed explorer content tree for cluster {}", clusterId, e);
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer content tree: " + e.getMessage());
-        }
+        });
     }
 
     public void handleContentNode(HttpServletResponse response, String clusterId, String requestedPath) throws IOException {
-        response.setContentType("application/json");
-        try {
-            ClusterDescriptor cluster = requireCluster(clusterId, response);
-            if (cluster == null) {
-                return;
-            }
-
-            String path = normalizeContentPath(requestedPath, cluster.browseRootPath);
-            if (!isPathAllowed(cluster, path)) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Path is outside the requested cluster scope");
-                return;
-            }
-
-            NodeState node = getNode(path);
-            if (!node.exists()) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
-                return;
-            }
-
-            Map<String, Object> payload = buildContentEnvelope(cluster, path, node);
-            payload.put("node", buildNodeSummary(path, node));
+        handleContent(response, clusterId, requestedPath, "node", (payload, cluster, path, node) -> {
             payload.put("properties", buildProperties(node));
             payload.put("childrenPreview", buildVisibleChildren(cluster, path, node, 0, 24));
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
-        } catch (Exception e) {
-            log.error("Failed explorer content node for cluster {}", clusterId, e);
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer content node: " + e.getMessage());
-        }
+        });
     }
 
     public void handleContentProvenance(HttpServletResponse response, String clusterId, String requestedPath) throws IOException {
-        response.setContentType("application/json");
-        try {
-            ClusterDescriptor cluster = requireCluster(clusterId, response);
-            if (cluster == null) {
-                return;
-            }
-
-            String path = normalizeContentPath(requestedPath, cluster.browseRootPath);
-            if (!isPathAllowed(cluster, path)) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Path is outside the requested cluster scope");
-                return;
-            }
-
-            NodeState node = getNode(path);
-            if (!node.exists()) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
-                return;
-            }
-
-            Map<String, Object> payload = buildContentEnvelope(cluster, path, node);
-            payload.put("node", buildNodeSummary(path, node));
+        handleContent(response, clusterId, requestedPath, "provenance", (payload, cluster, path, node) -> {
             payload.put("writeMetadata", findNearestWriteMetadata(path));
             payload.put("walletAuthority", buildWalletAuthority(extractWalletAddress(path)));
 
@@ -429,12 +340,43 @@ public class ExplorerApiV1Handler {
             facts.put("propertyCount", countProperties(node));
             facts.put("childCount", countChildren(node));
             payload.put("contentFacts", facts);
+        });
+    }
 
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+    private interface ContentView {
+        void fill(Map<String, Object> payload, ClusterDescriptor cluster, String path, NodeState node);
+    }
+
+    /** Resolves cluster, path and node for a content endpoint, then lets {@code view} add its sections. */
+    private void handleContent(HttpServletResponse response, String clusterId, String requestedPath,
+                               String endpoint, ContentView view) throws IOException {
+        response.setContentType("application/json");
+        try {
+            ClusterDescriptor cluster = requireCluster(clusterId, response);
+            if (cluster == null) {
+                return;
+            }
+
+            String path = normalizeContentPath(requestedPath, cluster.browseRootPath);
+            if (!isPathAllowed(cluster, path)) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Path is outside the requested cluster scope");
+                return;
+            }
+
+            NodeState node = getNode(path);
+            if (!node.exists()) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
+                return;
+            }
+
+            Map<String, Object> payload = buildContentEnvelope(cluster, path, node);
+            payload.put("node", buildNodeSummary(path, node));
+            view.fill(payload, cluster, path, node);
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
-            log.error("Failed explorer content provenance for cluster {}", clusterId, e);
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer content provenance: " + e.getMessage());
+            log.error("Failed explorer content " + endpoint + " for cluster {}", clusterId, e);
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                "Failed explorer content " + endpoint + ": " + e.getMessage());
         }
     }
 
@@ -446,16 +388,20 @@ public class ExplorerApiV1Handler {
         }
         try {
             Map<String, Object> flow = context.proposalQueueManager.getProposalReleaseFlowStats();
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("contractVersion", "explorer.v1");
-            payload.put("generatedAtMs", System.currentTimeMillis());
+            Map<String, Object> payload = explorerEnvelope();
             payload.put("releaseFlow", flow);
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.getWriter().write(JsonOutputUtil.toJson(payload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer release flow", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer release flow: " + e.getMessage());
         }
+    }
+
+    private static Map<String, Object> explorerEnvelope() {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contractVersion", "explorer.v1");
+        payload.put("generatedAtMs", System.currentTimeMillis());
+        return payload;
     }
 
     private ClusterDescriptor requireCluster(String clusterId, HttpServletResponse response) throws IOException {
@@ -485,12 +431,7 @@ public class ExplorerApiV1Handler {
 
         Map<String, List<ShardingRuntimeConfig.ReadOnlyMount>> mountsByEndpoint = new LinkedHashMap<>();
         for (ShardingRuntimeConfig.ReadOnlyMount mount : runtimeConfig.expandRemoteReadOnlyMounts()) {
-            List<ShardingRuntimeConfig.ReadOnlyMount> mounts = mountsByEndpoint.get(mount.getEndpoint());
-            if (mounts == null) {
-                mounts = new ArrayList<>();
-                mountsByEndpoint.put(mount.getEndpoint(), mounts);
-            }
-            mounts.add(mount);
+            mountsByEndpoint.computeIfAbsent(mount.getEndpoint(), k -> new ArrayList<>()).add(mount);
         }
 
         int ordinal = 1;
@@ -866,15 +807,6 @@ public class ExplorerApiV1Handler {
     }
 
     private String inferNamespace(ClusterDescriptor cluster, String path) {
-        if ("remote".equals(cluster.scope)) {
-            for (String root : cluster.allowedRootPaths) {
-                if (path.equals(root) || path.startsWith(root + "/")) {
-                    return root;
-                }
-            }
-            return cluster.browseRootPath;
-        }
-
         for (String root : cluster.allowedRootPaths) {
             if (path.equals(root) || path.startsWith(root + "/")) {
                 return root;
@@ -1024,47 +956,21 @@ public class ExplorerApiV1Handler {
         return Boolean.parseBoolean(String.valueOf(value));
     }
 
-    private static final class ClusterDescriptor {
-        private final String clusterId;
-        private final String displayName;
-        private final String scope;
-        private final boolean readOnly;
-        private final boolean authoritative;
-        private final String browseRootPath;
-        private final List<String> allowedRootPaths;
-        private final String ownedPrefixes;
-        private final String endpoint;
-        private final String roleLabel;
-        private final String transport;
-        private final String status;
-        private final String note;
-
-        private ClusterDescriptor(String clusterId,
-                                  String displayName,
-                                  String scope,
-                                  boolean readOnly,
-                                  boolean authoritative,
-                                  String browseRootPath,
-                                  List<String> allowedRootPaths,
-                                  String ownedPrefixes,
-                                  String endpoint,
-                                  String roleLabel,
-                                  String transport,
-                                  String status,
-                                  String note) {
-            this.clusterId = clusterId;
-            this.displayName = displayName;
-            this.scope = scope;
-            this.readOnly = readOnly;
-            this.authoritative = authoritative;
-            this.browseRootPath = browseRootPath;
-            this.allowedRootPaths = allowedRootPaths != null ? allowedRootPaths : Collections.<String>emptyList();
-            this.ownedPrefixes = ownedPrefixes;
-            this.endpoint = endpoint;
-            this.roleLabel = roleLabel;
-            this.transport = transport;
-            this.status = status;
-            this.note = note;
+    private record ClusterDescriptor(String clusterId,
+                                     String displayName,
+                                     String scope,
+                                     boolean readOnly,
+                                     boolean authoritative,
+                                     String browseRootPath,
+                                     List<String> allowedRootPaths,
+                                     String ownedPrefixes,
+                                     String endpoint,
+                                     String roleLabel,
+                                     String transport,
+                                     String status,
+                                     String note) {
+        private ClusterDescriptor {
+            allowedRootPaths = allowedRootPaths != null ? allowedRootPaths : Collections.<String>emptyList();
         }
     }
 }

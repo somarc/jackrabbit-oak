@@ -44,13 +44,13 @@ public class ProposalQueueTuningTest {
     public void testPersistenceDefaultsFromSystemProperties() {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertTrue("Persistence should default to enabled", tuning.isPersistenceEnabled());
+        assertTrue("Persistence should default to enabled", tuning.persistenceEnabled());
         assertEquals("Default flush interval should match constant",
             ProposalQueueTuning.DEFAULT_PERSISTENCE_FLUSH_INTERVAL_MS,
-            tuning.getPersistenceFlushIntervalMs());
+            tuning.persistenceFlushIntervalMs());
         assertEquals("Default flush batch should match constant",
             ProposalQueueTuning.DEFAULT_PERSISTENCE_FLUSH_BATCH,
-            tuning.getPersistenceFlushBatch());
+            tuning.persistenceFlushBatch());
     }
 
     @Test
@@ -61,23 +61,23 @@ public class ProposalQueueTuningTest {
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertFalse("Persistence flag should be configurable", tuning.isPersistenceEnabled());
-        assertEquals("Flush interval override should apply", 750L, tuning.getPersistenceFlushIntervalMs());
-        assertEquals("Flush batch override should apply", 400, tuning.getPersistenceFlushBatch());
+        assertFalse("Persistence flag should be configurable", tuning.persistenceEnabled());
+        assertEquals("Flush interval override should apply", 750L, tuning.persistenceFlushIntervalMs());
+        assertEquals("Flush batch override should apply", 400, tuning.persistenceFlushBatch());
     }
 
     @Test
     public void testReleaseModeDefaultsToAdaptiveActive() {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.getReleaseMode());
+        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.releaseMode());
     }
 
     @Test
     public void testRequiredConfirmationsDefaultsToOne() {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(1, tuning.getRequiredConfirmations());
+        assertEquals(1, tuning.requiredConfirmations());
     }
 
     @Test
@@ -86,7 +86,7 @@ public class ProposalQueueTuningTest {
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(3, tuning.getRequiredConfirmations());
+        assertEquals(3, tuning.requiredConfirmations());
     }
 
     @Test
@@ -95,7 +95,7 @@ public class ProposalQueueTuningTest {
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(AdaptiveReleaseMode.ADAPTIVE_SHADOW, tuning.getReleaseMode());
+        assertEquals(AdaptiveReleaseMode.ADAPTIVE_SHADOW, tuning.releaseMode());
     }
 
     @Test
@@ -104,7 +104,7 @@ public class ProposalQueueTuningTest {
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.getReleaseMode());
+        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.releaseMode());
     }
 
     @Test
@@ -113,7 +113,7 @@ public class ProposalQueueTuningTest {
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.getReleaseMode());
+        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.releaseMode());
     }
 
     @Test
@@ -122,14 +122,14 @@ public class ProposalQueueTuningTest {
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.getReleaseMode());
+        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.releaseMode());
     }
 
     @Test
     public void testValidatorHostedBinaryUploadDefaultsEnabled() {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertTrue(tuning.isValidatorHostedBinaryUploadEnabled());
+        assertTrue(tuning.validatorHostedBinaryUploadEnabled());
     }
 
     @Test
@@ -138,18 +138,18 @@ public class ProposalQueueTuningTest {
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertFalse(tuning.isValidatorHostedBinaryUploadEnabled());
+        assertFalse(tuning.validatorHostedBinaryUploadEnabled());
     }
 
     @Test
     public void testPayloadSpillDefaultsApply() {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_INLINE_MAX_BYTES, tuning.getPayloadInlineMaxBytes());
-        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_SOFT_PENDING, tuning.getPayloadSpillSoftPending());
-        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_MAX_BYTES, tuning.getPayloadSpillMaxBytes());
-        assertEquals(ProposalQueueTuning.DEFAULT_HARD_MAX_PENDING_PROPOSALS, tuning.getHardMaxPendingProposals());
-        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_DIR, tuning.getPayloadSpillDir());
+        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_INLINE_MAX_BYTES, tuning.payloadInlineMaxBytes());
+        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_SOFT_PENDING, tuning.payloadSpillSoftPending());
+        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_MAX_BYTES, tuning.payloadSpillMaxBytes());
+        assertEquals(ProposalQueueTuning.DEFAULT_HARD_MAX_PENDING_PROPOSALS, tuning.hardMaxPendingProposals());
+        assertEquals(ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_DIR, tuning.payloadSpillDir());
     }
 
     @Test
@@ -162,10 +162,10 @@ public class ProposalQueueTuningTest {
 
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(64L, tuning.getPayloadInlineMaxBytes());
-        assertEquals(32L, tuning.getPayloadSpillSoftPending());
-        assertEquals(2048L, tuning.getPayloadSpillMaxBytes());
-        assertEquals(48L, tuning.getHardMaxPendingProposals());
-        assertEquals("/tmp/oak-spill", tuning.getPayloadSpillDir());
+        assertEquals(64L, tuning.payloadInlineMaxBytes());
+        assertEquals(32L, tuning.payloadSpillSoftPending());
+        assertEquals(2048L, tuning.payloadSpillMaxBytes());
+        assertEquals(48L, tuning.hardMaxPendingProposals());
+        assertEquals("/tmp/oak-spill", tuning.payloadSpillDir());
     }
 }

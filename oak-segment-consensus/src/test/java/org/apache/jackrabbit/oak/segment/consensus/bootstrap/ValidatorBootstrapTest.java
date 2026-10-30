@@ -31,7 +31,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -40,36 +39,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 public class ValidatorBootstrapTest {
-
-    @Test
-    public void needsBootstrapReturnsTrueWhenFileStoreIsEmpty() throws Exception {
-        FileStore fileStore = mock(FileStore.class);
-        when(fileStore.size()).thenReturn(0L);
-
-        ValidatorBootstrap bootstrap = new ValidatorBootstrap(fileStore, 8091);
-
-        assertTrue(bootstrap.needsBootstrap());
-    }
-
-    @Test
-    public void needsBootstrapReturnsFalseWhenFileStoreHasData() throws Exception {
-        FileStore fileStore = mock(FileStore.class);
-        when(fileStore.size()).thenReturn(1024L * 1024L);
-
-        ValidatorBootstrap bootstrap = new ValidatorBootstrap(fileStore, 8091);
-
-        assertFalse(bootstrap.needsBootstrap());
-    }
-
-    @Test
-    public void needsBootstrapReturnsFalseWhenFileStoreSizeCheckFails() throws Exception {
-        FileStore fileStore = mock(FileStore.class);
-        when(fileStore.size()).thenThrow(new RuntimeException("size failed"));
-
-        ValidatorBootstrap bootstrap = new ValidatorBootstrap(fileStore, 8091);
-
-        assertFalse(bootstrap.needsBootstrap());
-    }
 
     @Test
     public void bootstrapFromPrimaryPromotesImmediatelyWhenAlreadyCaughtUp() throws Exception {

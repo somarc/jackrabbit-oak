@@ -64,13 +64,13 @@ final class StandbyPromotionCoordinator {
     void bootstrapAndPromote(ValidatorBootstrap bootstrap,
                              BootstrapTarget target,
                              Runnable onPromoted) throws IOException {
-        bootstrap.bootstrapFromPrimary(target.getHost(), target.getPort(), onPromoted);
+        bootstrap.bootstrapFromPrimary(target.host(), target.port(), onPromoted);
     }
 
     DeferredAeronStartup startDeferredCluster(GlobalStoreServerComponentFactory components,
                                               AeronClusterService existingService,
                                               DeferredAeronStartupContext context) throws IOException {
-        if (context.getSelfUrl() == null) {
+        if (context.selfUrl() == null) {
             throw new IOException("Aeron Cluster bootstrap: selfUrl not stored");
         }
 
@@ -82,18 +82,18 @@ final class StandbyPromotionCoordinator {
         AeronClusterConfig config = clusterService != null ? clusterService.getConfig() : null;
         boolean observeElections = config != null && config.observeElections();
         boolean logClusterStateDetails = config != null && config.logClusterStateDetails();
-        List<String> peerUrls = context.getPeerUrls() != null
-            ? new ArrayList<>(context.getPeerUrls())
+        List<String> peerUrls = context.peerUrls() != null
+            ? new ArrayList<>(context.peerUrls())
             : Collections.<String>emptyList();
 
         AeronClusterStartupResult startupResult = clusterService.startCluster(
-            context.getFileStore(),
-            context.getNodeStore(),
-            context.getHttpServer(),
-            context.getWallet(),
-            context.getStoreDirectory(),
-            context.getBlobStore(),
-            context.getSelfUrl(),
+            context.fileStore(),
+            context.nodeStore(),
+            context.httpServer(),
+            context.wallet(),
+            context.storeDirectory(),
+            context.blobStore(),
+            context.selfUrl(),
             peerUrls,
             observeElections,
             logClusterStateDetails
@@ -102,101 +102,20 @@ final class StandbyPromotionCoordinator {
         return new DeferredAeronStartup(clusterService, startupResult);
     }
 
-    static final class BootstrapTarget {
-        private final String host;
-        private final int port;
-
-        BootstrapTarget(String host, int port) {
-            this.host = host;
-            this.port = port;
-        }
-
-        String getHost() {
-            return host;
-        }
-
-        int getPort() {
-            return port;
-        }
+    record BootstrapTarget(String host, int port) {
     }
 
-    static final class DeferredAeronStartup {
-        private final AeronClusterService aeronClusterService;
-        private final AeronClusterStartupResult startupResult;
-
-        private DeferredAeronStartup(AeronClusterService aeronClusterService,
-                                     AeronClusterStartupResult startupResult) {
-            this.aeronClusterService = aeronClusterService;
-            this.startupResult = startupResult;
-        }
-
-        AeronClusterService getAeronClusterService() {
-            return aeronClusterService;
-        }
-
-        AeronClusterStartupResult getStartupResult() {
-            return startupResult;
-        }
+    record DeferredAeronStartup(AeronClusterService aeronClusterService,
+                                AeronClusterStartupResult startupResult) {
     }
 
-    static final class DeferredAeronStartupContext {
-        private final FileStore fileStore;
-        private final NodeStore nodeStore;
-        private final SegmentHttpServer httpServer;
-        private final EthereumWallet wallet;
-        private final String storeDirectory;
-        private final BlobStore blobStore;
-        private final String selfUrl;
-        private final List<String> peerUrls;
-
-        DeferredAeronStartupContext(FileStore fileStore,
-                                    NodeStore nodeStore,
-                                    SegmentHttpServer httpServer,
-                                    EthereumWallet wallet,
-                                    String storeDirectory,
-                                    BlobStore blobStore,
-                                    String selfUrl,
-                                    List<String> peerUrls) {
-            this.fileStore = fileStore;
-            this.nodeStore = nodeStore;
-            this.httpServer = httpServer;
-            this.wallet = wallet;
-            this.storeDirectory = storeDirectory;
-            this.blobStore = blobStore;
-            this.selfUrl = selfUrl;
-            this.peerUrls = peerUrls;
-        }
-
-        FileStore getFileStore() {
-            return fileStore;
-        }
-
-        NodeStore getNodeStore() {
-            return nodeStore;
-        }
-
-        SegmentHttpServer getHttpServer() {
-            return httpServer;
-        }
-
-        EthereumWallet getWallet() {
-            return wallet;
-        }
-
-        String getStoreDirectory() {
-            return storeDirectory;
-        }
-
-        BlobStore getBlobStore() {
-            return blobStore;
-        }
-
-        String getSelfUrl() {
-            return selfUrl;
-        }
-
-        List<String> getPeerUrls() {
-            return peerUrls;
-        }
+    record DeferredAeronStartupContext(FileStore fileStore,
+                                       NodeStore nodeStore,
+                                       SegmentHttpServer httpServer,
+                                       EthereumWallet wallet,
+                                       String storeDirectory,
+                                       BlobStore blobStore,
+                                       String selfUrl,
+                                       List<String> peerUrls) {
     }
 }

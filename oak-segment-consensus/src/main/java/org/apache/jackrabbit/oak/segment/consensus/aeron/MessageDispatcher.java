@@ -35,6 +35,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 
 /**
  * Service responsible for dispatching incoming Aeron messages to appropriate handlers.
@@ -82,32 +83,11 @@ public class MessageDispatcher {
                                 String message, String signature, String intentToken,
                                 String blobId, String mimeType, String ipfsCid,
                                 MutationAuditMetadata auditMetadata) {
-            applyWrite(
-                walletAddress,
-                path,
-                contentType,
-                message,
-                signature,
-                intentToken,
-                blobId,
-                mimeType,
-                ipfsCid,
-                auditMetadata != null ? auditMetadata.getProposalId() : null
-            );
-        }
-
-        default void applyWrite(String walletAddress, String path, String contentType,
-                                String message, String signature, String intentToken,
-                                String blobId, String mimeType, String ipfsCid, String proposalId) {
             throw new UnsupportedOperationException("Write callback must implement applyWrite");
         }
 
         default void applyDelete(String walletAddress, String path, String signature,
                                  MutationAuditMetadata auditMetadata) {
-            applyDelete(walletAddress, path, signature, auditMetadata != null ? auditMetadata.getProposalId() : null);
-        }
-
-        default void applyDelete(String walletAddress, String path, String signature, String proposalId) {
             throw new UnsupportedOperationException("Write callback must implement applyDelete");
         }
     }
@@ -188,14 +168,6 @@ public class MessageDispatcher {
     @Deactivate
     protected void deactivate() {
         log.info("✅ MessageDispatcher deactivated (OSGi)");
-    }
-    
-    /**
-     * Set callbacks (for OSGi injection).
-     */
-    public void setCallbacks(WriteCallback writeCallback) {
-        this.writeCallback = writeCallback;
-        log.info("✅ MessageDispatcher callbacks set");
     }
     
     /**
@@ -317,16 +289,20 @@ public class MessageDispatcher {
                 return handleWriteBatch(timestamp, logPosition, buffer, payloadOffset, payloadLength);
                 
             case SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL:
-                return handleGCProposal(buffer, payloadOffset, payloadLength);
+                return handleControl(gcCallback, "GC", "GC proposal", buffer, payloadOffset, payloadLength,
+                    this::applyGcProposal);
                 
             case SimpleMessageHeader.TEMPLATE_ID_GC_VOTE:
-                return handleGCVote(buffer, payloadOffset, payloadLength);
+                return handleControl(gcCallback, "GC", "GC vote", buffer, payloadOffset, payloadLength,
+                    this::applyGcVote);
                 
             case SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE:
-                return handleGCExecute(buffer, payloadOffset, payloadLength);
+                return handleControl(gcCallback, "GC", "GC execute", buffer, payloadOffset, payloadLength,
+                    this::applyGcExecute);
                 
             case SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED:
-                return handleSegmentPersisted(timestamp, buffer, payloadOffset, payloadLength);
+                return handleControl(durabilityCallback, "Durability", "segment persisted", buffer, payloadOffset,
+                    payloadLength, json -> applySegmentPersisted(json, timestamp));
                 
             case SimpleMessageHeader.TEMPLATE_ID_QUEUE_SEGMENT:
             case SimpleMessageHeader.TEMPLATE_ID_ACK_SEGMENT_PERSISTED:
@@ -335,23 +311,18 @@ public class MessageDispatcher {
                 return true;
 
             case SimpleMessageHeader.TEMPLATE_ID_START_TRANSACTION:
-                return handleStartTransaction(buffer, payloadOffset, payloadLength);
+                return handleControl(transactionCallback, "Transaction", "start transaction", buffer, payloadOffset,
+                    payloadLength, this::applyStartTransaction);
 
             case SimpleMessageHeader.TEMPLATE_ID_COMMIT_TRANSACTION:
-                return handleCommitTransaction(buffer, payloadOffset, payloadLength);
+                return handleControl(transactionCallback, "Transaction", "commit transaction", buffer, payloadOffset,
+                    payloadLength, this::applyCommitTransaction);
 
             case SimpleMessageHeader.TEMPLATE_ID_ABORT_TRANSACTION:
-                return handleAbortTransaction(buffer, payloadOffset, payloadLength);
-                
-            case SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL:
-                log.info("🎬 GENESIS proposal received - delegating to genesis callback");
-                // Genesis is handled specially by AeronConsensusEngine
-                return true;
-                
-            case SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT:
-                log.debug("📸 Snapshot message received (handled separately)");
-                return true;
-                
+                return handleControl(transactionCallback, "Transaction", "abort transaction", buffer, payloadOffset,
+                    payloadLength, this::applyAbortTransaction);
+
+
             default:
                 log.warn("Unknown template ID: {}", header.templateId);
                 return false;
@@ -454,7 +425,6 @@ public class MessageDispatcher {
         }
         
         log.debug("✅ Batch processed: {}/{} proposals successful", successCount, proposals.size());
-        lastBatchSize = successCount;
         return successCount > 0;
     }
 
@@ -637,296 +607,167 @@ public class MessageDispatcher {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
     /**
-     * Handle GC_PROPOSAL message (template ID 103).
-     * 
-     * @param buffer message buffer
-     * @param payloadOffset offset to JSON payload (after SBE header)
-     * @param payloadLength length of JSON payload
+     * Shared guard for the GC, durability and transaction commands: without a callback the entry is rejected; a
+     * parse or callback failure is logged and rejected, except agent termination, which stops the member.
      */
-    private boolean handleGCProposal(DirectBuffer buffer, int payloadOffset, int payloadLength) {
-        if (gcCallback == null) {
-            log.warn("⚠️  GC callback not set - cannot process GC proposal");
+    private boolean handleControl(Object callback, String callbackName, String what, DirectBuffer buffer,
+                                  int payloadOffset, int payloadLength, Predicate<Map<String, Object>> apply) {
+        if (callback == null) {
+            log.warn("⚠️  {} callback not set - cannot process {}", callbackName, what);
             return false;
         }
-        
         try {
-            // Extract JSON payload
-            Map<String, Object> json = readPayload(buffer, payloadOffset, payloadLength);
-            
-            // Parse GC proposal fields
-            String proposalId = stringField(json, "proposalId");
-            String proposerWallet = stringField(json, "proposerWallet");
-            String targetRevision = stringField(json, "targetRevision");
-            Long estimatedReclaimableSizeMB = longField(json, "estimatedReclaimableSizeMB");
-            String estimatedCostUSDC = stringField(json, "estimatedCostUSDC");
-            
-            if (proposalId == null || proposerWallet == null) {
-                log.warn("Invalid GC proposal: missing required fields (proposalId={}, proposerWallet={})", 
-                    proposalId, proposerWallet);
-                return false;
-            }
-            
-            log.info("🗑️  Received GC proposal: id={}, proposer={}, targetRevision={}", 
-                proposalId, proposerWallet, targetRevision);
-            
-            // Delegate to callback
-            gcCallback.applyGCProposal(proposalId, proposerWallet, targetRevision,
-                estimatedReclaimableSizeMB != null ? estimatedReclaimableSizeMB : 0L,
-                estimatedCostUSDC);
-            
-            return true;
-            
+            return apply.test(readPayload(buffer, payloadOffset, payloadLength));
         } catch (AgentTerminationException e) {
             throw e;
         } catch (Exception e) {
-            log.error("Failed to handle GC proposal", e);
+            log.error("Failed to handle {}", what, e);
             return false;
         }
     }
-    
-    /**
-     * Handle GC_VOTE message (template ID 104).
-     * 
-     * @param buffer message buffer
-     * @param payloadOffset offset to JSON payload (after SBE header)
-     * @param payloadLength length of JSON payload
-     */
-    private boolean handleGCVote(DirectBuffer buffer, int payloadOffset, int payloadLength) {
-        if (gcCallback == null) {
-            log.warn("⚠️  GC callback not set - cannot process GC vote");
+
+    private boolean applyGcProposal(Map<String, Object> json) {
+        String proposalId = stringField(json, "proposalId");
+        String proposerWallet = stringField(json, "proposerWallet");
+        String targetRevision = stringField(json, "targetRevision");
+        Long estimatedReclaimableSizeMB = longField(json, "estimatedReclaimableSizeMB");
+        String estimatedCostUSDC = stringField(json, "estimatedCostUSDC");
+
+        if (proposalId == null || proposerWallet == null) {
+            log.warn("Invalid GC proposal: missing required fields (proposalId={}, proposerWallet={})",
+                proposalId, proposerWallet);
             return false;
         }
-        
-        try {
-            // Extract JSON payload
-            Map<String, Object> json = readPayload(buffer, payloadOffset, payloadLength);
-            
-            // Parse GC vote fields
-            String proposalId = stringField(json, "proposalId");
-            Long validatorIdLong = longField(json, "validatorId");
-            Boolean approve = booleanField(json, "approve");
-            String reason = stringField(json, "reason");
-            
-            if (proposalId == null || validatorIdLong == null || approve == null) {
-                log.warn("Invalid GC vote: missing required fields");
-                return false;
-            }
-            
-            int validatorId = validatorIdLong.intValue();
-            
-            log.info("🗳️  Received GC vote: proposalId={}, validatorId={}, approve={}", 
-                proposalId, validatorId, approve);
-            
-            // Delegate to callback
-            gcCallback.applyGCVote(proposalId, validatorId, approve, reason);
-            
-            return true;
-            
-        } catch (AgentTerminationException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to handle GC vote", e);
-            return false;
-        }
+
+        log.info("🗑️  Received GC proposal: id={}, proposer={}, targetRevision={}",
+            proposalId, proposerWallet, targetRevision);
+        gcCallback.applyGCProposal(proposalId, proposerWallet, targetRevision,
+            estimatedReclaimableSizeMB != null ? estimatedReclaimableSizeMB : 0L,
+            estimatedCostUSDC);
+        return true;
     }
-    
-    /**
-     * Handle GC_EXECUTE message (template ID 105).
-     * 
-     * @param buffer message buffer
-     * @param payloadOffset offset to JSON payload (after SBE header)
-     * @param payloadLength length of JSON payload
-     */
-    private boolean handleGCExecute(DirectBuffer buffer, int payloadOffset, int payloadLength) {
-        if (gcCallback == null) {
-            log.warn("⚠️  GC callback not set - cannot process GC execute");
+
+    private boolean applyGcVote(Map<String, Object> json) {
+        String proposalId = stringField(json, "proposalId");
+        Long validatorIdLong = longField(json, "validatorId");
+        Boolean approve = booleanField(json, "approve");
+        String reason = stringField(json, "reason");
+
+        if (proposalId == null || validatorIdLong == null || approve == null) {
+            log.warn("Invalid GC vote: missing required fields");
             return false;
         }
-        
-        try {
-            // Extract JSON payload
-            Map<String, Object> json = readPayload(buffer, payloadOffset, payloadLength);
-            
-            // Parse GC execute fields
-            String proposalId = stringField(json, "proposalId");
-            Long executorIdLong = longField(json, "executorId");
-            
-            if (proposalId == null || executorIdLong == null) {
-                log.warn("Invalid GC execute: missing required fields");
-                return false;
-            }
-            
-            int executorId = executorIdLong.intValue();
-            
-            log.info("⚡ Received GC execute command: proposalId={}, executorId={}", 
-                proposalId, executorId);
-            
-            // Delegate to callback
-            gcCallback.applyGCExecute(proposalId, executorId);
-            
-            return true;
-            
-        } catch (AgentTerminationException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to handle GC execute", e);
+
+        int validatorId = validatorIdLong.intValue();
+        log.info("🗳️  Received GC vote: proposalId={}, validatorId={}, approve={}",
+            proposalId, validatorId, approve);
+        gcCallback.applyGCVote(proposalId, validatorId, approve, reason);
+        return true;
+    }
+
+    private boolean applyGcExecute(Map<String, Object> json) {
+        String proposalId = stringField(json, "proposalId");
+        Long executorIdLong = longField(json, "executorId");
+
+        if (proposalId == null || executorIdLong == null) {
+            log.warn("Invalid GC execute: missing required fields");
             return false;
         }
+
+        int executorId = executorIdLong.intValue();
+        log.info("⚡ Received GC execute command: proposalId={}, executorId={}",
+            proposalId, executorId);
+        gcCallback.applyGCExecute(proposalId, executorId);
+        return true;
     }
-    
-    /**
-     * Get the number of proposals processed in the last batch.
-     * Used for metrics tracking.
-     */
-    public int getLastBatchSize() {
-        return lastBatchSize;
-    }
-    
-    private volatile int lastBatchSize = 0;
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // DURABILITY MESSAGE HANDLERS (ADR 026)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    private boolean handleSegmentPersisted(long timestamp, DirectBuffer buffer, int payloadOffset, int payloadLength) {
-        if (durabilityCallback == null) {
-            log.warn("⚠️  Durability callback not set - cannot process segment persisted");
+    private boolean applySegmentPersisted(Map<String, Object> json, long timestamp) {
+        String proposalId = stringField(json, "proposalId");
+        Long memberIdLong = longField(json, "memberId");
+        String durableHead = stringField(json, "durableHead");
+        Boolean success = booleanField(json, "success");
+        String error = stringField(json, "error");
+
+        if (proposalId == null || memberIdLong == null || success == null) {
+            log.warn("Invalid segment persisted: missing required fields");
             return false;
         }
 
-        try {
-            Map<String, Object> json = readPayload(buffer, payloadOffset, payloadLength);
-
-            String proposalId = stringField(json, "proposalId");
-            Long memberIdLong = longField(json, "memberId");
-            String durableHead = stringField(json, "durableHead");
-            Boolean success = booleanField(json, "success");
-            String error = stringField(json, "error");
-
-            if (proposalId == null || memberIdLong == null || success == null) {
-                log.warn("Invalid segment persisted: missing required fields");
-                return false;
-            }
-
-            durabilityCallback.onSegmentPersisted(
-                proposalId,
-                memberIdLong.intValue(),
-                durableHead,
-                success,
-                error,
-                timestamp
-            );
-            return true;
-        } catch (AgentTerminationException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to handle segment persisted", e);
-            return false;
-        }
+        durabilityCallback.onSegmentPersisted(
+            proposalId,
+            memberIdLong.intValue(),
+            durableHead,
+            success,
+            error,
+            timestamp
+        );
+        return true;
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // TRANSACTION MESSAGE HANDLERS
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    private boolean handleStartTransaction(DirectBuffer buffer, int payloadOffset, int payloadLength) {
-        if (transactionCallback == null) {
-            log.warn("⚠️  Transaction callback not set - cannot process start transaction");
+    private boolean applyStartTransaction(Map<String, Object> json) {
+        String transactionId = stringField(json, "transactionId");
+        String correlationId = stringField(json, "correlationId");
+        Long timeoutMs = longField(json, "timeoutMs");
+        String initiatorWallet = stringField(json, "initiatorWallet");
+        Long proposalTerm = longField(json, "term");
+
+        if (transactionId == null) {
+            log.warn("Invalid start transaction: missing transactionId");
+            return false;
+        }
+        if (isStaleTerm(proposalTerm)) {
             return false;
         }
 
-        try {
-            Map<String, Object> json = readPayload(buffer, payloadOffset, payloadLength);
-
-            String transactionId = stringField(json, "transactionId");
-            String correlationId = stringField(json, "correlationId");
-            Long timeoutMs = longField(json, "timeoutMs");
-            String initiatorWallet = stringField(json, "initiatorWallet");
-            Long proposalTerm = longField(json, "term");
-
-            if (transactionId == null) {
-                log.warn("Invalid start transaction: missing transactionId");
-                return false;
-            }
-            if (isStaleTerm(proposalTerm)) {
-                return false;
-            }
-
-            transactionCallback.onStartTransaction(
-                transactionId,
-                correlationId,
-                timeoutMs != null ? timeoutMs : 30000L,
-                initiatorWallet
-            );
-            return true;
-        } catch (AgentTerminationException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to handle start transaction", e);
-            return false;
-        }
+        transactionCallback.onStartTransaction(
+            transactionId,
+            correlationId,
+            timeoutMs != null ? timeoutMs : 30000L,
+            initiatorWallet
+        );
+        return true;
     }
 
-    private boolean handleCommitTransaction(DirectBuffer buffer, int payloadOffset, int payloadLength) {
-        if (transactionCallback == null) {
-            log.warn("⚠️  Transaction callback not set - cannot process commit transaction");
+    private boolean applyCommitTransaction(Map<String, Object> json) {
+        String transactionId = stringField(json, "transactionId");
+        String correlationId = stringField(json, "correlationId");
+        Long proposalTerm = longField(json, "term");
+
+        if (transactionId == null) {
+            log.warn("Invalid commit transaction: missing transactionId");
+            return false;
+        }
+        if (isStaleTerm(proposalTerm)) {
             return false;
         }
 
-        try {
-            Map<String, Object> json = readPayload(buffer, payloadOffset, payloadLength);
-
-            String transactionId = stringField(json, "transactionId");
-            String correlationId = stringField(json, "correlationId");
-            Long proposalTerm = longField(json, "term");
-
-            if (transactionId == null) {
-                log.warn("Invalid commit transaction: missing transactionId");
-                return false;
-            }
-            if (isStaleTerm(proposalTerm)) {
-                return false;
-            }
-
-            transactionCallback.onCommitTransaction(transactionId, correlationId);
-            return true;
-        } catch (AgentTerminationException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to handle commit transaction", e);
-            return false;
-        }
+        transactionCallback.onCommitTransaction(transactionId, correlationId);
+        return true;
     }
 
-    private boolean handleAbortTransaction(DirectBuffer buffer, int payloadOffset, int payloadLength) {
-        if (transactionCallback == null) {
-            log.warn("⚠️  Transaction callback not set - cannot process abort transaction");
+    private boolean applyAbortTransaction(Map<String, Object> json) {
+        String transactionId = stringField(json, "transactionId");
+        String correlationId = stringField(json, "correlationId");
+        String reason = stringField(json, "reason");
+        Long proposalTerm = longField(json, "term");
+
+        if (transactionId == null) {
+            log.warn("Invalid abort transaction: missing transactionId");
+            return false;
+        }
+        if (isStaleTerm(proposalTerm)) {
             return false;
         }
 
-        try {
-            Map<String, Object> json = readPayload(buffer, payloadOffset, payloadLength);
-
-            String transactionId = stringField(json, "transactionId");
-            String correlationId = stringField(json, "correlationId");
-            String reason = stringField(json, "reason");
-            Long proposalTerm = longField(json, "term");
-
-            if (transactionId == null) {
-                log.warn("Invalid abort transaction: missing transactionId");
-                return false;
-            }
-            if (isStaleTerm(proposalTerm)) {
-                return false;
-            }
-
-            transactionCallback.onAbortTransaction(transactionId, correlationId, reason);
-            return true;
-        } catch (AgentTerminationException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Failed to handle abort transaction", e);
-            return false;
-        }
+        transactionCallback.onAbortTransaction(transactionId, correlationId, reason);
+        return true;
     }
 }

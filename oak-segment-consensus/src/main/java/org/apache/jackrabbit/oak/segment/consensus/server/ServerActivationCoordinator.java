@@ -45,42 +45,41 @@ final class ServerActivationCoordinator {
     }
 
     ActivationResult activate(ActivationContext context) throws IOException {
-        startHttpServer(context.getDetectedMode(), context.getHttpServer(), context.getPort());
+        startHttpServer(context.detectedMode(), context.httpServer(), context.port());
 
-        AeronClusterConfig aeronConfig = context.getAeronClusterService() != null
-            ? context.getAeronClusterService().getConfig()
+        AeronClusterConfig aeronConfig = context.aeronClusterService() != null
+            ? context.aeronClusterService().getConfig()
             : null;
-        boolean isStandbyMode = context.getDetectedMode() == BootstrapMode.STANDBY;
+        boolean isStandbyMode = context.detectedMode() == BootstrapMode.STANDBY;
 
         ConsensusStartupCoordinator.StartupOutcome consensusStartup = consensusStartupStarter.initialize(
             new ConsensusStartupCoordinator.StartupContext(
-                context.getPort(),
-                context.isAeronMode(),
+                context.port(),
                 isStandbyMode,
-                context.getFileStore(),
-                context.getNodeStore(),
-                context.getHttpServer(),
-                context.getWallet(),
-                context.getStoreDirectory(),
-                context.getBlobStore(),
-                context.getAeronClusterService(),
-                context.getComponentFactory(),
-                context.getClusterWalletAddress(),
+                context.fileStore(),
+                context.nodeStore(),
+                context.httpServer(),
+                context.wallet(),
+                context.storeDirectory(),
+                context.blobStore(),
+                context.aeronClusterService(),
+                context.componentFactory(),
+                context.clusterWalletAddress(),
                 aeronConfig
             )
         );
 
-        if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DISABLED) {
+        if (consensusStartup.disposition() == ConsensusStartupCoordinator.StartupDisposition.DISABLED) {
             log.info("ℹ️  Consensus disabled (single-validator mode)");
-        } else if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DEFERRED) {
+        } else if (consensusStartup.disposition() == ConsensusStartupCoordinator.StartupDisposition.DEFERRED) {
             log.info("ℹ️  Consensus initialization deferred (STANDBY mode -> callback)");
         }
 
-        startStandbyServer(context.getDetectedMode(), context.getBootstrap());
+        startStandbyServer(context.detectedMode(), context.bootstrap());
 
         return new ActivationResult(
-            consensusStartup.getAeronClusterService(),
-            resolveLauncher(context.getExistingLauncher(), consensusStartup)
+            consensusStartup.aeronClusterService(),
+            resolveLauncher(context.existingLauncher(), consensusStartup)
         );
     }
 
@@ -115,11 +114,11 @@ final class ServerActivationCoordinator {
 
     private static AeronClusterLauncher resolveLauncher(AeronClusterLauncher existingLauncher,
                                                         ConsensusStartupCoordinator.StartupOutcome consensusStartup) {
-        if (consensusStartup.getDisposition() == ConsensusStartupCoordinator.StartupDisposition.DEFERRED
-                && consensusStartup.getLauncher() == null) {
+        if (consensusStartup.disposition() == ConsensusStartupCoordinator.StartupDisposition.DEFERRED
+                && consensusStartup.launcher() == null) {
             return existingLauncher;
         }
-        return consensusStartup.getLauncher();
+        return consensusStartup.launcher();
     }
 
     @FunctionalInterface
@@ -128,124 +127,21 @@ final class ServerActivationCoordinator {
             throws IOException;
     }
 
-    static final class ActivationContext {
-        private final int port;
-        private final boolean aeronMode;
-        private final BootstrapMode detectedMode;
-        private final FileStore fileStore;
-        private final NodeStore nodeStore;
-        private final SegmentHttpServer httpServer;
-        private final EthereumWallet wallet;
-        private final String storeDirectory;
-        private final BlobStore blobStore;
-        private final AeronClusterService aeronClusterService;
-        private final AeronClusterLauncher existingLauncher;
-        private final GlobalStoreServerComponentFactory componentFactory;
-        private final String clusterWalletAddress;
-        private final ValidatorBootstrap bootstrap;
-
-        ActivationContext(int port,
-                          boolean aeronMode,
-                          BootstrapMode detectedMode,
-                          FileStore fileStore,
-                          NodeStore nodeStore,
-                          SegmentHttpServer httpServer,
-                          EthereumWallet wallet,
-                          String storeDirectory,
-                          BlobStore blobStore,
-                          AeronClusterService aeronClusterService,
-                          AeronClusterLauncher existingLauncher,
-                          GlobalStoreServerComponentFactory componentFactory,
-                          String clusterWalletAddress,
-                          ValidatorBootstrap bootstrap) {
-            this.port = port;
-            this.aeronMode = aeronMode;
-            this.detectedMode = detectedMode;
-            this.fileStore = fileStore;
-            this.nodeStore = nodeStore;
-            this.httpServer = httpServer;
-            this.wallet = wallet;
-            this.storeDirectory = storeDirectory;
-            this.blobStore = blobStore;
-            this.aeronClusterService = aeronClusterService;
-            this.existingLauncher = existingLauncher;
-            this.componentFactory = componentFactory;
-            this.clusterWalletAddress = clusterWalletAddress;
-            this.bootstrap = bootstrap;
-        }
-
-        int getPort() {
-            return port;
-        }
-
-        boolean isAeronMode() {
-            return aeronMode;
-        }
-
-        BootstrapMode getDetectedMode() {
-            return detectedMode;
-        }
-
-        FileStore getFileStore() {
-            return fileStore;
-        }
-
-        NodeStore getNodeStore() {
-            return nodeStore;
-        }
-
-        SegmentHttpServer getHttpServer() {
-            return httpServer;
-        }
-
-        EthereumWallet getWallet() {
-            return wallet;
-        }
-
-        String getStoreDirectory() {
-            return storeDirectory;
-        }
-
-        BlobStore getBlobStore() {
-            return blobStore;
-        }
-
-        AeronClusterService getAeronClusterService() {
-            return aeronClusterService;
-        }
-
-        AeronClusterLauncher getExistingLauncher() {
-            return existingLauncher;
-        }
-
-        GlobalStoreServerComponentFactory getComponentFactory() {
-            return componentFactory;
-        }
-
-        String getClusterWalletAddress() {
-            return clusterWalletAddress;
-        }
-
-        ValidatorBootstrap getBootstrap() {
-            return bootstrap;
-        }
+    record ActivationContext(int port,
+                             BootstrapMode detectedMode,
+                             FileStore fileStore,
+                             NodeStore nodeStore,
+                             SegmentHttpServer httpServer,
+                             EthereumWallet wallet,
+                             String storeDirectory,
+                             BlobStore blobStore,
+                             AeronClusterService aeronClusterService,
+                             AeronClusterLauncher existingLauncher,
+                             GlobalStoreServerComponentFactory componentFactory,
+                             String clusterWalletAddress,
+                             ValidatorBootstrap bootstrap) {
     }
 
-    static final class ActivationResult {
-        private final AeronClusterService aeronClusterService;
-        private final AeronClusterLauncher launcher;
-
-        ActivationResult(AeronClusterService aeronClusterService, AeronClusterLauncher launcher) {
-            this.aeronClusterService = aeronClusterService;
-            this.launcher = launcher;
-        }
-
-        AeronClusterService getAeronClusterService() {
-            return aeronClusterService;
-        }
-
-        AeronClusterLauncher getLauncher() {
-            return launcher;
-        }
+    record ActivationResult(AeronClusterService aeronClusterService, AeronClusterLauncher launcher) {
     }
 }

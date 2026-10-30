@@ -30,7 +30,7 @@ public class ClientRegistration {
     public final String walletAddress;   // Wallet address if provided
     public final String clientType;      // supply-chain (default) or enterprise
     public final long registeredAt;      // Timestamp
-    public volatile long lastSeen;          // Last heartbeat
+    public final long lastSeen;          // Last heartbeat
 
     public ClientRegistration(String clientId, String clientUrl, String walletAddress) {
         this(clientId, clientUrl, walletAddress, CLIENT_TYPE_SUPPLY_CHAIN);
@@ -63,10 +63,6 @@ public class ClientRegistration {
             long registeredAt,
             long lastSeen) {
         return new ClientRegistration(clientId, clientUrl, walletAddress, clientType, registeredAt, lastSeen);
-    }
-    
-    public void updateLastSeen() {
-        this.lastSeen = System.currentTimeMillis();
     }
 
     public boolean isEnterpriseClient() {

@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
-import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.sse.ContentEvent;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
@@ -211,7 +210,7 @@ public class EventStreamHandler {
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Access-Control-Allow-Origin", "*");
 
-        List<Map<String, Object>> eventPayloads = filteredEvents.stream().map(this::toEventMap).collect(Collectors.toList());
+        List<Map<String, Object>> eventPayloads = filteredEvents.stream().map(ContentEvent::toMap).collect(Collectors.toList());
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("contractVersion", "events.recent.v1");
         payload.put("generatedAtMs", System.currentTimeMillis());
@@ -326,40 +325,5 @@ public class EventStreamHandler {
         }
 
         return true;
-    }
-
-    private Map<String, Object> toEventMap(ContentEvent event) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", event.getId());
-        m.put("type", event.getType());
-        if (event.getAction() != null) {
-            m.put("action", event.getAction());
-        }
-        if (event.getPath() != null) {
-            m.put("path", event.getPath());
-        }
-        if (event.getWallet() != null) {
-            m.put("wallet", event.getWallet());
-        }
-        if (event.getOrganization() != null) {
-            m.put("organization", event.getOrganization());
-        }
-        m.put("timestamp", event.getTimestamp());
-        if (event.getMessage() != null) {
-            m.put("message", event.getMessage());
-        }
-        if (event.getIpfsCid() != null) {
-            m.put("ipfsCid", event.getIpfsCid());
-        }
-        if (event.getSignature() != null) {
-            m.put("signature", event.getSignature());
-        }
-        if (event.getSize() != null) {
-            m.put("size", event.getSize());
-        }
-        if (event.getContentType() != null) {
-            m.put("contentType", event.getContentType());
-        }
-        return m;
     }
 }

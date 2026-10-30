@@ -19,7 +19,6 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
-import org.apache.jackrabbit.oak.segment.http.server.util.DashboardDataService;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import jakarta.servlet.http.HttpServletResponse;
@@ -45,11 +44,9 @@ import java.util.Map;
 public class DashboardHandler {
     
     private final ServerContext context;
-    private final DashboardDataService dataService;
     
     public DashboardHandler(ServerContext context) {
         this.context = context;
-        this.dataService = new DashboardDataService(context);
     }
     
     /**
@@ -70,7 +67,9 @@ public class DashboardHandler {
 
         Map<String, Object> clusterState = Collections.emptyMap();
         try {
-            clusterState = dataService.getAeronClusterState();
+            clusterState = context.aeronConsensusEngine == null
+                ? null
+                : new AeronApiHandler(context).getClusterStateData();
         } catch (Exception ignored) {
             // Keep landing page available even if cluster probing fails.
         }
@@ -181,7 +180,6 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "GET", "/v1/wallets/content?wallet=0x...", "Wallet content query", "Wallets", null);
         addInternalIndexEntry(endpoints, "POST|PUT", "/v1/register-client", "Register client", "Registration", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/peers", "Peer list", "Registration", null);
-        addInternalIndexEntry(endpoints, "GET", "/v1/ngrok-url", "Current ngrok URL", "Registration", null);
         addSourceIndexEntry(endpoints, "GET", "/v1/blockchain/config", "Blockchain mode config", "Configuration", "blockchain.config.v1", "/ops/v1/blockchain/config");
 
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/cluster-state", "Aeron cluster state", "Aeron", "/v1/ops/snapshots/cluster");
@@ -190,7 +188,6 @@ public class DashboardHandler {
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/node-status?nodeId=0", "Per-node status", "Aeron", "/v1/ops/snapshots/runtime");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/leadership-history?limit=10", "Leadership history", "Aeron", "/ops/v1/events/recent");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/replication-lag", "Replication lag", "Aeron", "/v1/ops/snapshots/replication");
-        addInternalIndexEntry(endpoints, "POST", "/v1/follower/head-update", "Follower head update (internal)", "Aeron", null);
 
         addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/health", "Ops health snapshot", "Ops Snapshots", "ops.v1", "/ops/v1/health");
         addSourceIndexEntry(endpoints, "GET", "/v1/ops/snapshots/runtime", "Ops runtime snapshot", "Ops Snapshots", "ops.runtime.v1", "/ops/v1/runtime/*");

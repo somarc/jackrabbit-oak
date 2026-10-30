@@ -22,7 +22,6 @@ import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
-import org.apache.jackrabbit.oak.segment.consensus.security.ProofVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -40,7 +39,6 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -59,7 +57,6 @@ public class ServerContext {
     public volatile AeronConsensusEngine aeronConsensusEngine;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics aeronPrometheusMetrics;
-    public volatile ProofVerifier proofVerifier;
     public volatile String selfUrl;
     public volatile GCCostEstimator gcCostEstimator;
     public volatile GCProposalManager gcProposalManager;
@@ -67,10 +64,8 @@ public class ServerContext {
     public volatile org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob periodicGCJob;
     public volatile ProposalQueueManagerOptimized proposalQueueManager;
     public volatile FragmentationTracker fragmentationTracker;
-    public volatile org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics;
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
     public volatile ShardRouter shardRouter; // Optional - for sharded routing
-    public volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker validatorEarningsTracker;
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager; // ADR 020 lazy binary upload
     public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
     public volatile org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore; // For eager binary uploads
@@ -93,18 +88,7 @@ public class ServerContext {
     public final Map<String, ClientRegistration> registeredClients;
     private final DurableClientRegistrationStore durableClientRegistrationStore;
     public final Map<String, ValidatorRegistration> registeredValidators;
-    public final Set<String> connectedPeers;
     public final Map<String, WriteMetadata> recentWriteMetadata;
-    
-    // Validator identity for rejoin
-    public volatile String myValidatorId;
-    public volatile String myValidatorUrl;
-    public volatile java.util.List<String> myPeerUrls;
-    
-    // Genesis tracking for proof verification
-    public volatile String genesisSegmentId;
-    public volatile String genesisHash;
-    public volatile long genesisTimestamp;
     
     public ServerContext(
             FileStore fileStore,
@@ -121,14 +105,8 @@ public class ServerContext {
         this.registeredClients = new ConcurrentHashMap<>();
         this.durableClientRegistrationStore = new DurableClientRegistrationStore(storeDirectory);
         this.registeredValidators = new ConcurrentHashMap<>();
-        this.connectedPeers = java.util.concurrent.ConcurrentHashMap.newKeySet();
         this.recentWriteMetadata = new ConcurrentHashMap<>();
         loadDurableClientRegistrations();
-    }
-    
-    // Setters for consensus engines (can be set after construction)
-    public void setProofVerifier(ProofVerifier proofVerifier) {
-        this.proofVerifier = proofVerifier;
     }
     
     public void setSelfUrl(String selfUrl) {
@@ -248,24 +226,9 @@ public class ServerContext {
         persistRegisteredClients();
         return updated;
     }
-
-    public synchronized void touchClientRegistration(ClientRegistration registration) {
-        if (registration == null) {
-            return;
-        }
-        registration.updateLastSeen();
-        indexClientRegistration(registration);
-        persistRegisteredClients();
-    }
-    
     public void setFragmentationTracker(FragmentationTracker fragmentationTracker) {
         this.fragmentationTracker = fragmentationTracker;
         log.info("✅ Fragmentation Tracker initialized");
-    }
-    
-    public void setWalletStorageMetrics(org.apache.jackrabbit.oak.segment.consensus.fragmentation.WalletStorageMetrics walletStorageMetrics) {
-        this.walletStorageMetrics = walletStorageMetrics;
-        log.info("✅ Wallet Storage Metrics initialized");
     }
     
     public void setGCProposalManager(GCProposalManager gcProposalManager) {
@@ -276,11 +239,6 @@ public class ServerContext {
     public void setShardRouter(ShardRouter shardRouter) {
         this.shardRouter = shardRouter;
         log.info("✅ Shard Router initialized");
-    }
-    
-    public void setValidatorEarningsTracker(org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker validatorEarningsTracker) {
-        this.validatorEarningsTracker = validatorEarningsTracker;
-        log.info("✅ Validator Earnings Tracker initialized");
     }
     
     public void setUploadSessionManager(org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager) {

@@ -66,7 +66,7 @@ public class DeleteApplicationServiceTest {
         AtomicReference<String> durableHead = new AtomicReference<>();
         AtomicReference<String> ssePayload = new AtomicReference<>();
         service.setHeadUpdateCallback(updatedHead::set);
-        service.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+        service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
             @Override
             public void onDurable(String proposalId, String durableHeadValue) {
                 durableProposal.set(proposalId);
@@ -106,7 +106,7 @@ public class DeleteApplicationServiceTest {
         DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
-        service.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+        service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
             @Override
             public void onDurable(String proposalId, String durableHeadValue) {
                 durableProposal.set(proposalId);
@@ -144,7 +144,7 @@ public class DeleteApplicationServiceTest {
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
         AtomicReference<String> durableHead = new AtomicReference<>();
-        service.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+        service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
             @Override
             public void onDurable(String proposalId, String durableHeadValue) {
                 durableProposal.set(proposalId);
@@ -181,7 +181,7 @@ public class DeleteApplicationServiceTest {
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
         AtomicReference<String> durableHead = new AtomicReference<>();
-        service.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+        service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
             @Override
             public void onDurable(String proposalId, String durableHeadValue) {
                 durableProposal.set(proposalId);
@@ -214,7 +214,7 @@ public class DeleteApplicationServiceTest {
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
         AtomicReference<String> durableHead = new AtomicReference<>();
-        service.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+        service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
             @Override
             public void onDurable(String proposalId, String durableHeadValue) {
                 durableProposal.set(proposalId);
@@ -243,7 +243,7 @@ public class DeleteApplicationServiceTest {
 
         AtomicReference<String> failedProposal = new AtomicReference<>();
         AtomicReference<String> failureMessage = new AtomicReference<>();
-        service.setDurabilityCallback(new DeleteApplicationService.DurabilityCallback() {
+        service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
             @Override
             public void onDurable(String proposalId, String durableHead) {
             }

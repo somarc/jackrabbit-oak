@@ -126,67 +126,6 @@ public final class WalletValidator {
     }
     
     /**
-     * Validate an Ethereum wallet address with strict length checking.
-     * 
-     * <p>Same as {@link #validate(String)} but also requires exactly 42 characters
-     * (standard Ethereum address length).
-     * 
-     * @param wallet the wallet address to validate
-     * @return validation result with normalized address or error
-     */
-    @NotNull
-    public static ValidationResult<String> validateStrict(@Nullable String wallet) {
-        // First do basic validation
-        ValidationResult<String> basicResult = validate(wallet);
-        if (!basicResult.isValid()) {
-            return basicResult;
-        }
-        
-        String normalized = basicResult.getNormalizedValue();
-        
-        // Check exact length
-        if (normalized.length() != ETHEREUM_ADDRESS_LENGTH) {
-            return ValidationResult.error(
-                "Invalid Ethereum address length. Expected " + ETHEREUM_ADDRESS_LENGTH + 
-                " characters, got " + normalized.length() + ". " +
-                "Standard Ethereum addresses are 42 characters (0x + 40 hex digits)."
-            );
-        }
-        
-        return basicResult;
-    }
-    
-    /**
-     * Quick check if a string looks like a wallet address.
-     * 
-     * <p>This is a fast check that doesn't do full validation.
-     * Use {@link #validate(String)} for complete validation.
-     * 
-     * @param value the value to check
-     * @return true if it starts with "0x" and has reasonable length
-     */
-    public static boolean looksLikeWallet(@Nullable String value) {
-        return value != null && 
-               value.length() >= MIN_ADDRESS_LENGTH && 
-               value.startsWith(ADDRESS_PREFIX);
-    }
-    
-    /**
-     * Check if a wallet address is the zero address (0x0000...0000).
-     * 
-     * <p>The zero address is often used as a placeholder or burn address.
-     * 
-     * @param wallet the wallet address to check (should be normalized/lowercase)
-     * @return true if this is the zero address
-     */
-    public static boolean isZeroAddress(@Nullable String wallet) {
-        if (wallet == null) {
-            return false;
-        }
-        return wallet.equalsIgnoreCase("0x0000000000000000000000000000000000000000");
-    }
-    
-    /**
      * Normalize a wallet address to lowercase.
      * 
      * <p>Does NOT validate - use {@link #validate(String)} if validation is needed.

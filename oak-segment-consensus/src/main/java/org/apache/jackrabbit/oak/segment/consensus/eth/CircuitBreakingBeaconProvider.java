@@ -51,7 +51,7 @@ class CircuitBreakingBeaconProvider implements BeaconChainProvider {
 
     @Override
     public long fetchFinalizedEpoch() throws Exception {
-        if (circuitIsOpen()) {
+        if (isCircuitOpen()) {
             throw new CircuitOpenException(delegate.name() + " circuit is open (" +
                 consecutiveFailures + " consecutive failures)");
         }
@@ -70,15 +70,11 @@ class CircuitBreakingBeaconProvider implements BeaconChainProvider {
         return delegate.name();
     }
 
-    boolean isCircuitOpen() {
-        return circuitIsOpen();
-    }
-
     int getConsecutiveFailures() {
         return consecutiveFailures;
     }
 
-    private boolean circuitIsOpen() {
+    boolean isCircuitOpen() {
         if (consecutiveFailures < failureThreshold) {
             return false;
         }

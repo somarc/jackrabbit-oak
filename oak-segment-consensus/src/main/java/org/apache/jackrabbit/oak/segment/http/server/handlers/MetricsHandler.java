@@ -74,21 +74,34 @@ public class MetricsHandler {
         payload.put("success", true);
         payload.put("status", "UP");
         payload.put("timestamp", System.currentTimeMillis());
-        payload.put("consensus", buildConsensusMetrics());
-        payload.put("replication", buildReplicationMetrics());
-
-        Map<String, Object> validator = new LinkedHashMap<>();
-        validator.put("registeredClients", registeredClients.size());
-        validator.put("registeredValidators", registeredValidators.size());
-        validator.put("storePath", storeDirectory != null ? storeDirectory.toString() : "");
-        payload.put("validator", validator);
-        payload.put("ipfsPolicy", buildIpfsPolicyMetrics());
+        payload.putAll(buildMetricsPayload(currentAeronConsensusEngine(), context,
+            registeredClients, registeredValidators, storeDirectory));
 
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
 
-    private Map<String, Object> buildConsensusMetrics() {
-        AeronConsensusEngine engine = currentAeronConsensusEngine();
+    /**
+     * Builds the consensus/replication/validator/ipfsPolicy metrics shared by
+     * {@code /api/metrics} and the health snapshot.
+     */
+    static Map<String, Object> buildMetricsPayload(AeronConsensusEngine engine, ServerContext context,
+                                                   Map<String, ?> registeredClients,
+                                                   Map<String, ?> registeredValidators,
+                                                   Path storeDirectory) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("consensus", buildConsensusMetrics(engine));
+        payload.put("replication", buildReplicationMetrics(engine));
+
+        Map<String, Object> validator = new LinkedHashMap<>();
+        validator.put("registeredClients", registeredClients != null ? registeredClients.size() : 0);
+        validator.put("registeredValidators", registeredValidators != null ? registeredValidators.size() : 0);
+        validator.put("storePath", storeDirectory != null ? storeDirectory.toString() : "");
+        payload.put("validator", validator);
+        payload.put("ipfsPolicy", buildIpfsPolicyMetrics(context));
+        return payload;
+    }
+
+    private static Map<String, Object> buildConsensusMetrics(AeronConsensusEngine engine) {
         if (engine == null) {
             return null;
         }
@@ -110,8 +123,7 @@ public class MetricsHandler {
         return consensus;
     }
 
-    private Map<String, Object> buildReplicationMetrics() {
-        AeronConsensusEngine engine = currentAeronConsensusEngine();
+    private static Map<String, Object> buildReplicationMetrics(AeronConsensusEngine engine) {
         if (engine == null) {
             return null;
         }
@@ -137,7 +149,7 @@ public class MetricsHandler {
         return replication;
     }
 
-    private Map<String, Object> buildIpfsPolicyMetrics() {
+    private static Map<String, Object> buildIpfsPolicyMetrics(ServerContext context) {
         if (context == null) {
             return null;
         }

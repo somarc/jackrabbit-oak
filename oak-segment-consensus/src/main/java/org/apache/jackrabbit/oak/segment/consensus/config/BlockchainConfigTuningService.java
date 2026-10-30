@@ -37,6 +37,9 @@ import java.util.Map;
 public final class BlockchainConfigTuningService {
 
     private static final Logger log = LoggerFactory.getLogger(BlockchainConfigTuningService.class);
+    static final String NAMESPACE = BlockchainConfigTuningService.class.getName();
+    static final String COMPONENT = "blockchainTuning";
+    static final String FALLBACK_SOURCE = "env-or-system-properties";
 
     private static final String PROP_MODE = "oak.blockchain.mode";
     private static final String PROP_CONTRACT_ADDRESS = "oak.blockchain.contractAddress";
@@ -58,8 +61,8 @@ public final class BlockchainConfigTuningService {
 
     @Deactivate
     protected void deactivate() {
-        BlockchainConfigOverrideRegistry.clear();
-        BlockchainConfigSourceRegistry.markFallbackSource();
+        RuntimePropertyOverrideRegistry.clear(NAMESPACE);
+        RuntimePropertySourceRegistry.markSource(COMPONENT, FALLBACK_SOURCE);
         BlockchainConfig.reset();
         log.info("BLOCKCHAIN_CONFIG_SOURCE source=env-or-system-properties action=deactivate");
     }
@@ -75,13 +78,13 @@ public final class BlockchainConfigTuningService {
         putIfPositive(overrides, PROP_GAS_WRITE_EXPRESS, config.gas_write_express());
         putIfPositive(overrides, PROP_GAS_WRITE_PRIORITY, config.gas_write_priority());
 
-        BlockchainConfigOverrideRegistry.setOverrides(overrides);
+        RuntimePropertyOverrideRegistry.setOverrides(NAMESPACE, overrides);
 
         if (overrides.isEmpty()) {
-            BlockchainConfigSourceRegistry.markFallbackSource();
+            RuntimePropertySourceRegistry.markSource(COMPONENT, FALLBACK_SOURCE);
             log.info("BLOCKCHAIN_CONFIG_SOURCE source=env-or-system-properties overrides=0");
         } else {
-            BlockchainConfigSourceRegistry.markOsgiSource();
+            RuntimePropertySourceRegistry.markSource(COMPONENT, "osgi-config-admin");
             log.info("BLOCKCHAIN_CONFIG_SOURCE source=osgi-config-admin overrides={}", overrides.keySet());
         }
 

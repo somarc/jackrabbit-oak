@@ -17,68 +17,20 @@
 package org.apache.jackrabbit.oak.segment.consensus.util;
 
 /**
- * Utility for converting wallet addresses to sharded Oak paths.
- * 
- * <p><strong>Path Architecture (Updated Nov 21, 2024):</strong>
+ * Converts wallet addresses to wallet-scoped Oak paths.
+ *
  * <pre>
- * /oak-chain/{shard}/              ← Wallet-scoped root
- *   ├── content/                   ← Standard AEM content paths
- *   │   └── dam/fragments/...
- *   ├── conf/                      ← Wallet's own CF models & config
- *   │   └── settings/dam/cfm/models/...
- *   └── apps/ (future)             ← Custom components
+ *   Wallet:       0x742d35cc6634c0532925a3b844bc9e7595f0beb0
+ *   Shard root:   /oak-chain/74/2d/35/0x742d35cc6634c0532925a3b844bc9e7595f0beb0
+ *   Content path: /oak-chain/74/2d/35/0x742d35cc.../content
+ *   With org:     /oak-chain/74/2d/35/0x742d35cc.../{organization}/content
  * </pre>
- * 
- * <p><strong>Sharding Pattern:</strong>
- * - Shard ID: {L1}-{L2}-{L3} (e.g., "74-2d-35")
- * - L1: First 2 hex chars (00-ff) → 256 buckets
- * - L2: Next 2 hex chars (00-ff) → 256 buckets per L1
- * - L3: Next 2 hex chars (00-ff) → 256 buckets per L2
- * - Total: 16,777,216 shards
- * 
- * <p><strong>Example:</strong>
- * <pre>
- *   Wallet:       0x742d35cc6634c0532925a3b844bc9e7595f0beb
- *   Shard ID:     74-2d-35
- *   Shard Root:   /oak-chain/74-2d-35/
- *   Content Path: /oak-chain/74-2d-35/content/dam/fragments/product-widget-x
- *   Config Path:  /oak-chain/74-2d-35/conf/settings/dam/cfm/models/product
- * </pre>
- * 
- * <p><strong>Benefits:</strong>
- * - Complete wallet isolation (DELETE entire shard in one operation)
- * - Standard AEM paths within each shard
- * - Wallet-scoped CF models and configuration
- * - Accurate fragmentation tracking per wallet
- * - Prevents copy-on-write amplification
- * - Fault isolation (SNFE contained to single shard)
+ *
+ * <p>The first three address bytes form a three-level hex fan-out (256^3 buckets).
  */
 public class WalletPathUtil {
     
     private static final String OAK_CHAIN_ROOT = "/oak-chain";
-    
-    /**
-     * Get the shard ID for a wallet address.
-     * 
-     * <p>DEPRECATED: Use getShardLevels() for path construction.
-     * Shard ID format: "{L1}-{L2}-{L3}" (e.g., "74-2d-35")
-     * 
-     * @param walletAddress Ethereum wallet address (0x... format)
-     * @return Shard ID
-     * @throws IllegalArgumentException if wallet address is invalid
-     * @deprecated Use getShardLevels() for proper path construction
-     */
-    @Deprecated
-    public static String getShardId(String walletAddress) {
-        String addr = normalizeWalletAddress(walletAddress);
-        
-        // Extract sharding levels (first 6 hex chars)
-        String level1 = addr.substring(0, 2);  // 00-ff
-        String level2 = addr.substring(2, 4);  // 00-ff
-        String level3 = addr.substring(4, 6);  // 00-ff
-        
-        return String.format("%s-%s-%s", level1, level2, level3);
-    }
     
     /**
      * Get the shard levels for path construction.
@@ -180,46 +132,6 @@ public class WalletPathUtil {
     }
     
     /**
-     * Get the config root path for a wallet.
-     * 
-     * <p>Structure: /oak-chain/XX/YY/ZZ/0xWALLETADDRESS/conf
-     * 
-     * @param walletAddress Ethereum wallet address (0x... format)
-     * @return Config path (e.g., "/oak-chain/74/2d/35/0x742d35Cc.../conf")
-     */
-    public static String getConfPath(String walletAddress) {
-        return getShardRoot(walletAddress) + "/conf";
-    }
-    
-    /**
-     * Get the apps root path for a wallet (future use).
-     * 
-     * <p>Structure: /oak-chain/XX/YY/ZZ/0xWALLETADDRESS/apps
-     * 
-     * @param walletAddress Ethereum wallet address (0x... format)
-     * @return Apps path (e.g., "/oak-chain/74/2d/35/0x742d35Cc.../apps")
-     */
-    public static String getAppsPath(String walletAddress) {
-        return getShardRoot(walletAddress) + "/apps";
-    }
-    
-    /**
-     * Convert wallet address to sharded Oak path (DEPRECATED).
-     * 
-     * <p><strong>DEPRECATED:</strong> Use {@link #getShardRoot(String)} instead.
-     * This method is kept for backward compatibility.
-     * 
-     * @param walletAddress Ethereum wallet address (0x... format)
-     * @return Sharded path for Oak storage
-     * @throws IllegalArgumentException if wallet address is invalid
-     * @deprecated Use {@link #getShardRoot(String)} or {@link #getContentPath(String)}
-     */
-    @Deprecated
-    public static String toShardedPath(String walletAddress) {
-        return getContentPath(walletAddress);
-    }
-    
-    /**
      * Normalize a wallet address (lowercase, remove 0x prefix, validate).
      * 
      * @param walletAddress Ethereum wallet address
@@ -246,127 +158,5 @@ public class WalletPathUtil {
         return addr;
     }
     
-    /**
-     * Extract shard ID from a path.
-     * 
-     * @param path Oak path (e.g., "/oak-chain/74-2d-35/content/...")
-     * @return Shard ID (e.g., "74-2d-35")
-     * @throws IllegalArgumentException if path is invalid
-     */
-    public static String extractShardId(String path) {
-        if (path == null || !path.startsWith(OAK_CHAIN_ROOT + "/")) {
-            throw new IllegalArgumentException("Invalid oak-chain path: " + path);
-        }
-        
-        String[] parts = path.split("/");
-        
-        // Path should be: ["", "oak-chain", "74-2d-35", ...]
-        if (parts.length < 3) {
-            throw new IllegalArgumentException("Invalid sharded path: " + path);
-        }
-        
-        return parts[2]; // Shard ID (e.g., "74-2d-35")
-    }
-    
-    /**
-     * Extract wallet address from sharded path (DEPRECATED).
-     * 
-     * <p><strong>DEPRECATED:</strong> Use {@link #extractShardId(String)} instead.
-     * 
-     * @param shardedPath Sharded Oak path
-     * @return Shard ID (format changed - now returns "74-2d-35" instead of wallet)
-     * @throws IllegalArgumentException if path is invalid
-     * @deprecated Use {@link #extractShardId(String)}
-     */
-    @Deprecated
-    public static String fromShardedPath(String shardedPath) {
-        return extractShardId(shardedPath);
-    }
-    
-    /**
-     * Get the bucket path (DEPRECATED - use {@link #getShardRoot(String)}).
-     * 
-     * @param walletAddress Ethereum wallet address
-     * @return Shard root path
-     * @deprecated Use {@link #getShardRoot(String)}
-     */
-    @Deprecated
-    public static String toBucketPath(String walletAddress) {
-        return getShardRoot(walletAddress);
-    }
-    
-    /**
-     * Get bucket identifier for quarantine/metrics.
-     * 
-     * <p>Alias for {@link #getShardId(String)}.
-     * 
-     * @param walletAddress Ethereum wallet address
-     * @return Shard ID (e.g., "74-2d-35")
-     */
-    public static String toBucketId(String walletAddress) {
-        return getShardId(walletAddress);
-    }
-    
-    /**
-     * Check if a path is a sharded wallet path.
-     * 
-     * @param path Oak path to check
-     * @return true if path follows sharded wallet pattern
-     */
-    public static boolean isShardedWalletPath(String path) {
-        if (path == null || !path.startsWith(OAK_CHAIN_ROOT + "/")) {
-            return false;
-        }
-        
-        String[] parts = path.split("/");
-        
-        // Should have at least: ["", "oak-chain", "74-2d-35", ...]
-        if (parts.length < 3) {
-            return false;
-        }
-        
-        // Check if shard ID follows pattern: XX-XX-XX
-        String shardId = parts[2];
-        return shardId.matches("^[0-9a-f]{2}-[0-9a-f]{2}-[0-9a-f]{2}$");
-    }
-    
-    /**
-     * Get total number of possible buckets.
-     * 
-     * @return 256^3 = 16,777,216
-     */
-    public static int getTotalBuckets() {
-        return 256 * 256 * 256; // 16,777,216
-    }
-    
-    /**
-     * Estimate wallets per bucket (assuming uniform distribution).
-     * 
-     * @param totalWallets Total number of wallets in the network
-     * @return Average wallets per bucket
-     */
-    public static int estimateWalletsPerBucket(long totalWallets) {
-        return (int) (totalWallets / getTotalBuckets());
-    }
-    
-    /**
-     * Get the oak-chain root path.
-     * 
-     * @return "/oak-chain"
-     */
-    public static String getOakChainRoot() {
-        return OAK_CHAIN_ROOT;
-    }
-    
-    /**
-     * Get the content root path (DEPRECATED - use wallet-specific paths).
-     * 
-     * @return "/oak-chain" (global root)
-     * @deprecated Use {@link #getContentPath(String)} for wallet-specific content paths
-     */
-    @Deprecated
-    public static String getContentRoot() {
-        return OAK_CHAIN_ROOT;
-    }
 }
 

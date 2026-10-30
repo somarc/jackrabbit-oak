@@ -462,9 +462,9 @@ public class WriteApplicationServiceTest {
             null,
             mock(FileStoreFlushService.class));
 
-        assertEquals("Acme", service.extractOrganizationFromPath(PATH));
-        assertEquals(null, service.extractOrganizationFromPath("/oak-chain/aa/bb/cc/" + WALLET + "/content/doc-1"));
-        assertEquals(null, service.extractOrganizationFromPath(null));
+        assertEquals("Acme", MutationApplySupport.extractOrganizationFromPath(PATH));
+        assertEquals(null, MutationApplySupport.extractOrganizationFromPath("/oak-chain/aa/bb/cc/" + WALLET + "/content/doc-1"));
+        assertEquals(null, MutationApplySupport.extractOrganizationFromPath(null));
     }
 
     @Test

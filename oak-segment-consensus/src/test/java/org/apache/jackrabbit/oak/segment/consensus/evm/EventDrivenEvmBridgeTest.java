@@ -16,12 +16,10 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.evm;
 
-import org.apache.jackrabbit.oak.segment.consensus.evm.impl.EventDrivenEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.evm.impl.MockEventDrivenEvmBridge;
 import org.junit.Test;
 
 import java.math.BigInteger;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.*;
 
@@ -32,11 +30,9 @@ public class EventDrivenEvmBridgeTest {
     
     @Test
     public void testMockEventProcessing() throws InterruptedException {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true  // mock mode
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
         
         try {
@@ -75,40 +71,8 @@ public class EventDrivenEvmBridgeTest {
     }
     
     @Test
-    public void testEventListeners() throws InterruptedException {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge();
-        bridge.start();
-        
-        try {
-            CountDownLatch latch = new CountDownLatch(1);
-            
-            // Add event listener
-            bridge.addEventListener(event -> {
-                assertEquals("0xabc123", event.proposalId);
-                latch.countDown();
-            });
-            
-            // Simulate event
-            bridge.simulateWriteAuthorizedEvent(
-                "0xabc123",
-                "0x742d35cc...",
-                "0xdef456",
-                BigInteger.valueOf(1_000_000),
-                12345L,
-                "0xtx123"
-            );
-            
-            // Wait for listener to be called
-            assertTrue("Listener should be called", latch.await(2, TimeUnit.SECONDS));
-            
-        } finally {
-            bridge.stop();
-        }
-    }
-    
-    @Test
     public void testPaymentNotVerified() {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge();
+        MockEventDrivenEvmBridge bridge = new MockEventDrivenEvmBridge();
         bridge.start();
         
         try {
@@ -123,11 +87,9 @@ public class EventDrivenEvmBridgeTest {
 
     @Test
     public void testSettlementDetailsByTransactionHashUseCachedEventProof() throws InterruptedException {
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(
+        MockEventDrivenEvmBridge bridge = new MockEventDrivenEvmBridge(
             "sepolia",
-            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0",
-            true
-        );
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
         bridge.start();
 
         try {

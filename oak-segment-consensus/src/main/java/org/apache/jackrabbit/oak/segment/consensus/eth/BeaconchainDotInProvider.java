@@ -16,12 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.eth;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -83,10 +77,6 @@ class BeaconchainDotInProvider implements BeaconChainProvider {
         return "beaconcha.in(" + apiBaseUrl + ")";
     }
 
-    String getApiBaseUrl() {
-        return apiBaseUrl;
-    }
-
     /**
      * Parses an epoch number from a beaconcha.in JSON response.
      * Handles {@code {"data":{"epoch":NNN}}} and {@code {"data":NNN}} shapes.
@@ -97,21 +87,12 @@ class BeaconchainDotInProvider implements BeaconChainProvider {
             return -1;
         }
         try {
-            int epochIdx = json.indexOf("\"epoch\"");
-            if (epochIdx >= 0) {
-                int colonIdx = json.indexOf(":", epochIdx);
-                int endIdx = json.indexOf(",", colonIdx);
-                if (endIdx < 0) endIdx = json.indexOf("}", colonIdx);
-                if (colonIdx > 0 && endIdx > colonIdx) {
-                    return Long.parseLong(json.substring(colonIdx + 1, endIdx).trim());
-                }
-                return -1;
+            int keyIdx = json.indexOf("\"epoch\"");
+            if (keyIdx < 0) {
+                keyIdx = json.indexOf("\"data\"");
             }
-
-            // Alternate shape: "data": NNN
-            int dataIdx = json.indexOf("\"data\"");
-            if (dataIdx >= 0) {
-                int colonIdx = json.indexOf(":", dataIdx);
+            if (keyIdx >= 0) {
+                int colonIdx = json.indexOf(":", keyIdx);
                 int endIdx = json.indexOf(",", colonIdx);
                 if (endIdx < 0) endIdx = json.indexOf("}", colonIdx);
                 if (colonIdx > 0 && endIdx > colonIdx) {
@@ -124,31 +105,4 @@ class BeaconchainDotInProvider implements BeaconChainProvider {
         return -1;
     }
 
-    static HttpFetcher defaultFetcher() {
-        return BeaconchainDotInProvider::httpGet;
-    }
-
-    private static String httpGet(String endpoint) throws Exception {
-        URL url = new URL(endpoint);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(10_000);
-        conn.setReadTimeout(10_000);
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setRequestProperty("User-Agent", "OakSegmentConsensus/1.0");
-
-        int rc = conn.getResponseCode();
-        if (rc != 200) {
-            throw new Exception("HTTP " + rc + " from " + endpoint);
-        }
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
-            return sb.toString();
-        }
-    }
 }

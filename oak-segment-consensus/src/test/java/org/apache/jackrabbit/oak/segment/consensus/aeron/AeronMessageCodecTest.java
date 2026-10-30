@@ -16,12 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import java.nio.charset.StandardCharsets;
-
 import org.agrona.concurrent.UnsafeBuffer;
 import org.junit.Test;
 
-import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
 public class AeronMessageCodecTest {
@@ -45,41 +42,5 @@ public class AeronMessageCodecTest {
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, header.templateId);
         assertEquals(1, header.schemaId);
         assertEquals(1, header.version);
-    }
-
-    @Test
-    public void encodePayloadWritesHeaderAndPayloadBytes() {
-        AeronMessageCodec codec = new AeronMessageCodec();
-        UnsafeBuffer buffer = new UnsafeBuffer(new byte[64]);
-        byte[] payload = "oak".getBytes(StandardCharsets.UTF_8);
-
-        int encodedLength = codec.encodePayload(
-            buffer,
-            SimpleMessageHeader.TEMPLATE_ID_QUEUE_SEGMENT,
-            payload
-        );
-
-        byte[] copied = new byte[payload.length];
-        buffer.getBytes(SimpleMessageHeader.ENCODED_LENGTH, copied);
-        SimpleMessageHeader.HeaderInfo header = codec.decodeHeader(buffer, 0);
-
-        assertEquals(SimpleMessageHeader.ENCODED_LENGTH, codec.headerLength());
-        assertEquals(SimpleMessageHeader.ENCODED_LENGTH + payload.length, encodedLength);
-        assertEquals(payload.length, header.blockLength);
-        assertEquals(SimpleMessageHeader.TEMPLATE_ID_QUEUE_SEGMENT, header.templateId);
-        assertArrayEquals(payload, copied);
-    }
-
-    @Test
-    public void encodePayloadHandlesNullPayload() {
-        AeronMessageCodec codec = new AeronMessageCodec();
-        UnsafeBuffer buffer = new UnsafeBuffer(new byte[16]);
-
-        int encodedLength = codec.encodePayload(buffer, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT, null);
-        SimpleMessageHeader.HeaderInfo header = codec.decodeHeader(buffer, 0);
-
-        assertEquals(SimpleMessageHeader.ENCODED_LENGTH, encodedLength);
-        assertEquals(0, header.blockLength);
-        assertEquals(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT, header.templateId);
     }
 }

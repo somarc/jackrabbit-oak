@@ -207,9 +207,7 @@ badges.
 
 Health endpoints are observations, not correctness proofs. Validators also serve
 their segment files (`/segments/`, `/journal.log`, `/manifest`) for read-only
-mounts; replication itself happens only through the Aeron log. A legacy
-`POST /v1/follower/head-update` route that pulls segments from a claimed leader is
-still routed but unused by the runtime.
+mounts; replication itself happens only through the Aeron log.
 
 ## Build and test
 

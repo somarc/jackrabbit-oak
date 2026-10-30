@@ -48,9 +48,9 @@ public class AeronClusterElectionObserverTest {
 
         AeronClusterElectionObserver.ObservationSummary summary = observer.observe(engine, 2000);
 
-        assertEquals(0, summary.changeCount);
-        assertEquals(1, summary.uniqueLeaders);
-        assertEquals(1, summary.finalLeaderId);
+        assertEquals(0, summary.changeCount());
+        assertEquals(1, summary.uniqueLeaders());
+        assertEquals(1, summary.finalLeaderId());
         assertTrue(lines.stream().anyMatch(line -> line.contains("Single stable leader")));
     }
 
@@ -71,10 +71,10 @@ public class AeronClusterElectionObserverTest {
 
         AeronClusterElectionObserver.ObservationSummary summary = observer.observe(engine, 65000);
 
-        assertEquals(0, summary.changeCount);
-        assertEquals(1, summary.uniqueLeaders);
-        assertEquals(0, summary.finalLeaderId);
-        assertEquals(1, summary.clusterSize);
+        assertEquals(0, summary.changeCount());
+        assertEquals(1, summary.uniqueLeaders());
+        assertEquals(0, summary.finalLeaderId());
+        assertEquals(1, summary.clusterSize());
         assertTrue(lines.stream().anyMatch(line -> line.contains("65 seconds")));
         assertTrue(lines.stream().anyMatch(line -> line.contains("Single stable leader")));
     }
@@ -95,9 +95,9 @@ public class AeronClusterElectionObserverTest {
 
         AeronClusterElectionObserver.ObservationSummary summary = observer.observe(engine, 3000);
 
-        assertEquals(1, summary.changeCount);
-        assertEquals(2, summary.uniqueLeaders);
-        assertEquals(2, summary.finalLeaderId);
+        assertEquals(1, summary.changeCount());
+        assertEquals(2, summary.uniqueLeaders());
+        assertEquals(2, summary.finalLeaderId());
     }
 
     @Test

@@ -547,7 +547,6 @@ public class WriteProposalHandlerTest {
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,
-            null,
             System.currentTimeMillis(),
             System.currentTimeMillis() + 300_000L,
             ProposalState.PENDING
@@ -745,7 +744,6 @@ public class WriteProposalHandlerTest {
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,
-            null,
             System.currentTimeMillis(),
             System.currentTimeMillis() + 300_000L,
             ProposalState.PENDING
@@ -854,7 +852,6 @@ public class WriteProposalHandlerTest {
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,
-            null,
             System.currentTimeMillis(),
             System.currentTimeMillis() + 300_000L,
             ProposalState.PENDING
@@ -891,7 +888,6 @@ public class WriteProposalHandlerTest {
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,
-            null,
             System.currentTimeMillis(),
             System.currentTimeMillis() + 300_000L,
             ProposalState.PENDING
@@ -962,7 +958,6 @@ public class WriteProposalHandlerTest {
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,
-            null,
             System.currentTimeMillis(),
             System.currentTimeMillis() + 300_000L,
             ProposalState.PENDING

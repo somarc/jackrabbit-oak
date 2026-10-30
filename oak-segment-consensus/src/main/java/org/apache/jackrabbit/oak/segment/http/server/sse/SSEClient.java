@@ -16,8 +16,13 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.sse;
 
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
+
 import jakarta.servlet.AsyncContext;
 import java.io.PrintWriter;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -186,22 +191,6 @@ public class SSEClient {
         return closed.get();
     }
 
-    public long getConnectedAt() {
-        return connectedAt;
-    }
-
-    public Set<String> getWallets() {
-        return wallets;
-    }
-
-    public Set<String> getOrganizations() {
-        return organizations;
-    }
-
-    public Set<String> getTypes() {
-        return types;
-    }
-
     private String toOpsV1SSE(ContentEvent event) {
         String eventType = mapOpsEventType(event);
         StringBuilder sse = new StringBuilder();
@@ -212,44 +201,23 @@ public class SSEClient {
     }
 
     private String toOpsV1Json(ContentEvent event, String eventType) {
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"contractVersion\":\"ops.v1\",");
-        json.append("\"eventId\":\"").append(escapeJson(event.getId())).append("\",");
-        json.append("\"eventType\":\"").append(escapeJson(eventType)).append("\",");
-        json.append("\"sourceNode\":\"").append(escapeJson(sourceNode)).append("\",");
-        json.append("\"timestampMs\":").append(event.getTimestamp()).append(",");
-        json.append("\"data\":{");
-        json.append("\"legacyType\":\"").append(escapeJson(event.getType())).append("\"");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("legacyType", event.getType());
         if (event.getAction() != null) {
-            json.append(",\"legacyAction\":\"").append(escapeJson(event.getAction())).append("\"");
+            data.put("legacyAction", event.getAction());
         }
-        if (event.getPath() != null) {
-            json.append(",\"path\":\"").append(escapeJson(event.getPath())).append("\"");
-        }
-        if (event.getWallet() != null) {
-            json.append(",\"wallet\":\"").append(escapeJson(event.getWallet())).append("\"");
-        }
-        if (event.getOrganization() != null) {
-            json.append(",\"organization\":\"").append(escapeJson(event.getOrganization())).append("\"");
-        }
-        if (event.getMessage() != null) {
-            json.append(",\"message\":\"").append(escapeJson(event.getMessage())).append("\"");
-        }
-        if (event.getIpfsCid() != null) {
-            json.append(",\"ipfsCid\":\"").append(escapeJson(event.getIpfsCid())).append("\"");
-        }
-        if (event.getSignature() != null) {
-            json.append(",\"signature\":\"").append(escapeJson(event.getSignature())).append("\"");
-        }
-        if (event.getSize() != null) {
-            json.append(",\"size\":").append(event.getSize());
-        }
-        if (event.getContentType() != null) {
-            json.append(",\"contentType\":\"").append(escapeJson(event.getContentType())).append("\"");
-        }
-        json.append("}}");
-        return json.toString();
+        Map<String, Object> fields = event.toMap();
+        fields.keySet().removeAll(List.of("id", "type", "action", "timestamp"));
+        data.putAll(fields);
+
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("contractVersion", "ops.v1");
+        json.put("eventId", event.getId());
+        json.put("eventType", eventType);
+        json.put("sourceNode", sourceNode != null ? sourceNode : "");
+        json.put("timestampMs", event.getTimestamp());
+        json.put("data", data);
+        return JsonOutputUtil.toJson(json);
     }
 
     private String mapOpsEventType(ContentEvent event) {
@@ -269,17 +237,5 @@ public class SSEClient {
             return "proposal.queue.updated";
         }
         return "health.status.changed";
-    }
-
-    private String escapeJson(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t");
     }
 }

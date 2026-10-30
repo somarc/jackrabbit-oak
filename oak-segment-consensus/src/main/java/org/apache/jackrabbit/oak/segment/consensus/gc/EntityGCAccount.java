@@ -157,18 +157,6 @@ public class EntityGCAccount {
     }
     
     /**
-     * Record a GC execution that affected this entity.
-     * 
-     * @param proposalId GC proposal ID
-     * @param cost cost attributed to this entity
-     * @param reclaimedMB space reclaimed
-     */
-    public void recordGCExecution(String proposalId, BigDecimal cost, long reclaimedMB) {
-        GCExecution execution = new GCExecution(proposalId, cost, reclaimedMB, System.currentTimeMillis());
-        gcExecutions.add(execution);
-    }
-    
-    /**
      * Delete operation record.
      */
     public static class DeleteOperation {

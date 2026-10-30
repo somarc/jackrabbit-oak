@@ -23,6 +23,8 @@ import org.junit.Test;
 import java.util.Collections;
 
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class BlockchainConfigTest {
 
@@ -35,16 +37,18 @@ public class BlockchainConfigTest {
     @Before
     public void setUp() {
         clearProps();
-        BlockchainConfigOverrideRegistry.clear();
-        BlockchainConfigSourceRegistry.markFallbackSource();
+        RuntimePropertyOverrideRegistry.clear(BlockchainConfigTuningService.NAMESPACE);
+        RuntimePropertySourceRegistry.markSource(
+            BlockchainConfigTuningService.COMPONENT, BlockchainConfigTuningService.FALLBACK_SOURCE);
         BlockchainConfig.reset();
     }
 
     @After
     public void tearDown() {
         clearProps();
-        BlockchainConfigOverrideRegistry.clear();
-        BlockchainConfigSourceRegistry.markFallbackSource();
+        RuntimePropertyOverrideRegistry.clear(BlockchainConfigTuningService.NAMESPACE);
+        RuntimePropertySourceRegistry.markSource(
+            BlockchainConfigTuningService.COMPONENT, BlockchainConfigTuningService.FALLBACK_SOURCE);
         BlockchainConfig.reset();
     }
 
@@ -111,15 +115,31 @@ public class BlockchainConfigTest {
     @Test
     public void testOsgiOverrideTakesPrecedenceOverSystemProperty() {
         System.setProperty(PROP_GAS_PRICE_GWEI, "11");
-        BlockchainConfigOverrideRegistry.setOverrides(
+        RuntimePropertyOverrideRegistry.setOverrides(BlockchainConfigTuningService.NAMESPACE,
             Collections.singletonMap(PROP_GAS_PRICE_GWEI, "5")
         );
-        BlockchainConfigSourceRegistry.markOsgiSource();
+        RuntimePropertySourceRegistry.markSource(BlockchainConfigTuningService.COMPONENT, "osgi-config-admin");
 
         BlockchainConfig config = BlockchainConfig.getInstance();
 
         assertEquals(5L, config.getGasPriceGwei());
-        assertEquals("osgi-config-admin", BlockchainConfigSourceRegistry.getSource());
+        assertEquals("osgi-config-admin", BlockchainConfigIntrospection.source());
+    }
+
+    @Test
+    public void testTuningServicePublishesOverridesThroughTheSharedRegistry() {
+        BlockchainConfigTuningConfig osgiConfig = mock(BlockchainConfigTuningConfig.class);
+        when(osgiConfig.gas_price_gwei()).thenReturn(7L);
+        BlockchainConfigTuningService service = new BlockchainConfigTuningService();
+
+        service.activate(osgiConfig);
+        assertEquals("7", RuntimePropertyOverrideRegistry.get(PROP_GAS_PRICE_GWEI));
+        assertEquals(7L, BlockchainConfig.getInstance().getGasPriceGwei());
+        assertEquals("osgi-config-admin", BlockchainConfigIntrospection.source());
+
+        service.deactivate();
+        assertNull(RuntimePropertyOverrideRegistry.get(PROP_GAS_PRICE_GWEI));
+        assertEquals("env-or-system-properties", BlockchainConfigIntrospection.source());
     }
 
     private void clearProps() {

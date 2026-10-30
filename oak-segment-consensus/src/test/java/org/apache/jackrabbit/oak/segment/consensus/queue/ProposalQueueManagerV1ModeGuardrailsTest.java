@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTr
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.junit.After;
 import org.junit.Test;
@@ -53,7 +54,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
 
         BeaconChainClient beaconClient = mock(BeaconChainClient.class);
         when(beaconClient.getCachedCurrentEpoch()).thenReturn(10L);
@@ -98,7 +98,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             confirmedTxHash,
             123L,
@@ -156,7 +155,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -213,7 +211,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -276,7 +273,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -336,7 +332,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -396,7 +391,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -456,7 +450,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -516,7 +509,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             declaredTxHash,
             123L,
@@ -657,7 +649,6 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
         EvmBridge evmBridge = mock(EvmBridge.class);
         when(evmBridge.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
-        when(evmBridge.getCurrentBlockNumber()).thenReturn(123L);
         when(evmBridge.verifyPayment(proposalId)).thenReturn(new SimplePaymentProof(
             SIGNED_TX_HASH,
             123L,
@@ -767,16 +758,17 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
     private static final class NoopRaftAppendCallback implements RaftAppendCallback {
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType, String message, String signature) {
+        public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                               String contentType, String message, String signature,
+                                               String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
+                                               MutationAuditMetadata unusedAudit) {
+            return true;
         }
 
         @Override
-        public void appendProposal(String walletAddress, String path, String contentType,
-                                   String message, String signature, String blobId, String mimeType) {
-        }
-
-        @Override
-        public void appendDeleteProposal(String walletAddress, String path, String signature) {
+        public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
+                                                     String signature, MutationAuditMetadata unusedAudit) {
+            return true;
         }
     }
 }

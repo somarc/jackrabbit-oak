@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.agrona.DirectBuffer;
-import org.agrona.MutableDirectBuffer;
 import org.osgi.service.component.annotations.Component;
 
 /**
@@ -35,14 +34,5 @@ public class AeronMessageCodec {
 
     public int headerLength() {
         return SimpleMessageHeader.ENCODED_LENGTH;
-    }
-
-    public int encodePayload(MutableDirectBuffer buffer, int templateId, byte[] payload) {
-        int payloadLength = payload != null ? payload.length : 0;
-        SimpleMessageHeader.encode(buffer, 0, payloadLength, templateId);
-        if (payloadLength > 0) {
-            buffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, payload);
-        }
-        return SimpleMessageHeader.ENCODED_LENGTH + payloadLength;
     }
 }

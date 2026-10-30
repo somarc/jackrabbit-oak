@@ -35,7 +35,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -43,9 +42,9 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Security;
-import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.Properties;
 
 /**
@@ -150,7 +149,7 @@ public class EthereumWallet {
         if (keystoreFile.exists()) {
             validateStoredWalletMetadata(this.walletAddress);
         }
-        this.publicKeyHex = "0x" + bytesToHex(keyPair.getPublic().getEncoded());
+        this.publicKeyHex = "0x" + HexFormat.of().formatHex(keyPair.getPublic().getEncoded());
 
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         log.info("💎 ETHEREUM WALLET LOADED");
@@ -225,7 +224,7 @@ public class EthereumWallet {
         Properties props = new Properties();
         props.setProperty("algorithm", kp.getPrivate().getAlgorithm());
         props.setProperty("format", kp.getPrivate().getFormat());
-        props.setProperty("publicKey", bytesToHex(kp.getPublic().getEncoded()));
+        props.setProperty("publicKey", HexFormat.of().formatHex(kp.getPublic().getEncoded()));
         props.setProperty("createdAt", String.valueOf(System.currentTimeMillis()));
 
         String address = deriveWalletAddress(kp.getPublic());
@@ -242,13 +241,13 @@ public class EthereumWallet {
             byte[] encryptedKey = encryptPrivateKey(kp.getPrivate().getEncoded(), kek, iv);
 
             props.setProperty(WALLET_FORMAT_PROPERTY, WALLET_FORMAT_ENCRYPTED);
-            props.setProperty(KDF_SALT_PROPERTY, bytesToHex(salt));
-            props.setProperty(GCM_IV_PROPERTY, bytesToHex(iv));
+            props.setProperty(KDF_SALT_PROPERTY, HexFormat.of().formatHex(salt));
+            props.setProperty(GCM_IV_PROPERTY, HexFormat.of().formatHex(iv));
             props.setProperty(KDF_ITERATIONS_PROPERTY, String.valueOf(PBKDF2_ITERATIONS));
-            props.setProperty(ENCRYPTED_PRIVATE_KEY_PROPERTY, bytesToHex(encryptedKey));
+            props.setProperty(ENCRYPTED_PRIVATE_KEY_PROPERTY, HexFormat.of().formatHex(encryptedKey));
         } else {
             props.setProperty(WALLET_FORMAT_PROPERTY, WALLET_FORMAT_PLAINTEXT);
-            props.setProperty("privateKey", bytesToHex(kp.getPrivate().getEncoded()));
+            props.setProperty("privateKey", HexFormat.of().formatHex(kp.getPrivate().getEncoded()));
             log.warn("🔓 Keystore stored WITHOUT passphrase encryption. " +
                 "Set VALIDATOR_WALLET_PASSPHRASE to enable encryption at rest.");
         }
@@ -281,7 +280,7 @@ public class EthereumWallet {
             if (privateKeyHex == null) {
                 throw new IllegalStateException("Corrupted keystore: missing privateKey");
             }
-            privateKeyBytes = hexToBytes(privateKeyHex);
+            privateKeyBytes = HexFormat.of().parseHex(privateKeyHex);
         }
 
         String publicKeyHexProp = props.getProperty("publicKey");
@@ -294,7 +293,7 @@ public class EthereumWallet {
         PrivateKey privateKey = keyFactory.generatePrivate(
             new java.security.spec.PKCS8EncodedKeySpec(privateKeyBytes));
         PublicKey publicKey = keyFactory.generatePublic(
-            new java.security.spec.X509EncodedKeySpec(hexToBytes(publicKeyHexProp)));
+            new java.security.spec.X509EncodedKeySpec(HexFormat.of().parseHex(publicKeyHexProp)));
         KeyPair kp = new KeyPair(publicKey, privateKey);
 
         if (!isEncrypted && this.passphrase != null) {
@@ -336,11 +335,11 @@ public class EthereumWallet {
                 "Corrupted encrypted keystore: missing kdfSalt, gcmIv, or encryptedPrivateKey");
         }
 
-        SecretKey kek = deriveKey(this.passphrase, hexToBytes(saltHex));
+        SecretKey kek = deriveKey(this.passphrase, HexFormat.of().parseHex(saltHex));
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        cipher.init(Cipher.DECRYPT_MODE, kek, new GCMParameterSpec(GCM_TAG_BITS, hexToBytes(ivHex)));
+        cipher.init(Cipher.DECRYPT_MODE, kek, new GCMParameterSpec(GCM_TAG_BITS, HexFormat.of().parseHex(ivHex)));
         try {
-            return cipher.doFinal(hexToBytes(encryptedHex));
+            return cipher.doFinal(HexFormat.of().parseHex(encryptedHex));
         } catch (AEADBadTagException e) {
             throw new IllegalStateException(
                 "Wrong passphrase or corrupted keystore: AES-GCM authentication failed", e);
@@ -376,7 +375,7 @@ public class EthereumWallet {
 
             byte[] hash = keccak256(Arrays.copyOfRange(uncompressedPublicKey, 1, uncompressedPublicKey.length));
             byte[] addressBytes = Arrays.copyOfRange(hash, hash.length - 20, hash.length);
-            return "0x" + bytesToHex(addressBytes);
+            return "0x" + HexFormat.of().formatHex(addressBytes);
         } catch (Exception e) {
             log.error("Failed to derive Ethereum wallet address", e);
             throw e;
@@ -430,45 +429,6 @@ public class EthereumWallet {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Signing
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    /**
-     * Sign a message with the private key (Ethereum ECDSA).
-     */
-    public String sign(String message) throws Exception {
-        try {
-            Signature signature = Signature.getInstance("SHA256withECDSA");
-            signature.initSign(keyPair.getPrivate());
-            signature.update(message.getBytes(StandardCharsets.UTF_8));
-            byte[] signatureBytes = signature.sign();
-            return "0x" + bytesToHex(signatureBytes);
-        } catch (Exception e) {
-            log.error("Failed to sign message", e);
-            throw e;
-        }
-    }
-
-    /**
-     * Verify a signature from another validator.
-     */
-    public boolean verify(String message, String signatureHex, PublicKey theirPublicKey) throws Exception {
-        try {
-            Signature signature = Signature.getInstance("SHA256withECDSA");
-            signature.initVerify(theirPublicKey);
-            signature.update(message.getBytes(StandardCharsets.UTF_8));
-
-            byte[] signatureBytes = hexToBytes(signatureHex.startsWith("0x") ?
-                signatureHex.substring(2) : signatureHex);
-
-            return signature.verify(signatureBytes);
-        } catch (Exception e) {
-            log.error("Failed to verify signature", e);
-            return false;
-        }
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // Getters
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -480,33 +440,7 @@ public class EthereumWallet {
         return publicKeyHex;
     }
 
-    public PublicKey getPublicKey() {
-        return keyPair.getPublic();
-    }
-
     public PrivateKey getPrivateKey() {
         return keyPair.getPrivate();
-    }
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Hex Utilities
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    private static String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
-        return sb.toString();
-    }
-
-    private static byte[] hexToBytes(String hex) {
-        int len = hex.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
-                + Character.digit(hex.charAt(i + 1), 16));
-        }
-        return data;
     }
 }

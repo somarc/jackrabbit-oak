@@ -18,18 +18,19 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
+import org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
+import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
-import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,6 +40,7 @@ import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 /**
@@ -80,8 +82,7 @@ public class WriteProposalHandler {
         if (!context.aeronConsensusEngine.isClusterHealthy()) {
             String reason = context.aeronConsensusEngine.getUnhealthyReason();
             log.warn("❌ Cluster unhealthy, rejecting proposal: {}", reason);
-            context.apiRejectedRequests.incrementAndGet();
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+            reject(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, null,
                 "Cluster unhealthy: " + reason + ". Please retry in a few seconds.");
             return;
         }
@@ -181,9 +182,8 @@ public class WriteProposalHandler {
             // ✅ REFACTORED: Validate Ethereum address using WalletValidator
             ValidationResult<String> walletValidation = WalletValidator.validate(wallet);
             if (!walletValidation.isValid()) {
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: {}", walletValidation.getError());
-                ApiErrorUtil.sendJsonError(response, walletValidation.getHttpStatus(), walletValidation.getError());
+                reject(response, walletValidation.getHttpStatus(), null, walletValidation.getError());
                 return;
             }
             String normalizedWallet = walletValidation.getNormalizedValue();
@@ -194,16 +194,7 @@ public class WriteProposalHandler {
                 return;
             }
 
-            if (!ShardWriteAuthorityEnforcer.allowLocalWrite(
-                context,
-                normalizedWallet,
-                "/v1/propose-write",
-                response
-            )) {
-                return;
-            }
-
-            if (!LeaderWriteRedirectUtil.allowLeaderWrite(context, "/v1/propose-write", response)) {
+            if (!ProposalRequestSupport.allowShardAndLeader(context, normalizedWallet, "/v1/propose-write", response)) {
                 return;
             }
 
@@ -213,73 +204,45 @@ public class WriteProposalHandler {
             // Optional: allows multi-brand wallets (one wallet, multiple orgs)
             String orgValidationError = WalletPathUtil.validateOrganization(organization);
             if (orgValidationError != null) {
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Invalid organization '{}': {}", organization, orgValidationError);
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, orgValidationError);
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null, orgValidationError);
                 return;
             }
             if (organization != null && !organization.isEmpty()) {
                 log.debug("🏢 Organization: {} (wallet: {})", organization, normalizedWallet.substring(0, 10) + "...");
             }
 
-            // PATH ENFORCEMENT: Look up client registration BY WALLET ADDRESS
-            // This is the primary identifier - clientId is secondary
-            ClientRegistration clientReg = context.findClientRegistrationByWallet(normalizedWallet);
-            String clientId = clientReg != null ? clientReg.clientId : null;
-
-            // If not found by wallet, try clientId lookup (wallet address is preferred)
-            // Note: IP-based fallback has been removed - wallet address is required
-            if (clientReg == null) {
-                String clientIdHeader = request.getHeader("X-Client-Id");
-                if (clientIdHeader == null || clientIdHeader.isEmpty()) {
-                    clientIdHeader = request.getParameter("clientId");
-                }
-                // Only use explicit clientId header/param, not IP address
-                if (clientIdHeader != null && !clientIdHeader.isEmpty()) {
-                    clientReg = context.findClientRegistrationByClientId(clientIdHeader);
-                    if (clientReg != null) {
-                        clientId = clientIdHeader;
-                    }
-                }
-            }
+            // PATH ENFORCEMENT: wallet address is the primary identifier, clientId is secondary
+            ProposalRequestSupport.ClientLookup lookup =
+                ProposalRequestSupport.lookupClient(context, request, normalizedWallet);
+            ClientRegistration clientReg = lookup.registration;
+            String clientId = lookup.clientId;
 
             // TEMPORARY FOR TESTING REPLICATION: Auto-register any valid Ethereum address
             // This bypasses registration persistence issues so we can focus on testing replication
             if (clientReg == null) {
                 // Check if wallet belongs to a registered validator first
-                boolean isValidatorWallet = false;
-                String validatorId = null;
-
-                if (context.registeredValidators.containsKey(normalizedWallet)) {
-                    isValidatorWallet = true;
-                    validatorId = normalizedWallet;
-                } else {
+                String validatorId = context.registeredValidators.containsKey(normalizedWallet) ? normalizedWallet : null;
+                if (validatorId == null) {
                     for (String key : context.registeredValidators.keySet()) {
                         if (key != null && key.toLowerCase().equals(normalizedWallet)) {
-                            isValidatorWallet = true;
                             validatorId = key;
                             break;
                         }
                     }
                 }
 
-                // TEMPORARY FOR TESTING: Auto-register any valid Ethereum address (0x + 40 hex chars = 42 total)
-                if (!isValidatorWallet && normalizedWallet.startsWith("0x") && normalizedWallet.length() == 42) {
-                    // Auto-registration only in mock mode
-                    org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig =
-                        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+                // Auto-registration is allowed in mock mode only
+                BlockchainConfig blockchainConfig = BlockchainConfig.getInstance();
+                // TEMPORARY FOR TESTING: Auto-register any full-length Ethereum address (0x + 40 hex chars)
+                if (validatorId == null && normalizedWallet.length() == 42) {
                     if (blockchainConfig.isMockMode()) {
                         log.debug("🧪 MOCK MODE: Auto-registering wallet {} as client for replication testing", normalizedWallet);
                     }
-                    isValidatorWallet = true;
                     validatorId = normalizedWallet;
                 }
 
-                // Check if auto-registration is allowed (mock mode only)
-                org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig =
-                    org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
-
-                if (isValidatorWallet && blockchainConfig.isMockMode()) {
+                if (validatorId != null && blockchainConfig.isMockMode()) {
                     log.debug("✅ Auto-registering wallet {} as client (MOCK MODE - testing only)", validatorId);
                     clientReg = context.registerClient(validatorId, context.selfUrl, normalizedWallet, ClientRegistration.CLIENT_TYPE_SUPPLY_CHAIN);
                     clientId = clientReg.clientId;
@@ -344,26 +307,20 @@ public class WriteProposalHandler {
             boolean usesValidatorHostedBinary = hasBinaryPayload || hasIntentToken;
 
             if (hasClientIpfsCid && hasBinaryPayload) {
-                context.apiRejectedRequests.incrementAndGet();
-                context.apiIpfsPolicyRejectAmbiguousSource.incrementAndGet();
-                ConsensusMetrics.recordIpfsPolicyRejection("ambiguous_source");
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                rejectIpfsPolicy(response, context.apiIpfsPolicyRejectAmbiguousSource, "ambiguous_source",
+                    HttpServletResponse.SC_BAD_REQUEST, null,
                     "Ambiguous binary source: provide either ipfsCid or validator-hosted binary payload, not both.");
                 return;
             }
             if (hasClientIpfsCid && hasIntentToken) {
-                context.apiRejectedRequests.incrementAndGet();
-                context.apiIpfsPolicyRejectAmbiguousSource.incrementAndGet();
-                ConsensusMetrics.recordIpfsPolicyRejection("ambiguous_source");
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+                rejectIpfsPolicy(response, context.apiIpfsPolicyRejectAmbiguousSource, "ambiguous_source",
+                    HttpServletResponse.SC_BAD_REQUEST, null,
                     "Ambiguous binary source: provide either ipfsCid or intentToken, not both.");
                 return;
             }
             if (hasClientIpfsCid && !clientReg.isEnterpriseClient()) {
-                context.apiRejectedRequests.incrementAndGet();
-                context.apiIpfsPolicyRejectNonEnterpriseCid.incrementAndGet();
-                ConsensusMetrics.recordIpfsPolicyRejection("non_enterprise_client");
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,
+                rejectIpfsPolicy(response, context.apiIpfsPolicyRejectNonEnterpriseCid, "non_enterprise_client",
+                    HttpServletResponse.SC_FORBIDDEN,
                     "client_ipfs_cid_requires_enterprise_registration",
                     "Client-side ipfsCid is restricted to registered enterprise clients. " +
                     "Use validator-hosted binary upload (intentToken or multipart/base64) for supply-chain clients.");
@@ -371,19 +328,14 @@ public class WriteProposalHandler {
             }
             if (hasClientIpfsCid) {
                 if (context.cidMappingService == null) {
-                    context.apiRejectedRequests.incrementAndGet();
-                    context.apiIpfsPolicyRejectCidServiceUnavailable.incrementAndGet();
-                    ConsensusMetrics.recordIpfsPolicyRejection("cid_service_unavailable");
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                    rejectIpfsPolicy(response, context.apiIpfsPolicyRejectCidServiceUnavailable, "cid_service_unavailable",
+                        HttpServletResponse.SC_SERVICE_UNAVAILABLE, null,
                         "CID provenance service unavailable. Cannot validate external ipfsCid.");
                     return;
                 }
                 Optional<String> knownBlobId = context.cidMappingService.getOakBlobId(ipfsCid);
                 if (knownBlobId.isEmpty()) {
-                    context.apiRejectedRequests.incrementAndGet();
-                    context.apiIpfsPolicyRejectUnknownCid.incrementAndGet();
-                    ConsensusMetrics.recordIpfsPolicyRejection("unknown_cid");
-                    ApiErrorUtil.sendJsonError(response, 422,
+                    rejectIpfsPolicy(response, context.apiIpfsPolicyRejectUnknownCid, "unknown_cid", 422,
                         "unknown_ipfs_cid",
                         "ipfsCid is not known to validator CID mappings. " +
                         "Upload via validator-hosted flow first, or register/ingest CID through enterprise pipeline.");
@@ -398,37 +350,32 @@ public class WriteProposalHandler {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // WRITE BLOCKING: Check if entity has exceeded GC debt limit
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            if (context.gcAccountManager != null) {
-                if (!context.gcAccountManager.canWrite(normalizedWallet)) {
-                    org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account =
-                        context.gcAccountManager.getAccount(normalizedWallet);
+            if (context.gcAccountManager != null && !context.gcAccountManager.canWrite(normalizedWallet)) {
+                EntityGCAccount account = context.gcAccountManager.getAccount(normalizedWallet);
 
-                    log.warn("🚫 Write BLOCKED: wallet={}, debt=${}, limit=${}",
-                             normalizedWallet, account.totalDebt, account.debtLimit);
+                log.warn("🚫 Write BLOCKED: wallet={}, debt=${}, limit=${}",
+                         normalizedWallet, account.totalDebt, account.debtLimit);
 
-                    response.setContentType("application/json");
-                    response.setStatus(402); // 402 Payment Required
+                response.setContentType("application/json");
+                Map<String, Object> errorPayload = new LinkedHashMap<>();
+                errorPayload.put("success", false);
+                errorPayload.put("error", "Writes blocked due to unpaid GC debt. Please pay debt to resume.");
+                errorPayload.put("code", "write_blocked_gc_debt");
+                errorPayload.put("status", 402);
+                errorPayload.put("timestamp", System.currentTimeMillis());
+                errorPayload.put("wallet", normalizedWallet);
+                errorPayload.put("totalDebt", account.totalDebt.toString());
+                errorPayload.put("executedDebt", account.executedDebt.toString());
+                errorPayload.put("pendingDebt", account.getPendingDebt().toString());
+                errorPayload.put("debtLimit", account.debtLimit.toString());
+                errorPayload.put("amountOverLimit", account.totalDebt.subtract(account.debtLimit).toString());
+                errorPayload.put("paymentUrl", "/v1/gc/account/" + normalizedWallet + "/pay");
+                errorPayload.put("statusUrl", "/v1/gc/account/" + normalizedWallet);
+                JsonOutputUtil.write(response, 402, errorPayload); // 402 Payment Required
 
-                    Map<String, Object> errorPayload = new LinkedHashMap<>();
-                    errorPayload.put("success", false);
-                    errorPayload.put("error", "Writes blocked due to unpaid GC debt. Please pay debt to resume.");
-                    errorPayload.put("code", "write_blocked_gc_debt");
-                    errorPayload.put("status", 402);
-                    errorPayload.put("timestamp", System.currentTimeMillis());
-                    errorPayload.put("wallet", normalizedWallet);
-                    errorPayload.put("totalDebt", account.totalDebt.toString());
-                    errorPayload.put("executedDebt", account.executedDebt.toString());
-                    errorPayload.put("pendingDebt", account.getPendingDebt().toString());
-                    errorPayload.put("debtLimit", account.debtLimit.toString());
-                    errorPayload.put("amountOverLimit", account.totalDebt.subtract(account.debtLimit).toString());
-                    errorPayload.put("paymentUrl", "/v1/gc/account/" + normalizedWallet + "/pay");
-                    errorPayload.put("statusUrl", "/v1/gc/account/" + normalizedWallet);
-                    response.getWriter().write(JsonOutputUtil.toJson(errorPayload));
-
-                    log.info("💳 PAYMENT REQUIRED: Rejected write from {} (debt: ${})",
-                             normalizedWallet, account.totalDebt);
-                    return;
-                }
+                log.info("💳 PAYMENT REQUIRED: Rejected write from {} (debt: ${})",
+                         normalizedWallet, account.totalDebt);
+                return;
             }
 
             // Default values for optional parameters
@@ -439,50 +386,40 @@ public class WriteProposalHandler {
                 contentType = "page";
             }
 
-            // Check blockchain config for mock mode
-            org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig blockchainConfig =
-                org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.getInstance();
+            BlockchainConfig blockchainConfig = BlockchainConfig.getInstance();
 
             // ============================================================
             // SIGNATURE VALIDATION (strict even in MOCK mode for testing)
             // ============================================================
             if (signature == null || signature.isEmpty()) {
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Missing signature");
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Missing signature. All writes require a signature (even in mock mode for testing)."
-                );
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
+                    "Missing signature. All writes require a signature (even in mock mode for testing).");
                 return;
             }
 
             // Validate signature format: must start with 0x and be hex
             signature = signature.trim();
             if (!signature.startsWith("0x")) {
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Signature must start with '0x': {}", signature);
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Invalid signature format: must start with '0x'"
-                );
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
+                    "Invalid signature format: must start with '0x'");
                 return;
             }
 
             // Validate signature is valid hex after 0x prefix
             String sigHex = signature.substring(2);
             if (sigHex.isEmpty()) {
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Signature too short: {}", signature);
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Invalid signature: too short (need hex data after 0x)"
-                );
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
+                    "Invalid signature: too short (need hex data after 0x)");
                 return;
             }
 
             if (!sigHex.matches("[a-fA-F0-9]+")) {
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Signature contains non-hex characters: {}", signature);
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Invalid signature format: must be valid hexadecimal after '0x'"
-                );
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
+                    "Invalid signature format: must be valid hexadecimal after '0x'");
                 return;
             }
 
@@ -496,28 +433,19 @@ public class WriteProposalHandler {
                 log.debug("✅ Signature validation: Format OK (mock mode - cryptographic verification skipped)");
             } else {
                 // Real signature verification using Ethereum personal_sign recovery
-                if (!org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.isFullVerificationAvailable()) {
-                    context.apiRejectedRequests.incrementAndGet();
+                if (!EthereumSignatureVerifier.isFullVerificationAvailable()) {
                     log.error("❌ Full Ethereum signature verification unavailable: {}",
-                        org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier.getAvailabilityReason());
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                        EthereumSignatureVerifier.getAvailabilityReason());
+                    reject(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, null,
                         "Full Ethereum signature verification unavailable. Validator is missing required Bouncy Castle support.");
                     return;
                 }
 
-                // The message that was signed (must match what client signed)
-                // Client signs: wallet + path + contentType + message (or similar)
-                String signedMessage = message != null ? message : "";
-
-                boolean signatureValid = org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier
-                    .verifySignature(signedMessage, signature, wallet);
-
-                if (!signatureValid) {
-                    context.apiRejectedRequests.incrementAndGet();
+                // The client signs the message exactly as submitted (defaulted above when absent)
+                if (!EthereumSignatureVerifier.verifySignature(message, signature, wallet)) {
                     log.warn("❌ API REJECTED: Signature verification failed for wallet {}", wallet);
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_UNAUTHORIZED,
-                        "Signature verification failed. The signature does not match the claimed wallet address."
-                    );
+                    reject(response, HttpServletResponse.SC_UNAUTHORIZED, null,
+                        "Signature verification failed. The signature does not match the claimed wallet address.");
                     return;
                 }
 
@@ -528,54 +456,42 @@ public class WriteProposalHandler {
             // TRANSACTION HASH VALIDATION
             // ============================================================
             if (ethereumTxHash == null || ethereumTxHash.isEmpty()) {
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Missing ethereumTxHash");
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Missing ethereumTxHash parameter. Must provide Ethereum transaction hash from authorizeWrite() call."
-                );
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
+                    "Missing ethereumTxHash parameter. Must provide Ethereum transaction hash from authorizeWrite() call.");
                 return;
             }
 
             // Validate tx hash format: must start with 0x and be valid hex
             ethereumTxHash = ethereumTxHash.trim();
             if (!ethereumTxHash.startsWith("0x")) {
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Transaction hash must start with '0x': {}", ethereumTxHash);
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Invalid ethereumTxHash format: must start with '0x'"
-                );
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
+                    "Invalid ethereumTxHash format: must start with '0x'");
                 return;
             }
 
             String txHex = ethereumTxHash.substring(2);
             if (txHex.length() < 8) {  // Minimum reasonable tx hash length
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Transaction hash too short: {}", ethereumTxHash);
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Invalid ethereumTxHash: too short (expected at least 8 hex characters)"
-                );
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
+                    "Invalid ethereumTxHash: too short (expected at least 8 hex characters)");
                 return;
             }
 
             if (!txHex.matches("[a-fA-F0-9]+")) {
-                context.apiRejectedRequests.incrementAndGet();
                 log.warn("❌ API REJECTED: Transaction hash contains non-hex characters: {}", ethereumTxHash);
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Invalid ethereumTxHash format: must be valid hexadecimal"
-                );
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
+                    "Invalid ethereumTxHash format: must be valid hexadecimal");
                 return;
             }
 
             // ADR 059: Validator-hosted binary uploads are governed by explicit backend policy.
-            if (binaryBytes != null && binaryBytes.length > 0) {
-                if (!ProposalQueuePolicy.isValidatorHostedBinaryUploadEnabled()) {
-                    context.apiRejectedRequests.incrementAndGet();
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,
-                        "validator_binary_upload_disabled",
-                        "Validator-hosted binary upload is currently disabled. " +
-                        "For default client-side IPFS, upload to IPFS and pass ipfsCid instead.");
-                    return;
-                }
+            if (hasBinaryPayload && !ProposalQueuePolicy.isValidatorHostedBinaryUploadEnabled()) {
+                reject(response, HttpServletResponse.SC_FORBIDDEN, "validator_binary_upload_disabled",
+                    "Validator-hosted binary upload is currently disabled. " +
+                    "For default client-side IPFS, upload to IPFS and pass ipfsCid instead.");
+                return;
             }
             // ============================================================
             // BINARY UPLOAD TO BLOBSTORE
@@ -584,7 +500,7 @@ public class WriteProposalHandler {
             String blobId = null;
 
             // 📦 EAGER BINARY UPLOAD: If binary bytes are available, upload to BlobStore
-            if (binaryBytes != null && binaryBytes.length > 0 && context.blobStore != null) {
+            if (hasBinaryPayload && context.blobStore != null) {
                 try {
                     log.debug("📦 Uploading binary to BlobStore ({} bytes, {})", binaryBytes.length, mimeType);
 
@@ -626,31 +542,18 @@ public class WriteProposalHandler {
 
             // V5 alignment: require the client to supply the on-chain proposalId
             // (bytes32 from authorizeWrite()) in all modes.
-            String proposalId;
-            if (clientProposalId != null && !clientProposalId.trim().isEmpty()) {
-                proposalId = clientProposalId.trim();
-                if (!isValidClientProposalId(proposalId)) {
-                    context.apiRejectedRequests.incrementAndGet();
-                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                        "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
-                    return;
-                }
-                if (proposalId.startsWith("0X")) {
-                    proposalId = "0x" + proposalId.substring(2);
-                }
-            } else {
-                context.apiRejectedRequests.incrementAndGet();
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
+            if (clientProposalId == null || clientProposalId.trim().isEmpty()) {
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
                     "Missing proposalId parameter. Clients must supply a 0x-prefixed 32-byte hex proposalId from the authorize/payment contract flow.");
                 return;
             }
-
-            if (!isChainBackedProposalId(proposalId)) {
-                context.apiRejectedRequests.incrementAndGet();
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "proposalId must be a 0x-prefixed 32-byte hex value.");
+            String proposalId = clientProposalId.trim();
+            if (!ProposalRequestSupport.isValidProposalId(proposalId)) {
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
+                    "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
                 return;
             }
+            proposalId = ProposalRequestSupport.normalizeProposalId(proposalId);
 
             // Millisecond time alone collides for concurrent writes; the proposalId prefix keeps names unique.
             String contentId = contentType + "-" + clock.getAsLong() + "-"
@@ -659,8 +562,7 @@ public class WriteProposalHandler {
 
             // Check if proposal queue manager is available
             if (context.proposalQueueManager == null) {
-                context.apiRejectedRequests.incrementAndGet();
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                reject(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, null,
                     "Proposal queue unavailable. Clients must use queued verification.");
                 return;
             }
@@ -674,8 +576,8 @@ public class WriteProposalHandler {
                 ethereumTxHash,
                 normalizedWallet,
                 fullPath,
-                contentType != null ? contentType : "page",
-                message != null ? message : "",  // Keep message clean, no blob embedding
+                contentType,
+                message,
                 signature, // Already validated - no fallback needed
                 intentToken,  // Pass intentToken for lazy binary upload (ADR 020)
                 blobId,
@@ -697,41 +599,38 @@ public class WriteProposalHandler {
 
             // Return queued status (202 Accepted)
             response.setContentType("application/json");
-            response.setStatus(HttpServletResponse.SC_ACCEPTED);
-            Map<String, Object> links = new LinkedHashMap<>();
-            links.put("self", "/v1/ops/operations/" + proposalId);
-            Map<String, Object> resultPayload = new LinkedHashMap<>();
-            resultPayload.put("contractVersion", "ops.v1");
-            resultPayload.put("status", "accepted");
-            resultPayload.put("operationId", proposalId);
-            resultPayload.put("receivedAtMs", System.currentTimeMillis());
-            resultPayload.put("ackState", "ACCEPTED");
-            resultPayload.put("links", links);
-            resultPayload.put("proposalId", proposalId);
+            Map<String, Object> resultPayload = ProposalRequestSupport.acceptedEnvelope(proposalId);
             resultPayload.put("state", "PENDING");
             resultPayload.put("message", "Proposal queued, waiting for Ethereum confirmation");
             resultPayload.put("ethereumTxHash", ethereumTxHash);
-            resultPayload.put("proposalIdSource", clientProposalId != null && !clientProposalId.trim().isEmpty() ? "client" : "server");
+            resultPayload.put("proposalIdSource", "client");
             resultPayload.put("timeoutTimestamp", System.currentTimeMillis() + ProposalQueuePolicy.confirmationTimeoutMs());
             resultPayload.put("wallet", wallet);
             resultPayload.put("storagePath", fullPath);
             resultPayload.put("contentType", contentType);
-            response.getWriter().write(JsonOutputUtil.toJson(resultPayload));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_ACCEPTED, resultPayload);
             log.debug("✅ Proposal {} queued successfully", proposalId);
 
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            context.apiRejectedRequests.incrementAndGet();
             log.warn("❌ Proposal queue overloaded: {}", e.getMessage());
-            ApiErrorUtil.sendJsonError(
-                response,
-                HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                "queue_overloaded",
-                "Proposal queue overloaded. Retry in a few seconds."
-            );
+            reject(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "queue_overloaded",
+                "Proposal queue overloaded. Retry in a few seconds.");
         } catch (Exception e) {
             log.error("❌ Test write failed", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Test write failed: " + e.getMessage());
         }
+    }
+
+    private void reject(HttpServletResponse response, int status, String code, String message) throws IOException {
+        context.apiRejectedRequests.incrementAndGet();
+        ApiErrorUtil.sendJsonError(response, status, code, message);
+    }
+
+    private void rejectIpfsPolicy(HttpServletResponse response, AtomicLong policyCounter, String reason,
+                                  int status, String code, String message) throws IOException {
+        policyCounter.incrementAndGet();
+        ConsensusMetrics.recordIpfsPolicyRejection(reason);
+        reject(response, status, code, message);
     }
 
     /**
@@ -760,16 +659,5 @@ public class WriteProposalHandler {
         }
     }
 
-    private static boolean isValidClientProposalId(String proposalId) {
-        if (proposalId == null) {
-            return false;
-        }
-        String value = proposalId.trim();
-        return value.matches("(?i)^0x[a-f0-9]{64}$");
-    }
-
-    private static boolean isChainBackedProposalId(String proposalId) {
-        return proposalId != null && proposalId.trim().matches("(?i)^0x[a-f0-9]{64}$");
-    }
 
 }

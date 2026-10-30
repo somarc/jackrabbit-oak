@@ -51,71 +51,39 @@ final class AeronClusterShutdownCoordinator {
         this.resourceCloser = resourceCloser;
     }
 
-    ShutdownResult shutdown(MediaDriverHealthMonitor healthMonitor,
-                            ClusteredServiceContainer container,
-                            ClusteredMediaDriver clusteredMediaDriver,
-                            ShutdownSignalBarrier barrier,
-                            ExecutorService shutdownExecutor) {
+    void shutdown(MediaDriverHealthMonitor healthMonitor,
+                  ClusteredServiceContainer container,
+                  ClusteredMediaDriver clusteredMediaDriver,
+                  ShutdownSignalBarrier barrier,
+                  ExecutorService shutdownExecutor) {
         log.info("🛑 Shutting down Aeron Cluster (node {})...", nodeId);
 
-        boolean healthMonitorClosed = false;
         if (healthMonitor != null) {
             try {
                 healthMonitor.close();
-                healthMonitorClosed = true;
             } catch (Exception e) {
                 log.warn("Error closing health monitor", e);
             }
         }
 
-        boolean resourcesClosed = false;
         try {
             resourceCloser.close(container, clusteredMediaDriver);
-            resourcesClosed = true;
         } catch (RuntimeException e) {
             log.warn("Error closing Aeron resources", e);
         }
 
-        boolean barrierSignaled = false;
-        boolean barrierClosed = false;
         if (barrier != null) {
             try {
                 barrier.signal();
-                barrierSignaled = true;
             } finally {
                 barrier.close();
-                barrierClosed = true;
             }
         }
 
-        boolean executorShutdown = false;
         if (shutdownExecutor != null) {
             shutdownExecutor.shutdown();
-            executorShutdown = true;
         }
 
         log.info("✅ Aeron Cluster shut down");
-
-        return new ShutdownResult(healthMonitorClosed, resourcesClosed, barrierSignaled, barrierClosed, executorShutdown);
-    }
-
-    static final class ShutdownResult {
-        final boolean healthMonitorClosed;
-        final boolean resourcesClosed;
-        final boolean barrierSignaled;
-        final boolean barrierClosed;
-        final boolean executorShutdown;
-
-        ShutdownResult(boolean healthMonitorClosed,
-                       boolean resourcesClosed,
-                       boolean barrierSignaled,
-                       boolean barrierClosed,
-                       boolean executorShutdown) {
-            this.healthMonitorClosed = healthMonitorClosed;
-            this.resourcesClosed = resourcesClosed;
-            this.barrierSignaled = barrierSignaled;
-            this.barrierClosed = barrierClosed;
-            this.executorShutdown = executorShutdown;
-        }
     }
 }

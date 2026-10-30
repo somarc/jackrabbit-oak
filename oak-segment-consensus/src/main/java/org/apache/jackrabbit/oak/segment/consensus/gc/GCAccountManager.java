@@ -20,8 +20,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -89,15 +87,6 @@ public class GCAccountManager {
     public boolean canWrite(String walletAddress) {
         EntityGCAccount account = getAccount(walletAddress);
         return !account.shouldBlockWrites();
-    }
-    
-    /**
-     * Get all accounts (for dashboard, reporting).
-     * 
-     * @return collection of all accounts
-     */
-    public Collection<EntityGCAccount> getAllAccounts() {
-        return accounts.values();
     }
     
     /**
@@ -190,28 +179,6 @@ public class GCAccountManager {
         
         log.info("⚙️  Set debt limit: wallet={}, limit=${}, blocked={}",
             walletAddress, limit, account.writesBlocked);
-    }
-    
-    /**
-     * Get total network debt across all entities.
-     * 
-     * @return sum of all debt
-     */
-    public BigDecimal getTotalNetworkDebt() {
-        return accounts.values().stream()
-            .map(a -> a.totalDebt)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-    
-    /**
-     * Get total executed debt across all entities.
-     * 
-     * @return sum of all executed debt
-     */
-    public BigDecimal getTotalExecutedDebt() {
-        return accounts.values().stream()
-            .map(a -> a.executedDebt)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
     
     /**

@@ -69,10 +69,10 @@ public class ValidatorLoggingBootstrapTest {
 
         ValidatorLoggingBootstrap.BootstrapResult result = bootstrap.initialize(8090, storeDir.toString());
 
-        assertFalse(result.isExternalConfiguration());
-        assertEquals(storeDir.getParent().resolve("logs").toAbsolutePath().normalize(), result.getLogDir());
-        assertTrue(Files.isDirectory(result.getLogDir()));
-        assertEquals(result.getLogDir().resolve("validator.log"), result.getLogFile());
+        assertFalse(result.externalConfiguration());
+        assertEquals(storeDir.getParent().resolve("logs").toAbsolutePath().normalize(), result.logDir());
+        assertTrue(Files.isDirectory(result.logDir()));
+        assertEquals(result.logDir().resolve("validator.log"), result.logFile());
         assertEquals("8090", System.getProperty(ValidatorLoggingBootstrap.PROP_VALIDATOR_PORT));
         assertEquals(storeDir.toAbsolutePath().normalize().toString(),
             System.getProperty(ValidatorLoggingBootstrap.PROP_VALIDATOR_STORE));
@@ -86,7 +86,7 @@ public class ValidatorLoggingBootstrapTest {
         assertTrue(fileAppender instanceof RollingFileAppender);
 
         RollingFileAppender<ILoggingEvent> rollingFileAppender = (RollingFileAppender<ILoggingEvent>) fileAppender;
-        assertEquals(result.getLogFile().toString(), rollingFileAppender.getFile());
+        assertEquals(result.logFile().toString(), rollingFileAppender.getFile());
         assertTrue(rollingFileAppender.getRollingPolicy() instanceof SizeAndTimeBasedRollingPolicy);
 
         SizeAndTimeBasedRollingPolicy<?> policy =
@@ -113,7 +113,7 @@ public class ValidatorLoggingBootstrapTest {
 
         ValidatorLoggingBootstrap.BootstrapResult result = bootstrap.initialize(8091, tempFolder.getRoot().toString());
 
-        assertTrue(result.isExternalConfiguration());
+        assertTrue(result.externalConfiguration());
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         ch.qos.logback.classic.Logger root = context.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
         assertNotNull(root.getAppender("CUSTOM_CONSOLE"));
@@ -128,7 +128,7 @@ public class ValidatorLoggingBootstrapTest {
 
         ValidatorLoggingBootstrap.BootstrapResult result = bootstrap.initialize(8092, tempFolder.getRoot().toString());
 
-        assertEquals(explicitLogDir.toAbsolutePath().normalize(), result.getLogDir());
+        assertEquals(explicitLogDir.toAbsolutePath().normalize(), result.logDir());
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         ch.qos.logback.classic.Logger root = context.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
         assertNull(root.getAppender("CONSOLE"));

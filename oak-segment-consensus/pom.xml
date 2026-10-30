@@ -71,11 +71,8 @@
            <artifactId>apache-rat-plugin</artifactId>
           <configuration>
             <excludes>
-              <exclude>Dockerfile.global-store</exclude>
               <!-- Documentation files don't need license headers -->
               <exclude>**/*.md</exclude>
-              <!-- HTML templates with complex content -->
-              <exclude>**/validator-dashboard-template.html</exclude>
             </excludes>
            </configuration>
         </plugin>

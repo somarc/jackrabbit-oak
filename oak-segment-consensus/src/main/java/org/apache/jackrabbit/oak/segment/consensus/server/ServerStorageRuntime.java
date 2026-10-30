@@ -21,47 +21,8 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 
 import java.io.Closeable;
 
-final class ServerStorageRuntime {
-    private final FileStore fileStore;
-    private final NodeStore nodeStore;
-    private final NodeStore readViewNodeStore;
-    private final Closeable readViewResources;
-
-    ServerStorageRuntime(FileStore fileStore, NodeStore nodeStore) {
-        this(fileStore, nodeStore, nodeStore, null);
-    }
-
-    ServerStorageRuntime(FileStore fileStore, NodeStore nodeStore, NodeStore readViewNodeStore) {
-        this(fileStore, nodeStore, readViewNodeStore, null);
-    }
-
-    ServerStorageRuntime(FileStore fileStore,
-                         NodeStore nodeStore,
-                         NodeStore readViewNodeStore,
-                         Closeable readViewResources) {
-        this.fileStore = fileStore;
-        this.nodeStore = nodeStore;
-        this.readViewNodeStore = readViewNodeStore;
-        this.readViewResources = readViewResources;
-    }
-
-    FileStore getFileStore() {
-        return fileStore;
-    }
-
-    NodeStore getNodeStore() {
-        return nodeStore;
-    }
-
-    NodeStore getAuthoritativeNodeStore() {
-        return nodeStore;
-    }
-
-    NodeStore getReadViewNodeStore() {
-        return readViewNodeStore;
-    }
-
-    Closeable getReadViewResources() {
-        return readViewResources;
-    }
+record ServerStorageRuntime(FileStore fileStore,
+                            NodeStore authoritativeNodeStore,
+                            NodeStore readViewNodeStore,
+                            Closeable readViewResources) {
 }

@@ -51,12 +51,7 @@ public class UploadSession {
     // Getters
     public String getIntentToken() { return intentToken; }
     public String getWalletAddress() { return walletAddress; }
-    public long getFilesize() { return filesize; }
     public String getMimeType() { return mimeType; }
-    public String getContentHash() { return contentHash; }
-    public long getCreatedTime() { return createdTime; }
-    public long getExpiryTime() { return expiryTime; }
-    
     public UploadStatus getStatus() { return status; }
     public Long getEpochNumber() { return epochNumber; }
     public Long getUploadDeadline() { return uploadDeadline; }

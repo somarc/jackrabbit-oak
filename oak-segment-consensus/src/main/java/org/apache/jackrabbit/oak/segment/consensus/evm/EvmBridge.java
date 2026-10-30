@@ -28,8 +28,6 @@ import org.jetbrains.annotations.Nullable;
  * Key responsibilities:
  * - Listen for WritePayment events from OakChainPaymentVerifier contract
  * - Verify transaction confirmations
- * - Map Ethereum addresses to Oak wallet UUIDs
- * - Calculate required payment amounts
  */
 public interface EvmBridge {
     
@@ -40,37 +38,6 @@ public interface EvmBridge {
      * @return payment proof, or null if no valid payment found
      */
     PaymentProof verifyPayment(@NotNull String proposalId);
-    
-    /**
-     * Get the required payment amount for a write operation.
-     * <p>
-     * Based on segment count, byte size, and blob references.
-     *
-     * @param segmentCount number of segments being written
-     * @param byteSize total size in bytes
-     * @param blobCount number of blob references
-     * @return amount in wei
-     */
-    @NotNull
-    String calculateRequiredPayment(int segmentCount, long byteSize, int blobCount);
-    
-    /**
-     * Map an Ethereum address to an Oak wallet UUID.
-     * <p>
-     * This allows users to associate their Ethereum wallet
-     * with their Oak content wallet.
-     *
-     * @param ethereumAddress the Ethereum address (0x...)
-     * @return Oak wallet UUID, or null if not mapped
-     */
-    String getWalletUuidForAddress(@NotNull String ethereumAddress);
-    
-    /**
-     * Get the current block number on the connected blockchain.
-     *
-     * @return current block number
-     */
-    long getCurrentBlockNumber();
     
     /**
      * Get the blockchain network name.
