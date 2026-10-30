@@ -39,6 +39,10 @@ public class StorageBackendConfigTest {
         "oak.blob.backend",
         "blobstore.type",
         "ipfs.api.endpoint",
+        "ipfs.api.authorization",
+        "ipfs.api.connect-timeout-ms",
+        "ipfs.api.request-timeout-ms",
+        "ipfs.api.max-attempts",
         "oak.blob.azure.connection-string",
         "oak.blob.azure.container",
         "oak.blob.aws.bucket",
@@ -200,6 +204,26 @@ public class StorageBackendConfigTest {
 
         assertEquals(StorageBackendConfig.BlobBackend.IPFS, cfg.getBlobBackend());
         assertEquals("/ip4/10.0.0.5/tcp/5001", cfg.getBlobIpfsEndpoint());
+    }
+
+    @Test
+    public void testIpfsClientDefaultsAndOverrides() {
+        StorageBackendConfig defaults = StorageBackendConfig.load();
+        assertNull(defaults.getBlobIpfsAuthorization());
+        assertEquals(10_000, defaults.getBlobIpfsConnectTimeoutMs());
+        assertEquals(60_000, defaults.getBlobIpfsRequestTimeoutMs());
+        assertEquals(3, defaults.getBlobIpfsMaxAttempts());
+
+        System.setProperty("ipfs.api.authorization", " Bearer abc ");
+        System.setProperty("ipfs.api.connect-timeout-ms", "1500");
+        System.setProperty("ipfs.api.request-timeout-ms", "2500");
+        System.setProperty("ipfs.api.max-attempts", "5");
+        StorageBackendConfig cfg = StorageBackendConfig.load();
+
+        assertEquals("Bearer abc", cfg.getBlobIpfsAuthorization());
+        assertEquals(1500, cfg.getBlobIpfsConnectTimeoutMs());
+        assertEquals(2500, cfg.getBlobIpfsRequestTimeoutMs());
+        assertEquals(5, cfg.getBlobIpfsMaxAttempts());
     }
 
     @Test

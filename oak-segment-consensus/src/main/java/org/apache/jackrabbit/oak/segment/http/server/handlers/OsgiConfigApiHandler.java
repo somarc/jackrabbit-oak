@@ -906,6 +906,14 @@ public class OsgiConfigApiHandler {
             "Whether IPFS API endpoint is configured",
             "ipfs.api.endpoint|IPFS_API_ENDPOINT"));
         schema.add(schemaEntry(
+            "nodeRuntimeTuning.ipfs_api_authorization_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether an Authorization header is configured for the IPFS API (the value is never reported)",
+            "ipfs.api.authorization|IPFS_API_AUTHORIZATION"));
+        schema.add(schemaEntry(
             "nodeRuntimeTuning.http_port",
             "int",
             0,
@@ -1078,6 +1086,8 @@ public class OsgiConfigApiHandler {
             RuntimeConfigValueResolver.readString("blobstore.type", "BLOBSTORE_TYPE", ""));
         values.put("ipfs_api_endpoint_configured",
             RuntimeConfigValueResolver.hasConfiguredValue("ipfs.api.endpoint", "IPFS_API_ENDPOINT"));
+        values.put("ipfs_api_authorization_configured",
+            RuntimeConfigValueResolver.hasConfiguredValue("ipfs.api.authorization", "IPFS_API_AUTHORIZATION"));
         values.put("http_port", readInt("http.port", 0));
         values.put("sharding_num_shards",
             RuntimeConfigValueResolver.readInt("sharding.numShards", "NUM_SHARDS", 1));

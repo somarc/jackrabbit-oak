@@ -68,6 +68,7 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
             if (filesRoot != null) {
                 ipfsBackend.setIpfsFilesRoot(filesRoot);
             }
+            ipfsBackend.setClientSettings(IpfsClientSettings.fromProperties(properties));
         }
         return ipfsBackend;
     }
@@ -76,8 +77,9 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
      * Supplies backend properties that will be applied when the backend is
      * created.
      *
-     * <p>The backend currently consumes {@code ipfsApiEndpoint} and
-     * {@code ipfsFilesRoot} directly.</p>
+     * <p>The backend consumes {@code ipfsApiEndpoint}, {@code ipfsFilesRoot},
+     * {@code ipfsApiAuthorization}, {@code ipfsConnectTimeoutMillis},
+     * {@code ipfsRequestTimeoutMillis} and {@code ipfsMaxAttempts}.</p>
      *
      * @param properties datastore and backend configuration properties
      */

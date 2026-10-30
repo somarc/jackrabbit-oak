@@ -17,16 +17,16 @@
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
 /**
- * Factory for creating {@link IpfsClient} instances for a configured endpoint.
+ * Factory for creating {@link IpfsClient} instances for configured settings.
  */
 interface IpfsClientFactory {
 
     /**
-     * Creates a client for the given IPFS API endpoint.
+     * Creates a client for the given Kubo RPC settings.
      *
-     * @param endpoint IPFS API endpoint or multiaddr
-     * @return a client bound to that endpoint
+     * @param settings endpoint, credentials, timeouts and retry policy
+     * @return a client bound to those settings
      * @throws Exception if the client cannot be created
      */
-    IpfsClient create(String endpoint) throws Exception;
+    IpfsClient create(IpfsClientSettings settings) throws Exception;
 }

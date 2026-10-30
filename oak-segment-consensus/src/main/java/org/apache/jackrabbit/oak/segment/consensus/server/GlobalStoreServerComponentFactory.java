@@ -20,6 +20,7 @@ import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.util.function.Supplier;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
@@ -41,7 +42,7 @@ public interface GlobalStoreServerComponentFactory {
 
     org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService createAeronClusterService();
 
-    BlobStore createIpfsBlobStore(String ipfsEndpoint, java.io.File storeDir) throws Exception;
+    BlobStore createIpfsBlobStore(StorageBackendConfig config, java.io.File storeDir) throws Exception;
 
     GCCostEstimator createGCCostEstimator(FileStore fileStore, TarFiles tarFiles, BigDecimal usdcPerMB);
 
