@@ -930,6 +930,14 @@ public class OsgiConfigApiHandler {
             "Whether binaries are encrypted before they reach IPFS (the keys are never reported)",
             "ipfs.encryption.keys|IPFS_ENCRYPTION_KEYS"));
         schema.add(schemaEntry(
+            "nodeRuntimeTuning.ipfs_network_policy",
+            "string",
+            "warn",
+            "startup-only",
+            "guarded",
+            "How startup treats an IPFS node that may expose content outside a private network: off, warn or private",
+            "ipfs.network.policy|IPFS_NETWORK_POLICY"));
+        schema.add(schemaEntry(
             "nodeRuntimeTuning.http_port",
             "int",
             0,
@@ -1106,6 +1114,8 @@ public class OsgiConfigApiHandler {
             RuntimeConfigValueResolver.hasConfiguredValue("ipfs.api.authorization", "IPFS_API_AUTHORIZATION"));
         values.put("ipfs_cluster_configured", RuntimeConfigValueResolver.hasText(
             RuntimeConfigValueResolver.readString("ipfs.cluster.endpoint", "IPFS_CLUSTER_ENDPOINT", null)));
+        values.put("ipfs_network_policy",
+            RuntimeConfigValueResolver.readString("ipfs.network.policy", "IPFS_NETWORK_POLICY", "warn").trim());
         values.put("ipfs_encryption_configured", RuntimeConfigValueResolver.hasText(
             RuntimeConfigValueResolver.readString("ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null)));
         values.put("http_port", readInt("http.port", 0));
