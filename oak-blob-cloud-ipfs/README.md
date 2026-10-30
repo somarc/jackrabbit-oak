@@ -75,6 +75,9 @@ OSGi configuration PID:
 |---|---|
 | `ipfsApiEndpoint` | Kubo RPC endpoint: a multiaddr such as `/ip4/127.0.0.1/tcp/5001` or `/dns4/kubo/tcp/443/https`, or an `http(s)://` URL |
 | `ipfsApiAuthorization` | `Authorization` header for the RPC API, e.g. `Bearer <token>` for Kubo's `API.Authorizations`; never logged |
+| `ipfsClusterEndpoint`, `ipfsClusterAuthorization` | IPFS Cluster REST API (multiaddr or URL) and its `Authorization` header; empty disables replication |
+| `ipfsClusterReplicationMin`, `ipfsClusterReplicationMax`, `ipfsClusterPinTimeoutMillis` | Defaults 2, 3 and 120 s: peers that must hold a binary before its write returns, peers that should hold it, and how long to wait |
+| `ipfsClusterUnpinOnDelete` | Default `false`. Set `true` only when the cluster stores this Oak repository alone; deletes then unpin across the cluster |
 | `ipfsConnectTimeoutMillis`, `ipfsRequestTimeoutMillis`, `ipfsMaxAttempts` | Defaults 10 s, 60 s and 3. Transport failures and HTTP 502/503/504 are retried with exponential backoff; Kubo command errors are not. Uploads get one extra second per MiB |
 | `ipfsFilesRoot` | MFS namespace for mappings and metadata; use a distinct root per Oak repository |
 | `minRecordLength` | Binary threshold, default 16 KiB; smaller values stay inline |
@@ -103,12 +106,29 @@ running a campaign; the inherited cache defaults are not a laptop test budget.
   index is looked up there, recorded locally (mapping and attributes, no
   retention link) and read through the local node, which fetches it from its
   peers. `IPFSReplicatedReadTest` shows this across three private-swarm nodes.
-  The reading node does not pin what it fetches, so the binary remains as
-  available as the node that stored it.
+  The reading node does not pin what it fetches; durability across nodes
+  comes from IPFS Cluster (below).
+- With `ipfsClusterEndpoint` set, every write (and rewrite) pins the CID through
+  IPFS Cluster with `ipfsClusterReplicationMin`/`Max` and returns only once at
+  least the minimum of peers report it `pinned`. Peers in `pin_error` or
+  `cluster_error` do not count, so a write that cannot reach the minimum fails
+  early instead of being acknowledged under-replicated; a pin in `pin_error` is
+  recovered once before the write gives up. With a cluster configured, the
+  DataStore's asynchronous upload staging is disabled so that no caller is
+  acknowledged before replication. `IPFSClusterReplicationTest` and the
+  consensus module's `ReplicatedBinaryClusterReadTest` show a binary surviving
+  the loss of the IPFS node that stored it, after repository GC on the
+  surviving nodes.
+- Kubo and IPFS Cluster pins have no owner or reference count. Deleting a
+  record therefore removes its pins only when nothing else can depend on them:
+  without a cluster, the local pin of a blob stored through this repository;
+  with a cluster, nothing unless `ipfsClusterUnpinOnDelete` is set. Otherwise
+  DataStore GC removes the Oak mapping and reclaiming the pinned storage is an
+  operator action on the cluster pinset.
   Without a resolver, a blob can only be resolved through the repository and
   files root that stored it.
-- Pinning is local to the configured endpoint. There is no module-level guarantee
-  of replica count or cluster-wide placement.
+- Without `ipfsClusterEndpoint`, pinning is local to the configured endpoint and
+  there is no guarantee of a replica count.
 - An accepted/committed Oak mutation is not by itself proof that arbitrary remote
   IPFS peers can retrieve its binary; verify retrieval and the payload checksum.
 - There is no automatic S3 fallback. IPFS availability and replication are

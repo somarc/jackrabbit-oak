@@ -43,6 +43,11 @@ public class StorageBackendConfigTest {
         "ipfs.api.connect-timeout-ms",
         "ipfs.api.request-timeout-ms",
         "ipfs.api.max-attempts",
+        "ipfs.cluster.endpoint",
+        "ipfs.cluster.authorization",
+        "ipfs.cluster.replication-min",
+        "ipfs.cluster.replication-max",
+        "ipfs.cluster.pin-timeout-ms",
         "oak.blob.azure.connection-string",
         "oak.blob.azure.container",
         "oak.blob.aws.bucket",
@@ -224,6 +229,28 @@ public class StorageBackendConfigTest {
         assertEquals(1500, cfg.getBlobIpfsConnectTimeoutMs());
         assertEquals(2500, cfg.getBlobIpfsRequestTimeoutMs());
         assertEquals(5, cfg.getBlobIpfsMaxAttempts());
+    }
+
+    @Test
+    public void testIpfsClusterIsOffByDefaultAndConfigurable() {
+        StorageBackendConfig defaults = StorageBackendConfig.load();
+        assertNull(defaults.getBlobIpfsClusterEndpoint());
+        assertEquals(2, defaults.getBlobIpfsClusterReplicationMin());
+        assertEquals(3, defaults.getBlobIpfsClusterReplicationMax());
+        assertEquals(120_000, defaults.getBlobIpfsClusterPinTimeoutMs());
+
+        System.setProperty("ipfs.cluster.endpoint", " /dns4/cluster0/tcp/9094 ");
+        System.setProperty("ipfs.cluster.authorization", "Basic abc");
+        System.setProperty("ipfs.cluster.replication-min", "3");
+        System.setProperty("ipfs.cluster.replication-max", "5");
+        System.setProperty("ipfs.cluster.pin-timeout-ms", "30000");
+        StorageBackendConfig cfg = StorageBackendConfig.load();
+
+        assertEquals("/dns4/cluster0/tcp/9094", cfg.getBlobIpfsClusterEndpoint());
+        assertEquals("Basic abc", cfg.getBlobIpfsClusterAuthorization());
+        assertEquals(3, cfg.getBlobIpfsClusterReplicationMin());
+        assertEquals(5, cfg.getBlobIpfsClusterReplicationMax());
+        assertEquals(30_000, cfg.getBlobIpfsClusterPinTimeoutMs());
     }
 
     @Test

@@ -203,12 +203,28 @@ public class IpfsClusterDockerRule extends ExternalResource {
         awaitAllocatable();
     }
 
-    // full mesh; the cluster's ipfshttp connector would also do this, but only after connect_swarms_delay (30s)
+    // full mesh; the cluster's ipfshttp connector would also do this, but only after connect_swarms_delay (30s).
+    // A restarted node can race its peers' own redials (libp2p simultaneous open), so a failed dial is retried
+    // and an existing connection counts as success.
     private void connectKubo(int i) throws IOException, InterruptedException {
         for (int j = 0; j < size; j++) {
-            if (j != i) {
-                post(kuboRpcUrl(i).resolve("/api/v0/swarm/connect?arg=/dns4/kubo" + j + "/tcp/4001/p2p/"
-                        + kuboPeerIds.get(j)));
+            if (j == i) {
+                continue;
+            }
+            for (int attempt = 1; ; attempt++) {
+                try {
+                    post(kuboRpcUrl(i).resolve("/api/v0/swarm/connect?arg=/dns4/kubo" + j + "/tcp/4001/p2p/"
+                            + kuboPeerIds.get(j)));
+                    break;
+                } catch (IOException e) {
+                    if (post(kuboRpcUrl(i).resolve("/api/v0/swarm/peers")).contains(kuboPeerIds.get(j))) {
+                        break;
+                    }
+                    if (attempt == 10) {
+                        throw e;
+                    }
+                    Thread.sleep(300);
+                }
             }
         }
     }

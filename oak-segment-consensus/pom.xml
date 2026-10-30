@@ -391,5 +391,13 @@
             <artifactId>testcontainers</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Kubo and IPFS Cluster Docker rules for the replicated-binary tests -->
+        <dependency>
+            <groupId>org.apache.jackrabbit</groupId>
+            <artifactId>oak-blob-cloud-ipfs</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
   </dependencies>
 </project>
