@@ -49,8 +49,12 @@ public final class StorageBackendConfig {
 
     private final BlobBackend blobBackend;
 
-    // ipfs (legacy)
+    // ipfs
     private final String blobIpfsEndpoint;
+    private final String blobIpfsAuthorization; // null = none; never logged
+    private final int blobIpfsConnectTimeoutMs;
+    private final int blobIpfsRequestTimeoutMs;
+    private final int blobIpfsMaxAttempts;
 
     // azure
     private final String blobAzureConnectionString;
@@ -72,6 +76,10 @@ public final class StorageBackendConfig {
         this.segmentAwsEndpoint = b.segmentAwsEndpoint;
         this.blobBackend = b.blobBackend;
         this.blobIpfsEndpoint = b.blobIpfsEndpoint;
+        this.blobIpfsAuthorization = b.blobIpfsAuthorization;
+        this.blobIpfsConnectTimeoutMs = b.blobIpfsConnectTimeoutMs;
+        this.blobIpfsRequestTimeoutMs = b.blobIpfsRequestTimeoutMs;
+        this.blobIpfsMaxAttempts = b.blobIpfsMaxAttempts;
         this.blobAzureConnectionString = b.blobAzureConnectionString;
         this.blobAzureContainer = b.blobAzureContainer;
         this.blobAwsBucket = b.blobAwsBucket;
@@ -128,6 +136,15 @@ public final class StorageBackendConfig {
         if (b.blobBackend == BlobBackend.IPFS) {
             b.blobIpfsEndpoint = RuntimeConfigValueResolver.readString(
                 "ipfs.api.endpoint", "IPFS_API_ENDPOINT", "/ip4/127.0.0.1/tcp/5001");
+            String authorization = RuntimeConfigValueResolver.readString(
+                "ipfs.api.authorization", "IPFS_API_AUTHORIZATION", null);
+            b.blobIpfsAuthorization = RuntimeConfigValueResolver.hasText(authorization) ? authorization.trim() : null;
+            b.blobIpfsConnectTimeoutMs = RuntimeConfigValueResolver.readInt(
+                "ipfs.api.connect-timeout-ms", "IPFS_API_CONNECT_TIMEOUT_MS", 10_000);
+            b.blobIpfsRequestTimeoutMs = RuntimeConfigValueResolver.readInt(
+                "ipfs.api.request-timeout-ms", "IPFS_API_REQUEST_TIMEOUT_MS", 60_000);
+            b.blobIpfsMaxAttempts = RuntimeConfigValueResolver.readInt(
+                "ipfs.api.max-attempts", "IPFS_API_MAX_ATTEMPTS", 3);
         }
 
         if (b.blobBackend == BlobBackend.AZURE) {
@@ -185,6 +202,10 @@ public final class StorageBackendConfig {
     public BlobBackend getBlobBackend() { return blobBackend; }
 
     public String getBlobIpfsEndpoint() { return blobIpfsEndpoint; }
+    public String getBlobIpfsAuthorization() { return blobIpfsAuthorization; }
+    public int getBlobIpfsConnectTimeoutMs() { return blobIpfsConnectTimeoutMs; }
+    public int getBlobIpfsRequestTimeoutMs() { return blobIpfsRequestTimeoutMs; }
+    public int getBlobIpfsMaxAttempts() { return blobIpfsMaxAttempts; }
 
     public String getBlobAzureConnectionString() { return blobAzureConnectionString; }
     public String getBlobAzureContainer() { return blobAzureContainer; }
@@ -237,6 +258,10 @@ public final class StorageBackendConfig {
         String segmentAwsEndpoint;
         BlobBackend blobBackend;
         String blobIpfsEndpoint;
+        String blobIpfsAuthorization;
+        int blobIpfsConnectTimeoutMs;
+        int blobIpfsRequestTimeoutMs;
+        int blobIpfsMaxAttempts;
         String blobAzureConnectionString;
         String blobAzureContainer;
         String blobAwsBucket;

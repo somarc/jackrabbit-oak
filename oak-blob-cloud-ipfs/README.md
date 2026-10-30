@@ -46,10 +46,12 @@ SHA-256 of the content):
 | `content/<id>` | A link to the CID that keeps the blocks retained independently of pins. |
 | `metadata/<name>`, `metadata-attrs/<name>` | Shared DataStore metadata records and their write time. |
 
-Content is imported with CIDv0, SHA2-256 and 256 KiB chunks set explicitly, so
-a node's `Import.*` defaults for those cannot change the CIDs Oak records;
-DAG-layout settings such as maximum links are still the node's. CIDv1 strings
-are accepted wherever a CID is read. Reads are streamed and checked against the
+Content is imported with Kubo's legacy profile set explicitly (CIDv0,
+SHA2-256, 256 KiB chunks, no raw leaves, 174 links per node, balanced layout),
+so a node's own `Import.*` settings cannot change the CIDs Oak records;
+`IPFSKuboImportProfileTest` checks this against a node with skewed settings
+and a golden CID. Each import is confirmed by its recursive pin, because Kubo
+reports late import failures only in an HTTP trailer. Reads are streamed and checked against the
 SHA-256 identifier, so a truncated or wrong payload fails instead of being
 cached. Writing an existing blob refreshes its `lastModified`, and a different
 length for the same identifier is rejected as a collision, as with S3 and Azure.
@@ -71,7 +73,9 @@ OSGi configuration PID:
 
 | Setting | Meaning |
 |---|---|
-| `ipfsApiEndpoint` | Kubo HTTP API endpoint, e.g. `/ip4/127.0.0.1/tcp/5001` |
+| `ipfsApiEndpoint` | Kubo RPC endpoint: a multiaddr such as `/ip4/127.0.0.1/tcp/5001` or `/dns4/kubo/tcp/443/https`, or an `http(s)://` URL |
+| `ipfsApiAuthorization` | `Authorization` header for the RPC API, e.g. `Bearer <token>` for Kubo's `API.Authorizations`; never logged |
+| `ipfsConnectTimeoutMillis`, `ipfsRequestTimeoutMillis`, `ipfsMaxAttempts` | Defaults 10 s, 60 s and 3. Transport failures and HTTP 502/503/504 are retried with exponential backoff; Kubo command errors are not. Uploads get one extra second per MiB |
 | `ipfsFilesRoot` | MFS namespace for mappings and metadata; use a distinct root per Oak repository |
 | `minRecordLength` | Binary threshold, default 16 KiB; smaller values stay inline |
 | `cacheSizeInMB` | Oak blob-ID cache size |
@@ -80,8 +84,15 @@ OSGi configuration PID:
 | `stagingSplitPercentage` | Local staging share |
 | `uploadThreads` | Background upload concurrency |
 
-Treat the IPFS API as a trusted administrative endpoint. Do not expose it to an
-untrusted network. Select cache, staging, disk, and concurrency limits before
+The client is the JDK HTTP client: it reuses connections, streams uploads and
+downloads, and uses the JVM trust store for TLS. The request timeout also bounds
+any pause while a response body is read, so a stalled download fails instead of
+hanging. Endpoints that do not clearly select plain HTTP or TLS are rejected, and
+credentials sent over plain HTTP to a non-loopback host are logged as a warning.
+The module has no third-party IPFS dependencies.
+
+Treat the IPFS API as an administrative endpoint: require a token with Kubo's
+`API.Authorizations`, and put TLS in front of it when it leaves the host. Select cache, staging, disk, and concurrency limits before
 running a campaign; the inherited cache defaults are not a laptop test budget.
 
 ## Current boundaries

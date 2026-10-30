@@ -28,6 +28,7 @@ import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
 import org.osgi.service.component.annotations.Reference;
 import org.osgi.service.metatype.annotations.AttributeDefinition;
+import org.osgi.service.metatype.annotations.AttributeType;
 import org.osgi.service.metatype.annotations.Designate;
 import org.osgi.service.metatype.annotations.ObjectClassDefinition;
 import org.osgi.service.component.ComponentContext;
@@ -65,6 +66,31 @@ public class IPFSDataStoreService extends AbstractDataStoreService {
             description = "IPFS HTTP API multiaddr used to upload blobs and query block metadata."
         )
         String ipfsApiEndpoint() default "/ip4/127.0.0.1/tcp/5001";
+
+        @AttributeDefinition(
+            name = "IPFS API Authorization",
+            description = "Authorization header value for the Kubo RPC API, for example 'Bearer <token>' matching Kubo's API.Authorizations. Empty sends no header.",
+            type = AttributeType.PASSWORD
+        )
+        String ipfsApiAuthorization() default "";
+
+        @AttributeDefinition(
+            name = "IPFS Connect Timeout (ms)",
+            description = "Timeout for opening a connection to the Kubo RPC API."
+        )
+        int ipfsConnectTimeoutMillis() default 10_000;
+
+        @AttributeDefinition(
+            name = "IPFS Request Timeout (ms)",
+            description = "Time allowed for a Kubo RPC call to start responding. Uploads get one extra second per MiB."
+        )
+        int ipfsRequestTimeoutMillis() default 60_000;
+
+        @AttributeDefinition(
+            name = "IPFS Max Attempts",
+            description = "Attempts for a Kubo RPC call that fails in transport or with HTTP 502, 503 or 504."
+        )
+        int ipfsMaxAttempts() default 3;
 
         @AttributeDefinition(
             name = "IPFS Files Root",

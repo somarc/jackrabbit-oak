@@ -58,7 +58,7 @@ final class BlobStoreStartupCoordinator {
         String endpoint = config.getBlobIpfsEndpoint();
         log.info("📦 Configuring IPFS BlobStore (endpoint={})...", endpoint);
         try {
-            BlobStore blobStore = componentFactory.createIpfsBlobStore(endpoint, storeDir);
+            BlobStore blobStore = componentFactory.createIpfsBlobStore(config, storeDir);
             log.info("✅ Blob store: IPFS ({})", endpoint);
             return new StartupResult("ipfs", blobStore);
         } catch (Exception e) {
