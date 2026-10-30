@@ -48,7 +48,15 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
 
     private IPFSBackend ipfsBackend;
 
+    /**
+     * Keyring spec for blob encryption, {@code current;id:base64Key;...}; see
+     * {@link #setBlobKeyProvider}.
+     */
+    static final String ENCRYPTION_KEYS = "ipfsEncryptionKeys";
+
     private volatile CidResolver cidResolver;
+
+    private BlobKeyProvider blobKeyProvider;
 
     /**
      * The minimum size of an object that should be stored in IPFS.
@@ -79,7 +87,26 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
             }
         }
         ipfsBackend.setCidResolver(cidResolver);
+        BlobKeyProvider keys = blobKeyProvider;
+        String keySpec = properties == null ? null : properties.getProperty(ENCRYPTION_KEYS);
+        if (keys == null && keySpec != null && !keySpec.isBlank()) {
+            keys = StaticBlobKeyProvider.fromSpec(keySpec);
+        }
+        ipfsBackend.setBlobKeyProvider(keys);
         return ipfsBackend;
+    }
+
+    /**
+     * Encrypts every new blob with AES-256-GCM under the provider's current key
+     * before it reaches IPFS, and decrypts encrypted blobs on read; plaintext
+     * blobs stay readable. Every repository that reads these blobs needs the
+     * same keys. Takes precedence over {@code ipfsEncryptionKeys} and must be
+     * called before initialization.
+     *
+     * @param blobKeyProvider the keys, or {@code null} to use {@code ipfsEncryptionKeys}
+     */
+    public void setBlobKeyProvider(BlobKeyProvider blobKeyProvider) {
+        this.blobKeyProvider = blobKeyProvider;
     }
 
     /**
@@ -106,7 +133,8 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
      * replication through IPFS Cluster, {@code ipfsClusterEndpoint},
      * {@code ipfsClusterAuthorization}, {@code ipfsClusterReplicationMin},
      * {@code ipfsClusterReplicationMax}, {@code ipfsClusterPinTimeoutMillis} and
-     * {@code ipfsClusterUnpinOnDelete}.</p>
+     * {@code ipfsClusterUnpinOnDelete}, and, for encryption,
+     * {@code ipfsEncryptionKeys}.</p>
      *
      * @param properties datastore and backend configuration properties
      */

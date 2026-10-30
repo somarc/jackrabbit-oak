@@ -60,6 +60,7 @@ public final class StorageBackendConfig {
     private final int blobIpfsClusterReplicationMin;
     private final int blobIpfsClusterReplicationMax;
     private final int blobIpfsClusterPinTimeoutMs;
+    private final String blobIpfsEncryptionKeys; // null = plaintext; never logged
 
     // azure
     private final String blobAzureConnectionString;
@@ -90,6 +91,7 @@ public final class StorageBackendConfig {
         this.blobIpfsClusterReplicationMin = b.blobIpfsClusterReplicationMin;
         this.blobIpfsClusterReplicationMax = b.blobIpfsClusterReplicationMax;
         this.blobIpfsClusterPinTimeoutMs = b.blobIpfsClusterPinTimeoutMs;
+        this.blobIpfsEncryptionKeys = b.blobIpfsEncryptionKeys;
         this.blobAzureConnectionString = b.blobAzureConnectionString;
         this.blobAzureContainer = b.blobAzureContainer;
         this.blobAwsBucket = b.blobAwsBucket;
@@ -165,6 +167,8 @@ public final class StorageBackendConfig {
                 "ipfs.cluster.replication-max", "IPFS_CLUSTER_REPLICATION_MAX", 3);
             b.blobIpfsClusterPinTimeoutMs = RuntimeConfigValueResolver.readInt(
                 "ipfs.cluster.pin-timeout-ms", "IPFS_CLUSTER_PIN_TIMEOUT_MS", 120_000);
+            b.blobIpfsEncryptionKeys = textOrNull(RuntimeConfigValueResolver.readString(
+                "ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null));
         }
 
         if (b.blobBackend == BlobBackend.AZURE) {
@@ -231,6 +235,7 @@ public final class StorageBackendConfig {
     public int getBlobIpfsClusterReplicationMin() { return blobIpfsClusterReplicationMin; }
     public int getBlobIpfsClusterReplicationMax() { return blobIpfsClusterReplicationMax; }
     public int getBlobIpfsClusterPinTimeoutMs() { return blobIpfsClusterPinTimeoutMs; }
+    public String getBlobIpfsEncryptionKeys() { return blobIpfsEncryptionKeys; }
 
     public String getBlobAzureConnectionString() { return blobAzureConnectionString; }
     public String getBlobAzureContainer() { return blobAzureContainer; }
@@ -296,6 +301,7 @@ public final class StorageBackendConfig {
         int blobIpfsClusterReplicationMin;
         int blobIpfsClusterReplicationMax;
         int blobIpfsClusterPinTimeoutMs;
+        String blobIpfsEncryptionKeys;
         String blobAzureConnectionString;
         String blobAzureContainer;
         String blobAwsBucket;

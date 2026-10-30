@@ -922,6 +922,14 @@ public class OsgiConfigApiHandler {
             "Whether binary writes are replicated through IPFS Cluster before they are acknowledged",
             "ipfs.cluster.endpoint|IPFS_CLUSTER_ENDPOINT"));
         schema.add(schemaEntry(
+            "nodeRuntimeTuning.ipfs_encryption_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether binaries are encrypted before they reach IPFS (the keys are never reported)",
+            "ipfs.encryption.keys|IPFS_ENCRYPTION_KEYS"));
+        schema.add(schemaEntry(
             "nodeRuntimeTuning.http_port",
             "int",
             0,
@@ -1098,6 +1106,8 @@ public class OsgiConfigApiHandler {
             RuntimeConfigValueResolver.hasConfiguredValue("ipfs.api.authorization", "IPFS_API_AUTHORIZATION"));
         values.put("ipfs_cluster_configured", RuntimeConfigValueResolver.hasText(
             RuntimeConfigValueResolver.readString("ipfs.cluster.endpoint", "IPFS_CLUSTER_ENDPOINT", null)));
+        values.put("ipfs_encryption_configured", RuntimeConfigValueResolver.hasText(
+            RuntimeConfigValueResolver.readString("ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null)));
         values.put("http_port", readInt("http.port", 0));
         values.put("sharding_num_shards",
             RuntimeConfigValueResolver.readInt("sharding.numShards", "NUM_SHARDS", 1));
