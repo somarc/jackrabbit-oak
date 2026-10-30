@@ -19,14 +19,16 @@ package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 import io.ipfs.api.MerkleNode;
 import io.ipfs.api.NamedStreamable;
 
+import java.io.InputStream;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Minimal IPFS client contract used by {@link IPFSBackend}.
  *
  * <p>This indirection keeps the backend testable without depending directly on
- * the concrete Java IPFS HTTP client.</p>
+ * the concrete Java IPFS HTTP client. Missing paths are reported through return
+ * values; every other failure (unreachable daemon, protocol error) is thrown so
+ * callers never mistake an outage for absent data.</p>
  */
 interface IpfsClient {
 
@@ -36,14 +38,10 @@ interface IpfsClient {
     Object version() throws Exception;
 
     /**
-     * Uploads content to IPFS and returns the created Merkle nodes.
+     * Imports and recursively pins content with a fixed import profile, so the
+     * resulting CID does not depend on the node's own import configuration.
      */
     List<MerkleNode> add(NamedStreamable upload) throws Exception;
-
-    /**
-     * Pins the supplied CID so the node keeps the content locally.
-     */
-    void pinAdd(String cid) throws Exception;
 
     /**
      * Removes the local pin for the supplied CID.
@@ -51,23 +49,19 @@ interface IpfsClient {
     void pinRemove(String cid) throws Exception;
 
     /**
-     * Reads the raw bytes stored at the supplied CID.
+     * Streams the file content stored at the supplied CID. The caller closes
+     * the stream.
      */
-    byte[] cat(String cid) throws Exception;
+    InputStream cat(String cid) throws Exception;
 
     /**
-     * Returns block metadata used for existence and size checks.
-     */
-    Map<String, Object> blockStat(String cid) throws Exception;
-
-    /**
-     * Ensures a directory exists in the IPFS Files namespace.
+     * Ensures a directory, and its parents, exist in the IPFS Files namespace.
      */
     void ensureDirectory(String path) throws Exception;
 
     /**
-     * Writes a file into the IPFS Files namespace, replacing any previous
-     * content at the same path.
+     * Writes a file into the IPFS Files namespace, creating parents and
+     * replacing any previous content at the same path.
      */
     void writeFile(String path, byte[] data) throws Exception;
 
@@ -78,6 +72,8 @@ interface IpfsClient {
 
     /**
      * Reads a file from the IPFS Files namespace.
+     *
+     * @return the file content, or {@code null} when the path does not exist
      */
     byte[] readFile(String path) throws Exception;
 
@@ -92,12 +88,13 @@ interface IpfsClient {
     List<String> listFiles(String path) throws Exception;
 
     /**
-     * Deletes a file from the IPFS Files namespace.
+     * Deletes a file from the IPFS Files namespace; a missing path is ignored.
      */
     void deleteFile(String path) throws Exception;
 
     /**
-     * Returns the size of a file in the IPFS Files namespace.
+     * Returns the UnixFS file size of an IPFS Files path or {@code /ipfs/<cid>}
+     * path.
      */
     long fileSize(String path) throws Exception;
 }

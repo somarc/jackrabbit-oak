@@ -28,34 +28,48 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.FilterInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Date;
+import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
+import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 /**
  * {@link AbstractSharedBackend} implementation that stores Oak binaries in
  * IPFS.
  *
- * <p>The backend uploads content through the IPFS HTTP API, pins the resulting
- * CID, and persists the {@code DataIdentifier -> CID} mapping in the IPFS Files
- * namespace so restarts can still resolve Oak blob identifiers back to IPFS
- * objects.</p>
+ * <p>The backend imports and pins content through the IPFS HTTP API and keeps
+ * its durable state in the IPFS Files namespace (MFS) under
+ * {@code ipfsFilesRoot}:</p>
+ * <ul>
+ *     <li>{@code blob-index/<id>}: the CID of the blob (unchanged since the
+ *     first release, so older builds can still read it);</li>
+ *     <li>{@code blob-attrs/<id>}: the blob length and last-modified time,
+ *     which Oak's DataStore garbage collector compares against;</li>
+ *     <li>{@code content/<id>}: a link to the CID that keeps the blocks
+ *     retained independently of pins;</li>
+ *     <li>{@code metadata/<name>} and {@code metadata-attrs/<name>}: shared
+ *     DataStore metadata records and their last-modified time.</li>
+ * </ul>
  *
- * <p>Backend metadata, including {@code reference.key}, is also stored in the
- * IPFS Files namespace under stable paths. The in-memory cache now acts only as
- * an acceleration layer over that durable state.</p>
+ * <p>Entries written before {@code blob-attrs} existed report their UnixFS
+ * file size and the current time as last-modified, which keeps them out of
+ * garbage collection until they are written again.</p>
  */
 public class IPFSBackend extends AbstractSharedBackend {
 
@@ -64,6 +78,9 @@ public class IPFSBackend extends AbstractSharedBackend {
     private static final String DEFAULT_IPFS_API_ENDPOINT = "/ip4/127.0.0.1/tcp/5001";
     private static final String DEFAULT_IPFS_FILES_ROOT = "/oak/ipfs";
     private static final String REFERENCE_KEY = "reference.key";
+    private static final String LENGTH = "length";
+    private static final String LAST_MODIFIED = "lastModified";
+    private static final Pattern SHA256_HEX = Pattern.compile("[0-9a-f]{64}");
 
     private final IpfsClientFactory ipfsClientFactory;
 
@@ -71,12 +88,12 @@ public class IPFSBackend extends AbstractSharedBackend {
      * Client created during {@link #init()} and reused for all IPFS API calls.
      */
     private IpfsClient ipfs;
-    
+
     /**
      * IPFS API endpoint (e.g., "/ip4/127.0.0.1/tcp/5001")
      */
     private String ipfsApiEndpoint;
-    
+
     /**
      * In-memory cache for blob identifier-to-CID mappings.
      */
@@ -86,11 +103,6 @@ public class IPFSBackend extends AbstractSharedBackend {
      * Root directory in the IPFS Files namespace used for Oak metadata.
      */
     private String ipfsFilesRoot = DEFAULT_IPFS_FILES_ROOT;
-
-    /**
-     * Initialization timestamp used as a synthetic last-modified value.
-     */
-    private Date startTime;
 
     private volatile byte[] secret;
 
@@ -111,29 +123,23 @@ public class IPFSBackend extends AbstractSharedBackend {
     @Override
     public void init() throws DataStoreException {
         try {
-            LOG.info("🚀 Initializing IPFS Backend...");
-            
-            // Default to a local daemon when the caller did not configure one.
             if (ipfsApiEndpoint == null || ipfsApiEndpoint.isEmpty()) {
                 ipfsApiEndpoint = DEFAULT_IPFS_API_ENDPOINT;
             }
-            
-            // Connect once and reuse the same client for all later calls.
             ipfs = ipfsClientFactory.create(ipfsApiEndpoint);
-            
-            // Version lookup is a lightweight connectivity check; failure is
-            // logged but does not block startup if the client was created.
+
+            // Version lookup is informational; the namespace setup below is
+            // the real connectivity check.
             try {
-                Object versionInfo = ipfs.version();
-                LOG.info("✅ Connected to IPFS node: {} (version info: {})", ipfsApiEndpoint, versionInfo);
+                LOG.info("Connected to IPFS node {} (version info: {})", ipfsApiEndpoint, ipfs.version());
             } catch (Exception e) {
-                LOG.warn("Connected to IPFS node: {} (could not get version: {})", ipfsApiEndpoint, e.getMessage());
+                LOG.warn("Connected to IPFS node {} (could not get version: {})", ipfsApiEndpoint, e.getMessage());
             }
 
-            ensureNamespace();
-            
-            startTime = new Date();
-            
+            for (String directory : List.of(blobIndexDirectory(), blobAttrsDirectory(), contentDirectory(),
+                    metadataDirectory(), metadataAttrsDirectory())) {
+                ipfs.ensureDirectory(directory);
+            }
         } catch (Exception e) {
             throw new DataStoreException("Failed to initialize IPFS backend: " + e.getMessage(), e);
         }
@@ -142,32 +148,26 @@ public class IPFSBackend extends AbstractSharedBackend {
     @Override
     public void write(DataIdentifier identifier, File file) throws DataStoreException {
         try {
-            LOG.debug("📤 Uploading file to IPFS: {} ({} bytes)", identifier, file.length());
-            
-            // Upload the file and use the first returned node as the content CID.
-            NamedStreamable.FileWrapper fileWrapper = new NamedStreamable.FileWrapper(file);
-            List<MerkleNode> nodes = ipfs.add(fileWrapper);
-            
+            if (touchIfStored(identifier, file.length())) {
+                return;
+            }
+
+            List<MerkleNode> nodes = ipfs.add(new NamedStreamable.FileWrapper(file));
             if (nodes.isEmpty()) {
                 throw new DataStoreException("IPFS add returned empty result for " + identifier);
             }
-            
-            MerkleNode result = nodes.get(0);
-            String cid = result.hash.toString();
-            
-            LOG.info("📦 Uploaded binary to IPFS: {} → CID: {}", identifier, cid);
-            
-            // Pin the CID so the node keeps the content available locally.
-            ipfs.pinAdd(cid);
-            LOG.debug("📌 Pinned CID: {}", cid);
-            
+            String cid = nodes.get(0).hash.toString();
+
             try {
-                persistCidMapping(identifier, cid);
-                persistContentReference(identifier, cid);
+                writeBlobAttributes(identifier, file.length(), System.currentTimeMillis());
+                ipfs.writeFile(blobIndexPath(identifier), cid.getBytes(StandardCharsets.UTF_8));
+                ipfs.linkCid(cid, contentPath(identifier));
                 cidCache.put(identifier, cid);
             } catch (Exception e) {
-                deleteContentReferenceQuietly(identifier);
-                deleteCidMappingQuietly(identifier);
+                deleteQuietly(contentPath(identifier));
+                deleteQuietly(blobAttrsPath(identifier));
+                deleteQuietly(blobIndexPath(identifier));
+                cidCache.remove(identifier);
                 try {
                     ipfs.pinRemove(cid);
                 } catch (Exception cleanupFailure) {
@@ -175,32 +175,43 @@ public class IPFSBackend extends AbstractSharedBackend {
                 }
                 throw e;
             }
-            
+            LOG.debug("Stored {} ({} bytes) as CID {}", identifier, file.length(), cid);
+        } catch (DataStoreException e) {
+            throw e;
         } catch (Exception e) {
             throw new DataStoreException("IPFS write failed for " + identifier + ": " + e.getMessage(), e);
         }
     }
 
+    /**
+     * Mirrors the S3 and Azure backends: rewriting a stored blob only refreshes
+     * its last-modified time, and a different length for the same identifier is
+     * a collision.
+     */
+    private boolean touchIfStored(DataIdentifier identifier, long length) throws Exception {
+        if (resolveCid(identifier) == null || !ipfs.fileExists(contentPath(identifier))) {
+            return false;
+        }
+        Long storedLength = longAttribute(readAttributes(blobAttrsPath(identifier)), LENGTH);
+        if (storedLength != null && storedLength != length) {
+            throw new DataStoreException("Collision: " + identifier + " is stored with length "
+                + storedLength + ", not " + length);
+        }
+        writeBlobAttributes(identifier, length, System.currentTimeMillis());
+        return true;
+    }
+
     @Override
     public InputStream read(DataIdentifier identifier) throws DataStoreException {
+        String cid = resolveCid(identifier);
+        if (cid == null) {
+            throw new DataStoreException("CID not found for identifier: " + identifier);
+        }
         try {
-            // Reads are resolved through the durable mapping file and cached in memory.
-            String cid = resolveCid(identifier);
-            
-            if (cid == null) {
-                throw new DataStoreException("CID not found for identifier: " + identifier);
-            }
-            
-            LOG.debug("📥 Fetching binary from IPFS: CID: {}", cid);
-            
-            // The IPFS node decides whether this is served from local storage or
-            // the wider network.
-            byte[] content = ipfs.cat(cid);
-            
-            LOG.info("✅ Retrieved binary from IPFS: {} ({} bytes)", identifier, content.length);
-            
-            return new ByteArrayInputStream(content);
-            
+            InputStream content = ipfs.cat(cid);
+            return SHA256_HEX.matcher(identifier.toString()).matches()
+                ? new Sha256VerifyingInputStream(content, identifier.toString())
+                : content;
         } catch (Exception e) {
             throw new DataStoreException("IPFS read failed for " + identifier + ": " + e.getMessage(), e);
         }
@@ -211,88 +222,84 @@ public class IPFSBackend extends AbstractSharedBackend {
         if (!exists(identifier)) {
             throw new DataStoreException("Record not found: " + identifier);
         }
-        
         return new IPFSDataRecord(this, identifier);
     }
 
     @Override
     public Iterator<DataIdentifier> getAllIdentifiers() throws DataStoreException {
-        Set<DataIdentifier> identifiers = new LinkedHashSet<>(cidCache.keySet());
-        identifiers.addAll(loadPersistedIdentifiers());
-        return identifiers.iterator();
+        return loadPersistedIdentifiers().iterator();
     }
 
+    /**
+     * Records are returned with their attributes loaded. If they cannot be read
+     * the enumeration fails, because Oak would otherwise encode an unknown
+     * length into the blob id and treat a referenced blob as garbage.
+     */
     @Override
     public Iterator<DataRecord> getAllRecords() throws DataStoreException {
-        List<DataRecord> records = new ArrayList<>();
         Iterator<DataIdentifier> identifiers = getAllIdentifiers();
-        
-        while (identifiers.hasNext()) {
-            DataIdentifier id = identifiers.next();
-            records.add(new IPFSDataRecord(this, id));
-        }
-        
-        return records.iterator();
+        return new Iterator<>() {
+            @Override
+            public boolean hasNext() {
+                return identifiers.hasNext();
+            }
+
+            @Override
+            public DataRecord next() {
+                IPFSDataRecord record = new IPFSDataRecord(IPFSBackend.this, identifiers.next());
+                try {
+                    record.loadAttributes();
+                } catch (DataStoreException e) {
+                    throw new IllegalStateException("Cannot enumerate " + record.getIdentifier(), e);
+                }
+                return record;
+            }
+        };
     }
 
+    /**
+     * A blob exists when its CID mapping is stored. Failures to reach IPFS are
+     * thrown rather than reported as absence.
+     */
     @Override
     public boolean exists(DataIdentifier identifier) throws DataStoreException {
-        try {
-            String cid = resolveCid(identifier);
-            
-            if (cid == null) {
-                return false;
-            }
-            
-            // IPFS block metadata doubles as our existence probe.
-            Map<String, Object> stat = ipfs.blockStat(cid);
-            return stat != null && stat.containsKey("Size");
-            
-        } catch (Exception e) {
-            LOG.debug("IPFS exists check failed for {}: {}", identifier, e.getMessage());
-            return false;
-        }
+        return resolveCid(identifier) != null;
     }
 
     @Override
     public void close() throws DataStoreException {
-        LOG.info("🛑 Closing IPFS Backend");
         // The HTTP client has no explicit close hook; clear local state instead.
         cidCache.clear();
         secret = null;
     }
 
+    /**
+     * Removes the retention link, then the pin, and only then the mapping, so a
+     * delete that fails part-way can be retried.
+     */
     @Override
     public void deleteRecord(DataIdentifier identifier) throws DataStoreException {
         try {
             String cid = resolveCid(identifier);
-            
             if (cid == null) {
                 LOG.warn("Cannot delete - CID not found for: {}", identifier);
                 return;
             }
-            
-            LOG.debug("🗑️  Unpinning CID from IPFS: {}", cid);
 
-            // The MFS content link is the durable retention root for this blob.
-            deleteContentReference(identifier);
-            deleteCidMapping(identifier);
-
-            // Unpinning makes the content eligible for later IPFS garbage collection.
+            ipfs.deleteFile(contentPath(identifier));
             try {
                 ipfs.pinRemove(cid);
             } catch (Exception e) {
-                if (isNotPinned(e)) {
-                    LOG.debug("CID {} was not directly pinned at delete time; relying on removed MFS link", cid);
-                } else {
+                if (!isNotPinned(e)) {
                     throw e;
                 }
+                LOG.debug("CID {} was not directly pinned at delete time", cid);
             }
-            
-            LOG.info("✅ Unpinned binary from IPFS: {} (CID: {})", identifier, cid);
-            
-            // Actual block removal is deferred to the node's garbage-collection cycle.
-            
+            ipfs.deleteFile(blobAttrsPath(identifier));
+            ipfs.deleteFile(blobIndexPath(identifier));
+            cidCache.remove(identifier);
+            // Blocks are reclaimed by the node's own garbage collection.
+            LOG.debug("Unpinned {} (CID {})", identifier, cid);
         } catch (Exception e) {
             throw new DataStoreException("IPFS delete failed for " + identifier + ": " + e.getMessage(), e);
         }
@@ -303,15 +310,9 @@ public class IPFSBackend extends AbstractSharedBackend {
         requireInput(input);
         requireName(name);
         try {
-            LOG.debug("Adding metadata record: {}", name);
-            
-            // Metadata is stored in the durable IPFS Files namespace so it can
-            // be addressed by name after restart.
-            byte[] data = input.readAllBytes();
-            ensureNamespace();
-            ipfs.writeFile(metadataPath(name), data);
-            LOG.info("📝 Added metadata: {}", name);
-            
+            ipfs.writeFile(metadataPath(name), input.readAllBytes());
+            ipfs.writeFile(metadataAttrsPath(name), attributes(Map.of(LAST_MODIFIED, System.currentTimeMillis())));
+            LOG.debug("Added metadata record {}", name);
         } catch (Exception e) {
             throw new DataStoreException("Failed to add metadata: " + name, e);
         }
@@ -342,9 +343,7 @@ public class IPFSBackend extends AbstractSharedBackend {
         requirePrefix(prefix);
         List<DataRecord> records = new ArrayList<>();
         for (String name : listMetadataNames(prefix)) {
-            if (metadataRecordExists(name)) {
-                records.add(new IPFSMetadataRecord(this, name));
-            }
+            records.add(new IPFSMetadataRecord(this, name));
         }
         return records;
     }
@@ -357,6 +356,7 @@ public class IPFSBackend extends AbstractSharedBackend {
                 return false;
             }
             ipfs.deleteFile(metadataPath(name));
+            ipfs.deleteFile(metadataAttrsPath(name));
             return true;
         } catch (Exception e) {
             LOG.error("Failed to delete metadata: {}", name, e);
@@ -370,6 +370,7 @@ public class IPFSBackend extends AbstractSharedBackend {
         for (String name : listMetadataNames(prefix)) {
             try {
                 ipfs.deleteFile(metadataPath(name));
+                ipfs.deleteFile(metadataAttrsPath(name));
             } catch (Exception e) {
                 LOG.error("Failed to delete metadata: {}", name, e);
             }
@@ -385,13 +386,12 @@ public class IPFSBackend extends AbstractSharedBackend {
         try {
             return ipfs.fileExists(metadataPath(name));
         } catch (Exception e) {
-            LOG.debug("Failed to check metadata record {}: {}", name, e.getMessage());
-            return false;
+            throw new IllegalStateException("Failed to check metadata record " + name, e);
         }
     }
 
     // Accessors used by tests and higher-level integrations.
-    
+
     /**
      * Sets the IPFS API endpoint that will be used on the next {@link #init()}.
      *
@@ -400,7 +400,7 @@ public class IPFSBackend extends AbstractSharedBackend {
     public void setIpfsApiEndpoint(String endpoint) {
         this.ipfsApiEndpoint = endpoint;
     }
-    
+
     /**
      * Returns the configured IPFS API endpoint.
      *
@@ -427,7 +427,7 @@ public class IPFSBackend extends AbstractSharedBackend {
     public String getIpfsFilesRoot() {
         return ipfsFilesRoot;
     }
-    
+
     /**
      * Returns the cached CID for a given identifier.
      *
@@ -442,10 +442,10 @@ public class IPFSBackend extends AbstractSharedBackend {
             return null;
         }
     }
-    
+
     /**
      * Get all CID mappings (Oak blob ID → IPFS CID).
-     * 
+     *
      * @return Map of Oak blob IDs (as hex strings) to IPFS CIDs
      */
     public Map<String, String> getAllCIDMappings() {
@@ -477,22 +477,14 @@ public class IPFSBackend extends AbstractSharedBackend {
                 return secret;
             }
 
-            if (metadataRecordExists(REFERENCE_KEY)) {
-                secret = readMetadataBytes(REFERENCE_KEY);
-            } else {
-                byte[] key = super.getOrCreateReferenceKey();
-                addMetadataRecord(new ByteArrayInputStream(key), REFERENCE_KEY);
-                secret = readMetadataBytes(REFERENCE_KEY);
+            byte[] stored = readMetadataIfPresent(REFERENCE_KEY);
+            if (stored == null) {
+                addMetadataRecord(new ByteArrayInputStream(super.getOrCreateReferenceKey()), REFERENCE_KEY);
+                stored = readMetadataBytes(REFERENCE_KEY);
             }
+            secret = stored;
             return secret;
         }
-    }
-
-    private void ensureNamespace() throws Exception {
-        ipfs.ensureDirectory(ipfsFilesRoot);
-        ipfs.ensureDirectory(blobIndexDirectory());
-        ipfs.ensureDirectory(contentDirectory());
-        ipfs.ensureDirectory(metadataDirectory());
     }
 
     private String resolveCid(DataIdentifier identifier) throws DataStoreException {
@@ -500,67 +492,65 @@ public class IPFSBackend extends AbstractSharedBackend {
         if (cached != null) {
             return cached;
         }
-
-        String persisted = readPersistedCid(identifier);
+        if (ipfs == null) {
+            return null;
+        }
+        String persisted;
+        try {
+            byte[] mapping = ipfs.readFile(blobIndexPath(identifier));
+            persisted = mapping == null ? null : trimToNull(new String(mapping, StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            throw new DataStoreException("Failed to read CID mapping for " + identifier, e);
+        }
         if (persisted != null) {
             cidCache.put(identifier, persisted);
         }
         return persisted;
     }
 
-    private String readPersistedCid(DataIdentifier identifier) throws DataStoreException {
-        if (ipfs == null) {
+    private void writeBlobAttributes(DataIdentifier identifier, long length, long lastModified) throws Exception {
+        Map<String, Long> values = new LinkedHashMap<>();
+        values.put(LENGTH, length);
+        values.put(LAST_MODIFIED, lastModified);
+        ipfs.writeFile(blobAttrsPath(identifier), attributes(values));
+    }
+
+    /**
+     * Returns a numeric attribute, or {@code null} when the attributes or the
+     * value are missing or unreadable, which callers treat as a legacy entry.
+     */
+    private static Long longAttribute(Properties attributes, String key) {
+        if (attributes == null) {
             return null;
         }
         try {
-            String path = blobIndexPath(identifier);
-            if (!ipfs.fileExists(path)) {
-                return null;
-            }
-            return trimToNull(new String(ipfs.readFile(path), StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            throw new DataStoreException("Failed to read CID mapping for " + identifier, e);
+            return Long.valueOf(attributes.getProperty(key));
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
-    private void persistCidMapping(DataIdentifier identifier, String cid) throws Exception {
-        ensureNamespace();
-        ipfs.writeFile(blobIndexPath(identifier), cid.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private void persistContentReference(DataIdentifier identifier, String cid) throws Exception {
-        ensureNamespace();
-        ipfs.linkCid(cid, contentPath(identifier));
-    }
-
-    private void deleteCidMapping(DataIdentifier identifier) throws Exception {
-        String path = blobIndexPath(identifier);
-        if (ipfs.fileExists(path)) {
-            ipfs.deleteFile(path);
+    private Properties readAttributes(String path) throws Exception {
+        byte[] data = ipfs.readFile(path);
+        if (data == null) {
+            return null;
         }
-        cidCache.remove(identifier);
+        Properties properties = new Properties();
+        properties.load(new StringReader(new String(data, StandardCharsets.UTF_8)));
+        return properties;
     }
 
-    private void deleteCidMappingQuietly(DataIdentifier identifier) {
+    private static byte[] attributes(Map<String, Long> values) {
+        StringBuilder text = new StringBuilder();
+        values.forEach((key, value) -> text.append(key).append('=').append(value).append('\n'));
+        return text.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private void deleteQuietly(String path) {
         try {
-            deleteCidMapping(identifier);
-        } catch (Exception e) {
-            LOG.debug("Failed to clean up CID mapping for {} after write error: {}", identifier, e.getMessage());
-        }
-    }
-
-    private void deleteContentReference(DataIdentifier identifier) throws Exception {
-        String path = contentPath(identifier);
-        if (ipfs.fileExists(path)) {
             ipfs.deleteFile(path);
-        }
-    }
-
-    private void deleteContentReferenceQuietly(DataIdentifier identifier) {
-        try {
-            deleteContentReference(identifier);
         } catch (Exception e) {
-            LOG.debug("Failed to clean up content reference for {} after write error: {}", identifier, e.getMessage());
+            LOG.debug("Failed to clean up {} after write error: {}", path, e.getMessage());
         }
     }
 
@@ -592,12 +582,21 @@ public class IPFSBackend extends AbstractSharedBackend {
                 }
             }
         } catch (Exception e) {
-            LOG.error("Failed to list metadata records with prefix {}", prefix, e);
+            // An empty list would let shared GC sweep without every repository's references.
+            throw new IllegalStateException("Failed to list metadata records with prefix " + prefix, e);
         }
         return names;
     }
 
     private byte[] readMetadataBytes(String name) throws DataStoreException {
+        byte[] data = readMetadataIfPresent(name);
+        if (data == null) {
+            throw new DataStoreException("Metadata record not found: " + name);
+        }
+        return data;
+    }
+
+    private byte[] readMetadataIfPresent(String name) throws DataStoreException {
         requireName(name);
         if (ipfs == null) {
             throw new DataStoreException("IPFS backend is not initialized");
@@ -609,28 +608,32 @@ public class IPFSBackend extends AbstractSharedBackend {
         }
     }
 
-    private long getMetadataLength(String name) throws DataStoreException {
-        try {
-            return ipfs.fileSize(metadataPath(name));
-        } catch (Exception e) {
-            throw new DataStoreException("Failed to get metadata length for " + name, e);
-        }
-    }
-
     private String blobIndexPath(DataIdentifier identifier) {
         return joinPath(blobIndexDirectory(), encodeName(identifier.toString()));
+    }
+
+    private String blobAttrsPath(DataIdentifier identifier) {
+        return joinPath(blobAttrsDirectory(), encodeName(identifier.toString()));
+    }
+
+    private String contentPath(DataIdentifier identifier) {
+        return joinPath(contentDirectory(), encodeName(identifier.toString()));
     }
 
     private String metadataPath(String name) {
         return joinPath(metadataDirectory(), encodeName(name));
     }
 
+    private String metadataAttrsPath(String name) {
+        return joinPath(metadataAttrsDirectory(), encodeName(name));
+    }
+
     private String blobIndexDirectory() {
         return joinPath(ipfsFilesRoot, "blob-index");
     }
 
-    private String contentPath(DataIdentifier identifier) {
-        return joinPath(contentDirectory(), encodeName(identifier.toString()));
+    private String blobAttrsDirectory() {
+        return joinPath(ipfsFilesRoot, "blob-attrs");
     }
 
     private String contentDirectory() {
@@ -639,6 +642,10 @@ public class IPFSBackend extends AbstractSharedBackend {
 
     private String metadataDirectory() {
         return joinPath(ipfsFilesRoot, "metadata");
+    }
+
+    private String metadataAttrsDirectory() {
+        return joinPath(ipfsFilesRoot, "metadata-attrs");
     }
 
     private static String encodeName(String value) {
@@ -652,9 +659,6 @@ public class IPFSBackend extends AbstractSharedBackend {
     }
 
     private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
     }
@@ -701,63 +705,179 @@ public class IPFSBackend extends AbstractSharedBackend {
         Throwable current = e;
         while (current != null) {
             String message = current.getMessage();
-            if (message != null) {
-                String lower = message.toLowerCase(Locale.ROOT);
-                if (lower.contains("not pinned")) {
-                    return true;
-                }
+            if (message != null && message.toLowerCase(Locale.ROOT).contains("not pinned")) {
+                return true;
             }
             current = current.getCause();
         }
         return false;
     }
-    
+
     /**
-     * {@link DataRecord} view backed by a cached IPFS CID.
+     * Fails the read at end of stream when the content does not hash to the
+     * SHA-256 identifier, so a truncated or wrong payload is never cached as
+     * the blob.
+     */
+    private static final class Sha256VerifyingInputStream extends FilterInputStream {
+
+        private final String expectedHex;
+        private final MessageDigest digest;
+        private boolean verified;
+        private IOException failure;
+
+        private Sha256VerifyingInputStream(InputStream in, String expectedHex) {
+            super(in);
+            this.expectedHex = expectedHex;
+            try {
+                this.digest = MessageDigest.getInstance("SHA-256");
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        @Override
+        public int read() throws IOException {
+            if (failure != null) {
+                throw failure;
+            }
+            int b = in.read();
+            if (b == -1) {
+                verify();
+            } else {
+                digest.update((byte) b);
+            }
+            return b;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            if (failure != null) {
+                throw failure;
+            }
+            int count = in.read(buffer, offset, length);
+            if (count == -1) {
+                verify();
+            } else {
+                digest.update(buffer, offset, count);
+            }
+            return count;
+        }
+
+        @Override
+        public long skip(long n) throws IOException {
+            byte[] buffer = new byte[8192];
+            long skipped = 0;
+            while (skipped < n) {
+                int count = read(buffer, 0, (int) Math.min(buffer.length, n - skipped));
+                if (count == -1) {
+                    break;
+                }
+                skipped += count;
+            }
+            return skipped;
+        }
+
+        @Override
+        public boolean markSupported() {
+            return false;
+        }
+
+        @Override
+        public void mark(int readLimit) {
+        }
+
+        @Override
+        public void reset() throws IOException {
+            throw new IOException("mark/reset not supported");
+        }
+
+        private void verify() throws IOException {
+            if (verified) {
+                return;
+            }
+            verified = true;
+            String actual = HexFormat.of().formatHex(digest.digest());
+            if (!actual.equals(expectedHex)) {
+                failure = new IOException("IPFS content for " + expectedHex + " hashes to " + actual
+                    + "; the stream was truncated or the CID mapping is wrong");
+                throw failure;
+            }
+        }
+    }
+
+    /**
+     * {@link DataRecord} view whose length and last-modified time come from the
+     * blob's stored attributes.
      */
     private static class IPFSDataRecord extends AbstractDataRecord {
-        
+
         private final IPFSBackend backend;
         private final DataIdentifier identifier;
         private long length = -1;
         private long lastModified = -1;
-        
-        public IPFSDataRecord(IPFSBackend backend, DataIdentifier identifier) {
+
+        IPFSDataRecord(IPFSBackend backend, DataIdentifier identifier) {
             super(backend, identifier);
             this.backend = backend;
             this.identifier = identifier;
         }
-        
+
         @Override
         public InputStream getStream() throws DataStoreException {
             return backend.read(identifier);
         }
-        
+
         @Override
         public long getLength() throws DataStoreException {
-            if (length == -1) {
-                try {
-                    // Cache the block size on first access to avoid repeated stat calls.
-                    String cid = backend.resolveCid(identifier);
-                    if (cid != null) {
-                        Map<String, Object> stat = backend.ipfs.blockStat(cid);
-                        length = ((Number) stat.get("Size")).longValue();
-                    }
-                } catch (Exception e) {
-                    throw new DataStoreException("Failed to get length for " + identifier, e);
-                }
-            }
+            loadAttributes();
             return length;
         }
-        
+
         @Override
         public long getLastModified() {
-            if (lastModified == -1) {
-                // IPFS content is immutable, so expose backend start time as a
-                // stable synthetic modification timestamp.
-                lastModified = backend.startTime.getTime();
+            try {
+                loadAttributes();
+            } catch (DataStoreException e) {
+                // Unknown age must never make a blob look old enough to collect.
+                LOG.warn("Failed to read attributes of {}; reporting it as just modified", identifier, e);
+                return System.currentTimeMillis();
             }
             return lastModified;
+        }
+
+        synchronized void loadAttributes() throws DataStoreException {
+            if (lastModified != -1) {
+                return;
+            }
+            try {
+                Properties attributes = backend.readAttributes(backend.blobAttrsPath(identifier));
+                Long storedLength = longAttribute(attributes, LENGTH);
+                Long storedLastModified = longAttribute(attributes, LAST_MODIFIED);
+                if (storedLength != null && storedLastModified != null) {
+                    length = storedLength;
+                    lastModified = storedLastModified;
+                    return;
+                }
+                String cid = backend.resolveCid(identifier);
+                long now = System.currentTimeMillis();
+                if (cid == null) {
+                    length = -1;
+                    lastModified = now;
+                    return;
+                }
+                length = backend.ipfs.fileSize("/ipfs/" + cid);
+                lastModified = now;
+                // Recording "now" once lets a legacy blob age out of the GC window
+                // instead of looking new forever; it is never earlier than the
+                // real write time.
+                try {
+                    backend.writeBlobAttributes(identifier, length, now);
+                } catch (Exception e) {
+                    LOG.debug("Could not record attributes of legacy blob {}: {}", identifier, e.getMessage());
+                }
+            } catch (Exception e) {
+                throw new DataStoreException("Failed to get length for " + identifier, e);
+            }
         }
     }
 
@@ -782,7 +902,11 @@ public class IPFSBackend extends AbstractSharedBackend {
         @Override
         public long getLength() throws DataStoreException {
             if (length == -1) {
-                length = backend.getMetadataLength(name);
+                try {
+                    length = backend.ipfs.fileSize(backend.metadataPath(name));
+                } catch (Exception e) {
+                    throw new DataStoreException("Failed to get metadata length for " + name, e);
+                }
             }
             return length;
         }
@@ -790,7 +914,13 @@ public class IPFSBackend extends AbstractSharedBackend {
         @Override
         public long getLastModified() {
             if (lastModified == -1) {
-                lastModified = backend.startTime != null ? backend.startTime.getTime() : 0L;
+                try {
+                    Long stored = longAttribute(backend.readAttributes(backend.metadataAttrsPath(name)), LAST_MODIFIED);
+                    lastModified = stored == null ? System.currentTimeMillis() : stored;
+                } catch (Exception e) {
+                    LOG.warn("Failed to read attributes of metadata record {}; reporting it as just modified", name, e);
+                    return System.currentTimeMillis();
+                }
             }
             return lastModified;
         }

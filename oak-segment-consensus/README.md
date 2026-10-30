@@ -41,6 +41,10 @@ flowchart LR
 - **Genesis is verified.** The first replicated command creates a reserved,
   digest-sealed genesis subtree, and writes are refused until every member has
   verified it.
+- **Binaries are stored before they are ordered.** The leader stores an uploaded
+  binary synchronously and replicates only its blob ID and IPFS CID. If the
+  binary cannot be stored, the write is rejected with `503`
+  `binary_upload_failed` rather than queued without it.
 
 Details: [operation lifecycle](docs/OPERATION-LIFECYCLE.md) and the
 [genesis and write-safety contract](docs/GENESIS-AND-WRITE-SAFETY.md).
@@ -154,7 +158,7 @@ the environment variable wins. Settings listed without an environment variable a
 | `oak.validator.auth.token` | `OAK_VALIDATOR_AUTH_TOKEN` | unset (auth off) | See [Security](#security). |
 | `tls.enabled` | | `false` | With TLS, `--port` serves HTTPS. Also `tls.keystore.path`, `tls.keystore.password`, `tls.keystore.type` (`PKCS12`), `tls.truststore.*`, `tls.client.auth` (`none`/`want`/`need`), and `http.port` for an extra plain-HTTP connector. PEM files are rejected; convert to a keystore. |
 | `oak.blob.backend` | `OAK_BLOB_BACKEND` | `ipfs` | `ipfs`, `azure` or `aws`. Legacy alias: `blobstore.type` / `BLOBSTORE_TYPE`. |
-| `ipfs.api.endpoint` | `IPFS_API_ENDPOINT` | `/ip4/127.0.0.1/tcp/5001` | Kubo API multiaddr. Startup fails if it is unreachable. |
+| `ipfs.api.endpoint` | `IPFS_API_ENDPOINT` | `/ip4/127.0.0.1/tcp/5001` | Kubo API multiaddr. Startup fails if it is unreachable. Every validator of a cluster must use the same IPFS repository: a blob is resolved through the IPFS Files index of the node that stored it, so per-validator IPFS nodes are not supported yet. |
 | `oak.segment.backend` | `OAK_SEGMENT_BACKEND` | `local` | `local`, `azure` or `aws`. Cloud backends need further settings; see [`StorageBackendConfig`](src/main/java/org/apache/jackrabbit/oak/segment/consensus/config/StorageBackendConfig.java). |
 | `oak.blockchain.mode` | `OAK_BLOCKCHAIN_MODE` | `mock` | `mock` simulates payments. `sepolia` needs `OAK_BLOCKCHAIN_RPC_URL`. `mainnet` is rejected in this version. Unknown values fall back to `mock`. |
 | `oak.consensus.safety.enabled` | | `true` | `false` stops the validator from starting; genesis v2 requires the safety invariants on every member. |
