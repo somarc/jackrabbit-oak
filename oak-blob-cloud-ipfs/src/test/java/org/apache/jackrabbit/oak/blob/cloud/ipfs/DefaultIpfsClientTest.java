@@ -205,7 +205,7 @@ public class DefaultIpfsClientTest {
             try {
                 new DefaultIpfsClient(settings(node, null, Duration.ofSeconds(5), 2)).version();
                 throw new AssertionError("Expected the call to give up");
-            } catch (DefaultIpfsClient.KuboRpcException e) {
+            } catch (HttpRpc.RpcException e) {
                 assertEquals(504, e.status());
             }
             assertEquals(2, node.count("/api/v0/version"));
@@ -219,7 +219,7 @@ public class DefaultIpfsClientTest {
             try {
                 new DefaultIpfsClient(settings(node, null, Duration.ofSeconds(5), 3)).fileExists("/oak/x");
                 throw new AssertionError("Expected the Kubo error to be thrown");
-            } catch (DefaultIpfsClient.KuboRpcException e) {
+            } catch (HttpRpc.RpcException e) {
                 assertEquals(500, e.status());
                 assertTrue(e.getMessage().contains("injected failure"));
             }
@@ -252,7 +252,7 @@ public class DefaultIpfsClientTest {
             new DefaultIpfsClient(settings).version();
             throw new AssertionError("Expected a connection failure");
         } catch (IOException e) {
-            assertFalse(e instanceof DefaultIpfsClient.KuboRpcException);
+            assertFalse(e instanceof HttpRpc.RpcException);
         }
     }
 

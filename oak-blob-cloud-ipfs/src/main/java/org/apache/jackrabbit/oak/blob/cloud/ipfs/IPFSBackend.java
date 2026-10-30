@@ -115,6 +115,13 @@ public class IPFSBackend extends AbstractSharedBackend {
 
     private volatile CidResolver cidResolver;
 
+    private IpfsClusterSettings clusterSettings = IpfsClusterSettings.disabled();
+
+    /**
+     * Replicates writes through IPFS Cluster when configured, otherwise {@code null}.
+     */
+    private IpfsClusterClient cluster;
+
     /**
      * Creates a backend using the default HTTP IPFS client implementation.
      */
@@ -135,6 +142,12 @@ public class IPFSBackend extends AbstractSharedBackend {
             IpfsClientSettings settings = clientSettings.withEndpoint(ipfsApiEndpoint);
             ipfsApiEndpoint = settings.endpoint();
             ipfs = ipfsClientFactory.create(settings);
+            if (clusterSettings.enabled()) {
+                cluster = new IpfsClusterClient(clusterSettings, settings);
+                cluster.ping();
+                LOG.info("Writes are acknowledged once {} IPFS Cluster peers hold them (at most {}), via {}",
+                    clusterSettings.replicationMin(), clusterSettings.replicationMax(), clusterSettings.endpoint());
+            }
 
             // Version lookup is informational; the namespace setup below is
             // the real connectivity check.
@@ -157,6 +170,7 @@ public class IPFSBackend extends AbstractSharedBackend {
     public void write(DataIdentifier identifier, File file) throws DataStoreException {
         try {
             if (touchIfStored(identifier, file.length())) {
+                replicate(identifier, resolveCid(identifier));
                 return;
             }
 
@@ -172,18 +186,33 @@ public class IPFSBackend extends AbstractSharedBackend {
                 deleteQuietly(blobAttrsPath(identifier));
                 deleteQuietly(blobIndexPath(identifier));
                 cidCache.remove(identifier);
-                try {
-                    ipfs.pinRemove(cid);
-                } catch (Exception cleanupFailure) {
-                    LOG.warn("Failed to unpin CID {} after mapping persistence error", cid, cleanupFailure);
+                if (cluster == null) {
+                    // With IPFS Cluster the node's pin may be a cluster replica; Kubo pins have no owner.
+                    try {
+                        ipfs.pinRemove(cid);
+                    } catch (Exception cleanupFailure) {
+                        LOG.warn("Failed to unpin CID {} after mapping persistence error", cid, cleanupFailure);
+                    }
                 }
                 throw e;
             }
             LOG.debug("Stored {} ({} bytes) as CID {}", identifier, file.length(), cid);
+            replicate(identifier, cid);
         } catch (DataStoreException e) {
             throw e;
         } catch (Exception e) {
             throw new DataStoreException("IPFS write failed for " + identifier + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Waits until IPFS Cluster holds the blob on enough peers, when configured.
+     * A blob stored locally whose replication failed stays stored; writing it
+     * again retries the replication.
+     */
+    private void replicate(DataIdentifier identifier, String cid) throws IOException {
+        if (cluster != null) {
+            cluster.pinReplicated(cid, identifier.toString());
         }
     }
 
@@ -278,8 +307,15 @@ public class IPFSBackend extends AbstractSharedBackend {
     }
 
     /**
-     * Removes the retention link, then the pin, and only then the mapping, so a
+     * Removes the pin, then the retention link, and only then the mapping, so a
      * delete that fails part-way can be retried.
+     *
+     * <p>Kubo and IPFS Cluster keep one pin per CID without owners. Without a
+     * cluster, only blobs stored through this node (those with a retention
+     * link) are unpinned. With a cluster, its pin and the local one are removed
+     * only when {@code ipfsClusterUnpinOnDelete} declares the cluster dedicated
+     * to this repository; otherwise reclaiming the storage is an operator
+     * action on the cluster pinset.</p>
      */
     @Override
     public void deleteRecord(DataIdentifier identifier) throws DataStoreException {
@@ -290,22 +326,31 @@ public class IPFSBackend extends AbstractSharedBackend {
                 return;
             }
 
-            ipfs.deleteFile(contentPath(identifier));
-            try {
-                ipfs.pinRemove(cid);
-            } catch (Exception e) {
-                if (!isNotPinned(e)) {
-                    throw e;
+            if (cluster != null ? clusterSettings.unpinOnDelete() : ipfs.fileExists(contentPath(identifier))) {
+                if (cluster != null) {
+                    cluster.unpin(cid);
                 }
-                LOG.debug("CID {} was not directly pinned at delete time", cid);
+                unpinLocally(cid);
             }
+            ipfs.deleteFile(contentPath(identifier));
             ipfs.deleteFile(blobAttrsPath(identifier));
             ipfs.deleteFile(blobIndexPath(identifier));
             cidCache.remove(identifier);
             // Blocks are reclaimed by the node's own garbage collection.
-            LOG.debug("Unpinned {} (CID {})", identifier, cid);
+            LOG.debug("Deleted {} (CID {})", identifier, cid);
         } catch (Exception e) {
             throw new DataStoreException("IPFS delete failed for " + identifier + ": " + e.getMessage(), e);
+        }
+    }
+
+    private void unpinLocally(String cid) throws Exception {
+        try {
+            ipfs.pinRemove(cid);
+        } catch (Exception e) {
+            if (!isNotPinned(e)) {
+                throw e;
+            }
+            LOG.debug("CID {} was not directly pinned at delete time", cid);
         }
     }
 
@@ -412,6 +457,13 @@ public class IPFSBackend extends AbstractSharedBackend {
      */
     public void setCidResolver(CidResolver cidResolver) {
         this.cidResolver = cidResolver;
+    }
+
+    /**
+     * Sets the IPFS Cluster replication used on the next {@link #init()}.
+     */
+    void setClusterSettings(IpfsClusterSettings clusterSettings) {
+        this.clusterSettings = clusterSettings;
     }
 
     /**
