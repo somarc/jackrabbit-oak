@@ -1451,7 +1451,21 @@
                 if (!path) {
                     return;
                 }
-                window.location.hash = encodeURIComponent(path);
+                // Fragments may carry "/" and ":" literally (RFC 3986), so encode per segment
+                // to keep the address bar readable: #/oak-chain/00/00/00/0x.../content/genesis
+                window.location.hash = path.split("/").map(function (segment) {
+                    return encodeURIComponent(segment).replace(/%3A/gi, ":").replace(/%40/g, "@");
+                }).join("/");
+            }
+
+            function readHashPath() {
+                var raw = window.location.hash ? window.location.hash.slice(1) : "";
+                try {
+                    // Also accepts legacy fully-encoded links (#%2Foak-chain%2F...).
+                    return decodeURIComponent(raw);
+                } catch (error) {
+                    return raw;
+                }
             }
 
             function loadPath(path, force, allowReject) {
@@ -1489,7 +1503,7 @@
             }
 
             function initialPathForCluster(cluster) {
-                var hash = window.location.hash ? decodeURIComponent(window.location.hash.slice(1)) : "";
+                var hash = readHashPath();
                 if (hash) {
                     var normalized = normalizePath(hash, cluster.browseRoot);
                     if (normalized === "/" || normalized.indexOf(cluster.browseRoot) === 0) {
@@ -1510,7 +1524,7 @@
             }
 
             function loadExplicitPathFromHash(cluster, force) {
-                var hash = window.location.hash ? decodeURIComponent(window.location.hash.slice(1)) : "";
+                var hash = readHashPath();
                 if (!hash) {
                     return loadPreferredStartPath(cluster, force);
                 }
@@ -1896,6 +1910,14 @@
                     if (event.key === "/" && !typing && !valueDialog.open && !event.metaKey && !event.ctrlKey && !event.altKey) {
                         event.preventDefault();
                         startPathEdit();
+                    }
+                });
+                window.addEventListener("hashchange", function () {
+                    // Back/forward and hand-edited URLs; our own syncHash writes are no-ops here.
+                    var cluster = currentCluster();
+                    var hash = readHashPath();
+                    if (cluster && hash && normalizePath(hash, cluster.browseRoot) !== state.currentPath) {
+                        loadExplicitPathFromHash(cluster, false);
                     }
                 });
             }

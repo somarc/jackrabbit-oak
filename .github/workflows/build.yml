@@ -45,24 +45,49 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # A pull request checks out its merge commit; depth 2 keeps the base (HEAD^1) for the scope diff.
+          fetch-depth: 2
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           java-version: ${{ matrix.java }}
           distribution: temurin
           cache: maven
-      - name: Verify the product and its Oak dependencies
+      - name: Choose test scope
+        id: scope
         shell: bash
         run: |
           set -euo pipefail
+          # A pull request that changes only oak-segment-consensus/ leaves the upstream Oak modules
+          # untouched, so their tests (~25 of ~27 minutes) cannot change outcome. Anything else
+          # (another module, a root POM, this workflow) and every push to trunk runs the full suite.
+          scope=full
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            changed="$(git diff --name-only HEAD^1 HEAD)"
+            if [ -n "$changed" ] && ! grep -qv '^oak-segment-consensus/' <<<"$changed"; then
+              scope=module
+            fi
+          fi
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "Test scope: $scope"
+      - name: Verify the product and its Oak dependencies
+        shell: bash
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
+        run: |
+          set -euo pipefail
           test -z "$(git status --porcelain)"
-          # The inherited parallel-stream fixture requires two common-pool workers.
-          timeout --foreground 35m mvn -B -ntp \
-            -pl oak-segment-consensus -am verify \
-            -DskipITs -Dskip.deployment=true \
-            -Doak.source.revision="$(git rev-parse HEAD)" \
-            -Doak.source.dirty=false \
-            '-Dtest.opts.memory=-Xmx768m -XX:ActiveProcessorCount=2 -Djava.util.concurrent.ForkJoinPool.common.parallelism=2'
+          common=(-B -ntp -DskipITs -Dskip.deployment=true
+            -Doak.source.revision="$(git rev-parse HEAD)" -Doak.source.dirty=false
+            # The inherited parallel-stream fixture requires two common-pool workers.
+            '-Dtest.opts.memory=-Xmx768m -XX:ActiveProcessorCount=2 -Djava.util.concurrent.ForkJoinPool.common.parallelism=2')
+          if [ "$SCOPE" = module ]; then
+            # Build and install the unchanged upstream modules without their tests, then verify the module.
+            timeout --foreground 35m mvn "${common[@]}" -pl oak-segment-consensus -am install -DskipTests
+            timeout --foreground 35m mvn "${common[@]}" -pl oak-segment-consensus verify
+          else
+            timeout --foreground 35m mvn "${common[@]}" -pl oak-segment-consensus -am verify
+          fi
       - name: Retain test and bundle-baseline reports
         if: always()
         uses: actions/upload-artifact@v4
