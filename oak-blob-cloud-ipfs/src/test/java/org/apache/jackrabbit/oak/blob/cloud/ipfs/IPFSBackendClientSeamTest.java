@@ -319,6 +319,127 @@ public class IPFSBackendClientSeamTest {
     }
 
     @Test
+    public void testEncryptedBlobsReachIpfsAsCiphertextAndReadBackAsPlaintext() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        byte[] content = new byte[200_000];
+        new java.util.Random(3).nextBytes(content);
+        DataIdentifier id = new DataIdentifier(
+            HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setBlobKeyProvider(StaticBlobKeyProvider.fromSpec("k2;k1:" + key(1) + ";k2:" + key(2)));
+        backend.init();
+
+        File dir = Files.createTempDirectory("oak-ipfs-enc").toFile();
+        File tempFile = new File(dir, "staged.bin");
+        Files.write(tempFile.toPath(), content);
+        backend.write(id, tempFile);
+
+        byte[] stored = client.addedContent.get(0);
+        assertTrue(stored.length > content.length);
+        assertArrayEquals(BlobEncryption.MAGIC, java.util.Arrays.copyOf(stored, 4));
+        assertEquals("only the staged plaintext is left", List.of("staged.bin"), List.of(dir.list()));
+        assertEquals(content.length, backend.getRecord(id).getLength());
+
+        client.catResults.put(CID_ONE, stored);
+        try (InputStream stream = backend.read(id)) {
+            assertArrayEquals(content, stream.readAllBytes());
+        }
+
+        IPFSBackend rotated = new IPFSBackend(endpoint -> client);
+        rotated.setBlobKeyProvider(StaticBlobKeyProvider.fromSpec("k3;k3:" + key(3) + ";k2:" + key(2)));
+        rotated.init();
+        try (InputStream stream = rotated.read(id)) {
+            assertArrayEquals("an older key stays readable after rotation", content, stream.readAllBytes());
+        }
+
+        Map<String, String> failures = new LinkedHashMap<>();
+        failures.put("k2;k2:" + key(9), "failed authentication");
+        failures.put(null, "hashes to");
+        for (Map.Entry<String, String> failure : failures.entrySet()) {
+            IPFSBackend other = new IPFSBackend(endpoint -> client);
+            other.setBlobKeyProvider(failure.getKey() == null ? null : StaticBlobKeyProvider.fromSpec(failure.getKey()));
+            other.init();
+            try (InputStream stream = other.read(id)) {
+                stream.readAllBytes();
+                fail("Expected the read to fail with " + failure.getValue());
+            } catch (IOException expected) {
+                assertTrue(expected.getMessage(), expected.getMessage().contains(failure.getValue()));
+            }
+        }
+
+        byte[] substitute = content.clone();
+        substitute[0] ^= 1;
+        client.catResults.put(CID_ONE, substitute);
+        try (InputStream stream = backend.read(id)) {
+            stream.readAllBytes();
+            fail("Expected plaintext served in place of the ciphertext to fail verification");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage().contains("hashes to"));
+        }
+
+        client.catResults.put(CID_ONE, content);
+        try (InputStream stream = backend.read(id)) {
+            assertArrayEquals("plaintext written before encryption stays readable", content, stream.readAllBytes());
+        }
+
+        tempFile.delete();
+        dir.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testEncryptedBlobsAdoptedWithoutALengthReportThePlaintextLength() throws Exception {
+        byte[] content = new byte[150_000];
+        new java.util.Random(4).nextBytes(content);
+        BlobKeyProvider keys = StaticBlobKeyProvider.fromSpec("k1;k1:" + key(1));
+        String hex = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
+        java.io.ByteArrayOutputStream ciphertext = new java.io.ByteArrayOutputStream();
+        BlobEncryption.encrypt(new ByteArrayInputStream(content), ciphertext, hex, keys);
+
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.catResults.put(CID_ONE, ciphertext.toByteArray());
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setBlobKeyProvider(keys);
+        backend.setCidResolver(identifier -> new CidResolver.Resolution(CID_ONE, -1));
+        backend.init();
+
+        assertEquals(content.length, backend.getRecord(new DataIdentifier(hex)).getLength());
+        backend.close();
+    }
+
+    @Test
+    public void testAFailedEncryptedImportLeavesNoCiphertextBehind() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setBlobKeyProvider(StaticBlobKeyProvider.fromSpec("k1;k1:" + key(1)));
+        backend.init();
+        File dir = Files.createTempDirectory("oak-ipfs-staging").toFile();
+        File staged = new File(dir, "staged.bin");
+        Files.writeString(staged.toPath(), "secret");
+
+        try {
+            backend.write(new DataIdentifier("blob-failing"), staged);
+            fail("Expected the import to fail");
+        } catch (DataStoreException expected) {
+            assertTrue(expected.getMessage().contains("returned no CID"));
+        }
+        File ciphertext = client.addedFiles.get(0);
+        assertFalse(ciphertext + " was left behind", ciphertext.exists());
+        assertFalse("ciphertext must not be staged next to the upload", ciphertext.getParentFile().equals(dir));
+
+        staged.delete();
+        dir.delete();
+        backend.close();
+    }
+
+    private static String key(int seed) {
+        byte[] key = new byte[32];
+        java.util.Arrays.fill(key, (byte) seed);
+        return java.util.Base64.getEncoder().encodeToString(key);
+    }
+
+    @Test
     public void testReadVerifiesContentAgainstSha256Identifier() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
         client.addResults.add(CID_ONE);
@@ -792,6 +913,8 @@ public class IPFSBackendClientSeamTest {
     private static final class RecordingIpfsClient implements IpfsClient {
 
         private final Queue<String> addResults = new ArrayDeque<>();
+        private final List<byte[]> addedContent = new ArrayList<>();
+        private final List<File> addedFiles = new ArrayList<>();
         private final Map<String, byte[]> catResults = new HashMap<>();
         private int addCalls;
         private final List<String> pinRemoveCalls = new ArrayList<>();
@@ -824,6 +947,8 @@ public class IPFSBackendClientSeamTest {
         @Override
         public String add(File file) throws IOException {
             addCalls++;
+            addedFiles.add(file);
+            addedContent.add(Files.readAllBytes(file.toPath()));
             if (addResults.isEmpty()) {
                 throw new IOException("Kubo add returned no CID");
             }

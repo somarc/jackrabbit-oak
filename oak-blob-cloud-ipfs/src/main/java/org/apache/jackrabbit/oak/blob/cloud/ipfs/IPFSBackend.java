@@ -24,6 +24,7 @@ import org.apache.jackrabbit.oak.spi.blob.AbstractSharedBackend;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FilterInputStream;
@@ -123,6 +124,12 @@ public class IPFSBackend extends AbstractSharedBackend {
     private IpfsClusterClient cluster;
 
     /**
+     * Encrypts new blobs and decrypts encrypted ones when set, otherwise
+     * {@code null}.
+     */
+    private volatile BlobKeyProvider blobKeys;
+
+    /**
      * Creates a backend using the default HTTP IPFS client implementation.
      */
     public IPFSBackend() {
@@ -174,7 +181,7 @@ public class IPFSBackend extends AbstractSharedBackend {
                 return;
             }
 
-            String cid = ipfs.add(file);
+            String cid = blobKeys == null ? ipfs.add(file) : addEncrypted(identifier, file);
 
             try {
                 writeBlobAttributes(identifier, file.length(), System.currentTimeMillis());
@@ -186,8 +193,9 @@ public class IPFSBackend extends AbstractSharedBackend {
                 deleteQuietly(blobAttrsPath(identifier));
                 deleteQuietly(blobIndexPath(identifier));
                 cidCache.remove(identifier);
-                if (cluster == null) {
-                    // With IPFS Cluster the node's pin may be a cluster replica; Kubo pins have no owner.
+                if (cluster == null || blobKeys != null) {
+                    // With IPFS Cluster the node's pin may be a cluster replica, since Kubo pins have no
+                    // owner; a ciphertext CID is new to every write, so nothing else can hold it yet.
                     try {
                         ipfs.pinRemove(cid);
                     } catch (Exception cleanupFailure) {
@@ -202,6 +210,22 @@ public class IPFSBackend extends AbstractSharedBackend {
             throw e;
         } catch (Exception e) {
             throw new DataStoreException("IPFS write failed for " + identifier + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Imports an encrypted copy of the file. The ciphertext is bound to the
+     * identifier and written to an owner-only temporary file, outside the
+     * DataStore's staging directory so that a crash cannot leave it there to be
+     * uploaded as a blob, and deleted once imported.
+     */
+    private String addEncrypted(DataIdentifier identifier, File file) throws Exception {
+        File ciphertext = Files.createTempFile("oak-ipfs-", ".enc").toFile();
+        try {
+            BlobEncryption.encrypt(file, ciphertext, identifier.toString(), blobKeys);
+            return ipfs.add(ciphertext);
+        } finally {
+            Files.deleteIfExists(ciphertext.toPath());
         }
     }
 
@@ -240,12 +264,22 @@ public class IPFSBackend extends AbstractSharedBackend {
         if (cid == null) {
             throw new DataStoreException("CID not found for identifier: " + identifier);
         }
+        InputStream content = null;
         try {
-            InputStream content = ipfs.cat(cid);
+            content = ipfs.cat(cid);
+            BlobKeyProvider keys = blobKeys;
+            if (keys != null) {
+                // Sniffing is safe: what comes out is checked against the identifier below.
+                content = new BufferedInputStream(content);
+                if (BlobEncryption.isEncrypted(content)) {
+                    content = BlobEncryption.decrypt(content, identifier.toString(), keys);
+                }
+            }
             return SHA256_HEX.matcher(identifier.toString()).matches()
                 ? new Sha256VerifyingInputStream(content, identifier.toString())
                 : content;
         } catch (Exception e) {
+            closeQuietly(content);
             throw new DataStoreException("IPFS read failed for " + identifier + ": " + e.getMessage(), e);
         }
     }
@@ -460,6 +494,14 @@ public class IPFSBackend extends AbstractSharedBackend {
     }
 
     /**
+     * Sets the keys that encrypt new blobs and decrypt encrypted ones;
+     * {@code null} stores and reads plaintext.
+     */
+    void setBlobKeyProvider(BlobKeyProvider blobKeys) {
+        this.blobKeys = blobKeys;
+    }
+
+    /**
      * Sets the IPFS Cluster replication used on the next {@link #init()}.
      */
     void setClusterSettings(IpfsClusterSettings clusterSettings) {
@@ -605,7 +647,7 @@ public class IPFSBackend extends AbstractSharedBackend {
             return null;
         }
         try {
-            long length = resolution.length() >= 0 ? resolution.length() : ipfs.fileSize("/ipfs/" + resolution.cid());
+            long length = resolution.length() >= 0 ? resolution.length() : storedLength(resolution.cid());
             writeBlobAttributes(identifier, length, System.currentTimeMillis());
             ipfs.writeFile(blobIndexPath(identifier), resolution.cid().getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
@@ -613,6 +655,23 @@ public class IPFSBackend extends AbstractSharedBackend {
         }
         LOG.debug("Adopted {} as CID {} from the resolver", identifier, resolution.cid());
         return resolution.cid();
+    }
+
+    /**
+     * Returns the length of the content at the CID: the plaintext length for an
+     * encrypted blob when keys are configured, otherwise its UnixFS file size.
+     */
+    private long storedLength(String cid) throws Exception {
+        long size = ipfs.fileSize("/ipfs/" + cid);
+        if (blobKeys != null) {
+            try (InputStream header = ipfs.cat(cid)) {
+                long plaintext = BlobEncryption.plaintextLength(header, size);
+                if (plaintext >= 0) {
+                    return plaintext;
+                }
+            }
+        }
+        return size;
     }
 
     private void writeBlobAttributes(DataIdentifier identifier, long length, long lastModified) throws Exception {
@@ -658,6 +717,16 @@ public class IPFSBackend extends AbstractSharedBackend {
             ipfs.deleteFile(path);
         } catch (Exception e) {
             LOG.debug("Failed to clean up {} after write error: {}", path, e.getMessage());
+        }
+    }
+
+    private static void closeQuietly(InputStream stream) {
+        if (stream != null) {
+            try {
+                stream.close();
+            } catch (IOException e) {
+                LOG.debug("Failed to close IPFS stream: {}", e.getMessage());
+            }
         }
     }
 

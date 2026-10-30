@@ -78,6 +78,7 @@ OSGi configuration PID:
 | `ipfsClusterEndpoint`, `ipfsClusterAuthorization` | IPFS Cluster REST API (multiaddr or URL) and its `Authorization` header; empty disables replication |
 | `ipfsClusterReplicationMin`, `ipfsClusterReplicationMax`, `ipfsClusterPinTimeoutMillis` | Defaults 2, 3 and 120 s: peers that must hold a binary before its write returns, peers that should hold it, and how long to wait |
 | `ipfsClusterUnpinOnDelete` | Default `false`. Set `true` only when the cluster stores this Oak repository alone; deletes then unpin across the cluster |
+| `ipfsEncryptionKeys` | Keyring `current;id:base64Key;...` (32-byte keys) that encrypts every new binary before it reaches IPFS; empty stores plaintext. Never logged. See [Encryption](#encryption) |
 | `ipfsConnectTimeoutMillis`, `ipfsRequestTimeoutMillis`, `ipfsMaxAttempts` | Defaults 10 s, 60 s and 3. Transport failures and HTTP 502/503/504 are retried with exponential backoff; Kubo command errors are not. Uploads get one extra second per MiB |
 | `ipfsFilesRoot` | MFS namespace for mappings and metadata; use a distinct root per Oak repository |
 | `minRecordLength` | Binary threshold, default 16 KiB; smaller values stay inline |
@@ -98,6 +99,52 @@ Treat the IPFS API as an administrative endpoint: require a token with Kubo's
 `API.Authorizations`, and put TLS in front of it when it leaves the host. Select cache, staging, disk, and concurrency limits before
 running a campaign; the inherited cache defaults are not a laptop test budget.
 
+## Encryption
+
+With `ipfsEncryptionKeys` (or `IPFSDataStore.setBlobKeyProvider` for keys held
+elsewhere, such as a KMS), every new binary is encrypted on the Oak side before
+it is imported, the way S3's client-side encryption works: IPFS nodes, cluster
+peers, gateways and the swarm receive its ciphertext only.
+
+- Format (`BlobEncryption`, version 1): a header (magic `0x89 'O' 'K' 'E'`,
+  version, segment size, key id, random 32-byte salt, random 7-byte nonce
+  prefix) followed by 64 KiB AES-256-GCM segments. The data key is
+  HKDF-SHA256 of the master key and the salt. Each segment's nonce carries its
+  index and a last-segment flag, and each authenticates the header and the Oak
+  identifier, so tampering, truncation, reordering, appended data and swapping
+  ciphertext between identifiers all fail. A segment is released only after its
+  tag verifies. Overhead is the header plus 16 bytes per 64 KiB.
+- Key rotation: new binaries use the `current` key; older ones are read with
+  the key named in their header, so keep retired keys in the keyring until no
+  binary needs them. Every repository that reads the same binaries, such as all
+  validators of one consensus cluster, needs the same keyring; a repository
+  without keys writes plaintext.
+- Reads decrypt a binary that starts with the magic and pass other binaries
+  through, so plaintext written before encryption was enabled stays readable.
+  For Oak's SHA-256 identifiers the result is then checked against the
+  identifier, so a store cannot substitute content by serving plaintext. A
+  binary read without its key fails that check at the end of the stream. A
+  plaintext binary that happens to start with the magic bytes cannot be read
+  once keys are configured.
+- Reported lengths are plaintext lengths. CIDs are of ciphertext: the same file
+  encrypts differently each time, so IPFS does not deduplicate it. Oak still
+  deduplicates by identifier within one repository, but validators that ingest
+  the same content each store their own ciphertext. An IPFS gateway URL for the
+  CID serves ciphertext; serve binaries through Oak.
+- Not covered:
+  - binaries already stored as plaintext, which stay plaintext when they are
+    written again;
+  - the plaintext's SHA-256 identifier, which appears in the IPFS Files index,
+    IPFS Cluster pin names and the replicated binary index, so a party that can
+    read those can confirm whether a known file is stored;
+  - plaintext size (no padding), access patterns and the key id in the header;
+  - the local staging and download caches and the temporary ciphertext file,
+    which are on the repository host as with every Oak DataStore.
+
+`IPFSEncryptionKuboTest` shows against a real Kubo node that the stored bytes do
+not contain the plaintext, that a second repository with the keys reads the
+binary through its CID alone, and that a wrong key or no key fails.
+
 ## Current boundaries
 
 - Persistent mappings survive backend restarts against the same IPFS
@@ -107,7 +154,8 @@ running a campaign; the inherited cache defaults are not a laptop test budget.
   retention link) and read through the local node, which fetches it from its
   peers. `IPFSReplicatedReadTest` shows this across three private-swarm nodes.
   The reading node does not pin what it fetches; durability across nodes
-  comes from IPFS Cluster (below).
+  comes from IPFS Cluster (below). Without a resolver, a blob can only be
+  resolved through the repository and files root that stored it.
 - With `ipfsClusterEndpoint` set, every write (and rewrite) pins the CID through
   IPFS Cluster with `ipfsClusterReplicationMin`/`Max` and returns only once at
   least the minimum of peers report it `pinned`. Peers in `pin_error` or
@@ -125,8 +173,6 @@ running a campaign; the inherited cache defaults are not a laptop test budget.
   with a cluster, nothing unless `ipfsClusterUnpinOnDelete` is set. Otherwise
   DataStore GC removes the Oak mapping and reclaiming the pinned storage is an
   operator action on the cluster pinset.
-  Without a resolver, a blob can only be resolved through the repository and
-  files root that stored it.
 - Without `ipfsClusterEndpoint`, pinning is local to the configured endpoint and
   there is no guarantee of a replica count.
 - An accepted/committed Oak mutation is not by itself proof that arbitrary remote
@@ -142,9 +188,10 @@ running a campaign; the inherited cache defaults are not a laptop test budget.
 - Binary deletion and unpinning affect persistent data. Do not run garbage
   collection or delete campaigns against an existing repository without explicit
   approval and a recovery plan.
-- Content is not encrypted, and a Kubo node with default settings announces
+- Content is plaintext unless `ipfsEncryptionKeys` is set (see
+  [Encryption](#encryption)), and a Kubo node with default settings announces
   what it stores to the public IPFS network. Use a private network
-  (`swarm.key`) for content that must stay private.
+  (`swarm.key`) as well as encryption for content that must stay private.
 
 These are capability boundaries of an actively maintained product module, not a
 claim of production readiness. See the

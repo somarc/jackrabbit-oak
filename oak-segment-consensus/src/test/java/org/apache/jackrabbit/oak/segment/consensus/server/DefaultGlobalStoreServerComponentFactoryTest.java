@@ -30,7 +30,7 @@ public class DefaultGlobalStoreServerComponentFactoryTest {
     @After
     public void clearProps() {
         for (String prop : new String[] {"ipfs.api.endpoint", "ipfs.api.authorization", "ipfs.api.max-attempts",
-                "ipfs.cluster.endpoint", "ipfs.cluster.authorization"}) {
+                "ipfs.cluster.endpoint", "ipfs.cluster.authorization", "ipfs.encryption.keys"}) {
             System.clearProperty(prop);
         }
     }
@@ -58,6 +58,15 @@ public class DefaultGlobalStoreServerComponentFactoryTest {
 
         assertFalse(properties.containsKey("ipfsApiAuthorization"));
         assertFalse(properties.containsKey("ipfsClusterEndpoint"));
+        assertFalse(properties.containsKey("ipfsEncryptionKeys"));
+    }
+
+    @Test
+    public void testEncryptionKeysReachTheDataStore() {
+        System.setProperty("ipfs.encryption.keys", "k1;k1:AAAA");
+
+        assertEquals("k1;k1:AAAA", DefaultGlobalStoreServerComponentFactory.ipfsDataStoreProperties(
+            StorageBackendConfig.load()).getProperty("ipfsEncryptionKeys"));
     }
 
     @Test
