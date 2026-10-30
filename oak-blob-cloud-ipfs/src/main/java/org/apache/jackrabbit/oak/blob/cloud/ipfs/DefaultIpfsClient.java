@@ -113,6 +113,19 @@ final class DefaultIpfsClient implements IpfsClient {
     }
 
     @Override
+    public boolean isPinned(String cid) throws Exception {
+        try {
+            text("pin/ls", query("arg", cid) + "&type=recursive");
+            return true;
+        } catch (HttpRpc.RpcException e) {
+            if (String.valueOf(e.getMessage()).contains("not pinned")) {
+                return false;
+            }
+            throw e;
+        }
+    }
+
+    @Override
     public String config() throws Exception {
         return text("config/show", "");
     }

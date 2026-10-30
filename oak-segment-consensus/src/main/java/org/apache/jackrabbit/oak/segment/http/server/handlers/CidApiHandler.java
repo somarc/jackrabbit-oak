@@ -17,7 +17,6 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
-import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
@@ -218,9 +217,7 @@ public class CidApiHandler {
     }
 
     private IPFSDataStore ipfsDataStore() {
-        return context.blobStore instanceof DataStoreBlobStore
-            && ((DataStoreBlobStore) context.blobStore).getDataStore() instanceof IPFSDataStore
-            ? (IPFSDataStore) ((DataStoreBlobStore) context.blobStore).getDataStore() : null;
+        return context.ipfsDataStore();
     }
 
     /**
