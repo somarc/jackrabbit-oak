@@ -930,6 +930,14 @@ public class OsgiConfigApiHandler {
             "Whether binaries are encrypted before they reach IPFS (the keys are never reported)",
             "ipfs.encryption.keys|IPFS_ENCRYPTION_KEYS"));
         schema.add(schemaEntry(
+            "nodeRuntimeTuning.blob_url_signing_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether signed, expiring blob download URLs can be issued and verified (the keys are never reported)",
+            "oak.blob.url.keys|OAK_BLOB_URL_KEYS"));
+        schema.add(schemaEntry(
             "nodeRuntimeTuning.ipfs_network_policy",
             "string",
             "warn",
@@ -1116,6 +1124,8 @@ public class OsgiConfigApiHandler {
             RuntimeConfigValueResolver.readString("ipfs.cluster.endpoint", "IPFS_CLUSTER_ENDPOINT", null)));
         values.put("ipfs_network_policy",
             RuntimeConfigValueResolver.readString("ipfs.network.policy", "IPFS_NETWORK_POLICY", "warn").trim());
+        values.put("blob_url_signing_configured", RuntimeConfigValueResolver.hasText(
+            RuntimeConfigValueResolver.readString("oak.blob.url.keys", "OAK_BLOB_URL_KEYS", null)));
         values.put("ipfs_encryption_configured", RuntimeConfigValueResolver.hasText(
             RuntimeConfigValueResolver.readString("ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null)));
         values.put("http_port", readInt("http.port", 0));

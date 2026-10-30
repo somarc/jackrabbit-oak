@@ -43,6 +43,7 @@ import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfi
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
 import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSession;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
@@ -71,7 +72,9 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.nio.file.Paths;
 import java.nio.file.Path;
@@ -85,7 +88,12 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -1090,8 +1098,8 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testCidGatewayRouteRedirectsToGatewayUrl() throws Exception {
-        withRoutingProperties(true, () -> {
+    public void testCidGatewayRouteRedirectsToTheConfiguredGatewayUrl() throws Exception {
+        withProperties(Map.of("ipfs.gateway.base", "https://gateway.example/ipfs/"), () -> withRoutingProperties(true, () -> {
             Path storeDirectory = Files.createTempDirectory("router-cid-gateway");
             try {
                 ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
@@ -1112,12 +1120,12 @@ public class RequestRouterTest {
 
                     router.route(request, response);
 
-                    verify(response).sendRedirect("https://ipfs.io/ipfs/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
+                    verify(response).sendRedirect("https://gateway.example/ipfs/Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
                 }
             } finally {
                 deleteRecursively(storeDirectory);
             }
-        });
+        }));
     }
 
     @Test
@@ -1692,6 +1700,212 @@ public class RequestRouterTest {
             verify(response).setHeader("X-Blob-Id", "ed06f9cb-demo");
             assertArrayEquals(payload, output.toByteArray());
         });
+    }
+
+    @Test
+    public void testSignedBlobUrlsStandInForTheTokenAndNothingElse() throws Exception {
+        String keys = "k1;k1:" + Base64.getEncoder().encodeToString(new byte[32]);
+        withProperties(Map.of(AuthTokenValidator.TOKEN_PROPERTY_NAME, "secret-token", BlobUrlSigner.KEYS_PROPERTY, keys),
+            () -> withRoutingProperties(true, () -> {
+                ServerContext context = newContext();
+                BlobStore blobStore = mock(BlobStore.class);
+                when(blobStore.getInputStream("ed06f9cb-demo"))
+                    .thenAnswer(invocation -> new ByteArrayInputStream("blob-demo".getBytes(StandardCharsets.UTF_8)));
+                context.blobStore = blobStore;
+                RequestRouter router = new RequestRouter(context);
+
+                HttpServletResponse issued = responseWithBody();
+                HttpServletRequest issue = attributedRequest("GET", "/v1/binary/download-url/ed06f9cb-demo%2322216",
+                    Map.of("ttl", "120"));
+                when(issue.getHeader(AuthTokenValidator.AUTHORIZATION_HEADER)).thenReturn("secret-token");
+                router.route(issue, issued);
+                verify(issued).setStatus(HttpServletResponse.SC_OK);
+                String json = body.toString();
+                String url = json.substring(json.indexOf("\"url\":\"") + 7, json.indexOf("\"", json.indexOf("\"url\":\"") + 7));
+                assertTrue(url, url.startsWith("/api/blob/ed06f9cb-demo?exp="));
+
+                Map<String, String> query = new HashMap<>();
+                for (String pair : url.substring(url.indexOf('?') + 1).split("&")) {
+                    query.put(pair.substring(0, pair.indexOf('=')), pair.substring(pair.indexOf('=') + 1));
+                }
+                HttpServletRequest signed = attributedRequest("GET", "/api/blob/ed06f9cb-demo", query);
+                RecordingServletOutputStream output = new RecordingServletOutputStream();
+                HttpServletResponse streamed = mock(HttpServletResponse.class);
+                when(streamed.getOutputStream()).thenReturn(output);
+                router.route(signed, streamed);
+                verify(streamed).setStatus(HttpServletResponse.SC_OK);
+                verify(streamed).setHeader(eq("Cache-Control"), startsWith("private, max-age="));
+                verify(streamed).setHeader("Referrer-Policy", "no-referrer");
+                verify(streamed).setHeader("X-Content-Type-Options", "nosniff");
+                assertEquals("blob-demo", new String(output.toByteArray(), StandardCharsets.UTF_8));
+
+                Map<String, String> tampered = new HashMap<>(query);
+                tampered.put("exp", String.valueOf(Long.parseLong(query.get("exp")) + 1));
+                HttpServletRequest forged = attributedRequest("GET", "/api/blob/ed06f9cb-demo", tampered);
+                when(forged.getHeader(AuthTokenValidator.AUTHORIZATION_HEADER)).thenReturn("secret-token");
+                HttpServletResponse refused = responseWithBody();
+                router.route(forged, refused);
+                verify(refused).setStatus(HttpServletResponse.SC_FORBIDDEN);
+                assertTrue(body.toString().contains("blob_url_invalid"));
+
+                HttpServletResponse unsigned = responseWithBody();
+                router.route(attributedRequest("GET", "/api/blob/ed06f9cb-demo", Map.of()), unsigned);
+                verify(unsigned).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+
+                HttpServletResponse otherRoute = responseWithBody();
+                router.route(attributedRequest("GET", "/api/cid/stats", query), otherRoute);
+                verify(otherRoute).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            }));
+    }
+
+    @Test
+    public void testSignedBlobUrlsAreBoundToTheirBlobAndLifetime() throws Exception {
+        String keys = "k1;k1:" + Base64.getEncoder().encodeToString(new byte[32]);
+        withProperties(Map.of(AuthTokenValidator.TOKEN_PROPERTY_NAME, "secret-token", BlobUrlSigner.KEYS_PROPERTY, keys,
+                BlobUrlSigner.REQUIRED_PROPERTY, "true"),
+            () -> withRoutingProperties(true, () -> {
+                ServerContext context = newContext();
+                BlobStore blobStore = mock(BlobStore.class);
+                when(blobStore.getInputStream(anyString()))
+                    .thenAnswer(invocation -> new ByteArrayInputStream("blob".getBytes(StandardCharsets.UTF_8)));
+                context.blobStore = blobStore;
+                RequestRouter router = new RequestRouter(context);
+                BlobUrlSigner signer = BlobUrlSigner.fromConfig();
+                long now = System.currentTimeMillis() / 1000;
+
+                Map<String, String> forA = query(signer.sign("blob-a", 60L, now).url());
+                assertEquals(HttpServletResponse.SC_OK, status(router, "/api/blob/blob-a", forA, null));
+                assertEquals(HttpServletResponse.SC_FORBIDDEN, status(router, "/api/blob/blob-b", forA, null));
+                assertEquals(HttpServletResponse.SC_FORBIDDEN, status(router, "/api/blob/blob-a%2312", forA, null));
+                assertTrue(body.toString().contains("blob_url_invalid"));
+
+                Map<String, String> expired = query(signer.sign("blob-a", 60L, now - 1000).url());
+                assertEquals(HttpServletResponse.SC_FORBIDDEN, status(router, "/api/blob/blob-a", expired, "secret-token"));
+                assertTrue(body.toString().contains("blob_url_expired"));
+
+                assertEquals("required: a token alone is not enough",
+                    HttpServletResponse.SC_FORBIDDEN, status(router, "/api/blob/blob-a", Map.of(), "secret-token"));
+
+                assertEquals(HttpServletResponse.SC_UNAUTHORIZED,
+                    status(router, "/v1/binary/download-url/blob-a", Map.of(), null));
+                assertEquals(HttpServletResponse.SC_BAD_REQUEST,
+                    status(router, "/v1/binary/download-url/blob-a", Map.of("ttl", "soon"), "secret-token"));
+                assertEquals(HttpServletResponse.SC_BAD_REQUEST,
+                    status(router, "/v1/binary/download-url/blob-a", Map.of("ttl", "3601"), "secret-token"));
+            }));
+    }
+
+    @Test
+    public void testUnsignedDownloadsUnderTokenAuthAreNotPubliclyCacheable() throws Exception {
+        withProperties(Map.of(AuthTokenValidator.TOKEN_PROPERTY_NAME, "secret-token"), () -> withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            BlobStore blobStore = mock(BlobStore.class);
+            when(blobStore.getInputStream("blob-a")).thenReturn(new ByteArrayInputStream(new byte[1]));
+            context.blobStore = blobStore;
+            HttpServletRequest request = attributedRequest("GET", "/api/blob/blob-a", Map.of());
+            when(request.getHeader(AuthTokenValidator.AUTHORIZATION_HEADER)).thenReturn("secret-token");
+            HttpServletResponse response = mock(HttpServletResponse.class);
+            when(response.getOutputStream()).thenReturn(new RecordingServletOutputStream());
+
+            new RequestRouter(context).route(request, response);
+
+            verify(response).setHeader("Cache-Control", "private, max-age=31536000, immutable");
+        }));
+    }
+
+    @Test
+    public void testMalformedSignedUrlSettingsFailStartup() throws Exception {
+        for (Map<String, String> settings : List.of(
+                Map.of(BlobUrlSigner.REQUIRED_PROPERTY, "yes"),
+                Map.of(BlobUrlSigner.TTL_PROPERTY, "5m"),
+                Map.of(BlobUrlSigner.REQUIRED_PROPERTY, "true"))) {
+            withProperties(settings, () -> {
+                try {
+                    new RequestRouter(newContext());
+                    fail("Expected " + settings + " to be refused");
+                } catch (IllegalArgumentException expected) {
+                    assertTrue(expected.getMessage().startsWith("oak.blob.url."));
+                }
+            });
+        }
+    }
+
+    private int status(RequestRouter router, String uri, Map<String, String> query, String token) throws Exception {
+        HttpServletRequest request = attributedRequest("GET", uri, query);
+        if (token != null) {
+            when(request.getHeader(AuthTokenValidator.AUTHORIZATION_HEADER)).thenReturn(token);
+        }
+        HttpServletResponse response = responseWithBody();
+        when(response.getOutputStream()).thenReturn(new RecordingServletOutputStream());
+        int[] status = {HttpServletResponse.SC_OK};
+        doAnswer(invocation -> status[0] = invocation.getArgument(0)).when(response).setStatus(anyInt());
+        router.route(request, response);
+        return status[0];
+    }
+
+    private static Map<String, String> query(String url) {
+        Map<String, String> values = new HashMap<>();
+        for (String pair : url.substring(url.indexOf('?') + 1).split("&")) {
+            values.put(pair.substring(0, pair.indexOf('=')), pair.substring(pair.indexOf('=') + 1));
+        }
+        return values;
+    }
+
+    @Test
+    public void testRequiredSignedBlobUrlsRefuseUnsignedDownloads() throws Exception {
+        String keys = "k1;k1:" + Base64.getEncoder().encodeToString(new byte[32]);
+        withProperties(Map.of(BlobUrlSigner.KEYS_PROPERTY, keys, BlobUrlSigner.REQUIRED_PROPERTY, "true"),
+            () -> withRoutingProperties(true, () -> {
+                RequestRouter router = new RequestRouter(newContext());
+                HttpServletResponse response = responseWithBody();
+
+                router.route(attributedRequest("GET", "/api/blob/ed06f9cb-demo", Map.of()), response);
+
+                verify(response).setStatus(HttpServletResponse.SC_FORBIDDEN);
+                assertTrue(body.toString().contains("blob_url_required"));
+            }));
+    }
+
+    @Test
+    public void testDownloadUrlsAreUnavailableWithoutKeys() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            HttpServletResponse response = responseWithBody();
+
+            router.route(attributedRequest("GET", "/v1/binary/download-url/ed06f9cb-demo", Map.of()), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            assertTrue(body.toString().contains("blob_url_signing_not_configured"));
+        });
+    }
+
+    private HttpServletRequest attributedRequest(String method, String uri, Map<String, String> parameters) {
+        HttpServletRequest request = request(method, uri);
+        Map<String, Object> attributes = new HashMap<>();
+        parameters.forEach((key, value) -> when(request.getParameter(key)).thenReturn(value));
+        doAnswer(invocation -> attributes.put(invocation.getArgument(0), invocation.getArgument(1)))
+            .when(request).setAttribute(anyString(), any());
+        when(request.getAttribute(anyString())).thenAnswer(invocation -> attributes.get(invocation.getArgument(0)));
+        return request;
+    }
+
+    private static void withProperties(Map<String, String> properties, ThrowingRunnable block) throws Exception {
+        Map<String, String> previous = new HashMap<>();
+        properties.forEach((key, value) -> {
+            previous.put(key, System.getProperty(key));
+            System.setProperty(key, value);
+        });
+        try {
+            block.run();
+        } finally {
+            previous.forEach((key, value) -> {
+                if (value == null) {
+                    System.clearProperty(key);
+                } else {
+                    System.setProperty(key, value);
+                }
+            });
+        }
     }
 
     @Test

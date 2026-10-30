@@ -16,8 +16,11 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
+import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
@@ -52,6 +55,11 @@ import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
  *   "localUrl": "http://127.0.0.1:8099/ipfs/Qmf4F3..."
  * }
  * </pre>
+ *
+ * <p>CIDs come from this node's mappings or, for binaries stored through
+ * another validator, the replicated binary index. Gateway URLs are built from
+ * this node's settings when asked for, and left out when no gateway is
+ * configured.</p>
  */
 public class CidApiHandler {
 
@@ -76,23 +84,27 @@ public class CidApiHandler {
         // Extract blob ID from path: /api/cid/{blobId}
         String oakBlobId = path.substring(path.lastIndexOf('/') + 1);
 
-        if (context.cidMappingService == null) {
+        if (context.cidMappingService == null && ipfsDataStore() == null) {
             ApiErrorUtil.sendJsonError(response, 503, "CID mapping service not available");
             return;
         }
 
-        Optional<String> cid = context.cidMappingService.getCid(oakBlobId);
-
+        Optional<String> cid = resolveCidOrReport(oakBlobId, response);
         if (cid.isEmpty()) {
-            ApiErrorUtil.sendJsonError(response, 404, "No CID found for Oak blob ID: " + oakBlobId);
             return;
         }
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("oakBlobId", oakBlobId);
         payload.put("ipfsCid", cid.get());
-        payload.put("gatewayUrl", IpfsGatewayUrls.gatewayUrl(cid.get()));
-        payload.put("localUrl", IpfsGatewayUrls.localGatewayUrl(cid.get()));
+        String gatewayUrl = IpfsGatewayUrls.gatewayUrl(cid.get());
+        if (gatewayUrl != null) {
+            payload.put("gatewayUrl", gatewayUrl);
+        }
+        String localUrl = IpfsGatewayUrls.localGatewayUrl(cid.get());
+        if (localUrl != null) {
+            payload.put("localUrl", localUrl);
+        }
         JsonOutputUtil.send(response, 200, JsonOutputUtil.toJson(payload));
     }
 
@@ -139,20 +151,76 @@ public class CidApiHandler {
 
         String oakBlobId = path.substring(path.lastIndexOf('/') + 1);
 
-        if (context.cidMappingService == null) {
+        if (IpfsGatewayUrls.gatewayBase() == null) {
+            ApiErrorUtil.sendJsonError(response, 404, "ipfs_gateway_not_configured",
+                "No IPFS gateway is configured; download through /api/blob/{blobId}");
+            return;
+        }
+
+        if (context.cidMappingService == null && ipfsDataStore() == null) {
             ApiErrorUtil.sendJsonError(response, 503, "CID mapping service not available");
             return;
         }
 
-        Optional<String> gatewayUrl = context.cidMappingService.getGatewayUrl(oakBlobId);
-
-        if (gatewayUrl.isEmpty()) {
-            ApiErrorUtil.sendJsonError(response, 404, "No CID found for Oak blob ID: " + oakBlobId);
+        Optional<String> cid = resolveCidOrReport(oakBlobId, response);
+        if (cid.isEmpty()) {
             return;
         }
 
         // Redirect to IPFS gateway
-        response.sendRedirect(gatewayUrl.get());
+        response.sendRedirect(IpfsGatewayUrls.gatewayUrl(cid.get()));
+    }
+
+    /**
+     * Looks the CID up in this node's mappings, then through the IPFS
+     * DataStore, which also consults the replicated binary index.
+     */
+    private Optional<String> resolveCid(String oakBlobId) {
+        if (context.cidMappingService != null) {
+            Optional<String> cid = context.cidMappingService.getCid(oakBlobId);
+            if (cid.isPresent()) {
+                return cid;
+            }
+        }
+        IPFSDataStore dataStore = ipfsDataStore();
+        String id = BlobUrlSigner.normalizeBlobId(oakBlobId);
+        if (dataStore == null || id == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.ofNullable(dataStore.getCID(id));
+        } catch (RuntimeException e) {
+            log.warn("Could not resolve the CID of {}: {}", id, e.toString());
+            throw new IpfsUnavailableException();
+        }
+    }
+
+    /**
+     * IPFS could not be asked, which is not the same as an unknown blob.
+     */
+    private static final class IpfsUnavailableException extends RuntimeException {
+        private IpfsUnavailableException() {
+            super(null, null, false, false);
+        }
+    }
+
+    private Optional<String> resolveCidOrReport(String oakBlobId, HttpServletResponse response) throws IOException {
+        try {
+            Optional<String> cid = resolveCid(oakBlobId);
+            if (cid.isEmpty()) {
+                ApiErrorUtil.sendJsonError(response, 404, "No CID found for Oak blob ID: " + oakBlobId);
+            }
+            return cid;
+        } catch (IpfsUnavailableException e) {
+            ApiErrorUtil.sendJsonError(response, 503, "ipfs_unavailable", "The IPFS node could not be asked");
+            return Optional.empty();
+        }
+    }
+
+    private IPFSDataStore ipfsDataStore() {
+        return context.blobStore instanceof DataStoreBlobStore
+            && ((DataStoreBlobStore) context.blobStore).getDataStore() instanceof IPFSDataStore
+            ? (IPFSDataStore) ((DataStoreBlobStore) context.blobStore).getDataStore() : null;
     }
 
     /**
