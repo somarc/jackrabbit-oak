@@ -76,6 +76,12 @@ Standalone replicated writes carry Aeron's command timestamp through immutable
 Legacy direct-call helpers retain a local-clock fallback; they are not the
 standalone replicated ingress path.
 
+A replicated write that carries a stored binary also records its blob identifier,
+CID and length under the hidden `/:oak-chain-binaries/<aa>/<bb>/<sha-256>` index.
+The entry is derived only from the proposal, so every member writes the same one;
+the first entry for an identifier is kept. Node-local gateway URLs are not part of
+this index.
+
 Aeron's committed log is the apply authority. The dispatcher never filters committed
 commands using a locally synthesized HTTP leadership term: the term it compares is
 Aeron's `leadershipTermId`, applied in log order from `onNewLeadershipTermEvent`, so

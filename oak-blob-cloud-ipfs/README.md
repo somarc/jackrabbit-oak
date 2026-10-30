@@ -97,9 +97,16 @@ running a campaign; the inherited cache defaults are not a laptop test budget.
 
 ## Current boundaries
 
-- Persistent mappings survive backend restarts **against the same IPFS
-  repository**. Independent IPFS repositories are not automatically coordinated:
-  a blob can only be resolved through the repository and files root that stored it.
+- Persistent mappings survive backend restarts against the same IPFS
+  repository. Independent IPFS repositories share blobs only through a
+  `CidResolver` (`IPFSDataStore.setCidResolver`): a blob missing from the local
+  index is looked up there, recorded locally (mapping and attributes, no
+  retention link) and read through the local node, which fetches it from its
+  peers. `IPFSReplicatedReadTest` shows this across three private-swarm nodes.
+  The reading node does not pin what it fetches, so the binary remains as
+  available as the node that stored it.
+  Without a resolver, a blob can only be resolved through the repository and
+  files root that stored it.
 - Pinning is local to the configured endpoint. There is no module-level guarantee
   of replica count or cluster-wide placement.
 - An accepted/committed Oak mutation is not by itself proof that arbitrary remote
