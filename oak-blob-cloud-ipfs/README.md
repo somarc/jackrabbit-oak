@@ -188,6 +188,39 @@ peers, gateways and the swarm receive its ciphertext only.
 not contain the plaintext, that a second repository with the keys reads the
 binary through its CID alone, and that a wrong key or no key fails.
 
+## Operations
+
+**Health and metrics.** `IPFSDataStore.checkHealth()` calls the IPFS node (and
+the cluster, when configured) and reports reachability, latency, the encryption
+key id in use (never the key), the network check's findings and operation
+counts since startup. `getStatistics()` returns the counts alone without calling
+IPFS: writes, written bytes, reads, deletes, their failures, cluster pins, pin
+failures and the time spent waiting for replication. The consensus server shows
+them at `/v1/ops/ipfs/health`, a status summary in `/health/deep`, and as
+`oak_ipfs_*_total` counters at `/metrics`.
+
+**Retention check.** `verifyRetention(limit)` walks the local index and reports
+binaries held by fewer than `ipfsClusterReplicationMin` cluster peers, or,
+without a cluster, binaries stored through this node that lost their pin. It
+makes one or two IPFS calls per binary; run it with a limit and repeat. The
+consensus server exposes it at `/v1/ops/ipfs/verify?limit=`.
+
+**Runbook.**
+
+| Situation | Action |
+|---|---|
+| An IPFS node is lost | With a cluster, nothing is lost while `replicationMin` peers remain. Replace the node, let the cluster re-allocate (`ipfs-cluster-ctl recover --all` for pins in `pin_error`), then run the retention check. Without a cluster, binaries stored only there are gone; restore its repository. |
+| Writes fail with "cannot pin … on N peers" | Fewer healthy peers than `ipfsClusterReplicationMin`. Restore peers or lower the minimum deliberately; writes are refused rather than acknowledged under-replicated. |
+| Rotating the encryption key | Add the new key and make it `current` on every repository at once; keep the old key listed while any binary was written with it. There is no re-encryption of existing binaries. |
+| Reclaiming space after DataStore GC | Without a cluster, deletes unpin and Kubo's own GC (`ipfs repo gc`) reclaims blocks. With a shared cluster, deleted binaries stay pinned; unpin them in the cluster once no repository needs them, or set `ipfsClusterUnpinOnDelete` for a dedicated cluster. |
+| Startup refused by `ipfsNetworkPolicy=private` | The log lists each exposure. Fix the Kubo configuration (see [Private network](#private-network)) or, temporarily, use `warn`. |
+
+**Scale.** Identifier-to-CID mappings are cached for the latest 100,000
+binaries and read from the IPFS Files index beyond that. Enumeration for
+DataStore GC lists the whole index in one call and reads each binary's
+attributes with one call, so GC time grows linearly with the number of
+binaries.
+
 ## Current boundaries
 
 - Persistent mappings survive backend restarts against the same IPFS

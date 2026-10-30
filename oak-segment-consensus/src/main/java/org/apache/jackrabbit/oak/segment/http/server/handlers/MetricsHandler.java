@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
+import org.apache.jackrabbit.oak.segment.consensus.metrics.IpfsMetricsCollector;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.slf4j.Logger;
@@ -188,6 +189,8 @@ public class MetricsHandler {
      * Called before each metrics scrape to reflect current state.
      */
     private void updateDynamicMetrics() {
+        IpfsMetricsCollector.INSTANCE.source(() -> context == null ? null : context.ipfsDataStore());
+
         // Update leader status - check Aeron first, then Leader
         AeronConsensusEngine engine = currentAeronConsensusEngine();
         if (engine != null) {

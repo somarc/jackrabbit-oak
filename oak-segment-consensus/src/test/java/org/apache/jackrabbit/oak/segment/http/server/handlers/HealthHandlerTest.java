@@ -36,9 +36,11 @@ import java.io.StringWriter;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.nio.file.Paths;
 import java.util.Collections;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.*;
 
@@ -248,6 +250,36 @@ public class HealthHandlerTest {
 
     @Test
     public void testHandleDeepHealthHealthySubsystems() throws Exception {
+        assertDeepHealth(mock(org.apache.jackrabbit.oak.spi.blob.BlobStore.class), HttpServletResponse.SC_OK, true);
+    }
+
+    @Test
+    public void testDeepHealthIsDegradedWhenTheIpfsNodeIsDown() throws Exception {
+        org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfs =
+            mock(org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore.class);
+        when(ipfs.checkHealth()).thenReturn(Map.of("status", "DOWN",
+            "kubo", Map.of("status", "DOWN", "endpoint", "/ip4/10.0.0.5/tcp/5001"), "cluster", Map.of("configured", false)));
+        String json = assertDeepHealth(new org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore(ipfs),
+            HttpServletResponse.SC_SERVICE_UNAVAILABLE, false);
+
+        assertTrue(json, json.contains("\"ipfs\":{\"status\":\"DOWN\",\"kubo\":\"DOWN\",\"cluster\":\"NOT_CONFIGURED\"}"));
+        assertFalse("node addresses stay off the public route", json.contains("10.0.0.5"));
+    }
+
+    @Test
+    public void testDeepHealthReportsAHealthyIpfsCluster() throws Exception {
+        org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfs =
+            mock(org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore.class);
+        when(ipfs.checkHealth()).thenReturn(Map.of("status", "UP",
+            "kubo", Map.of("status", "UP"), "cluster", Map.of("configured", true, "status", "UP")));
+        String json = assertDeepHealth(new org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore(ipfs),
+            HttpServletResponse.SC_OK, true);
+
+        assertTrue(json, json.contains("\"ipfs\":{\"status\":\"UP\",\"kubo\":\"UP\",\"cluster\":\"UP\"}"));
+    }
+
+    private String assertDeepHealth(org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore, int status, boolean success)
+            throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
         Path storeDirectory = Files.createTempDirectory("health-deep-healthy");
@@ -262,7 +294,7 @@ public class HealthHandlerTest {
         context.registeredValidators.put("validator-1",
             new ValidatorRegistration("validator-1", "http://validator-1:8090"));
         context.blobStoreType = "ipfs";
-        context.blobStore = mock(org.apache.jackrabbit.oak.spi.blob.BlobStore.class);
+        context.blobStore = blobStore;
         context.cidMappingService = mock(org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService.class);
         context.setAuthoritativeNodeStore(mock(NodeStore.class));
         context.setShardingRuntimeConfig(ShardingRuntimeConfig.fromSpecs(
@@ -291,9 +323,9 @@ public class HealthHandlerTest {
         HealthHandler handler = newHandler(context);
         handler.handleDeepHealth(response);
 
-        verify(response).setStatus(HttpServletResponse.SC_OK);
+        verify(response).setStatus(status);
         String json = body.toString();
-        assertTrue(json.contains("\"success\":true"));
+        assertTrue(json.contains("\"success\":" + success));
         assertTrue(json.contains("\"mode\":\"aeron-cluster\""));
         assertTrue(json.contains("\"registeredClients\":1"));
         assertTrue(json.contains("\"registeredValidators\":1"));
@@ -304,7 +336,9 @@ public class HealthHandlerTest {
         assertTrue(json.contains("\"localPrefixes\":\"80-ff\""));
         assertTrue(json.contains("\"remoteMountCount\":2"));
         assertTrue(json.contains("\"authoritativeStoreSeparated\":true"));
-        assertTrue(json.matches("(?s).*\"overall\":\\{[^}]*\"status\":\"UP\"[^}]*}.*"));
+        assertTrue(json.matches("(?s).*\"overall\":\\{[^}]*\"status\":\"" + (success ? "UP" : "DEGRADED")
+            + "\"[^}]*}.*"));
+        return json;
     }
 
     @Test
