@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -52,10 +53,20 @@ public final class CanonicalGenesisContent {
     private static final String GENESIS_IMAGE_RESOURCE = "genesis-assets/do-it-live.jpeg";
     private static final String GENESIS_MESSAGE = "DO IT LIVE!";
     private static final String CHAIN_ID = "oak-blockchain-aem";
-    private static final String VERSION = "2.0.0";
+    private static final String VERSION = "2.1.0";
     private static final String IMAGE_SHA256 = "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442";
     private static final String GENESIS_WALLET_PATH = WalletPathUtil.getShardRoot(GENESIS_ADDRESS);
     private static final String CANONICAL_GENESIS_PATH = WalletPathUtil.getContentPath(GENESIS_ADDRESS) + "/genesis";
+    private static final String SHAPES_PATH = CANONICAL_GENESIS_PATH + "/shapes";
+
+    // Illustrative wallets for the shape examples: a brand and the counsel that reviews its claims.
+    private static final String EXAMPLE_BRAND_CONTENT =
+        WalletPathUtil.getContentPath("0x742d35cc6634c0532925a3b844bc9e7595f1b3e8", "acme");
+    private static final String EXAMPLE_COUNSEL_CONTENT =
+        WalletPathUtil.getContentPath("0x9b0e41c7d2a85f3e6b1940ad27c58e03f6d1b24a", "counsel");
+    private static final String EXAMPLE_CLAIM_PATH = EXAMPLE_BRAND_CONTENT + "/claims/recycled-bottle";
+    private static final String EXAMPLE_ASSET_PATH = EXAMPLE_BRAND_CONTENT + "/assets/bottle-hero";
+    private static final String EXAMPLE_REPORT_PATH = EXAMPLE_BRAND_CONTENT + "/assets/lca-report-2025";
 
     private final NodeStore nodeStore;
 
@@ -227,12 +238,14 @@ public final class CanonicalGenesisContent {
         genesis.setProperty("genesisValidatorRole", "Lexicographically first configured HTTP endpoint, not an Aeron member-ID or ingress-caller claim.");
         genesis.setProperty("canonicalGenesisPath", CANONICAL_GENESIS_PATH);
         genesis.setProperty("walletNamespaceContract", "The wallet namespace boundary is the only enforced content contract today.");
-        genesis.setProperty("contentShapePolicy", "Below /content the structure is intentionally evolving; treat it as living protocol surface, not a frozen taxonomy.");
-        genesis.setProperty("startHere", "Read protocol, content-contract, architecture, api, and getting-started before writing clients.");
+        genesis.setProperty("contentShapePolicy", "Records below /content follow the shapes published at " + SHAPES_PATH
+            + ". Pages stay at the edge and cite records.");
+        genesis.setProperty("startHere", "Read protocol, content-contract, shapes, architecture, api, and getting-started before writing clients.");
         genesis.setProperty("governedSurface", "/v1/index");
 
         populateProtocol(genesis, normalizedTimestamp, genesisDate, genesisValidator, genesisHost);
         populateContentContract(genesis);
+        populateShapes(genesis);
         populateGettingStarted(genesis, genesisHost);
         populateApi(genesis);
         populateExamples(genesis);
@@ -274,11 +287,237 @@ public final class CanonicalGenesisContent {
         contract.setProperty("enforcedBoundary",
             "Only the wallet namespace /oak-chain/{L1}/{L2}/{L3}/{wallet} is structurally enforced.");
         contract.setProperty("contentRootPattern", "/oak-chain/{L1}/{L2}/{L3}/{wallet}/content");
-        contract.setProperty("contentShapeStatus", "Below /content the shape is intentionally open and may evolve.");
-        contract.setProperty("guidance", "Treat subtree conventions as living protocol material published by code, not a frozen schema.");
+        contract.setProperty("contentShapeStatus",
+            "Below /content, records follow the shapes published at genesis/shapes. The validator enforces only the wallet namespace today.");
+        contract.setProperty("guidance", "Shapes are published by code in genesis and change only with a new genesis version.");
+        contract.setProperty("shapes", SHAPES_PATH);
         contract.setProperty("genesisRole", "Genesis is the starting node for cluster joiners, operators, and the future CLI.");
         contract.setProperty("genesisWallet", WalletPathUtil.getShardRoot(GENESIS_ADDRESS));
         contract.setProperty("genesisReservation", "The zero-wallet subtree and its ancestors cannot be changed by ordinary mutations.");
+    }
+
+    /**
+     * The content shapes, written as data. Each shape declares its fields and carries an
+     * {@code example} child that is itself a well-formed record of that shape.
+     */
+    private void populateShapes(NodeBuilder genesis) {
+        NodeBuilder shapes = node(genesis, "shapes");
+        shapes.setProperty("jcr:title", "Content Shapes");
+        shapes.setProperty("jcr:description",
+            "What wallets write below /content. Oak Chain holds records: small, typed statements that someone may have to prove later. "
+                + "Pages, layout, and drafts stay at the edge; pages cite records.");
+        shapes.setProperty("pathPattern", "/oak-chain/{L1}/{L2}/{L3}/{wallet}[/{organization}]/content/{collection}/{name}");
+        shapes.setProperty("fieldTypes", "String, String[], Long, Boolean, Date (ISO-8601, UTC)");
+        shapes.setProperty("howToRead",
+            "Every shape lists its fields and carries an example that is itself a well-formed record. The example is the specification.");
+        shapes.setProperty("test-1", "Will someone later ask who said this, when, and whether this is the exact version?");
+        shapes.setProperty("test-2", "Does more than one party, system, or agent rely on it?");
+        shapes.setProperty("test-3", "Is it referred to by identity rather than by where it sits on a page?");
+        shapes.setProperty("test-4", "Is it small and structured, or the hash of something large?");
+        shapes.setProperty("verdict", "Yes to these makes a record. Anything else belongs at the edge.");
+
+        populateRecordContract(shapes);
+        populateClaimShape(shapes);
+        populateAttestationShape(shapes);
+        populateAssetShape(shapes);
+        populateReceiptShape(shapes);
+
+        NodeBuilder notRecords = node(shapes, "not-records");
+        notRecords.setProperty("jcr:title", "Not Records");
+        notRecords.setProperty("pages", "Pages, navigation, layout, and styling belong to the edge. A page cites records; a receipt proves what it showed.");
+        notRecords.setProperty("drafts", "Work in progress stays in authoring. Write a record when the organization is ready to stand behind it.");
+        notRecords.setProperty("personalData", "Personal data stays off chain: erasing it would mean deleting the trail.");
+        notRecords.setProperty("telemetry", "Analytics, events, and logs are high-volume and nobody signs them; they are not records.");
+
+        NodeBuilder today = node(shapes, "today");
+        today.setProperty("jcr:title", "What the Validator Does Today");
+        today.setProperty("jcr:description",
+            "The shapes bind clients and readers now. These are the places where the validator has not caught up.");
+        today.setProperty("write",
+            "Every write creates one flat node named {contentType}-{millis}-{proposalId prefix} directly under content. "
+                + "Collections and client-chosen names are not accepted yet.");
+        today.setProperty("fields",
+            "Send fields in message as JSON {\"title\": ..., \"payload\": {...}}. The title is stored as oak:title and the payload "
+                + "as the JSON string oak:payloadJson, not as typed properties.");
+        today.setProperty("signature",
+            "The write signature covers message only: it covers the fields but not contentType or organization. "
+                + "A shaped write must be signed over wallet, path, contentType, and fields.");
+        today.setProperty("validation", "contentType and fields are not validated. Clients validate before writing; readers validate before trusting.");
+        today.setProperty("reads",
+            "There is no content query, and /v1/wallets/content omits organization content. Follow /v1/events/stream?organizations=... "
+                + "and build indexes outside the validator.");
+    }
+
+    private static void populateRecordContract(NodeBuilder shapes) {
+        NodeBuilder record = node(shapes, "record");
+        record.setProperty("jcr:title", "Every Record");
+        record.setProperty("jcr:description", "Fields, names, references, and rules shared by every shape.");
+        record.setProperty("immutable", "Records are never edited in place. A revision is a new record that names its predecessor in supersedes.");
+        record.setProperty("withdrawal", "A record is withdrawn when its own wallet attests verdict=withdrawn about it.");
+        record.setProperty("current",
+            "A record is current when no record supersedes it and it has not been withdrawn. Readers derive this; nothing stores it.");
+        record.setProperty("names", "Collections and names use lowercase letters, digits, and hyphens: ^[a-z0-9][a-z0-9-]{0,63}$");
+        record.setProperty("references", "A reference is an absolute record path. Pin a version by also storing the oak:proposalId that wrote it.");
+        record.setProperty("crossWallet", "Records may reference any wallet. Writes never leave the writer's own namespace.");
+        record.setProperty("binaries", "Bytes are identified by SHA-256. Storage locations and gateway URLs are not identity.");
+        record.setProperty("deletion",
+            "Delete is hard removal and erases the trail. Reserve it for content that must not exist; withdraw everything else.");
+        record.setProperty("reservedNames",
+            List.of("wallet", "organization", "signature", "timestamp", "source", "message", "oak:proposalId"), Type.STRINGS);
+        record.setProperty("reservedPrefixes", List.of("oak:", "jcr:"), Type.STRINGS);
+        record.setProperty("reservedNote",
+            "The validator stamps the reserved names on every write. Shape fields never reuse them or the reserved prefixes, except jcr:title.");
+
+        NodeBuilder fields = node(record, "fields");
+        field(fields, "contentType", "String", true, "The shape name, sent as the write's contentType.",
+            List.of("claim", "attestation", "asset", "receipt"));
+        field(fields, "shapeVersion", "Long", true, "Version of the shape the record follows. Currently 1.");
+        field(fields, "jcr:title", "String", false, "Human label.");
+        field(fields, "supersedes", "String", false, "Path of the record this one replaces.");
+    }
+
+    private static void populateClaimShape(NodeBuilder shapes) {
+        NodeBuilder claim = shape(shapes, "claim", "Claim", "claims",
+            "A statement an organization stands behind and may have to prove: product claims, regulated disclosures, "
+                + "safety information, pricing terms, policy and AI-use statements.",
+            EXAMPLE_CLAIM_PATH);
+        claim.setProperty("edge", "Pages show the statement verbatim with its as-of date. A superseded, withdrawn, or expired claim never renders as current.");
+
+        NodeBuilder fields = node(claim, "fields");
+        field(fields, "statement", "String", true, "Exact wording, as published.");
+        field(fields, "locale", "String", true, "BCP 47 language tag, for example en-US.");
+        field(fields, "effectiveFrom", "Date", true, "When the statement starts to apply.");
+        field(fields, "effectiveUntil", "Date", false, "When it stops applying.");
+        field(fields, "jurisdictions", "String[]", false, "ISO 3166 codes where the statement is made.");
+        field(fields, "about", "String", false, "What the statement is about: a product identifier, a URL, or a record path.");
+        field(fields, "evidence", "String[]", false, "Paths of records or assets that support the statement.");
+
+        NodeBuilder example = example(claim, "claim", "Recycled bottle");
+        example.setProperty("statement", "The bottle is made from 100% recycled plastic, excluding the cap and label.");
+        example.setProperty("locale", "en-US");
+        example.setProperty("effectiveFrom", "2026-01-01T00:00:00.000Z", Type.DATE);
+        example.setProperty("jurisdictions", List.of("US", "CA"), Type.STRINGS);
+        example.setProperty("about", "sku:ACME-WB-750");
+        example.setProperty("evidence", List.of(EXAMPLE_REPORT_PATH), Type.STRINGS);
+    }
+
+    private static void populateAttestationShape(NodeBuilder shapes) {
+        NodeBuilder attestation = shape(shapes, "attestation", "Attestation", "attestations",
+            "One wallet's verdict on a specific version of another record: legal approval, regulatory review, delivery, acceptance, "
+                + "audit. It lives in the attester's namespace and points at its subject.",
+            EXAMPLE_COUNSEL_CONTENT + "/attestations/acme-recycled-bottle");
+        attestation.setProperty("pinning", "An attestation applies only while its subject still carries subjectProposalId.");
+
+        NodeBuilder fields = node(attestation, "fields");
+        field(fields, "subject", "String", true, "Path of the record attested.");
+        field(fields, "subjectProposalId", "String", true, "oak:proposalId of the subject version being attested.");
+        field(fields, "verdict", "String", true, "The decision. Only the subject's own wallet may withdraw.",
+            List.of("approved", "rejected", "withdrawn"));
+        field(fields, "role", "String", true, "Capacity of the attester, for example legal-review, regulatory-review, delivery, acceptance.");
+        field(fields, "note", "String", false, "Reasoning or scope, in a sentence or two.");
+        field(fields, "validUntil", "Date", false, "When the verdict lapses.");
+
+        NodeBuilder example = example(attestation, "attestation", "Legal review: recycled bottle");
+        example.setProperty("subject", EXAMPLE_CLAIM_PATH);
+        example.setProperty("subjectProposalId", "0x5e4a1c0b9d8f7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a");
+        example.setProperty("verdict", "approved");
+        example.setProperty("role", "legal-review");
+        example.setProperty("note", "Substantiated by the 2025 life-cycle assessment.");
+        example.setProperty("validUntil", "2026-12-31T23:59:59.000Z", Type.DATE);
+    }
+
+    private static void populateAssetShape(NodeBuilder shapes) {
+        NodeBuilder asset = shape(shapes, "asset", "Asset", "assets",
+            "Identity and usage rights for a binary. The edge delivers the bytes; the record says what they are and who may use them, "
+                + "where, and until when.",
+            EXAMPLE_ASSET_PATH);
+        asset.setProperty("bytes",
+            "A write may carry the bytes or an IPFS CID. The validator then also stamps jcr:data, jcr:mimeType, and ipfsCid; sha256 must match.");
+
+        NodeBuilder fields = node(asset, "fields");
+        field(fields, "sha256", "String", true, "SHA-256 of the bytes, lowercase hex.");
+        field(fields, "mimeType", "String", true, "Media type, for example image/jpeg.");
+        field(fields, "byteSize", "Long", true, "Size in bytes.");
+        field(fields, "origin", "String", true, "How the bytes were made.",
+            List.of("captured", "designed", "ai-generated", "ai-edited"));
+        field(fields, "license", "String", true, "SPDX license identifier, or a LicenseRef- identifier the owner defines.");
+        field(fields, "territories", "String[]", false, "ISO 3166 codes where use is allowed. Absent means unrestricted.");
+        field(fields, "channels", "String[]", false, "Where use is allowed, for example web, social, print, broadcast.");
+        field(fields, "usageUntil", "Date", false, "When the right to use ends.");
+        field(fields, "credit", "String", false, "Attribution line, exactly as it must appear.");
+
+        NodeBuilder example = example(asset, "asset", "Bottle hero image");
+        example.setProperty("sha256", "c3a17be2904d5f6e18a3b7c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f7a8b9c0d");
+        example.setProperty("mimeType", "image/jpeg");
+        example.setProperty("byteSize", 482113L);
+        example.setProperty("origin", "ai-edited");
+        example.setProperty("license", "LicenseRef-acme-brand");
+        example.setProperty("territories", List.of("US", "CA"), Type.STRINGS);
+        example.setProperty("channels", List.of("web", "social"), Type.STRINGS);
+        example.setProperty("usageUntil", "2027-12-31T23:59:59.000Z", Type.DATE);
+        example.setProperty("credit", "Acme Studio");
+    }
+
+    private static void populateReceiptShape(NodeBuilder shapes) {
+        NodeBuilder receipt = shape(shapes, "receipt", "Publication Receipt", "receipts",
+            "Proof that a URL served exact content at a time, and which records it showed. The page stays at the edge; "
+                + "the receipt is the record.",
+            EXAMPLE_BRAND_CONTENT + "/receipts/2026-03-02-3f1c9a7e52b0");
+        receipt.setProperty("naming", "Name receipts {yyyy-mm-dd}-{first 12 hex of contentSha256}.");
+        receipt.setProperty("writer", "A publish step writes the receipt after the edge serves the new version.");
+
+        NodeBuilder fields = node(receipt, "fields");
+        field(fields, "url", "String", true, "The published URL.");
+        field(fields, "representation", "String", true, "Which bytes were hashed.",
+            List.of("plain-html", "markdown", "pdf", "json"));
+        field(fields, "contentSha256", "String", true, "SHA-256 of that representation, lowercase hex.");
+        field(fields, "publishedAt", "Date", true, "When the edge started serving it.");
+        field(fields, "cites", "String[]", false, "Paths of the records the page displayed.");
+        field(fields, "sourceRef", "String", false, "Authoring revision, for example a git commit or document version.");
+
+        NodeBuilder example = example(receipt, "receipt", "Published: water bottle page");
+        example.setProperty("url", "https://www.acme.example/products/water-bottle");
+        example.setProperty("representation", "plain-html");
+        example.setProperty("contentSha256", "3f1c9a7e52b0d4e6f8a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e2f4a6b8c0d1e3");
+        example.setProperty("publishedAt", "2026-03-02T15:04:05.000Z", Type.DATE);
+        example.setProperty("cites", List.of(EXAMPLE_CLAIM_PATH, EXAMPLE_ASSET_PATH), Type.STRINGS);
+        example.setProperty("sourceRef", "git:5c1e9a2");
+    }
+
+    private static NodeBuilder shape(NodeBuilder shapes, String name, String title, String collection, String purpose, String examplePath) {
+        NodeBuilder shape = node(shapes, name);
+        shape.setProperty("jcr:title", title);
+        shape.setProperty("purpose", purpose);
+        shape.setProperty("collection", collection);
+        shape.setProperty("shapeVersion", 1L);
+        shape.setProperty("examplePath", examplePath);
+        return shape;
+    }
+
+    private static NodeBuilder example(NodeBuilder shape, String contentType, String title) {
+        NodeBuilder example = node(shape, "example");
+        example.setProperty("contentType", contentType);
+        example.setProperty("shapeVersion", 1L);
+        example.setProperty("jcr:title", title);
+        return example;
+    }
+
+    private static void field(NodeBuilder fields, String name, String type, boolean required, String description) {
+        NodeBuilder field = node(fields, name);
+        field.setProperty("type", type);
+        field.setProperty("required", required);
+        field.setProperty("description", description);
+    }
+
+    private static void field(NodeBuilder fields, String name, String type, boolean required, String description, List<String> allowedValues) {
+        field(fields, name, type, required, description);
+        fields.getChildNode(name).setProperty("allowedValues", allowedValues, Type.STRINGS);
+    }
+
+    private static NodeBuilder node(NodeBuilder parent, String name) {
+        NodeBuilder child = parent.child(name);
+        child.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        return child;
     }
 
     private void populateGettingStarted(NodeBuilder genesis, String genesisHost) {
@@ -335,6 +574,7 @@ public final class CanonicalGenesisContent {
         writeFlow.setProperty("step-3", "202 means accepted, not committed. Poll /v1/ops/operations/{proposalId} until state=COMMITTED.");
         writeFlow.setProperty("step-4", "Inspect queue and adaptive release state via /v1/proposals/queue/stats and /v1/proposals/release-flow.");
         writeFlow.setProperty("note", "The validator allocates the resulting storage path under your wallet namespace.");
+        writeFlow.setProperty("shape", "Set contentType to a shape from " + SHAPES_PATH + " and send its fields as shapes/today describes.");
 
         NodeBuilder readWallet = gettingStarted.child("6-read-wallet");
         readWallet.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
@@ -442,9 +682,10 @@ public final class CanonicalGenesisContent {
         readOrder.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
         readOrder.setProperty("step-1", "protocol");
         readOrder.setProperty("step-2", "content-contract");
-        readOrder.setProperty("step-3", "architecture");
-        readOrder.setProperty("step-4", "api");
-        readOrder.setProperty("step-5", "getting-started");
+        readOrder.setProperty("step-3", "shapes");
+        readOrder.setProperty("step-4", "architecture");
+        readOrder.setProperty("step-5", "api");
+        readOrder.setProperty("step-6", "getting-started");
     }
 
     private void populateArchitecture(NodeBuilder genesis) {
@@ -463,11 +704,12 @@ public final class CanonicalGenesisContent {
 
         NodeBuilder paths = architecture.child("wallet-scoped-paths");
         paths.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
-        paths.setProperty("pattern", "/oak-chain/{shard-level-1}/{shard-level-2}/{shard-level-3}/{wallet}/content/{path}");
-        paths.setProperty("example", "/oak-chain/74/2d/35/0x742d35Cc6634C0532925a3b844Bc9e7595f1b3E8/content/my-page");
+        paths.setProperty("pattern",
+            "/oak-chain/{shard-level-1}/{shard-level-2}/{shard-level-3}/{wallet}[/{organization}]/content/{collection}/{name}");
+        paths.setProperty("example", EXAMPLE_CLAIM_PATH);
         paths.setProperty("genesis", CANONICAL_GENESIS_PATH);
         paths.setProperty("sharding", "First 3 bytes of wallet address create the 3-level directory structure");
-        paths.setProperty("contract", "The wallet namespace is enforced; subtree structure below /content is intentionally flexible.");
+        paths.setProperty("contract", "The wallet namespace is enforced; records below /content follow genesis/shapes.");
 
         NodeBuilder consensus = architecture.child("consensus");
         consensus.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
