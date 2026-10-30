@@ -113,6 +113,17 @@ final class DefaultIpfsClient implements IpfsClient {
     }
 
     @Override
+    public String config() throws Exception {
+        return text("config/show", "");
+    }
+
+    @Override
+    public List<String> swarmListenAddresses() throws Exception {
+        return IpfsNetworkPosture.strings(
+            JsonObject.fromJson(text("swarm/addrs/listen", ""), true).getProperties().get("Strings"));
+    }
+
+    @Override
     public void pinRemove(String cid) throws Exception {
         text("pin/rm", query("arg", cid));
     }

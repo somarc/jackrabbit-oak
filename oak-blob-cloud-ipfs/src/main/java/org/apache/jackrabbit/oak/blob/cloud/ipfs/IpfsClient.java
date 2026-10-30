@@ -97,4 +97,18 @@ interface IpfsClient {
      * path.
      */
     long fileSize(String path) throws Exception;
+
+    /**
+     * Returns the node's configuration as JSON. Kubo leaves out its private key.
+     */
+    default String config() throws Exception {
+        throw new UnsupportedOperationException("config");
+    }
+
+    /**
+     * Returns the multiaddrs the node's swarm listens on.
+     */
+    default List<String> swarmListenAddresses() throws Exception {
+        throw new UnsupportedOperationException("swarmListenAddresses");
+    }
 }
