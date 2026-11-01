@@ -27,11 +27,13 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
+import org.apache.jackrabbit.oak.segment.consensus.mount.FederatedReadView;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -76,6 +78,11 @@ final class ServerInfrastructureInitializer {
         SegmentHttpServer httpServer = initializeHttpServer(storeDir, port, aeronConfig, componentFactory,
             blobStore, blobStoreType, fileStore, readViewNodeStore, authoritativeNodeStore, storageRuntime.remoteMounts(),
             gcCostEstimator);
+        if (readViewResources instanceof FederatedReadView) {
+            ServerContext context = httpServer.getContext();
+            ((FederatedReadView) readViewResources).start(FederationConfig.pollMsFromRuntime(),
+                mounts -> context.remoteMounts = mounts);
+        }
         FragmentationTracker fragmentationTracker = initializeFragmentationTracker(httpServer, componentFactory);
         initializeGcConsensusSupport(httpServer, aeronConfig, componentFactory, fileStore, gcCostEstimator,
             fragmentationTracker);

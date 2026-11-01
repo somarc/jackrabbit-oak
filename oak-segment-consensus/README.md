@@ -217,6 +217,26 @@ rather than "not found", and the all-wallets listing is marked `partial`.
 available, circuit, revision, last refresh, last error) together with
 `sharding.configDigest`, which is identical on validators configured alike.
 
+Once a federation directory is committed, it replaces those static routes: each
+namespace of every `ACTIVE` enterprise other than the local charter's is mounted
+read-only at its address root (`/oak-chain/XX/YY/ZZ/0x<address>`); local and
+unclaimed paths stay on the local store. Reads use the first of the enterprise's
+listed endpoints whose `GET /v1/federation` reports the entry's `enterpriseId`
+(and `clusterId`, when the entry pins one), whose breaker is closed and that is
+connected, and fall over in order; an endpoint is checked again after its breaker
+resets. The validator polls the committed directory every `oak.federation.pollMs`,
+rebuilds the read view when it changes and swaps it in place. `/health` then
+reports `sharding.mountSource: directory`, the `directoryEpoch`, and per mount
+the `enterpriseId`, `namespaces`, `endpoints`, `activeEndpoint` and `verified`.
+
+Each remote enterprise is one Oak mount listing all of its namespace roots.
+Oak's `SimpleMountInfoProvider` resolves a path by scanning every mount, and a
+composite root reads every mount's root, so both costs grow with the number of
+remote enterprises; within one mount the lookup is a sorted-set search over its
+namespace roots. Listing the children of a node above a mounted namespace (`/`,
+`/oak-chain` or a shard level) still scans every mounted namespace root once
+(`MountInfo.isDirectlyUnder`), linear in the total number of remote namespaces.
+
 ## Build and test
 
 ```sh

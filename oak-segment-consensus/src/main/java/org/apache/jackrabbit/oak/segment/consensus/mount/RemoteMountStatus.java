@@ -19,13 +19,16 @@ package org.apache.jackrabbit.oak.segment.consensus.mount;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Point-in-time state of one remote endpoint that backs read-only mounts.
  * {@code available} is false until the endpoint has connected, and whenever
- * its most recent connect or refresh attempt failed.
+ * its most recent connect or refresh attempt failed. {@code federation} is set for mounts derived from the
+ * committed federation directory and null for static routes.
  */
 public record RemoteMountStatus(@NotNull String endpoint,
                                 @NotNull String prefixes,
@@ -34,7 +37,39 @@ public record RemoteMountStatus(@NotNull String endpoint,
                                 @NotNull String circuit,
                                 @Nullable String revision,
                                 @Nullable Long lastRefreshAt,
-                                @Nullable String lastError) {
+                                @Nullable String lastError,
+                                @Nullable Federation federation) {
+
+    public RemoteMountStatus(@NotNull String endpoint, @NotNull String prefixes, boolean connected, boolean available,
+                             @NotNull String circuit, @Nullable String revision, @Nullable Long lastRefreshAt,
+                             @Nullable String lastError) {
+        this(endpoint, prefixes, connected, available, circuit, revision, lastRefreshAt, lastError, null);
+    }
+
+    /** The remote enterprise behind a directory-derived mount and the directory epoch the mount set was built from. */
+    public record Federation(@NotNull String enterpriseId,
+                             @NotNull List<String> namespaces,
+                             @NotNull List<EndpointState> endpoints,
+                             @Nullable String activeEndpoint,
+                             boolean verified,
+                             long directoryEpoch) {
+    }
+
+    /** One of the enterprise's endpoints, in failover order. */
+    public record EndpointState(@NotNull String url, boolean verified, @NotNull String circuit, boolean connected,
+                                boolean available, @Nullable String lastError) {
+
+        Map<String, Object> toMap() {
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("url", url);
+            map.put("verified", verified);
+            map.put("circuit", circuit);
+            map.put("connected", connected);
+            map.put("available", available);
+            map.put("lastError", lastError);
+            return map;
+        }
+    }
 
     @NotNull
     public Map<String, Object> toMap() {
@@ -47,6 +82,16 @@ public record RemoteMountStatus(@NotNull String endpoint,
         map.put("revision", revision);
         map.put("lastRefreshAt", lastRefreshAt);
         map.put("lastError", lastError);
+        if (federation != null) {
+            map.put("enterpriseId", federation.enterpriseId());
+            map.put("namespaces", federation.namespaces());
+            List<Map<String, Object>> endpoints = new ArrayList<>();
+            federation.endpoints().forEach(state -> endpoints.add(state.toMap()));
+            map.put("endpoints", endpoints);
+            map.put("activeEndpoint", federation.activeEndpoint());
+            map.put("verified", federation.verified());
+            map.put("directoryEpoch", federation.directoryEpoch());
+        }
         return map;
     }
 }

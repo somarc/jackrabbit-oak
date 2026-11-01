@@ -50,8 +50,7 @@ public final class FederationConfig {
     public static FederationConfig fromRuntime() {
         String enterpriseId = read("oak.federation.enterpriseId", "OAK_FEDERATION_ENTERPRISE_ID", "");
         String file = read("oak.federation.directoryFile", "OAK_FEDERATION_DIRECTORY_FILE", "");
-        long pollMs = Math.max(1000L,
-            RuntimeConfigValueResolver.readLong("oak.federation.pollMs", DEFAULT_POLL_MS));
+        long pollMs = pollMsFromRuntime();
         Charter charter = null;
         if (!enterpriseId.isEmpty()) {
             String mode = read("oak.federation.mode", "OAK_FEDERATION_MODE",
@@ -63,6 +62,11 @@ public final class FederationConfig {
             charter = Charter.of(enterpriseId, mode, chainId, registry);
         }
         return new FederationConfig(charter, file.isEmpty() ? null : Paths.get(file), pollMs);
+    }
+
+    /** {@code oak.federation.pollMs}, at least one second. */
+    public static long pollMsFromRuntime() {
+        return Math.max(1000L, RuntimeConfigValueResolver.readLong("oak.federation.pollMs", DEFAULT_POLL_MS));
     }
 
     static long defaultChainId(String mode) {

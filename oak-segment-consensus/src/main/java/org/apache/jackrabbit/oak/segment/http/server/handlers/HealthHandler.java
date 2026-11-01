@@ -733,7 +733,6 @@ public class HealthHandler {
 
         sharding.put("enabled", context.shardingRuntimeConfig.isEnabled());
         sharding.put("localPrefixes", context.shardingRuntimeConfig.describeLocalRanges());
-        sharding.put("remoteMountCount", context.shardingRuntimeConfig.expandRemoteReadOnlyMounts().size());
         sharding.put(
             "authoritativeStoreSeparated",
             context.authoritativeNodeStore != null && context.authoritativeNodeStore != context.nodeStore
@@ -742,12 +741,21 @@ public class HealthHandler {
 
         List<Map<String, Object>> remoteMounts = new ArrayList<>();
         int available = 0;
+        int namespaces = 0;
         for (RemoteMountStatus status : context.remoteMounts.statuses()) {
             remoteMounts.add(status.toMap());
             if (status.available()) {
                 available++;
             }
+            if (status.federation() != null) {
+                namespaces += status.federation().namespaces().size();
+            }
         }
+        boolean fromDirectory = context.remoteMounts.fromDirectory();
+        sharding.put("mountSource", fromDirectory ? "directory" : "static");
+        sharding.put("directoryEpoch", fromDirectory ? context.remoteMounts.directoryEpoch() : null);
+        sharding.put("remoteMountCount", fromDirectory ? namespaces
+            : context.shardingRuntimeConfig.expandRemoteReadOnlyMounts().size());
         sharding.put("remoteEndpointCount", remoteMounts.size());
         sharding.put("remoteEndpointsAvailable", available);
         sharding.put("remoteMounts", remoteMounts);

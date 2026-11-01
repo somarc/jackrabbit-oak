@@ -38,21 +38,40 @@ public final class RemoteMounts {
         new RemoteMounts(Mounts.defaultMountInfoProvider(), Map.of(), List.of());
 
     private final MountInfoProvider mountInfoProvider;
-    private final Map<String, Endpoint> endpointsByMountName;
-    private final List<Endpoint> endpoints;
+    private final Map<String, StatusSource> endpointsByMountName;
+    private final List<StatusSource> endpoints;
+    private final long directoryEpoch;
 
     RemoteMounts(@NotNull MountInfoProvider mountInfoProvider,
-                 @NotNull Map<String, Endpoint> endpointsByMountName,
-                 @NotNull List<Endpoint> endpoints) {
+                 @NotNull Map<String, ? extends StatusSource> endpointsByMountName,
+                 @NotNull List<? extends StatusSource> endpoints) {
+        this(mountInfoProvider, endpointsByMountName, endpoints, -1L);
+    }
+
+    RemoteMounts(@NotNull MountInfoProvider mountInfoProvider,
+                 @NotNull Map<String, ? extends StatusSource> endpointsByMountName,
+                 @NotNull List<? extends StatusSource> endpoints,
+                 long directoryEpoch) {
         this.mountInfoProvider = mountInfoProvider;
         this.endpointsByMountName = Map.copyOf(endpointsByMountName);
         this.endpoints = List.copyOf(endpoints);
+        this.directoryEpoch = directoryEpoch;
+    }
+
+    /** True when these mounts were derived from a committed federation directory rather than static routes. */
+    public boolean fromDirectory() {
+        return directoryEpoch >= 0L;
+    }
+
+    /** The epoch of the directory these mounts were derived from, or -1 for static routes. */
+    public long directoryEpoch() {
+        return directoryEpoch;
     }
 
     @NotNull
     public List<RemoteMountStatus> statuses() {
         List<RemoteMountStatus> statuses = new ArrayList<>(endpoints.size());
-        for (Endpoint endpoint : endpoints) {
+        for (StatusSource endpoint : endpoints) {
             statuses.add(endpoint.status());
         }
         return statuses;
@@ -69,7 +88,7 @@ public final class RemoteMounts {
         if (mount.isDefault()) {
             return null;
         }
-        Endpoint endpoint = endpointsByMountName.get(mount.getName());
+        StatusSource endpoint = endpointsByMountName.get(mount.getName());
         if (endpoint == null) {
             return null;
         }
@@ -77,8 +96,14 @@ public final class RemoteMounts {
         return status.available() ? null : status;
     }
 
-    record Endpoint(@NotNull String url, @NotNull String prefixes, @NotNull NodeStore store) {
-        RemoteMountStatus status() {
+    @FunctionalInterface
+    interface StatusSource {
+        RemoteMountStatus status();
+    }
+
+    record Endpoint(@NotNull String url, @NotNull String prefixes, @NotNull NodeStore store) implements StatusSource {
+        @Override
+        public RemoteMountStatus status() {
             if (store instanceof LazyHttpNodeStore lazy) {
                 return lazy.status(prefixes);
             }

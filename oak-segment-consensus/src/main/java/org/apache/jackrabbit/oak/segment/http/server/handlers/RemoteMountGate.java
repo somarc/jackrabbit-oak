@@ -45,9 +45,11 @@ final class RemoteMountGate {
         if (status == null) {
             return false;
         }
+        String source = status.federation() != null
+            ? "Remote enterprise " + status.federation().enterpriseId()
+            : "Remote cluster " + status.endpoint() + " serving prefixes " + status.prefixes();
         ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, CODE,
-            "Remote cluster " + status.endpoint() + " serving prefixes " + status.prefixes()
-                + " is unavailable: " + status.lastError());
+            source + " is unavailable: " + status.lastError());
         return true;
     }
 

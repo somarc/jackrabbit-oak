@@ -343,6 +343,42 @@ public class HealthHandlerTest {
     }
 
     @Test
+    public void testHealthReportsDirectoryDerivedMounts() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        Path storeDirectory = Files.createTempDirectory("health-directory-mounts");
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString10()).thenReturn("0123456789abcdef0123456789");
+        NodeStore nodeStore = mock(NodeStore.class);
+        when(nodeStore.getRoot()).thenReturn(mock(NodeState.class));
+        ServerContext context = new ServerContext(fileStore, nodeStore, storeDirectory, "http://localhost:8090");
+        context.setShardingRuntimeConfig(ShardingRuntimeConfig.fromSpecs(true, "00-55", "56-ff=http://127.0.0.1:8190"));
+        RemoteMounts remoteMounts = mock(RemoteMounts.class);
+        when(remoteMounts.fromDirectory()).thenReturn(true);
+        when(remoteMounts.directoryEpoch()).thenReturn(7L);
+        String enterprise = "0x" + "b".repeat(64);
+        when(remoteMounts.statuses()).thenReturn(List.of(new RemoteMountStatus("http://b1:8190", "0xn1,0xn2", true,
+            true, "CLOSED", "rev-3", 1700000000000L, null,
+            new RemoteMountStatus.Federation(enterprise, List.of("0xn1", "0xn2"), List.of(
+                new RemoteMountStatus.EndpointState("http://b0:8190", false, "OPEN", false, false, "circuit open"),
+                new RemoteMountStatus.EndpointState("http://b1:8190", true, "CLOSED", true, true, null)),
+                "http://b1:8190", true, 7L))));
+        context.remoteMounts = remoteMounts;
+
+        newHandler(context).handleHealth(response);
+
+        String json = body.toString();
+        assertTrue(json.contains("\"mountSource\":\"directory\""));
+        assertTrue(json.contains("\"remoteMountCount\":2"));
+        assertTrue(json.contains("\"enterpriseId\":\"" + enterprise + "\""));
+        assertTrue(json.contains("\"activeEndpoint\":\"http://b1:8190\""));
+        assertTrue(json.contains("\"verified\":true"));
+        assertTrue(json.contains("\"directoryEpoch\":7"));
+        assertTrue(json.contains("\"namespaces\":[\"0xn1\",\"0xn2\"]"));
+        assertTrue(json.contains("\"lastError\":\"circuit open\""));
+    }
+
+    @Test
     public void testHandleDeepHealthDegradedSubsystemsAndMediaDriver() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);

@@ -380,6 +380,11 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
         return delegate.get() != null;
     }
 
+    /** Connected and the most recent connect or refresh succeeded. */
+    public boolean isAvailable() {
+        return delegate.get() != null && lastError == null;
+    }
+
     /**
      * Current state of this endpoint for health reporting and read gating.
      *
@@ -428,7 +433,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
         );
     }
 
-    private static NodeStore createRemoteNodeStore(
+    static NodeStore createRemoteNodeStore(
             String endpoint,
             String mountName,
             long connectTimeoutMs,
