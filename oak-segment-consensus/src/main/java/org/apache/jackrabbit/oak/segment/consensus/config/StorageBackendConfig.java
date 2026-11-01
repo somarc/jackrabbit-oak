@@ -49,8 +49,20 @@ public final class StorageBackendConfig {
 
     private final BlobBackend blobBackend;
 
-    // ipfs (legacy)
+    // ipfs
     private final String blobIpfsEndpoint;
+    private final String blobIpfsAuthorization; // null = none; never logged
+    private final int blobIpfsConnectTimeoutMs;
+    private final int blobIpfsRequestTimeoutMs;
+    private final int blobIpfsMaxAttempts;
+    private final String blobIpfsClusterEndpoint; // null = no replication
+    private final String blobIpfsClusterAuthorization; // null = none; never logged
+    private final int blobIpfsClusterReplicationMin;
+    private final int blobIpfsClusterReplicationMax;
+    private final int blobIpfsClusterPinTimeoutMs;
+    private final String blobIpfsEncryptionKeys; // null = plaintext; never logged
+    private final String blobIpfsNetworkPolicy; // off | warn | private
+    private final String blobIpfsSwarmProbeAddress; // null = no wire probe
 
     // azure
     private final String blobAzureConnectionString;
@@ -72,6 +84,18 @@ public final class StorageBackendConfig {
         this.segmentAwsEndpoint = b.segmentAwsEndpoint;
         this.blobBackend = b.blobBackend;
         this.blobIpfsEndpoint = b.blobIpfsEndpoint;
+        this.blobIpfsAuthorization = b.blobIpfsAuthorization;
+        this.blobIpfsConnectTimeoutMs = b.blobIpfsConnectTimeoutMs;
+        this.blobIpfsRequestTimeoutMs = b.blobIpfsRequestTimeoutMs;
+        this.blobIpfsMaxAttempts = b.blobIpfsMaxAttempts;
+        this.blobIpfsClusterEndpoint = b.blobIpfsClusterEndpoint;
+        this.blobIpfsClusterAuthorization = b.blobIpfsClusterAuthorization;
+        this.blobIpfsClusterReplicationMin = b.blobIpfsClusterReplicationMin;
+        this.blobIpfsClusterReplicationMax = b.blobIpfsClusterReplicationMax;
+        this.blobIpfsClusterPinTimeoutMs = b.blobIpfsClusterPinTimeoutMs;
+        this.blobIpfsEncryptionKeys = b.blobIpfsEncryptionKeys;
+        this.blobIpfsNetworkPolicy = b.blobIpfsNetworkPolicy;
+        this.blobIpfsSwarmProbeAddress = b.blobIpfsSwarmProbeAddress;
         this.blobAzureConnectionString = b.blobAzureConnectionString;
         this.blobAzureContainer = b.blobAzureContainer;
         this.blobAwsBucket = b.blobAwsBucket;
@@ -128,6 +152,31 @@ public final class StorageBackendConfig {
         if (b.blobBackend == BlobBackend.IPFS) {
             b.blobIpfsEndpoint = RuntimeConfigValueResolver.readString(
                 "ipfs.api.endpoint", "IPFS_API_ENDPOINT", "/ip4/127.0.0.1/tcp/5001");
+            String authorization = RuntimeConfigValueResolver.readString(
+                "ipfs.api.authorization", "IPFS_API_AUTHORIZATION", null);
+            b.blobIpfsAuthorization = RuntimeConfigValueResolver.hasText(authorization) ? authorization.trim() : null;
+            b.blobIpfsConnectTimeoutMs = RuntimeConfigValueResolver.readInt(
+                "ipfs.api.connect-timeout-ms", "IPFS_API_CONNECT_TIMEOUT_MS", 10_000);
+            b.blobIpfsRequestTimeoutMs = RuntimeConfigValueResolver.readInt(
+                "ipfs.api.request-timeout-ms", "IPFS_API_REQUEST_TIMEOUT_MS", 60_000);
+            b.blobIpfsMaxAttempts = RuntimeConfigValueResolver.readInt(
+                "ipfs.api.max-attempts", "IPFS_API_MAX_ATTEMPTS", 3);
+            b.blobIpfsClusterEndpoint = textOrNull(RuntimeConfigValueResolver.readString(
+                "ipfs.cluster.endpoint", "IPFS_CLUSTER_ENDPOINT", null));
+            b.blobIpfsClusterAuthorization = textOrNull(RuntimeConfigValueResolver.readString(
+                "ipfs.cluster.authorization", "IPFS_CLUSTER_AUTHORIZATION", null));
+            b.blobIpfsClusterReplicationMin = RuntimeConfigValueResolver.readInt(
+                "ipfs.cluster.replication-min", "IPFS_CLUSTER_REPLICATION_MIN", 2);
+            b.blobIpfsClusterReplicationMax = RuntimeConfigValueResolver.readInt(
+                "ipfs.cluster.replication-max", "IPFS_CLUSTER_REPLICATION_MAX", 3);
+            b.blobIpfsClusterPinTimeoutMs = RuntimeConfigValueResolver.readInt(
+                "ipfs.cluster.pin-timeout-ms", "IPFS_CLUSTER_PIN_TIMEOUT_MS", 120_000);
+            b.blobIpfsEncryptionKeys = textOrNull(RuntimeConfigValueResolver.readString(
+                "ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null));
+            b.blobIpfsNetworkPolicy = RuntimeConfigValueResolver.readString(
+                "ipfs.network.policy", "IPFS_NETWORK_POLICY", "warn").trim();
+            b.blobIpfsSwarmProbeAddress = textOrNull(RuntimeConfigValueResolver.readString(
+                "ipfs.swarm.probe-address", "IPFS_SWARM_PROBE_ADDRESS", null));
         }
 
         if (b.blobBackend == BlobBackend.AZURE) {
@@ -185,6 +234,18 @@ public final class StorageBackendConfig {
     public BlobBackend getBlobBackend() { return blobBackend; }
 
     public String getBlobIpfsEndpoint() { return blobIpfsEndpoint; }
+    public String getBlobIpfsAuthorization() { return blobIpfsAuthorization; }
+    public int getBlobIpfsConnectTimeoutMs() { return blobIpfsConnectTimeoutMs; }
+    public int getBlobIpfsRequestTimeoutMs() { return blobIpfsRequestTimeoutMs; }
+    public int getBlobIpfsMaxAttempts() { return blobIpfsMaxAttempts; }
+    public String getBlobIpfsClusterEndpoint() { return blobIpfsClusterEndpoint; }
+    public String getBlobIpfsClusterAuthorization() { return blobIpfsClusterAuthorization; }
+    public int getBlobIpfsClusterReplicationMin() { return blobIpfsClusterReplicationMin; }
+    public int getBlobIpfsClusterReplicationMax() { return blobIpfsClusterReplicationMax; }
+    public int getBlobIpfsClusterPinTimeoutMs() { return blobIpfsClusterPinTimeoutMs; }
+    public String getBlobIpfsEncryptionKeys() { return blobIpfsEncryptionKeys; }
+    public String getBlobIpfsNetworkPolicy() { return blobIpfsNetworkPolicy; }
+    public String getBlobIpfsSwarmProbeAddress() { return blobIpfsSwarmProbeAddress; }
 
     public String getBlobAzureConnectionString() { return blobAzureConnectionString; }
     public String getBlobAzureContainer() { return blobAzureContainer; }
@@ -218,6 +279,10 @@ public final class StorageBackendConfig {
         }
     }
 
+    private static String textOrNull(String value) {
+        return RuntimeConfigValueResolver.hasText(value) ? value.trim() : null;
+    }
+
     private static String requireParam(String sysProp, String envVar, String errorMsg) {
         String value = RuntimeConfigValueResolver.readString(sysProp, envVar, null);
         if (!RuntimeConfigValueResolver.hasText(value)) {
@@ -237,6 +302,18 @@ public final class StorageBackendConfig {
         String segmentAwsEndpoint;
         BlobBackend blobBackend;
         String blobIpfsEndpoint;
+        String blobIpfsAuthorization;
+        int blobIpfsConnectTimeoutMs;
+        int blobIpfsRequestTimeoutMs;
+        int blobIpfsMaxAttempts;
+        String blobIpfsClusterEndpoint;
+        String blobIpfsClusterAuthorization;
+        int blobIpfsClusterReplicationMin;
+        int blobIpfsClusterReplicationMax;
+        int blobIpfsClusterPinTimeoutMs;
+        String blobIpfsEncryptionKeys;
+        String blobIpfsNetworkPolicy;
+        String blobIpfsSwarmProbeAddress;
         String blobAzureConnectionString;
         String blobAzureContainer;
         String blobAwsBucket;

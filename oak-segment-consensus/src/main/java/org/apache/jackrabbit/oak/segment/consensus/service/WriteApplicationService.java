@@ -21,7 +21,6 @@ import org.apache.jackrabbit.oak.api.Blob;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob;
-import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.federation.NamespaceAuthority;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
@@ -276,10 +275,14 @@ public class WriteApplicationService {
             // Handle binary content
             if (blobId != null && !blobId.isEmpty()) {
                 handleBinaryContent(contentNode, blobStore, blobId, mimeType, ipfsCid);
+                if (ipfsCid != null && !ipfsCid.isEmpty()) {
+                    // Lets every validator resolve the binary, whichever IPFS node stored it.
+                    ReplicatedBinaryIndex.record(rootBuilder, blobId, ipfsCid);
+                }
             } else if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 // Pure IPFS reference without local blob
+                // No gateway URL: it depends on this node's settings, and replicated state must not.
                 contentNode.setProperty("ipfsCid", ipfsCid);
-                contentNode.setProperty("ipfsGateway", IpfsGatewayUrls.gatewayUrl(ipfsCid));
                 log.debug("🔗 Stored pure IPFS reference (no local blob): ipfsCid={}", ipfsCid);
             }
             
@@ -482,7 +485,6 @@ public class WriteApplicationService {
         // Only the CID carried in the proposal (decided by the ingesting node): a lookup here would differ per node.
         if (ipfsCid != null && !ipfsCid.isEmpty()) {
             contentNode.setProperty("ipfsCid", ipfsCid);
-            contentNode.setProperty("ipfsGateway", IpfsGatewayUrls.gatewayUrl(ipfsCid));
             log.info("✅ Binary stored with proposal IPFS CID: jcr:blobId={}, ipfsCid={}", blobId, ipfsCid);
         } else {
             log.info("✅ Binary stored (proposal carries no IPFS CID): jcr:blobId={}", blobId);

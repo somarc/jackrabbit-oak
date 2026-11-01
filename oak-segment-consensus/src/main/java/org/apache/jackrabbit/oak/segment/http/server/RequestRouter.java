@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueReso
 import org.apache.jackrabbit.oak.segment.consensus.federation.Charter;
 import org.apache.jackrabbit.oak.segment.consensus.federation.DirectorySnapshot;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
+import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.AeronApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.BinaryUploadHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.BlockchainConfigApiHandler;
@@ -36,6 +37,7 @@ import org.apache.jackrabbit.oak.segment.http.server.handlers.FileHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.FragmentationApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.GcCostHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.HealthHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.IpfsOpsHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.MetricsHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.OsgiConfigApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.PeerDiscoveryHandler;
@@ -91,6 +93,7 @@ public class RequestRouter implements AutoCloseable {
     private final org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager;
     private final BinaryUploadHandler binaryUploadHandler;
     private final AuthTokenValidator authValidator;
+    private final BlobUrlSigner blobUrlSigner;
     private final RateLimiter rateLimiter;
     private final boolean browserUiEnabled;
     
@@ -99,6 +102,7 @@ public class RequestRouter implements AutoCloseable {
     public RequestRouter(ServerContext context) {
         this.context = context;
         this.authValidator = new AuthTokenValidator();
+        this.blobUrlSigner = BlobUrlSigner.fromConfig();
         this.rateLimiter = new RateLimiter();
         this.browserUiEnabled = RuntimeConfigValueResolver.readBoolean("oak.http.browser.ui.enabled", true);
         
@@ -247,6 +251,8 @@ public class RequestRouter implements AutoCloseable {
         post("/v1/propose-delete", (req, res, path) -> deleteProposalHandler.handleDeleteProposal(req, res));
         post("/v1/binary/declare-intent", (req, res, path) -> binaryUploadHandler.handleDeclareIntent(req, res));
         prefix("GET", "/v1/binary/check-intent/", (req, res, path) -> binaryUploadHandler.handleCheckIntent(req, res));
+        prefix("GET", "/v1/binary/download-url/", (req, res, path) ->
+            handleDownloadUrl(req, res, path.substring("/v1/binary/download-url/".length())));
         post("/v1/binary/complete-upload", (req, res, path) -> binaryUploadHandler.handleCompleteUpload(req, res));
 
         get("/v1/head", (req, res, path) -> handleHead(res));
@@ -261,6 +267,9 @@ public class RequestRouter implements AutoCloseable {
 
         prefix("GET", "/v1/ops/operations/", (req, res, path) -> proposalQueryHandler.handleGetOperationStatus(req, res));
         get("/v1/ops/snapshots/queue", (req, res, path) -> proposalQueryHandler.handleGetOpsQueueSnapshot(res));
+        IpfsOpsHandler ipfsOpsHandler = new IpfsOpsHandler(context);
+        get("/v1/ops/ipfs/health", (req, res, path) -> ipfsOpsHandler.handleHealth(res));
+        get("/v1/ops/ipfs/verify", (req, res, path) -> ipfsOpsHandler.handleVerify(req, res));
         prefix("GET", "/v1/settlement/proposals/", (req, res, path) ->
             proposalQueryHandler.handleGetSettlementByProposalId(req, res));
         prefix("GET", "/v1/settlement/transactions/", (req, res, path) ->
@@ -371,9 +380,18 @@ public class RequestRouter implements AutoCloseable {
                 return;
             }
             
+            boolean signedBlobRequest = false;
+            if ("GET".equals(method) && path.startsWith(BlobUrlSigner.PATH_PREFIX)) {
+                Boolean signed = checkBlobSignature(request, response, path);
+                if (signed == null) {
+                    return; // refused; response already sent
+                }
+                signedBlobRequest = signed;
+            }
+
             // Validate authentication for all other endpoints (if auth is enabled)
             // If auth is disabled (no token configured), this allows all requests (POC mode)
-            if (!authValidator.validateRequest(request, response)) {
+            if (!signedBlobRequest && !authValidator.validateRequest(request, response)) {
                 return; // Response already sent by validateRequest
             }
 
@@ -406,6 +424,81 @@ public class RequestRouter implements AutoCloseable {
                 response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, e.getMessage());
             }
         }
+    }
+
+    /**
+     * Checks a blob download's signature. A valid one stands in for the token;
+     * an invalid or expired one is refused even with a token, and an unsigned
+     * download is refused when signed URLs are required.
+     *
+     * @return whether the request carries a valid signature, or {@code null}
+     *         when it was refused and the response sent
+     */
+    private Boolean checkBlobSignature(HttpServletRequest request, HttpServletResponse response, String path)
+            throws IOException {
+        long now = System.currentTimeMillis() / 1000;
+        String exp = request.getParameter("exp");
+        BlobUrlSigner.Verdict verdict = blobUrlSigner.verify(path.substring(BlobUrlSigner.PATH_PREFIX.length()),
+            exp, request.getParameter("kid"), request.getParameter("sig"), now);
+        switch (verdict) {
+            case VALID:
+                request.setAttribute(ExplorerApiHandler.BLOB_CACHE_CONTROL,
+                    "private, max-age=" + Math.max(0, Long.parseLong(exp) - now));
+                request.setAttribute(ExplorerApiHandler.BLOB_SIGNED, Boolean.TRUE);
+                return true;
+            case EXPIRED:
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, "blob_url_expired",
+                    "The signed blob URL has expired");
+                return null;
+            case INVALID:
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, "blob_url_invalid",
+                    "The signed blob URL is not valid");
+                return null;
+            default:
+                if (blobUrlSigner.required()) {
+                    ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN, "blob_url_required",
+                        "Blob downloads need a signed URL from /v1/binary/download-url/{blobId}");
+                    return null;
+                }
+                if (authValidator.isEnabled()) {
+                    request.setAttribute(ExplorerApiHandler.BLOB_CACHE_CONTROL, "private, max-age=31536000, immutable");
+                }
+                return false;
+        }
+    }
+
+    /**
+     * Issues a signed download URL: GET /v1/binary/download-url/{blobId}?ttl=seconds.
+     */
+    private void handleDownloadUrl(HttpServletRequest request, HttpServletResponse response, String blobId)
+            throws IOException {
+        if (!blobUrlSigner.enabled()) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                "blob_url_signing_not_configured", "Set " + BlobUrlSigner.KEYS_ENV + " to issue signed blob URLs");
+            return;
+        }
+        BlobUrlSigner.SignedUrl url;
+        try {
+            String ttl = request.getParameter("ttl");
+            Long seconds;
+            try {
+                seconds = ttl == null || ttl.isBlank() ? null : Long.valueOf(ttl.trim());
+            } catch (NumberFormatException e) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "ttl must be a whole number of seconds");
+                return;
+            }
+            url = blobUrlSigner.sign(blobId, seconds, System.currentTimeMillis() / 1000);
+        } catch (IllegalArgumentException e) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("blobId", url.blobId());
+        payload.put("url", url.url());
+        payload.put("expiresAt", url.expiresAt());
+        payload.put("keyId", url.keyId());
+        response.setHeader("Cache-Control", "no-store");
+        JsonOutputUtil.send(response, 200, JsonOutputUtil.toJson(payload));
     }
 
     private Handler findRoute(String method, String path) {

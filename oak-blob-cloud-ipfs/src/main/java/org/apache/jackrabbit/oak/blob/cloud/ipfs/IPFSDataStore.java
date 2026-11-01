@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.plugins.blob.AbstractSharedCachingDataStore;
 import org.apache.jackrabbit.oak.spi.blob.AbstractSharedBackend;
 import org.apache.jackrabbit.oak.spi.blob.SharedBackend;
 import org.apache.jackrabbit.oak.spi.blob.data.DataIdentifier;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
 
 import java.util.Properties;
 
@@ -49,6 +50,28 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
     private IPFSBackend ipfsBackend;
 
     /**
+     * Keyring spec for blob encryption, {@code current;id:base64Key;...}; see
+     * {@link #setBlobKeyProvider}.
+     */
+    static final String ENCRYPTION_KEYS = "ipfsEncryptionKeys";
+
+    /**
+     * {@code off}, {@code warn} (default) or {@code private}: how startup treats
+     * an IPFS node that may expose content outside a private network.
+     */
+    static final String NETWORK_POLICY = "ipfsNetworkPolicy";
+
+    /**
+     * The IPFS node's swarm listener as reachable from Oak, {@code host:port},
+     * used to prove that it uses a private network key.
+     */
+    static final String SWARM_PROBE_ADDRESS = "ipfsSwarmProbeAddress";
+
+    private volatile CidResolver cidResolver;
+
+    private BlobKeyProvider blobKeyProvider;
+
+    /**
      * The minimum size of an object that should be stored in IPFS.
      * Smaller objects are stored inline in Oak segments.
      * Default: 16KB (matches S3DataStore default)
@@ -68,16 +91,66 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
             if (filesRoot != null) {
                 ipfsBackend.setIpfsFilesRoot(filesRoot);
             }
+            ipfsBackend.setClientSettings(IpfsClientSettings.fromProperties(properties));
+            ipfsBackend.setNetworkPolicy(IpfsNetworkPosture.Policy.parse(properties.getProperty(NETWORK_POLICY)),
+                properties.getProperty(SWARM_PROBE_ADDRESS));
+            IpfsClusterSettings cluster = IpfsClusterSettings.fromProperties(properties);
+            ipfsBackend.setClusterSettings(cluster);
+            if (cluster.enabled()) {
+                // Every write then waits for replication, so no caller is acknowledged early.
+                setStagingSplitPercentage(0);
+            }
         }
+        ipfsBackend.setCidResolver(cidResolver);
+        BlobKeyProvider keys = blobKeyProvider;
+        String keySpec = properties == null ? null : properties.getProperty(ENCRYPTION_KEYS);
+        if (keys == null && keySpec != null && !keySpec.isBlank()) {
+            keys = StaticBlobKeyProvider.fromSpec(keySpec);
+        }
+        ipfsBackend.setBlobKeyProvider(keys);
         return ipfsBackend;
+    }
+
+    /**
+     * Encrypts every new blob with AES-256-GCM under the provider's current key
+     * before it reaches IPFS, and decrypts encrypted blobs on read; plaintext
+     * blobs stay readable. Every repository that reads these blobs needs the
+     * same keys. Takes precedence over {@code ipfsEncryptionKeys} and must be
+     * called before initialization.
+     *
+     * @param blobKeyProvider the keys, or {@code null} to use {@code ipfsEncryptionKeys}
+     */
+    public void setBlobKeyProvider(BlobKeyProvider blobKeyProvider) {
+        this.blobKeyProvider = blobKeyProvider;
+    }
+
+    /**
+     * Sets the resolver consulted for blobs that the local IPFS Files index does
+     * not know, for example blobs stored by another validator. May be called
+     * before or after initialization.
+     *
+     * @param cidResolver the resolver, or {@code null} for none
+     */
+    public void setCidResolver(CidResolver cidResolver) {
+        this.cidResolver = cidResolver;
+        if (ipfsBackend != null) {
+            ipfsBackend.setCidResolver(cidResolver);
+        }
     }
 
     /**
      * Supplies backend properties that will be applied when the backend is
      * created.
      *
-     * <p>The backend currently consumes {@code ipfsApiEndpoint} and
-     * {@code ipfsFilesRoot} directly.</p>
+     * <p>The backend consumes {@code ipfsApiEndpoint}, {@code ipfsFilesRoot},
+     * {@code ipfsApiAuthorization}, {@code ipfsConnectTimeoutMillis},
+     * {@code ipfsRequestTimeoutMillis}, {@code ipfsMaxAttempts}, and, for
+     * replication through IPFS Cluster, {@code ipfsClusterEndpoint},
+     * {@code ipfsClusterAuthorization}, {@code ipfsClusterReplicationMin},
+     * {@code ipfsClusterReplicationMax}, {@code ipfsClusterPinTimeoutMillis} and
+     * {@code ipfsClusterUnpinOnDelete}, for encryption,
+     * {@code ipfsEncryptionKeys}, and, for the network check,
+     * {@code ipfsNetworkPolicy} and {@code ipfsSwarmProbeAddress}.</p>
      *
      * @param properties datastore and backend configuration properties
      */
@@ -196,6 +269,43 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
         return ipfsBackend.getCID(identifier);
     }
     
+    /**
+     * Reports whether the IPFS node and, when configured, the IPFS Cluster
+     * answer now, the encryption and network settings in effect, and the
+     * operation counts since startup.
+     *
+     * @return the report, with {@code status} {@code UP} or {@code DOWN}
+     */
+    public java.util.Map<String, Object> checkHealth() {
+        if (ipfsBackend == null) {
+            return java.util.Map.of("status", "DOWN", "error", "not initialized");
+        }
+        return ipfsBackend.health();
+    }
+
+    /**
+     * Returns cumulative operation counts since startup (writes, bytes, reads,
+     * deletes, failures, IPFS Cluster pins and the time spent waiting for
+     * them) without calling IPFS.
+     */
+    public java.util.Map<String, Long> getStatistics() {
+        return ipfsBackend == null ? java.util.Map.of() : ipfsBackend.statistics();
+    }
+
+    /**
+     * Checks that up to {@code limit} stored binaries are retained: held by
+     * the IPFS Cluster replication minimum, or pinned on this node without a
+     * cluster. Makes one or two IPFS calls per binary.
+     *
+     * @return counts, and up to 100 identifiers per kind of problem
+     */
+    public java.util.Map<String, Object> verifyRetention(int limit) throws DataStoreException {
+        if (ipfsBackend == null) {
+            throw new DataStoreException("IPFS DataStore is not initialized");
+        }
+        return ipfsBackend.verify(limit);
+    }
+
     /**
      * Returns a snapshot of the backend's current identifier-to-CID mappings.
      *

@@ -39,6 +39,18 @@ public class StorageBackendConfigTest {
         "oak.blob.backend",
         "blobstore.type",
         "ipfs.api.endpoint",
+        "ipfs.api.authorization",
+        "ipfs.api.connect-timeout-ms",
+        "ipfs.api.request-timeout-ms",
+        "ipfs.api.max-attempts",
+        "ipfs.cluster.endpoint",
+        "ipfs.cluster.authorization",
+        "ipfs.cluster.replication-min",
+        "ipfs.cluster.replication-max",
+        "ipfs.cluster.pin-timeout-ms",
+        "ipfs.encryption.keys",
+        "ipfs.network.policy",
+        "ipfs.swarm.probe-address",
         "oak.blob.azure.connection-string",
         "oak.blob.azure.container",
         "oak.blob.aws.bucket",
@@ -200,6 +212,69 @@ public class StorageBackendConfigTest {
 
         assertEquals(StorageBackendConfig.BlobBackend.IPFS, cfg.getBlobBackend());
         assertEquals("/ip4/10.0.0.5/tcp/5001", cfg.getBlobIpfsEndpoint());
+    }
+
+    @Test
+    public void testIpfsClientDefaultsAndOverrides() {
+        StorageBackendConfig defaults = StorageBackendConfig.load();
+        assertNull(defaults.getBlobIpfsAuthorization());
+        assertEquals(10_000, defaults.getBlobIpfsConnectTimeoutMs());
+        assertEquals(60_000, defaults.getBlobIpfsRequestTimeoutMs());
+        assertEquals(3, defaults.getBlobIpfsMaxAttempts());
+
+        System.setProperty("ipfs.api.authorization", " Bearer abc ");
+        System.setProperty("ipfs.api.connect-timeout-ms", "1500");
+        System.setProperty("ipfs.api.request-timeout-ms", "2500");
+        System.setProperty("ipfs.api.max-attempts", "5");
+        StorageBackendConfig cfg = StorageBackendConfig.load();
+
+        assertEquals("Bearer abc", cfg.getBlobIpfsAuthorization());
+        assertEquals(1500, cfg.getBlobIpfsConnectTimeoutMs());
+        assertEquals(2500, cfg.getBlobIpfsRequestTimeoutMs());
+        assertEquals(5, cfg.getBlobIpfsMaxAttempts());
+    }
+
+    @Test
+    public void testIpfsClusterIsOffByDefaultAndConfigurable() {
+        StorageBackendConfig defaults = StorageBackendConfig.load();
+        assertNull(defaults.getBlobIpfsClusterEndpoint());
+        assertEquals(2, defaults.getBlobIpfsClusterReplicationMin());
+        assertEquals(3, defaults.getBlobIpfsClusterReplicationMax());
+        assertEquals(120_000, defaults.getBlobIpfsClusterPinTimeoutMs());
+
+        System.setProperty("ipfs.cluster.endpoint", " /dns4/cluster0/tcp/9094 ");
+        System.setProperty("ipfs.cluster.authorization", "Basic abc");
+        System.setProperty("ipfs.cluster.replication-min", "3");
+        System.setProperty("ipfs.cluster.replication-max", "5");
+        System.setProperty("ipfs.cluster.pin-timeout-ms", "30000");
+        StorageBackendConfig cfg = StorageBackendConfig.load();
+
+        assertEquals("/dns4/cluster0/tcp/9094", cfg.getBlobIpfsClusterEndpoint());
+        assertEquals("Basic abc", cfg.getBlobIpfsClusterAuthorization());
+        assertEquals(3, cfg.getBlobIpfsClusterReplicationMin());
+        assertEquals(5, cfg.getBlobIpfsClusterReplicationMax());
+        assertEquals(30_000, cfg.getBlobIpfsClusterPinTimeoutMs());
+    }
+
+    @Test
+    public void testIpfsEncryptionIsOffByDefaultAndConfigurable() {
+        assertNull(StorageBackendConfig.load().getBlobIpfsEncryptionKeys());
+
+        System.setProperty("ipfs.encryption.keys", " k1;k1:AAAA ");
+        assertEquals("k1;k1:AAAA", StorageBackendConfig.load().getBlobIpfsEncryptionKeys());
+    }
+
+    @Test
+    public void testIpfsNetworkPolicyWarnsByDefault() {
+        StorageBackendConfig defaults = StorageBackendConfig.load();
+        assertEquals("warn", defaults.getBlobIpfsNetworkPolicy());
+        assertNull(defaults.getBlobIpfsSwarmProbeAddress());
+
+        System.setProperty("ipfs.network.policy", "private");
+        System.setProperty("ipfs.swarm.probe-address", " kubo:4001 ");
+        StorageBackendConfig cfg = StorageBackendConfig.load();
+        assertEquals("private", cfg.getBlobIpfsNetworkPolicy());
+        assertEquals("kubo:4001", cfg.getBlobIpfsSwarmProbeAddress());
     }
 
     @Test

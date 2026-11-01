@@ -48,6 +48,17 @@ import java.util.stream.Stream;
  */
 public class ExplorerApiHandler {
     private static final Logger log = LoggerFactory.getLogger(ExplorerApiHandler.class);
+
+    /**
+     * Request attribute with the {@code Cache-Control} value for a blob
+     * download, set by the router from how the request was authorized.
+     */
+    public static final String BLOB_CACHE_CONTROL = "oak.blob.cacheControl";
+
+    /**
+     * Request attribute set when a blob download was authorized by a signed URL.
+     */
+    public static final String BLOB_SIGNED = "oak.blob.signed";
     
     private final NodeStore nodeStore;
     private final Path storeDirectory;
@@ -287,45 +298,65 @@ public class ExplorerApiHandler {
             return;
         }
         
+        log.debug("Streaming blob from BlobStore: {}", blobId);
+        java.io.InputStream blobStream;
         try {
-            log.info("📦 Streaming blob from BlobStore: {}", blobId);
-            
-            // Read blob from BlobStore
-            java.io.InputStream blobStream = blobStore.getInputStream(blobId);
-            
-            if (blobStream == null) {
-                log.warn("Blob not found in BlobStore: {}", blobId);
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, 
-                    "Blob not found: " + blobId);
-                return;
-            }
-            
-            // Try to determine content type from blob ID or default to octet-stream
-            // For genesis image, we know it's JPEG
-            String contentType = "application/octet-stream";
-            if (blobId.contains("do-it-live") || blobId.startsWith("ed06f9cb")) {
-                contentType = "image/jpeg";
-            }
-            
-            // Set response headers
-            response.setStatus(HttpServletResponse.SC_OK);
-            response.setContentType(contentType);
-            response.setHeader("Cache-Control", "public, max-age=31536000"); // 1 year cache
-            response.setHeader("X-Blob-Id", blobId);
-            
-            // Stream the blob
-            try (java.io.OutputStream out = response.getOutputStream()) {
-                long totalBytes = blobStream.transferTo(out);
-                out.flush();
-                log.info("✅ Streamed blob {} ({} bytes)", blobId, totalBytes);
-            } finally {
-                blobStream.close();
-            }
-            
+            blobStream = blobStore.getInputStream(blobId);
         } catch (Exception e) {
-            log.error("Error streaming blob {}: {}", blobId, e.getMessage());
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, 
-                "Failed to stream blob: " + e.getMessage());
+            // Details stay in the log: signed URLs are shared, and the cause can name IPFS paths or nodes.
+            boolean missing = isNotFound(e);
+            log.warn("Cannot open blob {}: {}", blobId, e.toString());
+            ApiErrorUtil.sendJsonError(response,
+                missing ? HttpServletResponse.SC_NOT_FOUND : HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                missing ? "blob_not_found" : "blob_stream_failed",
+                missing ? "Blob not found: " + blobId : "Failed to read the blob");
+            return;
         }
+        if (blobStream == null) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "blob_not_found",
+                "Blob not found: " + blobId);
+            return;
+        }
+
+        // Try to determine content type from blob ID or default to octet-stream
+        // For genesis image, we know it's JPEG
+        String contentType = "application/octet-stream";
+        if (blobId.contains("do-it-live") || blobId.startsWith("ed06f9cb")) {
+            contentType = "image/jpeg";
+        }
+
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType(contentType);
+        Object cacheControl = request == null ? null : request.getAttribute(BLOB_CACHE_CONTROL);
+        response.setHeader("Cache-Control", cacheControl != null ? cacheControl.toString() : "public, max-age=31536000");
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        if (request != null && Boolean.TRUE.equals(request.getAttribute(BLOB_SIGNED))) {
+            // A signed URL must not leak to other sites through the Referer header of embedded content.
+            response.setHeader("Referrer-Policy", "no-referrer");
+        }
+        response.setHeader("X-Blob-Id", blobId);
+
+        try (java.io.InputStream in = blobStream; java.io.OutputStream out = response.getOutputStream()) {
+            long totalBytes = in.transferTo(out);
+            out.flush();
+            log.debug("Streamed blob {} ({} bytes)", blobId, totalBytes);
+        } catch (IOException e) {
+            // The status is already sent; aborting the body tells the client the download failed.
+            log.error("Error streaming blob {}: {}", blobId, e.toString());
+        }
+    }
+
+    /**
+     * DataStoreBlobStore reports an unknown blob as "No DataRecord found",
+     * backends as "not found".
+     */
+    private static boolean isNotFound(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            String message = t.getMessage() == null ? "" : t.getMessage().toLowerCase(java.util.Locale.ROOT);
+            if (message.contains("not found") || message.contains("no datarecord found")) {
+                return true;
+            }
+        }
+        return false;
     }
 }

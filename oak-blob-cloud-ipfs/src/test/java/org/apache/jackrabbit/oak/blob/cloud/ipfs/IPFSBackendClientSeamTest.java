@@ -16,8 +16,6 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
-import io.ipfs.api.MerkleNode;
-import io.ipfs.api.NamedStreamable;
 import org.apache.jackrabbit.oak.spi.blob.data.DataIdentifier;
 import org.apache.jackrabbit.oak.spi.blob.data.DataRecord;
 import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
@@ -29,11 +27,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.security.MessageDigest;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -60,8 +60,8 @@ public class IPFSBackendClientSeamTest {
         RecordingIpfsClient client = new RecordingIpfsClient();
         client.versionFailure = new RuntimeException("no version");
         AtomicReference<String> endpointRef = new AtomicReference<>();
-        IPFSBackend backend = new IPFSBackend(endpoint -> {
-            endpointRef.set(endpoint);
+        IPFSBackend backend = new IPFSBackend(settings -> {
+            endpointRef.set(settings.endpoint());
             return client;
         });
 
@@ -76,8 +76,8 @@ public class IPFSBackendClientSeamTest {
     public void testInitTreatsEmptyEndpointAsUnset() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
         AtomicReference<String> endpointRef = new AtomicReference<>();
-        IPFSBackend backend = new IPFSBackend(endpoint -> {
-            endpointRef.set(endpoint);
+        IPFSBackend backend = new IPFSBackend(settings -> {
+            endpointRef.set(settings.endpoint());
             return client;
         });
         backend.setIpfsApiEndpoint("");
@@ -92,10 +92,9 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testWriteReadExistsRecordAndDeleteRoundTrip() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         byte[] content = "hello-ipfs".getBytes(StandardCharsets.UTF_8);
         client.catResults.put(CID_ONE, content);
-        client.blockStats.put(CID_ONE, Map.of("Size", content.length));
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.setIpfsApiEndpoint("/ip4/10.0.0.9/tcp/5001");
         backend.init();
@@ -104,11 +103,13 @@ public class IPFSBackendClientSeamTest {
         Files.write(tempFile.toPath(), content);
         DataIdentifier id = new DataIdentifier("blob-1");
 
+        long before = System.currentTimeMillis();
         backend.write(id, tempFile);
+        long after = System.currentTimeMillis();
 
         assertEquals(CID_ONE, backend.getCID(id));
         assertEquals(Map.of("blob-1", CID_ONE), backend.getAllCIDMappings());
-        assertEquals(List.of(CID_ONE), client.pinAddCalls);
+        assertEquals(1, client.addCalls);
         assertEquals(List.of(CID_ONE + "@/oak/ipfs/content/YmxvYi0x"), client.linkCidCalls);
         assertTrue(backend.exists(id));
 
@@ -118,9 +119,8 @@ public class IPFSBackendClientSeamTest {
 
         DataRecord record = backend.getRecord(id);
         assertEquals(content.length, record.getLength());
-        assertEquals(content.length, record.getLength());
         long lastModified = record.getLastModified();
-        assertTrue(lastModified > 0);
+        assertTrue(lastModified >= before && lastModified <= after);
         assertEquals(lastModified, record.getLastModified());
         try (InputStream stream = record.getStream()) {
             assertArrayEquals(content, stream.readAllBytes());
@@ -141,56 +141,564 @@ public class IPFSBackendClientSeamTest {
         assertEquals(List.of(CID_ONE), client.pinRemoveCalls);
         assertFalse(backend.exists(id));
         assertNull(backend.getCID(id));
+        assertTrue(client.listFiles("/oak/ipfs/blob-attrs").isEmpty());
+        assertTrue(client.listFiles("/oak/ipfs/content").isEmpty());
         tempFile.delete();
         backend.close();
     }
 
     @Test
-    public void testExistsReturnsFalseWhenBlockStatIsIncompleteOrThrows() throws Exception {
+    public void testLengthIsTheFileLengthNotTheRootBlockSize() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.blockStats.put(CID_ONE, Map.of("Links", 1));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
-        File tempFile = File.createTempFile("oak-ipfs-stat", ".bin");
-        Files.writeString(tempFile.toPath(), "stat");
-        DataIdentifier id = new DataIdentifier("blob-stat");
-
+        byte[] content = new byte[762_228];
+        File tempFile = File.createTempFile("oak-ipfs-chunked", ".bin");
+        Files.write(tempFile.toPath(), content);
+        DataIdentifier id = new DataIdentifier("blob-chunked");
         backend.write(id, tempFile);
 
-        assertFalse(backend.exists(id));
-
-        client.blockStatFailure = new RuntimeException("stat failed");
-        assertFalse(backend.exists(id));
+        IPFSBackend restarted = new IPFSBackend(endpoint -> client);
+        restarted.init();
+        assertEquals(content.length, restarted.getRecord(id).getLength());
 
         tempFile.delete();
         backend.close();
+        restarted.close();
     }
 
     @Test
-    public void testGetRecordRejectsCachedCidWhenBlockStatReturnsNull() throws Exception {
+    public void testRewriteOnlyTouchesLastModifiedAndRejectsLengthCollisions() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
-        File tempFile = File.createTempFile("oak-ipfs-null-stat", ".bin");
-        Files.writeString(tempFile.toPath(), "missing");
-        DataIdentifier id = new DataIdentifier("blob-null-stat");
+        File tempFile = File.createTempFile("oak-ipfs-touch", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        DataIdentifier id = new DataIdentifier("blob-touch");
+        backend.write(id, tempFile);
+        long firstWrite = backend.getRecord(id).getLastModified();
 
+        Thread.sleep(5);
         backend.write(id, tempFile);
 
-        assertFalse(backend.exists(id));
+        assertEquals(1, client.addCalls);
+        assertTrue(backend.getRecord(id).getLastModified() > firstWrite);
+
+        Files.writeString(tempFile.toPath(), "hello, longer");
         try {
-            backend.getRecord(id);
-            fail("Expected missing block stat to reject cached record");
+            backend.write(id, tempFile);
+            fail("Expected a length collision");
         } catch (DataStoreException e) {
-            assertTrue(e.getMessage().contains("Record not found"));
+            assertTrue(e.getMessage().contains("Collision"));
         }
 
         tempFile.delete();
         backend.close();
+    }
+
+    @Test
+    public void testLegacyMappingWithoutAttributesUsesFileSizeAndLooksNew() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        byte[] content = "legacy-content".getBytes(StandardCharsets.UTF_8);
+        client.catResults.put(CID_ONE, content);
+        DataIdentifier id = new DataIdentifier("blob-legacy");
+        client.writeFile("/oak/ipfs/blob-index/YmxvYi1sZWdhY3k", CID_ONE.getBytes(StandardCharsets.UTF_8));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        long before = System.currentTimeMillis();
+        DataRecord record = backend.getRecord(id);
+
+        assertEquals(content.length, record.getLength());
+        long lastModified = record.getLastModified();
+        assertTrue(lastModified >= before);
+
+        Thread.sleep(5);
+        assertEquals(lastModified, backend.getRecord(id).getLastModified());
+        backend.close();
+    }
+
+    @Test
+    public void testUnreadableAttributesAreTreatedAsLegacy() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        byte[] content = "hello".getBytes(StandardCharsets.UTF_8);
+        client.catResults.put(CID_ONE, content);
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+        File tempFile = File.createTempFile("oak-ipfs-bad-attrs", ".bin");
+        Files.write(tempFile.toPath(), content);
+        DataIdentifier id = new DataIdentifier("blob-bad-attrs");
+        backend.write(id, tempFile);
+        String attrsPath = "/oak/ipfs/blob-attrs/YmxvYi1iYWQtYXR0cnM";
+        client.writeFile(attrsPath, "length=oops\n".getBytes(StandardCharsets.UTF_8));
+
+        backend.write(id, tempFile);
+        assertEquals(1, client.addCalls);
+
+        client.writeFile(attrsPath, "length=oops\n".getBytes(StandardCharsets.UTF_8));
+        assertEquals(content.length, backend.getRecord(id).getLength());
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testEnumerationFailsInsteadOfReportingUnknownLengths() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+        File tempFile = File.createTempFile("oak-ipfs-enumerate", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        backend.write(new DataIdentifier("blob-enumerate"), tempFile);
+        client.fileReadFailure = new RuntimeException("connection refused");
+
+        Iterator<DataRecord> records = backend.getAllRecords();
+        try {
+            records.next();
+            fail("Expected enumeration to fail when attributes cannot be read");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage().contains("Cannot enumerate"));
+        }
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testMetadataFailuresAreNotReportedAsAbsence() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+        byte[] key = backend.getOrCreateReferenceKey();
+
+        IPFSBackend restarted = new IPFSBackend(endpoint -> client);
+        restarted.init();
+        client.fileReadFailure = new RuntimeException("connection refused");
+        try {
+            restarted.getOrCreateReferenceKey();
+            fail("Expected an unreachable node to fail rather than create a new reference key");
+        } catch (DataStoreException e) {
+            assertTrue(e.getMessage().contains("Failed to read metadata"));
+        }
+        client.fileReadFailure = null;
+        assertArrayEquals(key, restarted.getOrCreateReferenceKey());
+
+        client.fileListFailure = new RuntimeException("connection refused");
+        try {
+            restarted.getAllMetadataRecords("repository");
+            fail("Expected a failed listing to fail rather than report no records");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage().contains("Failed to list metadata records"));
+        }
+
+        backend.close();
+        restarted.close();
+    }
+
+    @Test
+    public void testExistsThrowsWhenTheMappingCannotBeRead() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+        client.fileReadFailure = new RuntimeException("connection refused");
+
+        try {
+            backend.exists(new DataIdentifier("blob-unreachable"));
+            fail("Expected an unreachable node to fail rather than report absence");
+        } catch (DataStoreException e) {
+            assertTrue(e.getMessage().contains("Failed to read CID mapping"));
+        }
+
+        backend.close();
+    }
+
+    @Test
+    public void testEncryptedBlobsReachIpfsAsCiphertextAndReadBackAsPlaintext() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        byte[] content = new byte[200_000];
+        new java.util.Random(3).nextBytes(content);
+        DataIdentifier id = new DataIdentifier(
+            HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setBlobKeyProvider(StaticBlobKeyProvider.fromSpec("k2;k1:" + key(1) + ";k2:" + key(2)));
+        backend.init();
+
+        File dir = Files.createTempDirectory("oak-ipfs-enc").toFile();
+        File tempFile = new File(dir, "staged.bin");
+        Files.write(tempFile.toPath(), content);
+        backend.write(id, tempFile);
+
+        byte[] stored = client.addedContent.get(0);
+        assertTrue(stored.length > content.length);
+        assertArrayEquals(BlobEncryption.MAGIC, java.util.Arrays.copyOf(stored, 4));
+        assertEquals("only the staged plaintext is left", List.of("staged.bin"), List.of(dir.list()));
+        assertEquals(content.length, backend.getRecord(id).getLength());
+
+        client.catResults.put(CID_ONE, stored);
+        try (InputStream stream = backend.read(id)) {
+            assertArrayEquals(content, stream.readAllBytes());
+        }
+
+        IPFSBackend rotated = new IPFSBackend(endpoint -> client);
+        rotated.setBlobKeyProvider(StaticBlobKeyProvider.fromSpec("k3;k3:" + key(3) + ";k2:" + key(2)));
+        rotated.init();
+        try (InputStream stream = rotated.read(id)) {
+            assertArrayEquals("an older key stays readable after rotation", content, stream.readAllBytes());
+        }
+
+        Map<String, String> failures = new LinkedHashMap<>();
+        failures.put("k2;k2:" + key(9), "failed authentication");
+        failures.put(null, "hashes to");
+        for (Map.Entry<String, String> failure : failures.entrySet()) {
+            IPFSBackend other = new IPFSBackend(endpoint -> client);
+            other.setBlobKeyProvider(failure.getKey() == null ? null : StaticBlobKeyProvider.fromSpec(failure.getKey()));
+            other.init();
+            try (InputStream stream = other.read(id)) {
+                stream.readAllBytes();
+                fail("Expected the read to fail with " + failure.getValue());
+            } catch (IOException expected) {
+                assertTrue(expected.getMessage(), expected.getMessage().contains(failure.getValue()));
+            }
+        }
+
+        byte[] substitute = content.clone();
+        substitute[0] ^= 1;
+        client.catResults.put(CID_ONE, substitute);
+        try (InputStream stream = backend.read(id)) {
+            stream.readAllBytes();
+            fail("Expected plaintext served in place of the ciphertext to fail verification");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage().contains("hashes to"));
+        }
+
+        client.catResults.put(CID_ONE, content);
+        try (InputStream stream = backend.read(id)) {
+            assertArrayEquals("plaintext written before encryption stays readable", content, stream.readAllBytes());
+        }
+
+        tempFile.delete();
+        dir.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testEncryptedBlobsAdoptedWithoutALengthReportThePlaintextLength() throws Exception {
+        byte[] content = new byte[150_000];
+        new java.util.Random(4).nextBytes(content);
+        BlobKeyProvider keys = StaticBlobKeyProvider.fromSpec("k1;k1:" + key(1));
+        String hex = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
+        java.io.ByteArrayOutputStream ciphertext = new java.io.ByteArrayOutputStream();
+        BlobEncryption.encrypt(new ByteArrayInputStream(content), ciphertext, hex, keys);
+
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.catResults.put(CID_ONE, ciphertext.toByteArray());
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setBlobKeyProvider(keys);
+        backend.setCidResolver(identifier -> new CidResolver.Resolution(CID_ONE, -1));
+        backend.init();
+
+        assertEquals(content.length, backend.getRecord(new DataIdentifier(hex)).getLength());
+        backend.close();
+    }
+
+    @Test
+    public void testAFailedEncryptedImportLeavesNoCiphertextBehind() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setBlobKeyProvider(StaticBlobKeyProvider.fromSpec("k1;k1:" + key(1)));
+        backend.init();
+        File dir = Files.createTempDirectory("oak-ipfs-staging").toFile();
+        File staged = new File(dir, "staged.bin");
+        Files.writeString(staged.toPath(), "secret");
+
+        try {
+            backend.write(new DataIdentifier("blob-failing"), staged);
+            fail("Expected the import to fail");
+        } catch (DataStoreException expected) {
+            assertTrue(expected.getMessage().contains("returned no CID"));
+        }
+        File ciphertext = client.addedFiles.get(0);
+        assertFalse(ciphertext + " was left behind", ciphertext.exists());
+        assertFalse("ciphertext must not be staged next to the upload", ciphertext.getParentFile().equals(dir));
+
+        staged.delete();
+        dir.delete();
+        backend.close();
+    }
+
+    private static String key(int seed) {
+        byte[] key = new byte[32];
+        java.util.Arrays.fill(key, (byte) seed);
+        return java.util.Base64.getEncoder().encodeToString(key);
+    }
+
+    @Test
+    public void testHealthReportsTheNodeSettingsAndOperationCounts() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setBlobKeyProvider(StaticBlobKeyProvider.fromSpec("k7;k7:" + key(7)));
+        backend.init();
+        File tempFile = File.createTempFile("oak-ipfs-health", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        DataIdentifier id = new DataIdentifier("blob-health");
+        backend.write(id, tempFile);
+        try {
+            backend.read(new DataIdentifier("missing"));
+            fail("Expected a missing blob to fail");
+        } catch (DataStoreException expected) {
+            // counted as a failed read
+        }
+
+        Map<String, Object> health = backend.health();
+        assertEquals("UP", health.get("status"));
+        assertEquals("UP", ((Map<?, ?>) health.get("kubo")).get("status"));
+        assertEquals(Map.of("configured", false), health.get("cluster"));
+        assertEquals(Map.of("enabled", true, "currentKeyId", "k7"), health.get("encryption"));
+        Map<?, ?> statistics = (Map<?, ?>) health.get("statistics");
+        assertEquals(1L, statistics.get("writes"));
+        assertEquals(5L, statistics.get("writtenBytes"));
+        assertEquals(1L, statistics.get("readFailures"));
+        assertFalse(health.toString().contains(key(7)));
+
+        client.versionFailure = new RuntimeException("connection refused");
+        health = backend.health();
+        assertEquals("DOWN", health.get("status"));
+        assertEquals("connection refused", ((Map<?, ?>) health.get("kubo")).get("error"));
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testVerifyReportsBlobsThatLostTheirPin() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        client.addResults.add("QmZTR5bcpQD7cFgTorqxZDYaew1Wqgfbd2ud9QqGPAkK2V");
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setCidResolver(identifier -> "blob-adopted".equals(identifier)
+            ? new CidResolver.Resolution("QmYHNYAaYK5hm3ZhZFx5W9H6xydKDGimjdgJMrMSdnctEm", 3) : null);
+        backend.init();
+        File tempFile = File.createTempFile("oak-ipfs-verify", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        backend.write(new DataIdentifier("blob-a"), tempFile);
+        backend.write(new DataIdentifier("blob-b"), tempFile);
+        assertTrue(backend.exists(new DataIdentifier("blob-adopted")));
+
+        Map<String, Object> clean = backend.verify(100);
+        assertEquals(3, clean.get("total"));
+        assertEquals(0, clean.get("problems"));
+        assertEquals(1, clean.get("adoptedNotChecked"));
+        assertEquals(true, clean.get("complete"));
+
+        client.pins.remove(CID_ONE);
+        Map<String, Object> broken = backend.verify(100);
+        assertEquals(1, broken.get("problems"));
+        assertEquals(List.of("blob-a (" + CID_ONE + ")"), broken.get("unpinned"));
+
+        Map<String, Object> partial = backend.verify(1);
+        assertEquals(1, partial.get("checked"));
+        assertEquals(false, partial.get("complete"));
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testReadVerifiesContentAgainstSha256Identifier() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        byte[] content = "verified".getBytes(StandardCharsets.UTF_8);
+        DataIdentifier id = new DataIdentifier(
+            HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)));
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        File tempFile = File.createTempFile("oak-ipfs-verified", ".bin");
+        Files.write(tempFile.toPath(), content);
+        backend.write(id, tempFile);
+
+        client.catResults.put(CID_ONE, content);
+        try (InputStream stream = backend.read(id)) {
+            assertArrayEquals(content, stream.readAllBytes());
+        }
+
+        client.catResults.put(CID_ONE, "verif".getBytes(StandardCharsets.UTF_8));
+        try (InputStream stream = backend.read(id)) {
+            try {
+                stream.readAllBytes();
+                fail("Expected truncated content to fail verification");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().contains("hashes to"));
+            }
+            try {
+                stream.read();
+                fail("Expected the verification failure to repeat on later reads");
+            } catch (IOException e) {
+                assertTrue(e.getMessage().contains("hashes to"));
+            }
+        }
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testFailedMappingWriteUnpinsAndLeavesNoIndex() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+        client.fileWriteFailure = new RuntimeException("write failed");
+
+        File tempFile = File.createTempFile("oak-ipfs-cleanup", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        DataIdentifier id = new DataIdentifier("blob-cleanup");
+        try {
+            backend.write(id, tempFile);
+            fail("Expected the mapping write to fail");
+        } catch (DataStoreException e) {
+            assertTrue(e.getMessage().contains("IPFS write failed"));
+        }
+
+        assertEquals(List.of(CID_ONE), client.pinRemoveCalls);
+        client.fileWriteFailure = null;
+        assertFalse(backend.exists(id));
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testFailedUnpinKeepsTheMappingSoDeleteCanBeRetried() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        File tempFile = File.createTempFile("oak-ipfs-retry", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        DataIdentifier id = new DataIdentifier("blob-retry");
+        backend.write(id, tempFile);
+
+        client.pinRemoveFailure = new RuntimeException("daemon busy");
+        try {
+            backend.deleteRecord(id);
+            fail("Expected the unpin to fail");
+        } catch (DataStoreException e) {
+            assertTrue(e.getMessage().contains("IPFS delete failed"));
+        }
+        assertTrue(backend.exists(id));
+
+        client.pinRemoveFailure = null;
+        backend.deleteRecord(id);
+        assertFalse(backend.exists(id));
+        assertEquals(List.of(CID_ONE), client.pinRemoveCalls);
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testMetadataRecordsKeepTheirWriteTimeAcrossRestart() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.init();
+
+        long before = System.currentTimeMillis();
+        backend.addMetadataRecord(new ByteArrayInputStream("refs".getBytes(StandardCharsets.UTF_8)), "references-1");
+        long after = System.currentTimeMillis();
+        long lastModified = backend.getMetadataRecord("references-1").getLastModified();
+        assertTrue(lastModified >= before && lastModified <= after);
+        assertEquals(4, backend.getMetadataRecord("references-1").getLength());
+
+        Thread.sleep(5);
+        IPFSBackend restarted = new IPFSBackend(endpoint -> client);
+        restarted.init();
+        assertEquals(lastModified, restarted.getAllMetadataRecords("references").get(0).getLastModified());
+
+        assertTrue(restarted.deleteMetadataRecord("references-1"));
+        assertTrue(client.listFiles("/oak/ipfs/metadata-attrs").isEmpty());
+
+        backend.close();
+        restarted.close();
+    }
+
+    @Test
+    public void testUnknownIdentifierIsAdoptedFromTheResolver() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        byte[] content = "replicated".getBytes(StandardCharsets.UTF_8);
+        client.catResults.put(CID_ONE, content);
+        java.util.List<String> asked = new ArrayList<>();
+        IPFSBackend backend = new IPFSBackend(settings -> client);
+        backend.setCidResolver(identifier -> {
+            asked.add(identifier);
+            return "blob-remote".equals(identifier) ? new CidResolver.Resolution(CID_ONE, content.length) : null;
+        });
+        backend.init();
+        DataIdentifier id = new DataIdentifier("blob-remote");
+
+        assertTrue(backend.exists(id));
+        DataRecord record = backend.getRecord(id);
+        assertEquals(content.length, record.getLength());
+        try (InputStream stream = record.getStream()) {
+            assertArrayEquals(content, stream.readAllBytes());
+        }
+        assertFalse(backend.exists(new DataIdentifier("blob-unknown")));
+
+        IPFSBackend restarted = new IPFSBackend(settings -> client);
+        restarted.init();
+        assertEquals(CID_ONE, restarted.getCID(id));
+        assertEquals(content.length, restarted.getRecord(id).getLength());
+        assertEquals(java.util.List.of("blob-remote", "blob-unknown"), asked);
+        assertEquals(java.util.List.of(id), toList(restarted.getAllIdentifiers()));
+        assertTrue(client.listFiles("/oak/ipfs/content").isEmpty());
+
+        backend.close();
+        restarted.close();
+    }
+
+    @Test
+    public void testResolverWithoutLengthUsesTheFileSize() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.catResults.put(CID_ONE, "twelve bytes".getBytes(StandardCharsets.UTF_8));
+        IPFSBackend backend = new IPFSBackend(settings -> client);
+        backend.setCidResolver(identifier -> new CidResolver.Resolution(CID_ONE, -1));
+        backend.init();
+
+        assertEquals(12, backend.getRecord(new DataIdentifier("blob-no-length")).getLength());
+        backend.close();
+    }
+
+    @Test
+    public void testResolverFailureIsAnErrorNotAbsence() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        IPFSBackend backend = new IPFSBackend(settings -> client);
+        backend.setCidResolver(identifier -> {
+            throw new IllegalStateException("repository unavailable");
+        });
+        backend.init();
+
+        try {
+            backend.exists(new DataIdentifier("blob-x"));
+            fail("Expected the resolver failure to surface");
+        } catch (DataStoreException e) {
+            assertTrue(e.getMessage().contains("Failed to resolve CID"));
+        }
+        backend.close();
+    }
+
+    private static <T> java.util.List<T> toList(Iterator<T> iterator) {
+        java.util.List<T> list = new ArrayList<>();
+        iterator.forEachRemaining(list::add);
+        return list;
     }
 
     @Test
@@ -208,7 +716,7 @@ public class IPFSBackendClientSeamTest {
         assertTrue(backend.metadataRecordExists("pref-two"));
         assertNotNull(backend.getMetadataRecord("pref-one"));
         assertEquals(2, backend.getAllMetadataRecords("pref").size());
-        assertTrue(client.pinAddCalls.isEmpty());
+        assertEquals(0, client.addCalls);
 
         assertTrue(backend.deleteMetadataRecord("pref-one"));
         assertFalse(backend.metadataRecordExists("pref-one"));
@@ -224,8 +732,8 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testMetadataPrefixOperationsIgnoreNonMatchingEntries() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.addResults.add(new MerkleNode(CID_TWO));
+        client.addResults.add(CID_ONE);
+        client.addResults.add(CID_TWO);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -306,9 +814,9 @@ public class IPFSBackendClientSeamTest {
         Files.writeString(tempFile.toPath(), "empty");
         try {
             backend.write(new DataIdentifier("blob-empty"), tempFile);
-            fail("Expected empty add result to fail");
+            fail("Expected an add without a CID to fail");
         } catch (DataStoreException e) {
-            assertTrue(e.getMessage().contains("IPFS add returned empty result"));
+            assertTrue(e.getMessage().contains("Kubo add returned no CID"));
         }
 
         client.fileWriteFailure = new RuntimeException("write-failed");
@@ -326,8 +834,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testCidMappingsMetadataAndReferenceKeySurviveRestart() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.blockStats.put(CID_ONE, Map.of("Size", 5));
+        client.addResults.add(CID_ONE);
         client.catResults.put(CID_ONE, "hello".getBytes(StandardCharsets.UTF_8));
 
         IPFSBackend firstBackend = new IPFSBackend(endpoint -> client);
@@ -369,8 +876,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testRecordLengthReturnsNegativeOneWhenCidWasEvicted() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.blockStats.put(CID_ONE, Map.of("Size", 5));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -391,8 +897,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testRecordLengthFailureIsTranslated() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.blockStats.put(CID_ONE, Map.of("Size", 5));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -402,7 +907,7 @@ public class IPFSBackendClientSeamTest {
         backend.write(id, tempFile);
 
         DataRecord record = backend.getRecord(id);
-        client.blockStatFailure = new RuntimeException("stat failed");
+        client.fileReadFailure = new RuntimeException("read failed");
 
         try {
             record.getLength();
@@ -418,7 +923,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testInitFactoryFailureAndReadDeleteFailuresAreTranslated() throws Exception {
         try {
-            new IPFSBackend(endpoint -> {
+            new IPFSBackend(settings -> {
                 throw new RuntimeException("connect failed");
             }).init();
             fail("Expected init failure");
@@ -427,10 +932,9 @@ public class IPFSBackendClientSeamTest {
         }
 
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         client.catFailure = new RuntimeException("cat failed");
         client.pinRemoveFailure = new RuntimeException("rm failed");
-        client.blockStats.put(CID_ONE, Map.of("Size", 5));
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -460,8 +964,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testDeleteRecordIgnoresMissingDirectPinWhenContentIsRetainedViaFilesLink() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.blockStats.put(CID_ONE, Map.of("Size", 5));
+        client.addResults.add(CID_ONE);
         client.pinRemoveFailure = new RuntimeException("path is not pinned");
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
@@ -481,20 +984,20 @@ public class IPFSBackendClientSeamTest {
 
     private static final class RecordingIpfsClient implements IpfsClient {
 
-        private final Queue<MerkleNode> addResults = new ArrayDeque<>();
+        private final Queue<String> addResults = new ArrayDeque<>();
+        private final List<byte[]> addedContent = new ArrayList<>();
+        private final List<File> addedFiles = new ArrayList<>();
+        private final Set<String> pins = new HashSet<>();
         private final Map<String, byte[]> catResults = new HashMap<>();
-        private final Map<String, Map<String, Object>> blockStats = new HashMap<>();
-        private final List<String> pinAddCalls = new ArrayList<>();
+        private int addCalls;
         private final List<String> pinRemoveCalls = new ArrayList<>();
         private final List<String> linkCidCalls = new ArrayList<>();
         private final Map<String, byte[]> files = new LinkedHashMap<>();
         private final Set<String> directories = new HashSet<>();
 
         private RuntimeException versionFailure;
-        private RuntimeException pinAddFailure;
         private RuntimeException pinRemoveFailure;
         private RuntimeException catFailure;
-        private RuntimeException blockStatFailure;
         private RuntimeException fileWriteFailure;
         private RuntimeException fileDeleteFailure;
         private RuntimeException fileReadFailure;
@@ -515,19 +1018,21 @@ public class IPFSBackendClientSeamTest {
         }
 
         @Override
-        public List<MerkleNode> add(NamedStreamable upload) {
+        public String add(File file) throws IOException {
+            addCalls++;
+            addedFiles.add(file);
+            addedContent.add(Files.readAllBytes(file.toPath()));
             if (addResults.isEmpty()) {
-                return List.of();
+                throw new IOException("Kubo add returned no CID");
             }
-            return List.of(addResults.remove());
+            String cid = addResults.remove();
+            pins.add(cid);
+            return cid;
         }
 
         @Override
-        public void pinAdd(String cid) {
-            if (pinAddFailure != null) {
-                throw pinAddFailure;
-            }
-            pinAddCalls.add(cid);
+        public boolean isPinned(String cid) {
+            return pins.contains(cid);
         }
 
         @Override
@@ -536,22 +1041,19 @@ public class IPFSBackendClientSeamTest {
                 throw pinRemoveFailure;
             }
             pinRemoveCalls.add(cid);
+            pins.remove(cid);
         }
 
         @Override
-        public byte[] cat(String cid) {
+        public InputStream cat(String cid) throws IOException {
             if (catFailure != null) {
                 throw catFailure;
             }
-            return catResults.get(cid);
-        }
-
-        @Override
-        public Map<String, Object> blockStat(String cid) {
-            if (blockStatFailure != null) {
-                throw blockStatFailure;
+            byte[] content = catResults.get(cid);
+            if (content == null) {
+                throw new IOException("block not found");
             }
-            return blockStats.get(cid);
+            return new ByteArrayInputStream(content);
         }
 
         @Override
@@ -590,10 +1092,7 @@ public class IPFSBackendClientSeamTest {
                 throw fileReadFailure;
             }
             byte[] data = files.get(normalize(path));
-            if (data == null) {
-                throw new IOException("missing file");
-            }
-            return data.clone();
+            return data == null ? null : data.clone();
         }
 
         @Override
@@ -636,7 +1135,9 @@ public class IPFSBackendClientSeamTest {
             if (fileSizeFailure != null) {
                 throw fileSizeFailure;
             }
-            byte[] data = files.get(normalize(path));
+            byte[] data = path.startsWith("/ipfs/")
+                ? catResults.get(path.substring("/ipfs/".length()))
+                : files.get(normalize(path));
             if (data == null) {
                 throw new IOException("missing file");
             }

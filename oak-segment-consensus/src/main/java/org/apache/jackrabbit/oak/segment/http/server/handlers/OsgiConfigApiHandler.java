@@ -906,6 +906,46 @@ public class OsgiConfigApiHandler {
             "Whether IPFS API endpoint is configured",
             "ipfs.api.endpoint|IPFS_API_ENDPOINT"));
         schema.add(schemaEntry(
+            "nodeRuntimeTuning.ipfs_api_authorization_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether an Authorization header is configured for the IPFS API (the value is never reported)",
+            "ipfs.api.authorization|IPFS_API_AUTHORIZATION"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.ipfs_cluster_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether binary writes are replicated through IPFS Cluster before they are acknowledged",
+            "ipfs.cluster.endpoint|IPFS_CLUSTER_ENDPOINT"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.ipfs_encryption_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether binaries are encrypted before they reach IPFS (the keys are never reported)",
+            "ipfs.encryption.keys|IPFS_ENCRYPTION_KEYS"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.blob_url_signing_configured",
+            "boolean",
+            false,
+            "startup-only",
+            "guarded",
+            "Whether signed, expiring blob download URLs can be issued and verified (the keys are never reported)",
+            "oak.blob.url.keys|OAK_BLOB_URL_KEYS"));
+        schema.add(schemaEntry(
+            "nodeRuntimeTuning.ipfs_network_policy",
+            "string",
+            "warn",
+            "startup-only",
+            "guarded",
+            "How startup treats an IPFS node that may expose content outside a private network: off, warn or private",
+            "ipfs.network.policy|IPFS_NETWORK_POLICY"));
+        schema.add(schemaEntry(
             "nodeRuntimeTuning.http_port",
             "int",
             0,
@@ -1070,6 +1110,16 @@ public class OsgiConfigApiHandler {
             RuntimeConfigValueResolver.readString("blobstore.type", "BLOBSTORE_TYPE", ""));
         values.put("ipfs_api_endpoint_configured",
             RuntimeConfigValueResolver.hasConfiguredValue("ipfs.api.endpoint", "IPFS_API_ENDPOINT"));
+        values.put("ipfs_api_authorization_configured",
+            RuntimeConfigValueResolver.hasConfiguredValue("ipfs.api.authorization", "IPFS_API_AUTHORIZATION"));
+        values.put("ipfs_cluster_configured", RuntimeConfigValueResolver.hasText(
+            RuntimeConfigValueResolver.readString("ipfs.cluster.endpoint", "IPFS_CLUSTER_ENDPOINT", null)));
+        values.put("ipfs_network_policy",
+            RuntimeConfigValueResolver.readString("ipfs.network.policy", "IPFS_NETWORK_POLICY", "warn").trim());
+        values.put("blob_url_signing_configured", RuntimeConfigValueResolver.hasText(
+            RuntimeConfigValueResolver.readString("oak.blob.url.keys", "OAK_BLOB_URL_KEYS", null)));
+        values.put("ipfs_encryption_configured", RuntimeConfigValueResolver.hasText(
+            RuntimeConfigValueResolver.readString("ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null)));
         values.put("http_port", readInt("http.port", 0));
         values.put("mock_epoch_duration_seconds",
             RuntimeConfigValueResolver.readLongEnvFirst(

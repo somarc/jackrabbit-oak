@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
+import org.apache.jackrabbit.oak.blob.cloud.ipfs.CidResolver;
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.commons.json.JsopBuilder;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
@@ -207,34 +208,43 @@ public class WriteApplicationServiceTest {
         NodeState contentNode = contentNode(nodeStore, PATH);
         assertEquals("client", stringProperty(contentNode, "oak:binaryStorageMode"));
         assertEquals("bafybeigdyrzt5", stringProperty(contentNode, "ipfsCid"));
-        assertEquals("https://ipfs.io/ipfs/bafybeigdyrzt5", stringProperty(contentNode, "ipfsGateway"));
+        assertFalse("gateway URLs are node-local and stay out of replicated state",
+            contentNode.hasProperty("ipfsGateway"));
         assertEquals("intent-1", stringProperty(contentNode, "jcr:intentToken"));
         assertTrue(booleanProperty(contentNode, "jcr:pendingBinary"));
     }
 
     @Test
-    public void testApplyWriteUsesConfiguredGatewayBaseForStoredIpfsGateway() throws Exception {
-        withProperty("ipfs.gateway.base", "http://127.0.0.1:8099/ipfs/", () -> {
-            FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
-            MemoryNodeStore nodeStore = new MemoryNodeStore();
-            FileStoreFlushService flushService = mock(FileStoreFlushService.class);
-            WriteApplicationService service = new WriteApplicationService(fileStore, nodeStore, null, flushService);
+    public void testApplyWriteIsIndependentOfTheNodesGatewaySettings() throws Exception {
+        NodeState[] applied = new NodeState[2];
+        String[] gateways = {"http://127.0.0.1:8099/ipfs/", "https://gateway.example/ipfs/"};
+        for (int i = 0; i < gateways.length; i++) {
+            int member = i;
+            withProperty("ipfs.gateway.base", gateways[i], () -> {
+                FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
+                MemoryNodeStore nodeStore = new MemoryNodeStore();
+                WriteApplicationService service = new WriteApplicationService(fileStore, nodeStore, null,
+                    mock(FileStoreFlushService.class));
 
-            service.applyWrite(
-                WALLET,
-                PATH,
-                "asset",
-                "plain-text",
-                "0xsig",
-                null,
-                null,
-                null,
-                "bafybeigdyrzt5",
-                null);
+                service.applyWrite(WALLET, PATH, "asset", "plain-text", "0xsig", null, null, null,
+                    "bafybeigdyrzt5", null);
 
-            NodeState contentNode = contentNode(nodeStore, PATH);
-            assertEquals("http://127.0.0.1:8099/ipfs/bafybeigdyrzt5", stringProperty(contentNode, "ipfsGateway"));
-        });
+                applied[member] = contentNode(nodeStore, PATH);
+            });
+        }
+        assertFalse(applied[0].hasProperty("ipfsGateway"));
+        assertEquals("bafybeigdyrzt5", stringProperty(applied[1], "ipfsCid"));
+        java.util.Set<String> first = new java.util.TreeSet<>();
+        java.util.Set<String> second = new java.util.TreeSet<>();
+        applied[0].getProperties().forEach(property -> first.add(property.getName()));
+        applied[1].getProperties().forEach(property -> second.add(property.getName()));
+        assertEquals(first, second);
+        for (String name : first) {
+            // Only wall-clock times may differ between the two runs.
+            if (!name.equals("timestamp") && !name.startsWith("jcr:created") && !name.startsWith("jcr:lastModified")) {
+                assertEquals(name, applied[0].getProperty(name), applied[1].getProperty(name));
+            }
+        }
     }
 
     @Test
@@ -324,6 +334,44 @@ public class WriteApplicationServiceTest {
 
         assertEquals("bafyFromProposal", stringProperty(content, "ipfsCid"));
         verifyNoInteractions(dataStore);
+    }
+
+    @Test
+    public void binaryWriteRecordsTheProposalCidInTheReplicatedIndex() {
+        String identifier = "ab".repeat(32);
+        MemoryNodeStore member = applyIndexedBinaryWrite(identifier + "#3", INDEXED_CID);
+
+        assertEquals(new CidResolver.Resolution(INDEXED_CID, 3), new ReplicatedBinaryIndex(member).resolve(identifier));
+    }
+
+    @Test
+    public void writesWithoutAStoredBinaryRecordNothingInTheReplicatedIndex() {
+        assertFalse(applyIndexedBinaryWrite("ab".repeat(32) + "#3", null).getRoot()
+            .hasChildNode(ReplicatedBinaryIndex.ROOT));
+        assertFalse(applyIndexedBinaryWrite("0x010203", INDEXED_CID).getRoot()
+            .hasChildNode(ReplicatedBinaryIndex.ROOT));
+        assertFalse(applyIndexedBinaryWrite(null, INDEXED_CID).getRoot()
+            .hasChildNode(ReplicatedBinaryIndex.ROOT));
+    }
+
+    @Test
+    public void replayedProposalDoesNotRewriteTheReplicatedIndex() {
+        String identifier = "cd".repeat(32);
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        DataStoreBlobStore blobStore = mock(DataStoreBlobStore.class);
+        when(blobStore.getDataStore()).thenReturn(mock(IPFSDataStore.class));
+        WriteApplicationService service = new WriteApplicationService(
+            fileStoreWithHeads("prev-head", "new-head"), nodeStore, blobStore, mock(FileStoreFlushService.class));
+        MutationAuditMetadata audit = MutationAuditMetadata.write(null, null, "p-replay", null, null, null, null)
+            .withAppliedAt(1_000L);
+
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, identifier + "#3",
+            "image/png", INDEXED_CID, audit);
+        NodeState afterFirst = nodeStore.getRoot().getChildNode(ReplicatedBinaryIndex.ROOT);
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, identifier + "#3",
+            "image/png", "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi", audit);
+
+        assertEquals(afterFirst, nodeStore.getRoot().getChildNode(ReplicatedBinaryIndex.ROOT));
     }
 
     @Test
@@ -569,6 +617,19 @@ public class WriteApplicationServiceTest {
         service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, "blob-1#3", "image/png",
             proposalCid, MutationAuditMetadata.write(null, null, "p-1", null, null, null, null).withAppliedAt(1_000L));
         return contentNode(nodeStore, PATH);
+    }
+
+    private static final String INDEXED_CID = "Qma7P9KW6iSj5e9J6b4HSzAtzmy9WS69YsxNKktQX88H4i";
+
+    private static MemoryNodeStore applyIndexedBinaryWrite(String blobId, String proposalCid) {
+        DataStoreBlobStore blobStore = mock(DataStoreBlobStore.class);
+        when(blobStore.getDataStore()).thenReturn(mock(IPFSDataStore.class));
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        WriteApplicationService service = new WriteApplicationService(
+            fileStoreWithHeads("prev-head", "new-head"), nodeStore, blobStore, mock(FileStoreFlushService.class));
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, blobId, "image/png",
+            proposalCid, MutationAuditMetadata.write(null, null, "p-1", null, null, null, null).withAppliedAt(1_000L));
+        return nodeStore;
     }
 
     private static Map<String, String> nonBinaryProperties(NodeState node) {

@@ -28,6 +28,7 @@ import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
 import org.osgi.service.component.annotations.Reference;
 import org.osgi.service.metatype.annotations.AttributeDefinition;
+import org.osgi.service.metatype.annotations.AttributeType;
 import org.osgi.service.metatype.annotations.Designate;
 import org.osgi.service.metatype.annotations.ObjectClassDefinition;
 import org.osgi.service.component.ComponentContext;
@@ -65,6 +66,87 @@ public class IPFSDataStoreService extends AbstractDataStoreService {
             description = "IPFS HTTP API multiaddr used to upload blobs and query block metadata."
         )
         String ipfsApiEndpoint() default "/ip4/127.0.0.1/tcp/5001";
+
+        @AttributeDefinition(
+            name = "IPFS API Authorization",
+            description = "Authorization header value for the Kubo RPC API, for example 'Bearer <token>' matching Kubo's API.Authorizations. Empty sends no header.",
+            type = AttributeType.PASSWORD
+        )
+        String ipfsApiAuthorization() default "";
+
+        @AttributeDefinition(
+            name = "IPFS Connect Timeout (ms)",
+            description = "Timeout for opening a connection to the Kubo RPC API."
+        )
+        int ipfsConnectTimeoutMillis() default 10_000;
+
+        @AttributeDefinition(
+            name = "IPFS Request Timeout (ms)",
+            description = "Time allowed for a Kubo RPC call to start responding. Uploads get one extra second per MiB."
+        )
+        int ipfsRequestTimeoutMillis() default 60_000;
+
+        @AttributeDefinition(
+            name = "IPFS Max Attempts",
+            description = "Attempts for a Kubo RPC call that fails in transport or with HTTP 502, 503 or 504."
+        )
+        int ipfsMaxAttempts() default 3;
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Endpoint",
+            description = "IPFS Cluster REST API (multiaddr or http(s) URL). When set, a write is acknowledged only after the replication minimum of cluster peers hold it. Empty disables replication."
+        )
+        String ipfsClusterEndpoint() default "";
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Authorization",
+            description = "Authorization header value for the IPFS Cluster REST API (Basic or Bearer). Empty sends no header.",
+            type = AttributeType.PASSWORD
+        )
+        String ipfsClusterAuthorization() default "";
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Replication Minimum",
+            description = "Cluster peers that must hold a binary before its write is acknowledged."
+        )
+        int ipfsClusterReplicationMin() default 2;
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Replication Maximum",
+            description = "Cluster peers that should hold each binary."
+        )
+        int ipfsClusterReplicationMax() default 3;
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Pin Timeout (ms)",
+            description = "How long a write waits for the replication minimum before it fails."
+        )
+        int ipfsClusterPinTimeoutMillis() default 120_000;
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Unpin On Delete",
+            description = "Unpin deleted binaries across the cluster. Enable only when the cluster stores this Oak repository alone: cluster pins have no owner, so unpinning drops content that any other user of the same CID still needs."
+        )
+        boolean ipfsClusterUnpinOnDelete() default false;
+
+        @AttributeDefinition(
+            name = "IPFS Encryption Keys",
+            description = "Encrypts binaries with AES-256-GCM before they reach IPFS. Keyring 'current;id:base64Key;id2:base64Key' with 32-byte keys: new binaries use 'current', older ones are read with the key named in their header. Every repository reading the same binaries needs the same keys. Empty stores plaintext.",
+            type = AttributeType.PASSWORD
+        )
+        String ipfsEncryptionKeys() default "";
+
+        @AttributeDefinition(
+            name = "IPFS Network Policy",
+            description = "How startup treats an IPFS node that may expose content outside a private network: 'warn' logs each exposure (public bootstrap, public HTTP routing, announcing blocks, relays, no swarm key), 'private' refuses to start unless the node is proven private, 'off' skips the check."
+        )
+        String ipfsNetworkPolicy() default "warn";
+
+        @AttributeDefinition(
+            name = "IPFS Swarm Probe Address",
+            description = "The IPFS node's swarm listener as reachable from Oak (host:port, e.g. kubo:4001). When set, startup proves on the wire that the node uses a private network key; 'private' requires it."
+        )
+        String ipfsSwarmProbeAddress() default "";
 
         @AttributeDefinition(
             name = "IPFS Files Root",

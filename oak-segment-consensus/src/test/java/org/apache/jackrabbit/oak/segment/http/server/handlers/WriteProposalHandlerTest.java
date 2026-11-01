@@ -32,6 +32,7 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
+import org.apache.jackrabbit.oak.spi.blob.BlobOptions;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.After;
@@ -57,6 +58,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Optional;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -65,6 +67,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -901,6 +904,9 @@ public class WriteProposalHandlerTest {
         ServerContext context = readyContext();
         ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
         context.proposalQueueManager = queueManager;
+        BlobStore blobStore = mock(BlobStore.class);
+        when(blobStore.writeBlob(any(), any(BlobOptions.class))).thenReturn("blob-1#3");
+        context.blobStore = blobStore;
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
             org.mockito.ArgumentMatchers.nullable(String.class),
@@ -937,6 +943,9 @@ public class WriteProposalHandlerTest {
         ServerContext context = readyContext();
         ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
         context.proposalQueueManager = queueManager;
+        BlobStore blobStore = mock(BlobStore.class);
+        when(blobStore.writeBlob(any(), any(BlobOptions.class))).thenReturn("blob-1#3");
+        context.blobStore = blobStore;
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
             org.mockito.ArgumentMatchers.nullable(String.class),
@@ -979,7 +988,7 @@ public class WriteProposalHandlerTest {
         IPFSDataStore ipfs = mock(IPFSDataStore.class);
         DataStoreBlobStore blobStore = mock(DataStoreBlobStore.class);
         when(blobStore.getDataStore()).thenReturn(ipfs);
-        when(blobStore.writeBlob(any(java.io.InputStream.class))).thenReturn("blob-1#3");
+        when(blobStore.writeBlob(any(java.io.InputStream.class), any(BlobOptions.class))).thenReturn("blob-1#3");
         when(ipfs.getCID("blob-1#3")).thenReturn("bafyIngested");
         context.proposalQueueManager = queueManager;
         context.blobStore = blobStore;
@@ -995,6 +1004,89 @@ public class WriteProposalHandlerTest {
         verify(queueManager).queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
             nullable(String.class), eq("blob-1#3"), anyString(), eq("bafyIngested"));
+        verify(ipfs, times(1)).getCID("blob-1#3");
+    }
+
+    @Test
+    public void validatorHostedBinaryIsStoredSynchronouslyFromThePartStream() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        System.setProperty("oak.proposal.validator.binary.upload.enabled", "true");
+        BlockchainConfig.reset();
+
+        ServerContext context = readyContext();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        BlobStore blobStore = mock(BlobStore.class);
+        context.blobStore = blobStore;
+        context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author", VALID_WALLET.toLowerCase()));
+        ArgumentCaptor<BlobOptions> options = ArgumentCaptor.forClass(BlobOptions.class);
+        java.util.concurrent.atomic.AtomicReference<byte[]> stored = new java.util.concurrent.atomic.AtomicReference<>();
+        when(blobStore.writeBlob(any(java.io.InputStream.class), options.capture())).thenAnswer(invocation -> {
+            stored.set(invocation.<java.io.InputStream>getArgument(0).readAllBytes());
+            return "blob-1#3";
+        });
+        HttpServletRequest request = request();
+        when(request.getContentType()).thenReturn("multipart/form-data; boundary=test");
+        Collection<Part> parts = multipartParts();
+        when(request.getParts()).thenReturn(parts);
+
+        new WriteProposalHandler(context).handleProposeWrite(request, responseWithBody(new StringWriter()));
+
+        assertEquals(BlobOptions.UploadType.SYNCHRONOUS, options.getValue().getUpload());
+        assertArrayEquals(new byte[] {1, 2, 3}, stored.get());
+    }
+
+    @Test
+    public void binaryWithoutABlobStoreIsRejectedInsteadOfQueuedWithoutIt() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        System.setProperty("oak.proposal.validator.binary.upload.enabled", "true");
+        BlockchainConfig.reset();
+
+        ServerContext context = readyContext();
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author", VALID_WALLET.toLowerCase()));
+        HttpServletRequest request = request();
+        when(request.getContentType()).thenReturn("multipart/form-data; boundary=test");
+        Collection<Part> parts = multipartParts();
+        when(request.getParts()).thenReturn(parts);
+        HttpServletResponse response = responseWithBody(new StringWriter());
+
+        new WriteProposalHandler(context).handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        verify(queueManager, never()).queueProposal(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+            nullable(String.class), nullable(String.class), anyString(), nullable(String.class));
+    }
+
+    @Test
+    public void binaryStoreFailureRejectsTheWriteInsteadOfQueueingItWithoutTheBinary() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        System.setProperty("oak.proposal.validator.binary.upload.enabled", "true");
+        BlockchainConfig.reset();
+
+        ServerContext context = readyContext();
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        BlobStore blobStore = mock(BlobStore.class);
+        context.proposalQueueManager = queueManager;
+        context.blobStore = blobStore;
+        context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author", VALID_WALLET.toLowerCase()));
+        when(blobStore.writeBlob(any(java.io.InputStream.class), any(BlobOptions.class)))
+            .thenThrow(new java.io.IOException("IPFS unreachable"));
+        HttpServletRequest request = request();
+        when(request.getContentType()).thenReturn("multipart/form-data; boundary=test");
+        Collection<Part> parts = multipartParts();
+        when(request.getParts()).thenReturn(parts);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        new WriteProposalHandler(context).handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(body.toString().contains("binary_upload_failed"));
+        verify(queueManager, never()).queueProposal(
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+            nullable(String.class), nullable(String.class), anyString(), nullable(String.class));
     }
 
     @Test
@@ -1009,7 +1101,7 @@ public class WriteProposalHandlerTest {
         context.proposalQueueManager = queueManager;
         context.blobStore = blobStore;
         context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author", VALID_WALLET.toLowerCase()));
-        when(blobStore.writeBlob(any())).thenReturn("blob-1");
+        when(blobStore.writeBlob(any(), any(BlobOptions.class))).thenReturn("blob-1");
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
             nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
@@ -1031,7 +1123,7 @@ public class WriteProposalHandlerTest {
         WriteProposalHandler handler = new WriteProposalHandler(context);
         handler.handleProposeWrite(request, response);
 
-        verify(blobStore).writeBlob(any());
+        verify(blobStore).writeBlob(any(), any(BlobOptions.class));
         verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
         assertTrue(body.toString().contains("\"status\":\"accepted\""));
     }
@@ -1169,6 +1261,7 @@ public class WriteProposalHandlerTest {
         when(part.getName()).thenReturn(name);
         when(part.getSubmittedFileName()).thenReturn(filename);
         when(part.getContentType()).thenReturn(contentType);
+        when(part.getSize()).thenReturn((long) bytes.length);
         when(part.getInputStream()).thenReturn(new ByteArrayInputStream(bytes));
         return part;
     }

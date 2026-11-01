@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.binary;
 
-import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -189,17 +188,6 @@ public class CidMappingService implements AutoCloseable {
 
         String oakId = cidToOak.get(ipfsCid);
         return Optional.ofNullable(oakId);
-    }
-
-    /**
-     * Get IPFS gateway URL for an Oak blob ID.
-     * 
-     * @param oakBlobId Oak blob ID
-     * @return Optional containing gateway URL using the configured gateway base
-     */
-    public Optional<String> getGatewayUrl(String oakBlobId) {
-        return getCid(oakBlobId)
-            .map(IpfsGatewayUrls::gatewayUrl);
     }
 
     /**

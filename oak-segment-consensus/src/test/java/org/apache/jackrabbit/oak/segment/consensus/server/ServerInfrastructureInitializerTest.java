@@ -198,7 +198,7 @@ public class ServerInfrastructureInitializerTest {
 
         when(recordId.toString()).thenReturn("record-1");
         when(fileStore.getHead().getRecordId()).thenReturn(recordId);
-        when(factory.createIpfsBlobStore(anyString(), eq(tempFolder.getRoot()))).thenReturn(blobStore);
+        when(factory.createIpfsBlobStore(any(), eq(tempFolder.getRoot()))).thenReturn(blobStore);
         storageFactory.when(() -> StorageBackendFactory.createStorageRuntime(eq(tempFolder.getRoot()), eq(blobStore),
             any(org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig.class)))
             .thenReturn(new ServerStorageRuntime(fileStore, nodeStore, nodeStore, null, RemoteMounts.NONE));
@@ -279,5 +279,19 @@ public class ServerInfrastructureInitializerTest {
             this.gcAccountManager = gcAccountManager;
             this.periodicGCJob = periodicGCJob;
         }
+    }
+
+    @Test
+    public void testIpfsDataStoreGetsTheReplicatedBinaryIndex() {
+        org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfs =
+            mock(org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore.class);
+        org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore blobStore =
+            mock(org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore.class);
+        when(blobStore.getDataStore()).thenReturn(ipfs);
+
+        ServerInfrastructureInitializer.attachReplicatedBinaryIndex(blobStore, mock(NodeStore.class));
+        ServerInfrastructureInitializer.attachReplicatedBinaryIndex(mock(BlobStore.class), mock(NodeStore.class));
+
+        verify(ipfs).setCidResolver(any(org.apache.jackrabbit.oak.segment.consensus.service.ReplicatedBinaryIndex.class));
     }
 }

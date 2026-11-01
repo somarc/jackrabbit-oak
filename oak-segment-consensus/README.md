@@ -41,6 +41,14 @@ flowchart LR
 - **Genesis is verified.** The first replicated command creates a reserved,
   digest-sealed genesis subtree, and writes are refused until every member has
   verified it.
+- **Binaries are stored before they are ordered.** The leader stores an uploaded
+  binary synchronously and replicates only its blob ID and IPFS CID. If the
+  binary cannot be stored, the write is rejected with `503`
+  `binary_upload_failed` rather than queued without it.
+  Applying the write also records the blob ID and CID in a hidden, replicated
+  index (`/:oak-chain-binaries`), so every validator can resolve the binary
+  whichever IPFS node stored it. Changing what apply writes requires every
+  validator to run the same build.
 
 Details: [operation lifecycle](docs/OPERATION-LIFECYCLE.md) and the
 [genesis and write-safety contract](docs/GENESIS-AND-WRITE-SAFETY.md).
@@ -154,7 +162,17 @@ the environment variable wins. Settings listed without an environment variable a
 | `oak.validator.auth.token` | `OAK_VALIDATOR_AUTH_TOKEN` | unset (auth off) | See [Security](#security). |
 | `tls.enabled` | | `false` | With TLS, `--port` serves HTTPS. Also `tls.keystore.path`, `tls.keystore.password`, `tls.keystore.type` (`PKCS12`), `tls.truststore.*`, `tls.client.auth` (`none`/`want`/`need`), and `http.port` for an extra plain-HTTP connector. PEM files are rejected; convert to a keystore. |
 | `oak.blob.backend` | `OAK_BLOB_BACKEND` | `ipfs` | `ipfs`, `azure` or `aws`. Legacy alias: `blobstore.type` / `BLOBSTORE_TYPE`. |
-| `ipfs.api.endpoint` | `IPFS_API_ENDPOINT` | `/ip4/127.0.0.1/tcp/5001` | Kubo API multiaddr. Startup fails if it is unreachable. |
+| `ipfs.api.endpoint` | `IPFS_API_ENDPOINT` | `/ip4/127.0.0.1/tcp/5001` | Kubo API multiaddr. Startup fails if it is unreachable. Validators may each run their own IPFS node in one private swarm: a binary stored through another validator's node is resolved through the replicated binary index and fetched from that node. Reading nodes do not keep a copy, so without IPFS Cluster each binary is available only while the node that stored it is. Binaries written by builds without the index can only be read through the node that stored them. |
+| `ipfs.cluster.endpoint`, `ipfs.cluster.authorization` | `IPFS_CLUSTER_ENDPOINT`, `IPFS_CLUSTER_AUTHORIZATION` | unset | IPFS Cluster REST API of this validator's cluster peer, and its `Authorization` header (Basic or Bearer; prefer the environment variable). When set, a binary write is acknowledged only after the replication minimum of peers hold it, and a write that cannot reach it fails with `503 binary_upload_failed`. |
+| `ipfs.cluster.replication-min`, `ipfs.cluster.replication-max`, `ipfs.cluster.pin-timeout-ms` | `IPFS_CLUSTER_REPLICATION_MIN`, `IPFS_CLUSTER_REPLICATION_MAX`, `IPFS_CLUSTER_PIN_TIMEOUT_MS` | `2`, `3`, `120000` | Peers that must hold a binary before it is acknowledged, peers that should hold it, and how long a write waits. |
+| `ipfs.encryption.keys` | `IPFS_ENCRYPTION_KEYS` | unset (plaintext) | Keyring `current;id:base64Key;...` with 32-byte keys: binaries are encrypted with AES-256-GCM before they reach IPFS. Every validator needs the same keyring, and retired keys must stay listed while binaries use them. Set it through the environment variable; the value is never reported. Gateway URLs then serve ciphertext; `/api/blob/{id}` serves plaintext. Content that a client references by an existing `ipfsCid` never passes through the validator and is not encrypted. |
+| `ipfs.network.policy`, `ipfs.swarm.probe-address` | `IPFS_NETWORK_POLICY`, `IPFS_SWARM_PROBE_ADDRESS` | `warn`, unset | At startup the validator inspects its Kubo node for settings that expose content outside a private network (public bootstrap peers, public HTTP routers, AutoConf, announcing blocks, relays, QUIC/WebTransport/WebRTC listeners). `warn` logs them, `private` refuses to start unless the node is proven private, `off` skips the check. The probe address is the node's swarm listener as the validator reaches it (for example `kubo:4001`); with it, startup proves on the wire that the node uses a `swarm.key`. `private` requires it. |
+| `ipfs.gateway.base`, `ipfs.local.gateway.base` | `IPFS_GATEWAY_BASE`, `IPFS_LOCAL_GATEWAY_BASE` | unset, `http://127.0.0.1:8099/ipfs/` | IPFS gateways used to build URLs in `/api/cid` responses and the `/api/cid/gateway/{id}` redirect, at read time. There is no public default: a public gateway learns every CID it is asked for and cannot reach a private swarm. Without `ipfs.gateway.base`, `/api/cid/gateway/{id}` answers `404 ipfs_gateway_not_configured`. Gateway URLs are no longer stored in content; nodes written by earlier builds keep their `ipfsGateway`. Upgrade all validators together: a build that still writes the property derives different state from one that does not. |
+| `oak.blob.url.keys` | `OAK_BLOB_URL_KEYS` | unset (off) | Keyring `current;id:base64Key;...` (32-byte keys) for signed, expiring blob download URLs; see [Security](#security). Every validator needs the same keyring. Set it through the environment variable; the value is never reported. |
+| `oak.blob.url.ttl-seconds`, `oak.blob.url.max-ttl-seconds`, `oak.blob.url.clock-skew-seconds` | `OAK_BLOB_URL_TTL_SECONDS`, `OAK_BLOB_URL_MAX_TTL_SECONDS`, `OAK_BLOB_URL_CLOCK_SKEW_SECONDS` | `300`, `3600`, `60` | Default and maximum lifetime of a signed URL, and the clock skew tolerated between validators; a URL stays usable for its lifetime plus the skew. Use the same values on every validator. A malformed value fails startup. |
+| `oak.blob.url.required` | `OAK_BLOB_URL_REQUIRED` | `false` | `true` or `false`. With `true`, `/api/blob/{id}` serves signed URLs only (`403 blob_url_required` otherwise), and startup fails without `oak.blob.url.keys`. |
+| `ipfs.api.authorization` | `IPFS_API_AUTHORIZATION` | unset | `Authorization` header for the Kubo RPC API, for example `Bearer <token>` matching Kubo's `API.Authorizations`. Set it through the environment variable: a `-D` value is visible in process listings. The value is never reported. Use an `https://` endpoint or a `/https` multiaddr to send it over TLS. |
+| `ipfs.api.connect-timeout-ms`, `ipfs.api.request-timeout-ms`, `ipfs.api.max-attempts` | `IPFS_API_CONNECT_TIMEOUT_MS`, `IPFS_API_REQUEST_TIMEOUT_MS`, `IPFS_API_MAX_ATTEMPTS` | `10000`, `60000`, `3` | Kubo RPC timeouts and attempts. Transport failures and HTTP 502/503/504 are retried with backoff; uploads get one extra second per MiB. |
 | `oak.segment.backend` | `OAK_SEGMENT_BACKEND` | `local` | `local`, `azure` or `aws`. Cloud backends need further settings; see [`StorageBackendConfig`](src/main/java/org/apache/jackrabbit/oak/segment/consensus/config/StorageBackendConfig.java). |
 | `oak.blockchain.mode` | `OAK_BLOCKCHAIN_MODE` | `mock` | `mock` simulates payments. `local` (chain id 31337, epochs from the local clock) and `sepolia` (chain id 11155111) verify payments on chain and need the RPC URL and contract address. `mainnet` (chain id 1) is rejected in this version. Any other value fails startup. Checked before the store, HTTP or Aeron start. |
 | `oak.blockchain.rpcUrl` | `OAK_BLOCKCHAIN_RPC_URL` | unset | Absolute `http(s)`/`ws(s)` URL with a host. At bridge start `eth_chainId` must equal the mode's chain id; a mismatch or an unreachable endpoint fails startup. |
@@ -182,6 +200,19 @@ set values.
 - **Token auth is untested between validators.** Validators call each other over
   HTTP (for example `/v1/aeron/cluster-state` for leader discovery) without sending
   a token, so with a token set those calls are rejected.
+- **Signed blob URLs** work like S3 presigned URLs. With `oak.blob.url.keys`
+  set, `GET /v1/binary/download-url/{blobId}?ttl=300` (a guarded route) returns
+  `/api/blob/{blobId}?exp=…&kid=…&sig=…`, an HMAC-SHA256 signature over the
+  path, expiry and key id that any validator with the same keyring accepts
+  until it expires. A valid signature stands in for the token on that
+  download only; an invalid or expired one is refused with `403` even when a
+  token is sent. Signed downloads are served `Cache-Control: private`, with
+  `Referrer-Policy: no-referrer`; signatures cover GET only. Signing restricts
+  access only together with a token (who may ask for URLs) and
+  `oak.blob.url.required` (no unsigned downloads). To rotate keys, add the new
+  key to every validator, then make it `current`, and remove the old one after
+  `max-ttl-seconds` plus the skew. Download errors name no IPFS paths or nodes;
+  details are logged.
 - **Bind to loopback for local work** with `-Dhttp.bind.host=127.0.0.1`. Do not
   expose a validator without a token to an untrusted network.
 - **Mock mode is not payment verification.** Signatures are format-checked only and
@@ -200,6 +231,8 @@ See the repository [security policy](../SECURITY.md).
 | `POST /v1/propose-write`, `/v1/propose-delete` | Submit signed operations; returns `202` or a `307` redirect to the leader. |
 | `GET /v1/ops/operations/{id}` | Operation state through to `COMMITTED`, `FAILED` or `TIMED_OUT`. |
 | `GET /v1/wallets/content?wallet=…`, `/v1/explorer/*` | Read and browse repository content. |
+| `GET /api/blob/{blobId}`, `/v1/binary/download-url/{blobId}` | Download a binary (plaintext, also when IPFS encryption is on), and issue a signed, expiring URL for it. |
+| `GET /v1/ops/ipfs/health`, `/v1/ops/ipfs/verify?limit=` | IPFS node and cluster status, encryption and network settings, operation counts; and a check that stored binaries are pinned or replicated. `/health/deep` carries the status only, and `/metrics` the `oak_ipfs_*_total` counters. |
 | `GET /v1/config/osgi*` | Effective configuration and its sources. |
 | `GET /metrics` | Prometheus metrics. |
 
