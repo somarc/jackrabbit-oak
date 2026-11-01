@@ -439,6 +439,76 @@ public class IPFSBackendClientSeamTest {
     }
 
     @Test
+    public void testUnknownIdentifierIsAdoptedFromTheResolver() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        byte[] content = "replicated".getBytes(StandardCharsets.UTF_8);
+        client.catResults.put(CID_ONE, content);
+        java.util.List<String> asked = new ArrayList<>();
+        IPFSBackend backend = new IPFSBackend(settings -> client);
+        backend.setCidResolver(identifier -> {
+            asked.add(identifier);
+            return "blob-remote".equals(identifier) ? new CidResolver.Resolution(CID_ONE, content.length) : null;
+        });
+        backend.init();
+        DataIdentifier id = new DataIdentifier("blob-remote");
+
+        assertTrue(backend.exists(id));
+        DataRecord record = backend.getRecord(id);
+        assertEquals(content.length, record.getLength());
+        try (InputStream stream = record.getStream()) {
+            assertArrayEquals(content, stream.readAllBytes());
+        }
+        assertFalse(backend.exists(new DataIdentifier("blob-unknown")));
+
+        IPFSBackend restarted = new IPFSBackend(settings -> client);
+        restarted.init();
+        assertEquals(CID_ONE, restarted.getCID(id));
+        assertEquals(content.length, restarted.getRecord(id).getLength());
+        assertEquals(java.util.List.of("blob-remote", "blob-unknown"), asked);
+        assertEquals(java.util.List.of(id), toList(restarted.getAllIdentifiers()));
+        assertTrue(client.listFiles("/oak/ipfs/content").isEmpty());
+
+        backend.close();
+        restarted.close();
+    }
+
+    @Test
+    public void testResolverWithoutLengthUsesTheFileSize() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.catResults.put(CID_ONE, "twelve bytes".getBytes(StandardCharsets.UTF_8));
+        IPFSBackend backend = new IPFSBackend(settings -> client);
+        backend.setCidResolver(identifier -> new CidResolver.Resolution(CID_ONE, -1));
+        backend.init();
+
+        assertEquals(12, backend.getRecord(new DataIdentifier("blob-no-length")).getLength());
+        backend.close();
+    }
+
+    @Test
+    public void testResolverFailureIsAnErrorNotAbsence() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        IPFSBackend backend = new IPFSBackend(settings -> client);
+        backend.setCidResolver(identifier -> {
+            throw new IllegalStateException("repository unavailable");
+        });
+        backend.init();
+
+        try {
+            backend.exists(new DataIdentifier("blob-x"));
+            fail("Expected the resolver failure to surface");
+        } catch (DataStoreException e) {
+            assertTrue(e.getMessage().contains("Failed to resolve CID"));
+        }
+        backend.close();
+    }
+
+    private static <T> java.util.List<T> toList(Iterator<T> iterator) {
+        java.util.List<T> list = new ArrayList<>();
+        iterator.forEachRemaining(list::add);
+        return list;
+    }
+
+    @Test
     public void testMetadataLifecycleAndPrefixDeletion() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
         IPFSBackend backend = new IPFSBackend(endpoint -> client);

@@ -68,6 +68,11 @@ import java.util.regex.Pattern;
  * <p>Entries written before {@code blob-attrs} existed report their UnixFS
  * file size and the current time as last-modified, which keeps them out of
  * garbage collection until they are written again.</p>
+ *
+ * <p>When an identifier is not in the local index, an optional
+ * {@link CidResolver} is asked; a blob it knows is adopted into the local
+ * index (mapping and attributes, without a retention link) and read through
+ * this node, which fetches the blocks from its peers.</p>
  */
 public class IPFSBackend extends AbstractSharedBackend {
 
@@ -107,6 +112,8 @@ public class IPFSBackend extends AbstractSharedBackend {
     private String ipfsFilesRoot = DEFAULT_IPFS_FILES_ROOT;
 
     private volatile byte[] secret;
+
+    private volatile CidResolver cidResolver;
 
     /**
      * Creates a backend using the default HTTP IPFS client implementation.
@@ -399,6 +406,15 @@ public class IPFSBackend extends AbstractSharedBackend {
     }
 
     /**
+     * Sets the resolver consulted for identifiers missing from the local index.
+     *
+     * @param cidResolver the resolver, or {@code null} for none
+     */
+    public void setCidResolver(CidResolver cidResolver) {
+        this.cidResolver = cidResolver;
+    }
+
+    /**
      * Sets the credentials, timeouts and retry policy used on the next
      * {@link #init()}; the endpoint is taken from
      * {@link #setIpfsApiEndpoint(String)}.
@@ -508,10 +524,43 @@ public class IPFSBackend extends AbstractSharedBackend {
         } catch (Exception e) {
             throw new DataStoreException("Failed to read CID mapping for " + identifier, e);
         }
+        if (persisted == null) {
+            persisted = adopt(identifier);
+        }
         if (persisted != null) {
             cidCache.put(identifier, persisted);
         }
         return persisted;
+    }
+
+    /**
+     * Records a blob known only to the {@link CidResolver} in the local index,
+     * attributes first, so GC on this node can see it. Nothing is pinned here:
+     * retention belongs to the node that stored the blob or to its cluster.
+     */
+    private String adopt(DataIdentifier identifier) throws DataStoreException {
+        CidResolver resolver = cidResolver;
+        if (resolver == null) {
+            return null;
+        }
+        CidResolver.Resolution resolution;
+        try {
+            resolution = resolver.resolve(identifier.toString());
+        } catch (Exception e) {
+            throw new DataStoreException("Failed to resolve CID for " + identifier, e);
+        }
+        if (resolution == null) {
+            return null;
+        }
+        try {
+            long length = resolution.length() >= 0 ? resolution.length() : ipfs.fileSize("/ipfs/" + resolution.cid());
+            writeBlobAttributes(identifier, length, System.currentTimeMillis());
+            ipfs.writeFile(blobIndexPath(identifier), resolution.cid().getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            throw new DataStoreException("Failed to adopt " + identifier + " as " + resolution.cid(), e);
+        }
+        LOG.debug("Adopted {} as CID {} from the resolver", identifier, resolution.cid());
+        return resolution.cid();
     }
 
     private void writeBlobAttributes(DataIdentifier identifier, long length, long lastModified) throws Exception {

@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
+import org.apache.jackrabbit.oak.blob.cloud.ipfs.CidResolver;
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.commons.json.JsopBuilder;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
@@ -305,6 +306,44 @@ public class WriteApplicationServiceTest {
     }
 
     @Test
+    public void binaryWriteRecordsTheProposalCidInTheReplicatedIndex() {
+        String identifier = "ab".repeat(32);
+        MemoryNodeStore member = applyIndexedBinaryWrite(identifier + "#3", INDEXED_CID);
+
+        assertEquals(new CidResolver.Resolution(INDEXED_CID, 3), new ReplicatedBinaryIndex(member).resolve(identifier));
+    }
+
+    @Test
+    public void writesWithoutAStoredBinaryRecordNothingInTheReplicatedIndex() {
+        assertFalse(applyIndexedBinaryWrite("ab".repeat(32) + "#3", null).getRoot()
+            .hasChildNode(ReplicatedBinaryIndex.ROOT));
+        assertFalse(applyIndexedBinaryWrite("0x010203", INDEXED_CID).getRoot()
+            .hasChildNode(ReplicatedBinaryIndex.ROOT));
+        assertFalse(applyIndexedBinaryWrite(null, INDEXED_CID).getRoot()
+            .hasChildNode(ReplicatedBinaryIndex.ROOT));
+    }
+
+    @Test
+    public void replayedProposalDoesNotRewriteTheReplicatedIndex() {
+        String identifier = "cd".repeat(32);
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        DataStoreBlobStore blobStore = mock(DataStoreBlobStore.class);
+        when(blobStore.getDataStore()).thenReturn(mock(IPFSDataStore.class));
+        WriteApplicationService service = new WriteApplicationService(
+            fileStoreWithHeads("prev-head", "new-head"), nodeStore, blobStore, mock(FileStoreFlushService.class));
+        MutationAuditMetadata audit = MutationAuditMetadata.write(null, null, "p-replay", null, null, null, null)
+            .withAppliedAt(1_000L);
+
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, identifier + "#3",
+            "image/png", INDEXED_CID, audit);
+        NodeState afterFirst = nodeStore.getRoot().getChildNode(ReplicatedBinaryIndex.ROOT);
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, identifier + "#3",
+            "image/png", "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi", audit);
+
+        assertEquals(afterFirst, nodeStore.getRoot().getChildNode(ReplicatedBinaryIndex.ROOT));
+    }
+
+    @Test
     public void testApplyWriteIsIdempotentForDuplicateProposalReplay() {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = new MemoryNodeStore();
@@ -521,6 +560,19 @@ public class WriteApplicationServiceTest {
         service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, "blob-1#3", "image/png",
             proposalCid, MutationAuditMetadata.write(null, null, "p-1", null, null, null, null).withAppliedAt(1_000L));
         return contentNode(nodeStore, PATH);
+    }
+
+    private static final String INDEXED_CID = "Qma7P9KW6iSj5e9J6b4HSzAtzmy9WS69YsxNKktQX88H4i";
+
+    private static MemoryNodeStore applyIndexedBinaryWrite(String blobId, String proposalCid) {
+        DataStoreBlobStore blobStore = mock(DataStoreBlobStore.class);
+        when(blobStore.getDataStore()).thenReturn(mock(IPFSDataStore.class));
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        WriteApplicationService service = new WriteApplicationService(
+            fileStoreWithHeads("prev-head", "new-head"), nodeStore, blobStore, mock(FileStoreFlushService.class));
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, blobId, "image/png",
+            proposalCid, MutationAuditMetadata.write(null, null, "p-1", null, null, null, null).withAppliedAt(1_000L));
+        return nodeStore;
     }
 
     private static Map<String, String> nonBinaryProperties(NodeState node) {

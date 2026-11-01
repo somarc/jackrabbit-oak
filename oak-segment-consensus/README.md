@@ -45,6 +45,10 @@ flowchart LR
   binary synchronously and replicates only its blob ID and IPFS CID. If the
   binary cannot be stored, the write is rejected with `503`
   `binary_upload_failed` rather than queued without it.
+  Applying the write also records the blob ID and CID in a hidden, replicated
+  index (`/:oak-chain-binaries`), so every validator can resolve the binary
+  whichever IPFS node stored it. Changing what apply writes requires every
+  validator to run the same build.
 
 Details: [operation lifecycle](docs/OPERATION-LIFECYCLE.md) and the
 [genesis and write-safety contract](docs/GENESIS-AND-WRITE-SAFETY.md).
@@ -158,7 +162,7 @@ the environment variable wins. Settings listed without an environment variable a
 | `oak.validator.auth.token` | `OAK_VALIDATOR_AUTH_TOKEN` | unset (auth off) | See [Security](#security). |
 | `tls.enabled` | | `false` | With TLS, `--port` serves HTTPS. Also `tls.keystore.path`, `tls.keystore.password`, `tls.keystore.type` (`PKCS12`), `tls.truststore.*`, `tls.client.auth` (`none`/`want`/`need`), and `http.port` for an extra plain-HTTP connector. PEM files are rejected; convert to a keystore. |
 | `oak.blob.backend` | `OAK_BLOB_BACKEND` | `ipfs` | `ipfs`, `azure` or `aws`. Legacy alias: `blobstore.type` / `BLOBSTORE_TYPE`. |
-| `ipfs.api.endpoint` | `IPFS_API_ENDPOINT` | `/ip4/127.0.0.1/tcp/5001` | Kubo API multiaddr. Startup fails if it is unreachable. Every validator of a cluster must use the same IPFS repository: a blob is resolved through the IPFS Files index of the node that stored it, so per-validator IPFS nodes are not supported yet. |
+| `ipfs.api.endpoint` | `IPFS_API_ENDPOINT` | `/ip4/127.0.0.1/tcp/5001` | Kubo API multiaddr. Startup fails if it is unreachable. Validators may each run their own IPFS node in one private swarm: a binary stored through another validator's node is resolved through the replicated binary index and fetched from that node. Reading nodes do not keep a copy, so until replication is configured each binary is available only while the node that stored it is. Binaries written by builds without the index can only be read through the node that stored them. |
 | `ipfs.api.authorization` | `IPFS_API_AUTHORIZATION` | unset | `Authorization` header for the Kubo RPC API, for example `Bearer <token>` matching Kubo's `API.Authorizations`. Set it through the environment variable: a `-D` value is visible in process listings. The value is never reported. Use an `https://` endpoint or a `/https` multiaddr to send it over TLS. |
 | `ipfs.api.connect-timeout-ms`, `ipfs.api.request-timeout-ms`, `ipfs.api.max-attempts` | `IPFS_API_CONNECT_TIMEOUT_MS`, `IPFS_API_REQUEST_TIMEOUT_MS`, `IPFS_API_MAX_ATTEMPTS` | `10000`, `60000`, `3` | Kubo RPC timeouts and attempts. Transport failures and HTTP 502/503/504 are retried with backoff; uploads get one extra second per MiB. |
 | `oak.segment.backend` | `OAK_SEGMENT_BACKEND` | `local` | `local`, `azure` or `aws`. Cloud backends need further settings; see [`StorageBackendConfig`](src/main/java/org/apache/jackrabbit/oak/segment/consensus/config/StorageBackendConfig.java). |

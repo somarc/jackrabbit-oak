@@ -272,6 +272,10 @@ public class WriteApplicationService {
             // Handle binary content
             if (blobId != null && !blobId.isEmpty()) {
                 handleBinaryContent(contentNode, blobStore, blobId, mimeType, ipfsCid);
+                if (ipfsCid != null && !ipfsCid.isEmpty()) {
+                    // Lets every validator resolve the binary, whichever IPFS node stored it.
+                    ReplicatedBinaryIndex.record(rootBuilder, blobId, ipfsCid);
+                }
             } else if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 // Pure IPFS reference without local blob
                 contentNode.setProperty("ipfsCid", ipfsCid);

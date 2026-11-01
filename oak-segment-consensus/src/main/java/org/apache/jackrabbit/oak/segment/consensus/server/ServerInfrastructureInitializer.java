@@ -23,6 +23,8 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.function.Supplier;
 
+import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
+import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
@@ -32,6 +34,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
+import org.apache.jackrabbit.oak.segment.consensus.service.ReplicatedBinaryIndex;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
@@ -66,6 +69,7 @@ final class ServerInfrastructureInitializer {
         NodeStore authoritativeNodeStore = storageRuntime.authoritativeNodeStore();
         NodeStore readViewNodeStore = storageRuntime.readViewNodeStore();
         Closeable readViewResources = storageRuntime.readViewResources();
+        attachReplicatedBinaryIndex(blobStore, authoritativeNodeStore);
 
         log.info("✅ Oak FileStore initialized");
         log.info("   - Store version: {}", fileStore.getHead().getRecordId());
@@ -81,6 +85,19 @@ final class ServerInfrastructureInitializer {
         log.info("✅ HTTP server initialized (not yet started)");
         return new InitializationResult(blobStoreType, blobStore, fileStore, authoritativeNodeStore, readViewNodeStore,
             readViewResources, httpServer, gcCostEstimator);
+    }
+
+    /**
+     * Lets the IPFS DataStore resolve binaries stored through other validators' IPFS nodes from the
+     * replicated binary index.
+     */
+    static void attachReplicatedBinaryIndex(BlobStore blobStore, NodeStore authoritativeNodeStore) {
+        if (blobStore instanceof DataStoreBlobStore
+                && ((DataStoreBlobStore) blobStore).getDataStore() instanceof IPFSDataStore) {
+            ((IPFSDataStore) ((DataStoreBlobStore) blobStore).getDataStore())
+                .setCidResolver(new ReplicatedBinaryIndex(authoritativeNodeStore));
+            log.info("   - IPFS binaries stored by other validators resolve through the replicated binary index");
+        }
     }
 
     private GCCostEstimator initializeGCCostEstimator(FileStore fileStore,

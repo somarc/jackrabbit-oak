@@ -303,6 +303,24 @@ public class IPFSDataStoreTest {
         assertEquals(Map.of("blob-id", "QmTestCid"), dataStore.getAllCIDMappings());
     }
 
+    @Test
+    public void testCidResolverReachesTheBackendBeforeAndAfterCreation() throws Exception {
+        CidResolver first = identifier -> null;
+        dataStore.setCidResolver(first);
+        IPFSBackend backend = (IPFSBackend) dataStore.createBackend();
+        assertSame(first, resolverOf(backend));
+
+        CidResolver second = identifier -> null;
+        dataStore.setCidResolver(second);
+        assertSame(second, resolverOf(backend));
+    }
+
+    private static Object resolverOf(IPFSBackend backend) throws Exception {
+        Field field = IPFSBackend.class.getDeclaredField("cidResolver");
+        field.setAccessible(true);
+        return field.get(backend);
+    }
+
     @SuppressWarnings("unchecked")
     private static void addCidMapping(IPFSBackend backend, String blobId, String cid) throws Exception {
         Field cidCacheField = IPFSBackend.class.getDeclaredField("cidCache");

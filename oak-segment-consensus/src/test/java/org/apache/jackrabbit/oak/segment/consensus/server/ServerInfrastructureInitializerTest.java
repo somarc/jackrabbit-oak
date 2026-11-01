@@ -279,4 +279,18 @@ public class ServerInfrastructureInitializerTest {
             this.periodicGCJob = periodicGCJob;
         }
     }
+
+    @Test
+    public void testIpfsDataStoreGetsTheReplicatedBinaryIndex() {
+        org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfs =
+            mock(org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore.class);
+        org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore blobStore =
+            mock(org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore.class);
+        when(blobStore.getDataStore()).thenReturn(ipfs);
+
+        ServerInfrastructureInitializer.attachReplicatedBinaryIndex(blobStore, mock(NodeStore.class));
+        ServerInfrastructureInitializer.attachReplicatedBinaryIndex(mock(BlobStore.class), mock(NodeStore.class));
+
+        verify(ipfs).setCidResolver(any(org.apache.jackrabbit.oak.segment.consensus.service.ReplicatedBinaryIndex.class));
+    }
 }

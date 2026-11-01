@@ -48,6 +48,8 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
 
     private IPFSBackend ipfsBackend;
 
+    private volatile CidResolver cidResolver;
+
     /**
      * The minimum size of an object that should be stored in IPFS.
      * Smaller objects are stored inline in Oak segments.
@@ -70,7 +72,22 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
             }
             ipfsBackend.setClientSettings(IpfsClientSettings.fromProperties(properties));
         }
+        ipfsBackend.setCidResolver(cidResolver);
         return ipfsBackend;
+    }
+
+    /**
+     * Sets the resolver consulted for blobs that the local IPFS Files index does
+     * not know, for example blobs stored by another validator. May be called
+     * before or after initialization.
+     *
+     * @param cidResolver the resolver, or {@code null} for none
+     */
+    public void setCidResolver(CidResolver cidResolver) {
+        this.cidResolver = cidResolver;
+        if (ipfsBackend != null) {
+            ipfsBackend.setCidResolver(cidResolver);
+        }
     }
 
     /**
