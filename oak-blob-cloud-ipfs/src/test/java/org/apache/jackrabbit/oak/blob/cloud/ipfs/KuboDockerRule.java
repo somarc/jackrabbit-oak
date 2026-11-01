@@ -23,21 +23,49 @@ import org.junit.runners.model.Statement;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 
 /**
  * Starts an offline Kubo daemon in Docker for tests that need real IPFS
- * semantics. Tests are skipped when Docker is unavailable; any other startup
- * failure fails them.
+ * semantics, optionally requiring a bearer token on its RPC API
+ * ({@code API.Authorizations}). Tests are skipped when Docker is unavailable;
+ * any other startup failure fails them.
  */
 public class KuboDockerRule extends ExternalResource {
 
     private static final DockerImageName IMAGE = DockerImageName.parse("ipfs/kubo:v0.43.1");
     private static final int API_PORT = 5001;
 
+    private final String bearerToken;
+    private final StringBuilder configCommands = new StringBuilder();
     private GenericContainer<?> container;
+
+    public KuboDockerRule() {
+        this(null);
+    }
+
+    /**
+     * @param bearerToken token the RPC API requires, or {@code null} for none
+     */
+    public KuboDockerRule(String bearerToken) {
+        this.bearerToken = bearerToken;
+    }
+
+    /**
+     * Applies a Kubo config value (as JSON) before the daemon starts.
+     */
+    public KuboDockerRule configured(String key, String json) {
+        configCommands.append("ipfs config --json ").append(key).append(" '").append(json).append("'\n");
+        return this;
+    }
 
     @Override
     protected void before() {
@@ -46,6 +74,14 @@ public class KuboDockerRule extends ExternalResource {
             .withExposedPorts(API_PORT)
             .waitingFor(Wait.forLogMessage(".*Daemon is ready.*", 1))
             .withStartupTimeout(Duration.ofSeconds(90));
+        if (bearerToken != null) {
+            configured("API.Authorizations",
+                "{\"oak\":{\"AuthSecret\":\"bearer:" + bearerToken + "\",\"AllowedPaths\":[\"/api/v0\"]}}");
+        }
+        if (configCommands.length() > 0) {
+            container.withCopyToContainer(Transferable.of("#!/bin/sh\nset -e\n" + configCommands, 0755),
+                "/container-init.d/010-oak-config.sh");
+        }
         container.start();
     }
 
@@ -77,5 +113,26 @@ public class KuboDockerRule extends ExternalResource {
      */
     public String apiEndpoint() {
         return "/ip4/127.0.0.1/tcp/" + container.getMappedPort(API_PORT);
+    }
+
+    /**
+     * Calls a Kubo RPC command directly, for test assertions, and returns the
+     * response body.
+     *
+     * @param commandAndQuery for example {@code cid/format?arg=Qm...&v=1}
+     */
+    public String rpc(String commandAndQuery) throws IOException, InterruptedException {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(
+                "http://127.0.0.1:" + container.getMappedPort(API_PORT) + "/api/v0/" + commandAndQuery))
+            .POST(HttpRequest.BodyPublishers.noBody());
+        if (bearerToken != null) {
+            request.header("Authorization", "Bearer " + bearerToken);
+        }
+        HttpResponse<String> response = HttpClient.newHttpClient()
+            .send(request.build(), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new IOException("Kubo " + commandAndQuery + " failed: " + response.body());
+        }
+        return response.body();
     }
 }

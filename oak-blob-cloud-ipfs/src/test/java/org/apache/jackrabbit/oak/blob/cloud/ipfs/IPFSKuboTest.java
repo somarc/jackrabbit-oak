@@ -16,8 +16,8 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
-import io.ipfs.cid.Cid;
-import io.ipfs.multihash.Multihash;
+import org.apache.jackrabbit.oak.commons.json.JsonObject;
+import org.apache.jackrabbit.oak.commons.json.JsopTokenizer;
 import org.apache.jackrabbit.oak.plugins.blob.MarkSweepGarbageCollector;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.SharedDataStoreUtils.SharedStoreRecordType;
@@ -130,8 +130,9 @@ public class IPFSKuboTest {
         DataIdentifier id = sha256(content);
         backend.write(id, write(content));
 
-        Cid v0 = Cid.decode(backend.getCID(id));
-        String v1 = Cid.buildCidV1(Cid.Codec.DagProtobuf, Multihash.Type.sha2_256, v0.getHash()).toString();
+        String v1 = JsopTokenizer.decodeQuoted(JsonObject.fromJson(
+            KUBO.rpc("cid/format?arg=" + backend.getCID(id) + "&v=1&b=base32"), true).getProperties().get("Formatted"));
+        assertTrue(v1.startsWith("bafy"));
         try (InputStream stream = new DefaultIpfsClient(KUBO.apiEndpoint()).cat(v1)) {
             assertArrayEquals(content, stream.readAllBytes());
         }

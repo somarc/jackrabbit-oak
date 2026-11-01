@@ -16,8 +16,6 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
-import io.ipfs.api.MerkleNode;
-import io.ipfs.api.NamedStreamable;
 import org.apache.jackrabbit.oak.spi.blob.data.DataIdentifier;
 import org.apache.jackrabbit.oak.spi.blob.data.DataRecord;
 import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
@@ -62,8 +60,8 @@ public class IPFSBackendClientSeamTest {
         RecordingIpfsClient client = new RecordingIpfsClient();
         client.versionFailure = new RuntimeException("no version");
         AtomicReference<String> endpointRef = new AtomicReference<>();
-        IPFSBackend backend = new IPFSBackend(endpoint -> {
-            endpointRef.set(endpoint);
+        IPFSBackend backend = new IPFSBackend(settings -> {
+            endpointRef.set(settings.endpoint());
             return client;
         });
 
@@ -78,8 +76,8 @@ public class IPFSBackendClientSeamTest {
     public void testInitTreatsEmptyEndpointAsUnset() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
         AtomicReference<String> endpointRef = new AtomicReference<>();
-        IPFSBackend backend = new IPFSBackend(endpoint -> {
-            endpointRef.set(endpoint);
+        IPFSBackend backend = new IPFSBackend(settings -> {
+            endpointRef.set(settings.endpoint());
             return client;
         });
         backend.setIpfsApiEndpoint("");
@@ -94,7 +92,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testWriteReadExistsRecordAndDeleteRoundTrip() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         byte[] content = "hello-ipfs".getBytes(StandardCharsets.UTF_8);
         client.catResults.put(CID_ONE, content);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
@@ -152,7 +150,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testLengthIsTheFileLengthNotTheRootBlockSize() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -174,7 +172,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testRewriteOnlyTouchesLastModifiedAndRejectsLengthCollisions() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -227,7 +225,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testUnreadableAttributesAreTreatedAsLegacy() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         byte[] content = "hello".getBytes(StandardCharsets.UTF_8);
         client.catResults.put(CID_ONE, content);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
@@ -252,7 +250,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testEnumerationFailsInsteadOfReportingUnknownLengths() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
         File tempFile = File.createTempFile("oak-ipfs-enumerate", ".bin");
@@ -323,7 +321,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testReadVerifiesContentAgainstSha256Identifier() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         byte[] content = "verified".getBytes(StandardCharsets.UTF_8);
         DataIdentifier id = new DataIdentifier(
             HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)));
@@ -362,7 +360,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testFailedMappingWriteUnpinsAndLeavesNoIndex() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
         client.fileWriteFailure = new RuntimeException("write failed");
@@ -388,7 +386,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testFailedUnpinKeepsTheMappingSoDeleteCanBeRetried() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -471,8 +469,8 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testMetadataPrefixOperationsIgnoreNonMatchingEntries() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
-        client.addResults.add(new MerkleNode(CID_TWO));
+        client.addResults.add(CID_ONE);
+        client.addResults.add(CID_TWO);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -553,9 +551,9 @@ public class IPFSBackendClientSeamTest {
         Files.writeString(tempFile.toPath(), "empty");
         try {
             backend.write(new DataIdentifier("blob-empty"), tempFile);
-            fail("Expected empty add result to fail");
+            fail("Expected an add without a CID to fail");
         } catch (DataStoreException e) {
-            assertTrue(e.getMessage().contains("IPFS add returned empty result"));
+            assertTrue(e.getMessage().contains("Kubo add returned no CID"));
         }
 
         client.fileWriteFailure = new RuntimeException("write-failed");
@@ -573,7 +571,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testCidMappingsMetadataAndReferenceKeySurviveRestart() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         client.catResults.put(CID_ONE, "hello".getBytes(StandardCharsets.UTF_8));
 
         IPFSBackend firstBackend = new IPFSBackend(endpoint -> client);
@@ -615,7 +613,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testRecordLengthReturnsNegativeOneWhenCidWasEvicted() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -636,7 +634,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testRecordLengthFailureIsTranslated() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
 
@@ -662,7 +660,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testInitFactoryFailureAndReadDeleteFailuresAreTranslated() throws Exception {
         try {
-            new IPFSBackend(endpoint -> {
+            new IPFSBackend(settings -> {
                 throw new RuntimeException("connect failed");
             }).init();
             fail("Expected init failure");
@@ -671,7 +669,7 @@ public class IPFSBackendClientSeamTest {
         }
 
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         client.catFailure = new RuntimeException("cat failed");
         client.pinRemoveFailure = new RuntimeException("rm failed");
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
@@ -703,7 +701,7 @@ public class IPFSBackendClientSeamTest {
     @Test
     public void testDeleteRecordIgnoresMissingDirectPinWhenContentIsRetainedViaFilesLink() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
-        client.addResults.add(new MerkleNode(CID_ONE));
+        client.addResults.add(CID_ONE);
         client.pinRemoveFailure = new RuntimeException("path is not pinned");
         IPFSBackend backend = new IPFSBackend(endpoint -> client);
         backend.init();
@@ -723,7 +721,7 @@ public class IPFSBackendClientSeamTest {
 
     private static final class RecordingIpfsClient implements IpfsClient {
 
-        private final Queue<MerkleNode> addResults = new ArrayDeque<>();
+        private final Queue<String> addResults = new ArrayDeque<>();
         private final Map<String, byte[]> catResults = new HashMap<>();
         private int addCalls;
         private final List<String> pinRemoveCalls = new ArrayList<>();
@@ -754,12 +752,12 @@ public class IPFSBackendClientSeamTest {
         }
 
         @Override
-        public List<MerkleNode> add(NamedStreamable upload) {
+        public String add(File file) throws IOException {
             addCalls++;
             if (addResults.isEmpty()) {
-                return List.of();
+                throw new IOException("Kubo add returned no CID");
             }
-            return List.of(addResults.remove());
+            return addResults.remove();
         }
 
         @Override

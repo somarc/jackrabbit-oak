@@ -65,7 +65,7 @@ public class GlobalStoreServerStartupValidationTest {
         System.setProperty(PROP_BLOBSTORE_TYPE, "ipfs");
         RuntimeException cause = new RuntimeException("ipfs unavailable");
         GlobalStoreServer server = newServer(tempFolder.getRoot().toPath().resolve("segmentstore-ipfs"));
-        when(serverFactory(server).createIpfsBlobStore(anyString(), org.mockito.ArgumentMatchers.any()))
+        when(serverFactory(server).createIpfsBlobStore(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
             .thenThrow(cause);
 
         IOException error = expectIoFailure(server);

@@ -197,7 +197,7 @@ public class ServerInfrastructureInitializerTest {
 
         when(recordId.toString()).thenReturn("record-1");
         when(fileStore.getHead().getRecordId()).thenReturn(recordId);
-        when(factory.createIpfsBlobStore(anyString(), eq(tempFolder.getRoot()))).thenReturn(blobStore);
+        when(factory.createIpfsBlobStore(any(), eq(tempFolder.getRoot()))).thenReturn(blobStore);
         storageFactory.when(() -> StorageBackendFactory.createStorageRuntime(eq(tempFolder.getRoot()), eq(blobStore),
             any(org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig.class)))
             .thenReturn(new ServerStorageRuntime(fileStore, nodeStore, nodeStore, null));

@@ -16,9 +16,7 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
-import io.ipfs.api.MerkleNode;
-import io.ipfs.api.NamedStreamable;
-
+import java.io.File;
 import java.io.InputStream;
 import java.util.List;
 
@@ -38,10 +36,12 @@ interface IpfsClient {
     Object version() throws Exception;
 
     /**
-     * Imports and recursively pins content with a fixed import profile, so the
+     * Imports and recursively pins a file with a fixed import profile, so the
      * resulting CID does not depend on the node's own import configuration.
+     *
+     * @return the CID of the imported file
      */
-    List<MerkleNode> add(NamedStreamable upload) throws Exception;
+    String add(File file) throws Exception;
 
     /**
      * Removes the local pin for the supplied CID.

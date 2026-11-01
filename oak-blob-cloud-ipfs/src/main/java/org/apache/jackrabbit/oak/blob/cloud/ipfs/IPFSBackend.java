@@ -16,8 +16,6 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
-import io.ipfs.api.MerkleNode;
-import io.ipfs.api.NamedStreamable;
 import org.apache.jackrabbit.oak.spi.blob.data.DataIdentifier;
 import org.apache.jackrabbit.oak.spi.blob.data.DataRecord;
 import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
@@ -75,7 +73,6 @@ public class IPFSBackend extends AbstractSharedBackend {
 
     private static final Logger LOG = LoggerFactory.getLogger(IPFSBackend.class);
 
-    private static final String DEFAULT_IPFS_API_ENDPOINT = "/ip4/127.0.0.1/tcp/5001";
     private static final String DEFAULT_IPFS_FILES_ROOT = "/oak/ipfs";
     private static final String REFERENCE_KEY = "reference.key";
     private static final String LENGTH = "length";
@@ -93,6 +90,11 @@ public class IPFSBackend extends AbstractSharedBackend {
      * IPFS API endpoint (e.g., "/ip4/127.0.0.1/tcp/5001")
      */
     private String ipfsApiEndpoint;
+
+    /**
+     * Credentials, timeouts and retry policy for the Kubo RPC client.
+     */
+    private IpfsClientSettings clientSettings = IpfsClientSettings.of(null);
 
     /**
      * In-memory cache for blob identifier-to-CID mappings.
@@ -123,10 +125,9 @@ public class IPFSBackend extends AbstractSharedBackend {
     @Override
     public void init() throws DataStoreException {
         try {
-            if (ipfsApiEndpoint == null || ipfsApiEndpoint.isEmpty()) {
-                ipfsApiEndpoint = DEFAULT_IPFS_API_ENDPOINT;
-            }
-            ipfs = ipfsClientFactory.create(ipfsApiEndpoint);
+            IpfsClientSettings settings = clientSettings.withEndpoint(ipfsApiEndpoint);
+            ipfsApiEndpoint = settings.endpoint();
+            ipfs = ipfsClientFactory.create(settings);
 
             // Version lookup is informational; the namespace setup below is
             // the real connectivity check.
@@ -152,11 +153,7 @@ public class IPFSBackend extends AbstractSharedBackend {
                 return;
             }
 
-            List<MerkleNode> nodes = ipfs.add(new NamedStreamable.FileWrapper(file));
-            if (nodes.isEmpty()) {
-                throw new DataStoreException("IPFS add returned empty result for " + identifier);
-            }
-            String cid = nodes.get(0).hash.toString();
+            String cid = ipfs.add(file);
 
             try {
                 writeBlobAttributes(identifier, file.length(), System.currentTimeMillis());
@@ -399,6 +396,15 @@ public class IPFSBackend extends AbstractSharedBackend {
      */
     public void setIpfsApiEndpoint(String endpoint) {
         this.ipfsApiEndpoint = endpoint;
+    }
+
+    /**
+     * Sets the credentials, timeouts and retry policy used on the next
+     * {@link #init()}; the endpoint is taken from
+     * {@link #setIpfsApiEndpoint(String)}.
+     */
+    void setClientSettings(IpfsClientSettings clientSettings) {
+        this.clientSettings = clientSettings;
     }
 
     /**

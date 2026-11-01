@@ -31,7 +31,8 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -72,7 +73,7 @@ public class BlobStoreStartupCoordinatorTest {
         GlobalStoreServerComponentFactory componentFactory = mock(GlobalStoreServerComponentFactory.class);
         BlobStore blobStore = mock(BlobStore.class);
         File storeDir = tempFolder.newFolder("segmentstore");
-        when(componentFactory.createIpfsBlobStore(anyString(), any(File.class))).thenReturn(blobStore);
+        when(componentFactory.createIpfsBlobStore(any(StorageBackendConfig.class), any(File.class))).thenReturn(blobStore);
 
         StorageBackendConfig config = StorageBackendConfig.load();
         BlobStoreStartupCoordinator.StartupResult result =
@@ -90,7 +91,7 @@ public class BlobStoreStartupCoordinatorTest {
         GlobalStoreServerComponentFactory componentFactory = mock(GlobalStoreServerComponentFactory.class);
         BlobStore blobStore = mock(BlobStore.class);
         File storeDir = tempFolder.newFolder("segmentstore");
-        when(componentFactory.createIpfsBlobStore("/ip4/10.0.0.7/tcp/5001", storeDir)).thenReturn(blobStore);
+        when(componentFactory.createIpfsBlobStore(argThat(c -> "/ip4/10.0.0.7/tcp/5001".equals(c.getBlobIpfsEndpoint())), eq(storeDir))).thenReturn(blobStore);
 
         StorageBackendConfig config = StorageBackendConfig.load();
         BlobStoreStartupCoordinator.StartupResult result =
@@ -98,7 +99,7 @@ public class BlobStoreStartupCoordinatorTest {
 
         assertEquals("ipfs", result.blobStoreType());
         assertSame(blobStore, result.blobStore());
-        verify(componentFactory).createIpfsBlobStore("/ip4/10.0.0.7/tcp/5001", storeDir);
+        verify(componentFactory).createIpfsBlobStore(argThat(c -> "/ip4/10.0.0.7/tcp/5001".equals(c.getBlobIpfsEndpoint())), eq(storeDir));
     }
 
     @Test
@@ -107,7 +108,7 @@ public class BlobStoreStartupCoordinatorTest {
 
         RuntimeException cause = new RuntimeException("ipfs unavailable");
         GlobalStoreServerComponentFactory componentFactory = mock(GlobalStoreServerComponentFactory.class);
-        when(componentFactory.createIpfsBlobStore(anyString(), any(File.class))).thenThrow(cause);
+        when(componentFactory.createIpfsBlobStore(any(StorageBackendConfig.class), any(File.class))).thenThrow(cause);
 
         StorageBackendConfig config = StorageBackendConfig.load();
         try {

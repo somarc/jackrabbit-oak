@@ -30,6 +30,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
+import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.tar.TarFiles;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -58,12 +59,27 @@ public final class DefaultGlobalStoreServerComponentFactory implements GlobalSto
     }
 
     @Override
-    public BlobStore createIpfsBlobStore(String ipfsEndpoint, java.io.File storeDir) throws Exception {
+    public BlobStore createIpfsBlobStore(StorageBackendConfig config, java.io.File storeDir) throws Exception {
         IPFSDataStore ipfsDataStore = new IPFSDataStore();
-        ipfsDataStore.setIpfsApiEndpoint(ipfsEndpoint);
+        ipfsDataStore.setProperties(ipfsDataStoreProperties(config));
         ipfsDataStore.setMinRecordLength(16 * 1024);
         ipfsDataStore.init(storeDir.getAbsolutePath());
         return new DataStoreBlobStore(ipfsDataStore);
+    }
+
+    /**
+     * The IPFS DataStore properties for this validator; see {@link IPFSDataStore#setProperties}.
+     */
+    static java.util.Properties ipfsDataStoreProperties(StorageBackendConfig config) {
+        java.util.Properties properties = new java.util.Properties();
+        properties.setProperty("ipfsApiEndpoint", config.getBlobIpfsEndpoint());
+        if (config.getBlobIpfsAuthorization() != null) {
+            properties.setProperty("ipfsApiAuthorization", config.getBlobIpfsAuthorization());
+        }
+        properties.setProperty("ipfsConnectTimeoutMillis", String.valueOf(config.getBlobIpfsConnectTimeoutMs()));
+        properties.setProperty("ipfsRequestTimeoutMillis", String.valueOf(config.getBlobIpfsRequestTimeoutMs()));
+        properties.setProperty("ipfsMaxAttempts", String.valueOf(config.getBlobIpfsMaxAttempts()));
+        return properties;
     }
 
     @Override
