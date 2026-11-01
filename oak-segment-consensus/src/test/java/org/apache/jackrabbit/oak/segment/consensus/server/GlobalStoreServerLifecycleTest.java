@@ -21,9 +21,11 @@ import ch.qos.logback.core.read.ListAppender;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcScheduler;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -98,6 +100,43 @@ public class GlobalStoreServerLifecycleTest {
         } finally {
             TestLogAppenderSupport.detach(GlobalStoreServer.class, appender);
         }
+    }
+
+    @Test
+    public void testSegmentGcStartsWithTheAeronMembershipAndStopsFirst() throws Exception {
+        GlobalStoreServer server = new GlobalStoreServer(8090, "/tmp/test-store");
+        RevisionGcScheduler revisionGc = mock(RevisionGcScheduler.class);
+        SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
+        ServerContext context = new ServerContext(mock(FileStore.class), mock(NodeStore.class),
+            Paths.get("/tmp/test-store"), "http://localhost:8090");
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.getTotalMemberCount()).thenReturn(3);
+        context.aeronConsensusEngine = engine;
+        when(httpServer.getContext()).thenReturn(context);
+        setField(server, "revisionGc", revisionGc);
+        setField(server, "httpServer", httpServer);
+
+        String previous = System.getProperty("aeron.cluster.nodeId");
+        System.setProperty("aeron.cluster.nodeId", "2");
+        try {
+            server.startRevisionGc();
+        } finally {
+            if (previous == null) {
+                System.clearProperty("aeron.cluster.nodeId");
+            } else {
+                System.setProperty("aeron.cluster.nodeId", previous);
+            }
+        }
+        verify(revisionGc).start(2, 3);
+
+        context.aeronConsensusEngine = null;
+        server.startRevisionGc();
+        verify(revisionGc).start(0, 1);
+
+        server.stop();
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(revisionGc, httpServer);
+        order.verify(revisionGc).close();
+        order.verify(httpServer).stop();
     }
 
     @Test

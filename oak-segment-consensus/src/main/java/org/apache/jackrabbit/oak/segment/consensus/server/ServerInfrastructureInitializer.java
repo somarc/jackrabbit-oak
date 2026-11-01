@@ -25,6 +25,7 @@ import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcScheduler;
 import org.apache.jackrabbit.oak.segment.consensus.mount.FederatedReadView;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.consensus.service.ReplicatedBinaryIndex;
@@ -76,9 +77,13 @@ final class ServerInfrastructureInitializer {
                 mounts -> context.remoteMounts = mounts);
         }
 
+        RevisionGcScheduler revisionGc = new RevisionGcScheduler(storageRuntime.gcConfig(), fileStore,
+            storageRuntime.gcMonitor(), RevisionGcScheduler.genesisCommitted(authoritativeNodeStore));
+        httpServer.getContext().segmentGcStatus = revisionGc::status;
+
         log.info("✅ HTTP server initialized (not yet started)");
         return new InitializationResult(blobStoreType, blobStore, fileStore, authoritativeNodeStore, readViewNodeStore,
-            readViewResources, httpServer);
+            readViewResources, httpServer, revisionGc);
     }
 
     /**
@@ -152,6 +157,7 @@ final class ServerInfrastructureInitializer {
                                 NodeStore nodeStore,
                                 NodeStore readViewNodeStore,
                                 Closeable readViewResources,
-                                SegmentHttpServer httpServer) {
+                                SegmentHttpServer httpServer,
+                                RevisionGcScheduler revisionGc) {
     }
 }

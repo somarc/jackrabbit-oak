@@ -25,6 +25,7 @@ import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcStatus;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -38,6 +39,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * Shared context for HTTP server handlers.
@@ -68,6 +70,7 @@ public class ServerContext {
     public volatile ShardingRuntimeConfig shardingRuntimeConfig = ShardingRuntimeConfig.disabled();
     public volatile RemoteMounts remoteMounts = RemoteMounts.NONE; // Remote read-only mounts in nodeStore
     public volatile FederationCoordinator federationCoordinator; // Charter/directory status; null until Aeron starts
+    public volatile Supplier<RevisionGcStatus> segmentGcStatus; // Member-local segment GC; null until the store is built
     
     /**
      * @return the IPFS DataStore behind {@link #blobStore}, or {@code null}

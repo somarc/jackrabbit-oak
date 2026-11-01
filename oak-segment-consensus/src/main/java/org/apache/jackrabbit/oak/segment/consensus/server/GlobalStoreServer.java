@@ -22,6 +22,8 @@ import java.io.IOException;
 
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcScheduler;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -94,6 +96,7 @@ public class GlobalStoreServer {
     private Closeable readViewResources;
     private org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     private SegmentHttpServer httpServer;
+    private RevisionGcScheduler revisionGc;
     private ValidatorBootstrap bootstrap;
     private org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService aeronClusterService;
@@ -201,6 +204,7 @@ public class GlobalStoreServer {
             this.nodeStore = infrastructure.nodeStore();
             this.readViewResources = infrastructure.readViewResources();
             this.httpServer = infrastructure.httpServer();
+            this.revisionGc = infrastructure.revisionGc();
             String selfUrl = this.httpServer.getContext().selfUrl;
             
             // If bootstrap is needed, mark for immediate sync (before any other initialization)
@@ -314,6 +318,7 @@ public class GlobalStoreServer {
 
         this.aeronClusterService = activation.aeronClusterService();
         this.aeronClusterLauncher = activation.launcher();
+        startRevisionGc();
         
         // SEPOLIA_PHASE: Smart Contract Event Listener
         // This is where we'll listen to OakNetwork.sol contract events:
@@ -349,6 +354,21 @@ public class GlobalStoreServer {
     }
 
     /**
+     * Starts member-local segment GC. The member index is this validator's Aeron node id, the
+     * same {@code aeron.cluster.nodeId} the cluster was launched with; the count is the configured
+     * Aeron membership. Without Aeron the validator is member 0 of 1.
+     */
+    void startRevisionGc() {
+        if (revisionGc == null) {
+            return;
+        }
+        AeronConsensusEngine engine = httpServer != null ? httpServer.getContext().aeronConsensusEngine : null;
+        int memberCount = engine != null ? engine.getTotalMemberCount() : 1;
+        int memberIndex = engine != null ? Integer.getInteger("aeron.cluster.nodeId", 0) : 0;
+        revisionGc.start(memberIndex, memberCount);
+    }
+
+    /**
      * Block until the server is stopped.
      */
     protected void awaitStop() {
@@ -370,6 +390,9 @@ public class GlobalStoreServer {
         running = false;
         ServerContext serverContext = httpServer != null ? httpServer.getContext() : null;
 
+        if (revisionGc != null) {
+            quietly(revisionGc::close, "✅ Segment GC stopped", "Error stopping segment GC: {}");
+        }
         if (bootstrap != null) {
             quietly(bootstrap::shutdown, "✅ Bootstrap services stopped", "Error stopping bootstrap: {}");
         }

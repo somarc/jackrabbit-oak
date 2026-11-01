@@ -36,6 +36,7 @@ import org.junit.rules.TemporaryFolder;
 import org.mockito.MockedStatic;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.mockito.ArgumentMatchers.any;
@@ -87,6 +88,8 @@ public class ServerInfrastructureInitializerTest {
         assertEquals("http://validator-0:8090", fixture.context.selfUrl);
         assertSame(fixture.blobStore, fixture.context.blobStore);
         assertEquals("ipfs", fixture.context.blobStoreType);
+        assertNotNull(result.revisionGc());
+        assertNotNull(fixture.context.segmentGcStatus);
     }
 
     @Test
