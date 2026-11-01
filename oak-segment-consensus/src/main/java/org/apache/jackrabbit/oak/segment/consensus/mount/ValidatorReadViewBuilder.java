@@ -108,13 +108,25 @@ public final class ValidatorReadViewBuilder {
         CompositeNodeStore.Builder compositeBuilder =
             new CompositeNodeStore.Builder(mountInfoProvider, withoutObservation(authoritativeNodeStore));
 
-        for (ShardingRuntimeConfig.ReadOnlyMount mount : mountedEntries) {
-            compositeBuilder.addMount(mount.getMountName(), remoteStoresByEndpoint.get(mount.getEndpoint()));
+        Map<String, RemoteMounts.Endpoint> endpointsByMountName = new LinkedHashMap<>();
+        List<RemoteMounts.Endpoint> endpoints = new ArrayList<>();
+        for (EndpointMountGroup group : groupsByEndpoint.values()) {
+            NodeStore remoteStore = remoteStoresByEndpoint.get(group.endpoint);
+            if (remoteStore == null) {
+                continue;
+            }
+            RemoteMounts.Endpoint endpoint = new RemoteMounts.Endpoint(group.endpoint, group.describePrefixes(), remoteStore);
+            endpoints.add(endpoint);
+            for (ShardingRuntimeConfig.ReadOnlyMount mount : group.mounts) {
+                compositeBuilder.addMount(mount.getMountName(), remoteStore);
+                endpointsByMountName.put(mount.getMountName(), endpoint);
+            }
         }
 
         NodeStore readViewNodeStore = compositeBuilder.build();
         LOG.info("✅ Validator read-view composite enabled with {} remote shard mounts", mountedEntries.size());
-        return new BuildResult(readViewNodeStore, closeables, mountedEntries.size());
+        return new BuildResult(readViewNodeStore, closeables, mountedEntries.size(),
+            new RemoteMounts(mountInfoProvider, endpointsByMountName, endpoints));
     }
 
     /**
@@ -137,17 +149,20 @@ public final class ValidatorReadViewBuilder {
         private final NodeStore readViewNodeStore;
         private final List<Closeable> closeables;
         private final int remoteMountCount;
+        private final RemoteMounts remoteMounts;
 
         private BuildResult(@NotNull NodeStore readViewNodeStore,
                             @NotNull List<Closeable> closeables,
-                            int remoteMountCount) {
+                            int remoteMountCount,
+                            @NotNull RemoteMounts remoteMounts) {
             this.readViewNodeStore = readViewNodeStore;
             this.closeables = new ArrayList<>(closeables);
             this.remoteMountCount = remoteMountCount;
+            this.remoteMounts = remoteMounts;
         }
 
         private static BuildResult local(NodeStore authoritativeNodeStore) {
-            return new BuildResult(authoritativeNodeStore, List.of(), 0);
+            return new BuildResult(authoritativeNodeStore, List.of(), 0, RemoteMounts.NONE);
         }
 
         @NotNull
@@ -157,6 +172,11 @@ public final class ValidatorReadViewBuilder {
 
         public int getRemoteMountCount() {
             return remoteMountCount;
+        }
+
+        @NotNull
+        public RemoteMounts getRemoteMounts() {
+            return remoteMounts;
         }
 
         @Override
@@ -183,6 +203,20 @@ public final class ValidatorReadViewBuilder {
 
         private EndpointMountGroup(String endpoint) {
             this.endpoint = endpoint;
+        }
+
+        /** Mounted prefixes as compact ranges, e.g. {@code 56-aa} or {@code 00,80-81}. */
+        private String describePrefixes() {
+            int[] values = mounts.stream().mapToInt(m -> Integer.parseInt(m.getL1Prefix(), 16)).sorted().distinct().toArray();
+            List<String> ranges = new ArrayList<>();
+            for (int i = 0; i < values.length; i++) {
+                int start = values[i];
+                while (i + 1 < values.length && values[i + 1] == values[i] + 1) {
+                    i++;
+                }
+                ranges.add(start == values[i] ? String.format("%02x", start) : String.format("%02x-%02x", start, values[i]));
+            }
+            return String.join(",", ranges);
         }
     }
 }

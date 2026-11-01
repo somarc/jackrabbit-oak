@@ -27,6 +27,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.tar.TarFiles;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -200,7 +201,7 @@ public class ServerInfrastructureInitializerTest {
         when(factory.createIpfsBlobStore(anyString(), eq(tempFolder.getRoot()))).thenReturn(blobStore);
         storageFactory.when(() -> StorageBackendFactory.createStorageRuntime(eq(tempFolder.getRoot()), eq(blobStore),
             any(org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig.class)))
-            .thenReturn(new ServerStorageRuntime(fileStore, nodeStore, nodeStore, null));
+            .thenReturn(new ServerStorageRuntime(fileStore, nodeStore, nodeStore, null, RemoteMounts.NONE));
         when(factory.extractTarFiles(fileStore)).thenReturn(tarFiles);
         when(factory.createGCCostEstimator(eq(fileStore), eq(tarFiles), any(BigDecimal.class))).thenReturn(gcCostEstimator);
         when(factory.createHttpServer(tempFolder.getRoot(), 8090, fileStore, nodeStore)).thenReturn(httpServer);

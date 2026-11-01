@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 
@@ -24,5 +25,6 @@ import java.io.Closeable;
 record ServerStorageRuntime(FileStore fileStore,
                             NodeStore authoritativeNodeStore,
                             NodeStore readViewNodeStore,
-                            Closeable readViewResources) {
+                            Closeable readViewResources,
+                            RemoteMounts remoteMounts) {
 }

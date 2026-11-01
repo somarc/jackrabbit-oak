@@ -23,8 +23,12 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 
@@ -138,6 +142,34 @@ public final class ShardingRuntimeConfig {
             parts.add(route.range.asSpec() + " -> " + route.endpoint);
         }
         return String.join(", ", parts);
+    }
+
+    /**
+     * SHA-256 of the canonical configuration (sorted ranges and routes), so
+     * members configured alike report the same digest and drift is visible.
+     */
+    @NotNull
+    public String configDigest() {
+        String canonical = "enabled=" + enabled;
+        if (enabled) {
+            List<String> local = new ArrayList<>();
+            for (PrefixRange range : localRanges) {
+                local.add(range.asSpec());
+            }
+            List<String> remote = new ArrayList<>();
+            for (RemoteRoute route : remoteRoutes) {
+                remote.add(route.range.asSpec() + "=" + route.endpoint);
+            }
+            Collections.sort(local);
+            Collections.sort(remote);
+            canonical += ";local=" + String.join(",", local) + ";remote=" + String.join(",", remote);
+        }
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
     }
 
     @NotNull

@@ -209,6 +209,14 @@ Health endpoints are observations, not correctness proofs. Validators also serve
 their segment files (`/segments/`, `/journal.log`, `/manifest`) for read-only
 mounts; replication itself happens only through the Aeron log.
 
+With sharding enabled, wallet prefixes owned by another cluster are read through
+a read-only mount of one of its validators. While that mount is unavailable,
+wallet and explorer reads under its prefixes answer `503 mount_unavailable`
+rather than "not found", and the all-wallets listing is marked `partial`.
+`/health` reports each mount under `sharding.remoteMounts` (connected,
+available, circuit, revision, last refresh, last error) together with
+`sharding.configDigest`, which is identical on validators configured alike.
+
 ## Build and test
 
 ```sh

@@ -27,6 +27,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
@@ -72,6 +73,7 @@ public class ServerContext {
     public volatile String clusterWalletAddress = "0x0000000000000000000000000000000000000000"; // Cluster payment wallet (ADR 046)
     public volatile EventBroadcaster eventBroadcaster; // SSE event broadcasting (ADR 036)
     public volatile ShardingRuntimeConfig shardingRuntimeConfig = ShardingRuntimeConfig.disabled();
+    public volatile RemoteMounts remoteMounts = RemoteMounts.NONE; // Remote read-only mounts in nodeStore
     
     // API-level metrics (rejections before reaching queue)
     public final java.util.concurrent.atomic.AtomicLong apiRejectedRequests = new java.util.concurrent.atomic.AtomicLong(0);

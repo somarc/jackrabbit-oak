@@ -21,6 +21,8 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.MediaDriverHealthMonitor;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -38,6 +40,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collections;
+import java.util.List;
 
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.*;
@@ -304,7 +307,39 @@ public class HealthHandlerTest {
         assertTrue(json.contains("\"localPrefixes\":\"80-ff\""));
         assertTrue(json.contains("\"remoteMountCount\":2"));
         assertTrue(json.contains("\"authoritativeStoreSeparated\":true"));
+        assertTrue(json.contains("\"configDigest\":\"" + context.shardingRuntimeConfig.configDigest() + "\""));
+        assertTrue(json.contains("\"remoteEndpointCount\":0"));
+        assertTrue(json.contains("\"remoteMounts\":[]"));
         assertTrue(json.matches("(?s).*\"overall\":\\{[^}]*\"status\":\"UP\"[^}]*}.*"));
+    }
+
+    @Test
+    public void testHealthReportsLiveRemoteMountState() throws Exception {
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        Path storeDirectory = Files.createTempDirectory("health-remote-mounts");
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString10()).thenReturn("0123456789abcdef0123456789");
+        NodeStore nodeStore = mock(NodeStore.class);
+        when(nodeStore.getRoot()).thenReturn(mock(NodeState.class));
+        ServerContext context = new ServerContext(fileStore, nodeStore, storeDirectory, "http://localhost:8090");
+        context.setShardingRuntimeConfig(ShardingRuntimeConfig.fromSpecs(
+            true, "00-55", "56-aa=http://127.0.0.1:8190;ab-ff=http://127.0.0.1:8290"));
+        RemoteMounts remoteMounts = mock(RemoteMounts.class);
+        when(remoteMounts.statuses()).thenReturn(List.of(
+            new RemoteMountStatus("http://127.0.0.1:8190", "56-aa", true, true, "CLOSED", "rev-9", 1700000000000L, null),
+            new RemoteMountStatus("http://127.0.0.1:8290", "ab-ff", false, false, "OPEN", null, null, "connection refused")));
+        context.remoteMounts = remoteMounts;
+
+        newHandler(context).handleHealth(response);
+
+        String json = body.toString();
+        assertTrue(json.contains("\"remoteEndpointCount\":2"));
+        assertTrue(json.contains("\"remoteEndpointsAvailable\":1"));
+        assertTrue(json.contains("\"endpoint\":\"http://127.0.0.1:8290\""));
+        assertTrue(json.contains("\"lastError\":\"connection refused\""));
+        assertTrue(json.contains("\"revision\":\"rev-9\""));
+        assertTrue(json.contains("\"configDigest\":\"" + context.shardingRuntimeConfig.configDigest() + "\""));
     }
 
     @Test

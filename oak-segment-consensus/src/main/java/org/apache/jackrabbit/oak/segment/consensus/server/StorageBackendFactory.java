@@ -70,7 +70,7 @@ final class StorageBackendFactory {
         ValidatorReadViewBuilder.BuildResult readView = new ValidatorReadViewBuilder()
             .build(nodeStore, ShardingRuntimeConfig.load());
         return new ServerStorageRuntime(fileStore, nodeStore,
-            readView.getReadViewNodeStore(), readView);
+            readView.getReadViewNodeStore(), readView, readView.getRemoteMounts());
     }
 
     private static FileStore buildFileStore(File storeDir,

@@ -30,9 +30,14 @@ import org.junit.Test;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 public class ValidatorReadViewBuilderTest {
@@ -83,6 +88,50 @@ public class ValidatorReadViewBuilderTest {
     }
 
     @Test
+    public void testRemoteMountsReportUnavailableEndpointForItsPathsOnly() {
+        MemoryNodeStore localStore = new MemoryNodeStore();
+        ValidatorReadViewBuilder builder = new ValidatorReadViewBuilder((endpoint, mountName) ->
+            new LazyHttpNodeStore(endpoint, mountName, 1L, 1L, new CircuitBreaker(mountName, 1, 60_000L, 1),
+                (url, name, connectTimeoutMs, readTimeoutMs) -> {
+                    throw new IOException("connection refused");
+                }));
+
+        ValidatorReadViewBuilder.BuildResult result = builder.build(
+            localStore,
+            ShardingRuntimeConfig.fromSpecs(true, "00-0f", "10-11=http://cluster-a:8090")
+        );
+        RemoteMounts remoteMounts = result.getRemoteMounts();
+
+        assertFalse(result.getReadViewNodeStore().getRoot()
+            .getChildNode("oak-chain").getChildNode("10").exists());
+        RemoteMountStatus unavailable = remoteMounts.unavailableFor("/oak-chain/11/22/33/0xabc/content");
+        assertNotNull(unavailable);
+        assertEquals("http://cluster-a:8090", unavailable.endpoint());
+        assertEquals("10-11", unavailable.prefixes());
+        assertEquals("connection refused", unavailable.lastError());
+        assertNull(remoteMounts.unavailableFor("/oak-chain/0a/22/33/0xabc/content"));
+        assertNull(remoteMounts.unavailableFor("/oak-chain"));
+        assertEquals(1, remoteMounts.statuses().size());
+        assertFalse(remoteMounts.statuses().get(0).available());
+    }
+
+    @Test
+    public void testRemoteMountsDescribePrefixesPerEndpointAsCompactRanges() {
+        ValidatorReadViewBuilder.BuildResult result = new ValidatorReadViewBuilder((endpoint, mountName) -> new MemoryNodeStore())
+            .build(new MemoryNodeStore(),
+                ShardingRuntimeConfig.fromSpecs(true, "01-7f", "00=http://a:8190;80-81=http://a:8190;83-ff=http://b:8290"));
+
+        List<RemoteMountStatus> statuses = result.getRemoteMounts().statuses();
+
+        assertEquals(2, statuses.size());
+        assertEquals("http://a:8190", statuses.get(0).endpoint());
+        assertEquals("00,80-81", statuses.get(0).prefixes());
+        assertEquals("83-ff", statuses.get(1).prefixes());
+        assertTrue(statuses.get(1).available());
+        assertNull(result.getRemoteMounts().unavailableFor("/oak-chain/90/aa"));
+    }
+
+    @Test
     public void testBuildReturnsLocalStoreWhenShardingDisabled() {
         MemoryNodeStore localStore = new MemoryNodeStore();
         ValidatorReadViewBuilder builder = new ValidatorReadViewBuilder();
@@ -91,6 +140,9 @@ public class ValidatorReadViewBuilderTest {
 
         assertTrue(result.getReadViewNodeStore() == localStore);
         assertEquals(0, result.getRemoteMountCount());
+        assertSame(RemoteMounts.NONE, result.getRemoteMounts());
+        assertTrue(RemoteMounts.NONE.statuses().isEmpty());
+        assertNull(RemoteMounts.NONE.unavailableFor("/oak-chain/10"));
     }
 
     private static void seedPath(NodeStore nodeStore, String path) throws Exception {

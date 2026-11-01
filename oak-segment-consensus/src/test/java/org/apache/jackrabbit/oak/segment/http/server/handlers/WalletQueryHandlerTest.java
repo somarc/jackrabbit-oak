@@ -17,6 +17,8 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -30,7 +32,9 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Paths;
+import java.util.List;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -127,6 +131,66 @@ public class WalletQueryHandlerTest {
         assertTrue(json.contains("\"contentType\":\"fragment\""));
         assertTrue(json.contains("\"message\":\"hello\""));
     }
+
+    @Test
+    public void testWalletReadsAnswerServiceUnavailableWhenServingRemoteMountIsDown() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedWallet(nodeStore, WALLET_1, 2L, 7L);
+        ServerContext context = newContext(nodeStore);
+        RemoteMounts remoteMounts = mock(RemoteMounts.class);
+        when(remoteMounts.unavailableFor(WalletPathUtil.getShardRoot(WALLET_1))).thenReturn(UNAVAILABLE);
+        context.remoteMounts = remoteMounts;
+        WalletQueryHandler handler = new WalletQueryHandler(context);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getParameter("wallet")).thenReturn(WALLET_1);
+
+        StringWriter contentBody = new StringWriter();
+        HttpServletResponse contentResponse = responseWithBody(contentBody);
+        handler.handleWalletContent(request, contentResponse);
+
+        StringWriter statsBody = new StringWriter();
+        HttpServletResponse statsResponse = responseWithBody(statsBody);
+        handler.handleWalletStats(request, statsResponse);
+
+        verify(contentResponse).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        verify(statsResponse).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(contentBody.toString().contains("\"code\":\"mount_unavailable\""));
+        assertTrue(contentBody.toString().contains("http://cluster-b:8190"));
+        assertFalse(contentBody.toString().contains("\"content\":["));
+        assertTrue(statsBody.toString().contains("\"code\":\"mount_unavailable\""));
+    }
+
+    @Test
+    public void testTopWalletsAreMarkedPartialWhenAnyRemoteMountIsDown() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedWallet(nodeStore, WALLET_1, 2L, 7L);
+        ServerContext context = newContext(nodeStore);
+        RemoteMounts remoteMounts = mock(RemoteMounts.class);
+        when(remoteMounts.statuses()).thenReturn(List.of(UNAVAILABLE));
+        context.remoteMounts = remoteMounts;
+        StringWriter body = new StringWriter();
+
+        new WalletQueryHandler(context).handleWalletStats(mock(HttpServletRequest.class), responseWithBody(body));
+
+        String json = body.toString();
+        assertTrue(json.contains("\"wallet\":\"" + WALLET_1 + "\""));
+        assertTrue(json.contains("\"partial\":true"));
+        assertTrue(json.contains("\"unavailableRemoteMounts\":[{"));
+    }
+
+    @Test
+    public void testTopWalletsAreNotMarkedPartialWhenMountsAreAvailable() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedWallet(nodeStore, WALLET_1, 2L, 7L);
+        StringWriter body = new StringWriter();
+
+        new WalletQueryHandler(newContext(nodeStore)).handleWalletStats(mock(HttpServletRequest.class), responseWithBody(body));
+
+        assertFalse(body.toString().contains("\"partial\""));
+    }
+
+    private static final RemoteMountStatus UNAVAILABLE = new RemoteMountStatus(
+        "http://cluster-b:8190", "00-ff", false, false, "OPEN", null, null, "connection refused");
 
     private static ServerContext newContext(MemoryNodeStore nodeStore) {
         return new ServerContext(

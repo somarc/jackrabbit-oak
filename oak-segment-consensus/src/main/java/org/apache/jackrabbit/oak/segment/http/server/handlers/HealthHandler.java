@@ -21,6 +21,8 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
@@ -707,6 +709,10 @@ public class HealthHandler {
             sharding.put("localPrefixes", "none");
             sharding.put("remoteMountCount", 0);
             sharding.put("authoritativeStoreSeparated", false);
+            sharding.put("configDigest", ShardingRuntimeConfig.disabled().configDigest());
+            sharding.put("remoteEndpointCount", 0);
+            sharding.put("remoteEndpointsAvailable", 0);
+            sharding.put("remoteMounts", List.of());
             return sharding;
         }
 
@@ -717,6 +723,19 @@ public class HealthHandler {
             "authoritativeStoreSeparated",
             context.authoritativeNodeStore != null && context.authoritativeNodeStore != context.nodeStore
         );
+        sharding.put("configDigest", context.shardingRuntimeConfig.configDigest());
+
+        List<Map<String, Object>> remoteMounts = new ArrayList<>();
+        int available = 0;
+        for (RemoteMountStatus status : context.remoteMounts.statuses()) {
+            remoteMounts.add(status.toMap());
+            if (status.available()) {
+                available++;
+            }
+        }
+        sharding.put("remoteEndpointCount", remoteMounts.size());
+        sharding.put("remoteEndpointsAvailable", available);
+        sharding.put("remoteMounts", remoteMounts);
         return sharding;
     }
 

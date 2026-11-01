@@ -32,6 +32,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.InvalidFileStoreVersionException;
@@ -73,7 +74,8 @@ final class ServerInfrastructureInitializer {
 
         GCCostEstimator gcCostEstimator = initializeGCCostEstimator(fileStore, componentFactory);
         SegmentHttpServer httpServer = initializeHttpServer(storeDir, port, aeronConfig, componentFactory,
-            blobStore, blobStoreType, fileStore, readViewNodeStore, authoritativeNodeStore, gcCostEstimator);
+            blobStore, blobStoreType, fileStore, readViewNodeStore, authoritativeNodeStore, storageRuntime.remoteMounts(),
+            gcCostEstimator);
         FragmentationTracker fragmentationTracker = initializeFragmentationTracker(httpServer, componentFactory);
         initializeGcConsensusSupport(httpServer, aeronConfig, componentFactory, fileStore, gcCostEstimator,
             fragmentationTracker);
@@ -113,6 +115,7 @@ final class ServerInfrastructureInitializer {
                                                    FileStore fileStore,
                                                    NodeStore readViewNodeStore,
                                                    NodeStore authoritativeNodeStore,
+                                                   RemoteMounts remoteMounts,
                                                    GCCostEstimator gcCostEstimator) {
         log.info("Initializing HTTP server on port {}...", port);
         SegmentHttpServer httpServer = componentFactory.createHttpServer(storeDir, port, fileStore, readViewNodeStore);
@@ -127,6 +130,7 @@ final class ServerInfrastructureInitializer {
 
         httpServer.setSelfUrl(selfUrl);
         context.setAuthoritativeNodeStore(authoritativeNodeStore);
+        context.remoteMounts = remoteMounts != null ? remoteMounts : RemoteMounts.NONE;
         context.setShardingRuntimeConfig(ShardingRuntimeConfig.load());
         if (gcCostEstimator != null) {
             context.setGCCostEstimator(gcCostEstimator);
