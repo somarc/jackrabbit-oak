@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfi
 import org.apache.jackrabbit.oak.spi.mount.MountInfoProvider;
 import org.apache.jackrabbit.oak.spi.mount.Mounts;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
+import org.apache.jackrabbit.oak.spi.state.ProxyNodeStore;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,7 +106,7 @@ public final class ValidatorReadViewBuilder {
 
         MountInfoProvider mountInfoProvider = mountBuilder.build();
         CompositeNodeStore.Builder compositeBuilder =
-            new CompositeNodeStore.Builder(mountInfoProvider, authoritativeNodeStore);
+            new CompositeNodeStore.Builder(mountInfoProvider, withoutObservation(authoritativeNodeStore));
 
         for (ShardingRuntimeConfig.ReadOnlyMount mount : mountedEntries) {
             compositeBuilder.addMount(mount.getMountName(), remoteStoresByEndpoint.get(mount.getEndpoint()));
@@ -114,6 +115,22 @@ public final class ValidatorReadViewBuilder {
         NodeStore readViewNodeStore = compositeBuilder.build();
         LOG.info("✅ Validator read-view composite enabled with {} remote shard mounts", mountedEntries.size());
         return new BuildResult(readViewNodeStore, closeables, mountedEntries.size());
+    }
+
+    /**
+     * The composite registers an observer on an Observable global store and, on every
+     * local commit, reads every mount's root on the committing thread while it holds the
+     * commit lock. For remote mounts that is network I/O inside the replicated apply, and
+     * nothing listens on the composite's own dispatcher, so the global store is hidden
+     * behind a proxy that is not Observable.
+     */
+    static NodeStore withoutObservation(@NotNull NodeStore store) {
+        return new ProxyNodeStore() {
+            @Override
+            protected NodeStore getNodeStore() {
+                return store;
+            }
+        };
     }
 
     public static final class BuildResult implements Closeable {

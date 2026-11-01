@@ -17,9 +17,12 @@
 package org.apache.jackrabbit.oak.segment.consensus.mount;
 
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
+import org.apache.jackrabbit.oak.segment.memory.MemoryStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
+import org.apache.jackrabbit.oak.spi.commit.Observable;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -27,6 +30,7 @@ import org.junit.Test;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -62,6 +66,23 @@ public class ValidatorReadViewBuilderTest {
     }
 
     @Test
+    public void testLocalCommitsDoNotReadRemoteMounts() throws Exception {
+        NodeStore localStore = SegmentNodeStoreBuilders.builder(new MemoryStore()).build();
+        assertTrue("precondition: the authoritative segment store is Observable", localStore instanceof Observable);
+        RootCountingNodeStore remoteStore = new RootCountingNodeStore();
+
+        ValidatorReadViewBuilder.BuildResult result = new ValidatorReadViewBuilder((endpoint, mountName) -> remoteStore)
+            .build(localStore, ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://cluster-b:8190"));
+        int rootReadsAfterBuild = remoteStore.rootReads.get();
+
+        seedPath(localStore, "/oak-chain/0a/local-wallet/content/doc-1");
+        seedPath(localStore, "/oak-chain/0b/local-wallet/content/doc-2");
+
+        assertEquals("local commits must not fetch remote roots", rootReadsAfterBuild, remoteStore.rootReads.get());
+        assertTrue(exists(result.getReadViewNodeStore().getRoot(), "/oak-chain/0b/local-wallet/content/doc-2"));
+    }
+
+    @Test
     public void testBuildReturnsLocalStoreWhenShardingDisabled() {
         MemoryNodeStore localStore = new MemoryNodeStore();
         ValidatorReadViewBuilder builder = new ValidatorReadViewBuilder();
@@ -92,6 +113,16 @@ public class ValidatorReadViewBuilderTest {
             }
         }
         return current.exists();
+    }
+
+    private static final class RootCountingNodeStore extends MemoryNodeStore {
+        private final AtomicInteger rootReads = new AtomicInteger();
+
+        @Override
+        public NodeState getRoot() {
+            rootReads.incrementAndGet();
+            return super.getRoot();
+        }
     }
 
     private static final class CloseableMemoryNodeStore extends MemoryNodeStore implements Closeable {
