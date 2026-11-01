@@ -27,6 +27,7 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -74,6 +75,7 @@ public class ServerContext {
     public volatile EventBroadcaster eventBroadcaster; // SSE event broadcasting (ADR 036)
     public volatile ShardingRuntimeConfig shardingRuntimeConfig = ShardingRuntimeConfig.disabled();
     public volatile RemoteMounts remoteMounts = RemoteMounts.NONE; // Remote read-only mounts in nodeStore
+    public volatile FederationCoordinator federationCoordinator; // Charter/directory status; null until Aeron starts
     
     // API-level metrics (rejections before reaching queue)
     public final java.util.concurrent.atomic.AtomicLong apiRejectedRequests = new java.util.concurrent.atomic.AtomicLong(0);
@@ -266,6 +268,12 @@ public class ServerContext {
         if (loaded > 0) {
             log.info("✅ Restored {} durable client registrations", loaded);
         }
+    }
+
+    /** The local committed root, never the composite read view; null before storage is wired. */
+    public NodeState authoritativeRoot() {
+        NodeStore store = authoritativeNodeStore != null ? authoritativeNodeStore : nodeStore;
+        return store != null ? store.getRoot() : null;
     }
 
     private synchronized ClientRegistration recoverClientRegistrationFromWalletContent(String normalizedWallet) {

@@ -22,6 +22,8 @@ import org.apache.jackrabbit.oak.segment.Segment;
 import org.apache.jackrabbit.oak.segment.SegmentId;
 import org.apache.jackrabbit.oak.segment.SegmentIdProvider;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
@@ -1571,6 +1573,52 @@ public class RequestRouterTest {
             assertTrue(body.toString().contains("\"committedHead\": \"committed-aeron-head\""));
             assertTrue(body.toString().contains("\"latestEpochSeen\": 12"));
             assertTrue(body.toString().contains("\"committedEpoch\": 11"));
+        });
+    }
+
+    @Test
+    public void federationRouteServesTheCommittedCharterAndDirectory() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.setAuthoritativeNodeStore(FederationFixtures.store(FederationFixtures.charterA(),
+                FederationFixtures.directory(4, FederationFixtures.entryA("ACTIVE"), FederationFixtures.entryB())));
+            FederationCoordinator coordinator = new FederationCoordinator(null, null, context::authoritativeRoot,
+                new FederationCoordinator.Proposer() {
+                    @Override
+                    public boolean canPropose() {
+                        return false;
+                    }
+
+                    @Override
+                    public boolean propose(int templateId, String json) {
+                        return false;
+                    }
+                }, System::currentTimeMillis, 1000L);
+            coordinator.tick();
+            context.federationCoordinator = coordinator;
+            RequestRouter router = new RequestRouter(context);
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request("GET", "/v1/federation"), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            String json = body.toString();
+            assertTrue(json, json.contains(FederationFixtures.charterA().digest()));
+            assertTrue(json, json.contains(FederationFixtures.charterA().clusterId(FederationFixtures.GENESIS_DIGEST)));
+            assertTrue(json, json.contains("\"directoryEpoch\":4"));
+            assertTrue(json, json.contains(FederationFixtures.NAMESPACE_B));
+        });
+    }
+
+    @Test
+    public void federationRouteReportsAnUnfederatedCluster() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            HttpServletResponse response = responseWithBody();
+            router.route(request("GET", "/v1/federation"), response);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString(), body.toString().contains("\"charter\":null"));
+            assertTrue(body.toString(), body.toString().contains("\"directory\":null"));
         });
     }
 

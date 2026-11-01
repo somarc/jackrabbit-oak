@@ -22,6 +22,7 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
@@ -123,6 +124,7 @@ public class HealthHandler {
         }
 
         payload.put("sharding", buildShardingPayload());
+        payload.put("federation", buildFederationPayload());
 
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
@@ -315,6 +317,7 @@ public class HealthHandler {
 
         payload.put("blobStore", buildBlobStorePayload(new HashMap<>()));
         payload.put("sharding", buildShardingPayload());
+        payload.put("federation", buildFederationPayload());
 
         Map<String, Object> overall = new HashMap<>();
         overall.put("status", allHealthy ? "UP" : "DEGRADED");
@@ -700,6 +703,18 @@ public class HealthHandler {
             }
         }
         return total;
+    }
+
+    private Map<String, Object> buildFederationPayload() {
+        FederationCoordinator coordinator = context.federationCoordinator;
+        if (coordinator == null) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("available", false);
+            return payload;
+        }
+        Map<String, Object> payload = coordinator.getStatus().toMap();
+        payload.put("available", true);
+        return payload;
     }
 
     private Map<String, Object> buildShardingPayload() {
