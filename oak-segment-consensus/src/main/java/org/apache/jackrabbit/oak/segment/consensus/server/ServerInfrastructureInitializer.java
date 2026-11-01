@@ -19,22 +19,12 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 import java.io.File;
 import java.io.Closeable;
 import java.io.IOException;
-import java.math.BigDecimal;
-import java.util.List;
-import java.util.function.Supplier;
 
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
-import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
-import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationConfig;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
-import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
 import org.apache.jackrabbit.oak.segment.consensus.mount.FederatedReadView;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.consensus.service.ReplicatedBinaryIndex;
@@ -78,22 +68,17 @@ final class ServerInfrastructureInitializer {
         log.info("   - Store version: {}", fileStore.getHead().getRecordId());
         log.info("   - Segments: {}", storeDir.getAbsolutePath());
 
-        GCCostEstimator gcCostEstimator = initializeGCCostEstimator(fileStore, componentFactory);
         SegmentHttpServer httpServer = initializeHttpServer(storeDir, port, aeronConfig, componentFactory,
-            blobStore, blobStoreType, fileStore, readViewNodeStore, authoritativeNodeStore, storageRuntime.remoteMounts(),
-            gcCostEstimator);
+            blobStore, blobStoreType, fileStore, readViewNodeStore, authoritativeNodeStore, storageRuntime.remoteMounts());
         if (readViewResources instanceof FederatedReadView) {
             ServerContext context = httpServer.getContext();
             ((FederatedReadView) readViewResources).start(FederationConfig.pollMsFromRuntime(),
                 mounts -> context.remoteMounts = mounts);
         }
-        FragmentationTracker fragmentationTracker = initializeFragmentationTracker(httpServer, componentFactory);
-        initializeGcConsensusSupport(httpServer, aeronConfig, componentFactory, fileStore, gcCostEstimator,
-            fragmentationTracker);
 
         log.info("✅ HTTP server initialized (not yet started)");
         return new InitializationResult(blobStoreType, blobStore, fileStore, authoritativeNodeStore, readViewNodeStore,
-            readViewResources, httpServer, gcCostEstimator);
+            readViewResources, httpServer);
     }
 
     /**
@@ -109,27 +94,6 @@ final class ServerInfrastructureInitializer {
         }
     }
 
-    private GCCostEstimator initializeGCCostEstimator(FileStore fileStore,
-                                                      GlobalStoreServerComponentFactory componentFactory) {
-        log.info("Initializing GC Cost Estimator...");
-        try {
-            BigDecimal usdcPerMB = new BigDecimal(RuntimeConfigValueResolver.readString("gc.usdc.per.mb", "0.10"));
-            GCCostEstimator gcCostEstimator = componentFactory.createGCCostEstimator(
-                fileStore,
-                componentFactory.extractTarFiles(fileStore),
-                usdcPerMB
-            );
-
-            log.info("✅ GC Cost Estimator initialized");
-            log.info("   - USDC rate: ${} per MB", usdcPerMB);
-            return gcCostEstimator;
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to initialize GC Cost Estimator: {}", e.getMessage());
-            log.warn("   GC cost estimation will not be available");
-            return null;
-        }
-    }
-
     private SegmentHttpServer initializeHttpServer(File storeDir,
                                                    int port,
                                                    AeronClusterConfig aeronConfig,
@@ -139,8 +103,7 @@ final class ServerInfrastructureInitializer {
                                                    FileStore fileStore,
                                                    NodeStore readViewNodeStore,
                                                    NodeStore authoritativeNodeStore,
-                                                   RemoteMounts remoteMounts,
-                                                   GCCostEstimator gcCostEstimator) {
+                                                   RemoteMounts remoteMounts) {
         log.info("Initializing HTTP server on port {}...", port);
         SegmentHttpServer httpServer = componentFactory.createHttpServer(storeDir, port, fileStore, readViewNodeStore);
         ServerContext context = httpServer.getContext();
@@ -156,9 +119,6 @@ final class ServerInfrastructureInitializer {
         context.setAuthoritativeNodeStore(authoritativeNodeStore);
         context.remoteMounts = remoteMounts != null ? remoteMounts : RemoteMounts.NONE;
         context.setShardingRuntimeConfig(ShardingRuntimeConfig.load());
-        if (gcCostEstimator != null) {
-            context.setGCCostEstimator(gcCostEstimator);
-        }
 
         context.blobStoreType = blobStoreType;
         context.blobStore = blobStore;
@@ -186,116 +146,12 @@ final class ServerInfrastructureInitializer {
         }
     }
 
-    private FragmentationTracker initializeFragmentationTracker(SegmentHttpServer httpServer,
-                                                                GlobalStoreServerComponentFactory componentFactory) {
-        log.info("Initializing Fragmentation Tracker...");
-        try {
-            FragmentationTracker fragmentationTracker = componentFactory.createFragmentationTracker();
-            httpServer.getContext().setFragmentationTracker(fragmentationTracker);
-            log.info("✅ Fragmentation Tracker initialized");
-            log.info("   - Tracks TAR file creation per entity");
-            log.info("   - Calculates fragmentation scores and taxes");
-            return fragmentationTracker;
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to initialize Fragmentation Tracker: {}", e.getMessage());
-            log.warn("   Fragmentation tracking will not be available");
-            return null;
-        }
-    }
-
-    private void initializeGcConsensusSupport(SegmentHttpServer httpServer,
-                                              AeronClusterConfig aeronConfig,
-                                              GlobalStoreServerComponentFactory componentFactory,
-                                              FileStore fileStore,
-                                              GCCostEstimator gcCostEstimator,
-                                              FragmentationTracker fragmentationTracker) {
-        log.info("Initializing GC Proposal Manager...");
-        try {
-            ServerContext context = httpServer.getContext();
-            List<String> configuredPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(aeronConfig);
-            int totalValidators = configuredPeers.isEmpty() ? 1 : configuredPeers.size() + 1;
-            Supplier<Integer> executorIdSupplier = createExecutorIdSupplier(context);
-            Supplier<Boolean> isLeaderSupplier = createLeaderSupplier(context);
-
-            GCProposalManager gcProposalManager = componentFactory.createGCProposalManager(
-                fileStore,
-                gcCostEstimator,
-                fragmentationTracker,
-                context.evmBridge,
-                totalValidators,
-                executorIdSupplier,
-                isLeaderSupplier
-            );
-
-            gcProposalManager.setClusterMembership(() -> {
-                AeronConsensusEngine aeronEngine = context.aeronConsensusEngine;
-                return aeronEngine != null ? aeronEngine.getTotalMemberCount() : totalValidators;
-            });
-            gcProposalManager.setExecutionRequester(proposalId -> {
-                AeronConsensusEngine aeronEngine = context.aeronConsensusEngine;
-                return aeronEngine != null && aeronEngine.sendGCExecuteThroughIngress(proposalId, executorIdSupplier.get());
-            });
-            context.setGCProposalManager(gcProposalManager);
-
-            log.info("✅ GC Proposal Manager initialized");
-            log.info("   - Total validators: {}", totalValidators);
-            log.info("   - Quorum required: {}/{}", ((totalValidators * 2 / 3) + 1), totalValidators);
-            log.info("   - Tracks GC proposals, voting, and execution");
-
-            GCAccountManager gcAccountManager = componentFactory.createGCAccountManager();
-            context.gcAccountManager = gcAccountManager;
-
-            log.info("✅ GC Account Manager initialized");
-            log.info("   - Tracks GC debt per entity (wallet address)");
-            log.info("   - Default debt limit: $100.00");
-            log.info("   - Enforces write blocking when debt exceeds limit");
-
-            PeriodicGCJob periodicGCJob = componentFactory.createPeriodicGCJob(gcAccountManager);
-            periodicGCJob.start();
-            context.periodicGCJob = periodicGCJob;
-
-            log.info("✅ Periodic GC Job started");
-            log.info("   - Interval: {}s", periodicGCJob.getIntervalSeconds());
-            log.info("   - Initial delay: {}s", periodicGCJob.getInitialDelaySeconds());
-            log.info("   - Action: Converts pending debt -> executed debt");
-            log.info("   - Blocks writes when executed debt > limit");
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to initialize GC Proposal Manager: {}", e.getMessage());
-            log.warn("   GC consensus will not be available");
-        }
-    }
-
-    private Supplier<Integer> createExecutorIdSupplier(ServerContext context) {
-        return () -> {
-            AeronConsensusEngine aeronEngine = context.aeronConsensusEngine;
-            if (aeronEngine != null && aeronEngine.getCluster() != null) {
-                try {
-                    return aeronEngine.getCluster().memberId();
-                } catch (Exception e) {
-                    // Fall back to the standalone default below.
-                }
-            }
-            return 0;
-        };
-    }
-
-    private Supplier<Boolean> createLeaderSupplier(ServerContext context) {
-        return () -> {
-            AeronConsensusEngine aeronEngine = context.aeronConsensusEngine;
-            if (aeronEngine != null) {
-                return aeronEngine.isLeader();
-            }
-            return true;
-        };
-    }
-
     record InitializationResult(String blobStoreType,
                                 BlobStore blobStore,
                                 FileStore fileStore,
                                 NodeStore nodeStore,
                                 NodeStore readViewNodeStore,
                                 Closeable readViewResources,
-                                SegmentHttpServer httpServer,
-                                GCCostEstimator gcCostEstimator) {
+                                SegmentHttpServer httpServer) {
     }
 }

@@ -16,23 +16,14 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
-import java.math.BigDecimal;
 import java.nio.file.Path;
-import java.util.function.Supplier;
 
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
-import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
-import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
-import org.apache.jackrabbit.oak.segment.file.tar.TarFiles;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
@@ -99,11 +90,6 @@ public final class DefaultGlobalStoreServerComponentFactory implements GlobalSto
     }
 
     @Override
-    public GCCostEstimator createGCCostEstimator(FileStore fileStore, TarFiles tarFiles, BigDecimal usdcPerMB) {
-        return new GCCostEstimator(fileStore, tarFiles, usdcPerMB);
-    }
-
-    @Override
     public SegmentHttpServer createHttpServer(java.io.File storeDir, int port, FileStore fileStore, NodeStore nodeStore) {
         return new SegmentHttpServer(storeDir, port, fileStore, nodeStore);
     }
@@ -111,33 +97,6 @@ public final class DefaultGlobalStoreServerComponentFactory implements GlobalSto
     @Override
     public CidMappingService createCidMappingService(Path storeDir) throws Exception {
         return new CidMappingService(storeDir);
-    }
-
-    @Override
-    public FragmentationTracker createFragmentationTracker() {
-        return new FragmentationTracker();
-    }
-
-    @Override
-    public GCProposalManager createGCProposalManager(FileStore fileStore,
-                                                     GCCostEstimator gcCostEstimator,
-                                                     FragmentationTracker fragmentationTracker,
-                                                     EvmBridge evmBridge,
-                                                     int totalValidators,
-                                                     Supplier<Integer> executorIdSupplier,
-                                                     Supplier<Boolean> isLeaderSupplier) {
-        return new GCProposalManager(fileStore, gcCostEstimator, fragmentationTracker, evmBridge,
-            totalValidators, executorIdSupplier, isLeaderSupplier);
-    }
-
-    @Override
-    public GCAccountManager createGCAccountManager() {
-        return new GCAccountManager();
-    }
-
-    @Override
-    public PeriodicGCJob createPeriodicGCJob(GCAccountManager accountManager) {
-        return new PeriodicGCJob(accountManager);
     }
 
     @Override

@@ -22,11 +22,8 @@ import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -59,12 +56,7 @@ public class ServerContext {
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics aeronPrometheusMetrics;
     public volatile String selfUrl;
-    public volatile GCCostEstimator gcCostEstimator;
-    public volatile GCProposalManager gcProposalManager;
-    public volatile org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager gcAccountManager;
-    public volatile org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob periodicGCJob;
     public volatile ProposalQueueManagerOptimized proposalQueueManager;
-    public volatile FragmentationTracker fragmentationTracker;
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager; // ADR 020 lazy binary upload
     public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
@@ -157,11 +149,6 @@ public class ServerContext {
         this.aeronPrometheusMetrics = aeronPrometheusMetrics;
     }
     
-    public void setGCCostEstimator(GCCostEstimator gcCostEstimator) {
-        this.gcCostEstimator = gcCostEstimator;
-        log.info("✅ GC Cost Estimator initialized");
-    }
-    
     public void setProposalQueueManager(ProposalQueueManagerOptimized proposalQueueManager) {
         this.proposalQueueManager = proposalQueueManager;
         log.info("✅ Proposal Queue Manager initialized");
@@ -242,16 +229,7 @@ public class ServerContext {
         persistRegisteredClients();
         return updated;
     }
-    public void setFragmentationTracker(FragmentationTracker fragmentationTracker) {
-        this.fragmentationTracker = fragmentationTracker;
-        log.info("✅ Fragmentation Tracker initialized");
-    }
-    
-    public void setGCProposalManager(GCProposalManager gcProposalManager) {
-        this.gcProposalManager = gcProposalManager;
-        log.info("✅ GC Proposal Manager initialized");
-    }
-    
+
     public void setUploadSessionManager(org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager) {
         this.uploadSessionManager = uploadSessionManager;
         log.info("✅ Upload Session Manager initialized (ADR 020 lazy binary upload)");

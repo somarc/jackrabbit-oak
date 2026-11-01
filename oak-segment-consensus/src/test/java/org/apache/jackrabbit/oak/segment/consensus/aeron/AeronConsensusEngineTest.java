@@ -1275,57 +1275,30 @@ public class AeronConsensusEngineTest {
     }
 
     @Test
-    public void sendGCProposalThroughIngressOffersGcProposalMessage() throws Exception {
+    public void sendFederationThroughIngressOffersCharterForLeader() throws Exception {
         AeronConsensusEngine engine = createEngine();
         io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
 
-        assertTrue(engine.sendGCProposalThroughIngress("gc-2", "0xwallet", null, 512L, null));
+        assertTrue(engine.sendFederationThroughIngress(SimpleMessageHeader.TEMPLATE_ID_CHARTER, "{\"clusterId\":\"c-1\"}"));
 
         CapturedOffer offer = captureOffer(client);
-        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, offer.templateId);
-        assertTrue(offer.json.contains("\"proposalId\":\"gc-2\""));
-        assertTrue(offer.json.contains("\"proposerWallet\":\"0xwallet\""));
-        assertTrue(offer.json.contains("\"targetRevision\":\"HEAD\""));
-        assertTrue(offer.json.contains("\"estimatedReclaimableSizeMB\":512"));
-        assertTrue(offer.json.contains("\"estimatedCostUSDC\":\"0\""));
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_CHARTER, offer.templateId);
+        assertTrue(offer.json.contains("\"clusterId\":\"c-1\""));
     }
 
     @Test
-    public void sendGCVoteThroughIngressOffersGcVoteMessage() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
-
-        assertTrue(engine.sendGCVoteThroughIngress("gc-3", 4, false, "too expensive"));
-
-        CapturedOffer offer = captureOffer(client);
-        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GC_VOTE, offer.templateId);
-        assertTrue(offer.json.contains("\"proposalId\":\"gc-3\""));
-        assertTrue(offer.json.contains("\"validatorId\":4"));
-        assertTrue(offer.json.contains("\"approve\":false"));
-        assertTrue(offer.json.contains("\"reason\":\"too expensive\""));
-    }
-
-    @Test
-    public void sendGCExecuteThroughIngressOffersGcExecuteMessageForLeader() throws Exception {
-        AeronConsensusEngine engine = createEngine();
-        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
-
-        assertTrue(engine.sendGCExecuteThroughIngress("gc-1", 5));
-
-        CapturedOffer offer = captureOffer(client);
-        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE, offer.templateId);
-        assertTrue(offer.json.contains("\"proposalId\":\"gc-1\""));
-        assertTrue(offer.json.contains("\"executorId\":5"));
-    }
-
-    @Test
-    public void sendGCExecuteThroughIngressRejectsFollower() throws Exception {
+    public void sendFederationThroughIngressRejectsFollower() throws Exception {
         AeronConsensusEngine engine = createEngine();
         Cluster cluster = mock(Cluster.class);
         when(cluster.role()).thenReturn(Cluster.Role.FOLLOWER);
         installCluster(engine, cluster);
 
-        assertFalse(engine.sendGCExecuteThroughIngress("gc-1", 5));
+        assertFalse(engine.sendFederationThroughIngress(SimpleMessageHeader.TEMPLATE_ID_DIRECTORY_UPDATE, "{}"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void sendFederationThroughIngressRejectsOtherTemplates() {
+        createEngine().sendFederationThroughIngress(SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, "{}");
     }
 
     @Test

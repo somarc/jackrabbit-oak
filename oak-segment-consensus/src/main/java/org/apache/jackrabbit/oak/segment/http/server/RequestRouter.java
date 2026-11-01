@@ -34,8 +34,6 @@ import org.apache.jackrabbit.oak.segment.http.server.handlers.EventStreamHandler
 import org.apache.jackrabbit.oak.segment.http.server.handlers.ExplorerApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.ExplorerApiV1Handler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.FileHandler;
-import org.apache.jackrabbit.oak.segment.http.server.handlers.FragmentationApiHandler;
-import org.apache.jackrabbit.oak.segment.http.server.handlers.GcCostHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.HealthHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.IpfsOpsHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.MetricsHandler;
@@ -138,12 +136,10 @@ public class RequestRouter implements AutoCloseable {
         DeleteProposalHandler deleteProposalHandler = new DeleteProposalHandler(context);
         ConsensusStatusHandler consensusStatusHandler = new ConsensusStatusHandler(context);
         ProposalQueryHandler proposalQueryHandler = new ProposalQueryHandler(context);
-        GcCostHandler gcCostHandler = new GcCostHandler(context);
         WalletQueryHandler walletQueryHandler = new WalletQueryHandler(context);
         RegistrationHandler registrationHandler = new RegistrationHandler(context);
         PeerDiscoveryHandler peerDiscoveryHandler = new PeerDiscoveryHandler(context);
         AeronApiHandler aeronApiHandler = new AeronApiHandler(context);
-        FragmentationApiHandler fragmentationApiHandler = new FragmentationApiHandler(context);
         
         // Binary upload handler (ADR 020 - lazy upload on confirmation)
         this.uploadSessionManager = new org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager();
@@ -263,7 +259,6 @@ public class RequestRouter implements AutoCloseable {
 
         get("/v1/wallets/stats", (req, res, path) -> walletQueryHandler.handleWalletStats(req, res));
         get("/v1/wallets/content", (req, res, path) -> walletQueryHandler.handleWalletContent(req, res));
-        get("/v1/gc/estimate", (req, res, path) -> gcCostHandler.handleGCCostEstimate(req, res));
 
         prefix("GET", "/v1/ops/operations/", (req, res, path) -> proposalQueryHandler.handleGetOperationStatus(req, res));
         get("/v1/ops/snapshots/queue", (req, res, path) -> proposalQueryHandler.handleGetOpsQueueSnapshot(res));
@@ -299,23 +294,6 @@ public class RequestRouter implements AutoCloseable {
         get("/v1/aeron/node-status", (req, res, path) -> aeronApiHandler.handleNodeStatus(req, res));
         get("/v1/aeron/leadership-history", (req, res, path) -> aeronApiHandler.handleLeadershipHistory(req, res));
         get("/v1/aeron/replication-lag", (req, res, path) -> aeronApiHandler.handleReplicationLag(res));
-
-        // Fragmentation, GC and GC accounts
-        get("/v1/fragmentation/metrics", (req, res, path) -> fragmentationApiHandler.handleGetAllMetrics(req, res));
-        prefix("GET", "/v1/fragmentation/metrics/", (req, res, path) -> fragmentationApiHandler.handleGetEntityMetrics(
-            req, res, path.substring("/v1/fragmentation/metrics/".length())));
-        get("/v1/fragmentation/top", (req, res, path) -> fragmentationApiHandler.handleGetTopFragmented(req, res));
-        get("/v1/gc/status", (req, res, path) -> fragmentationApiHandler.handleGetGcStatus(req, res));
-        get("/v1/compaction/proposals", (req, res, path) -> fragmentationApiHandler.handleGetCompactionProposals(req, res));
-        post("/v1/propose-gc", (req, res, path) -> fragmentationApiHandler.handleProposeGC(req, res));
-        post("/v1/gc/execute", (req, res, path) -> fragmentationApiHandler.handleExecuteGC(req, res));
-        post("/v1/gc/vote", (req, res, path) -> fragmentationApiHandler.handleVoteGC(req, res));
-        prefix(null, "/v1/gc/account/", (req, res, path) -> {
-            if (!handleGcAccount(fragmentationApiHandler, req, res, path)) {
-                sendNotFound(req, res, path);
-            }
-        });
-        post("/v1/gc/trigger", (req, res, path) -> fragmentationApiHandler.handleTriggerGC(req, res));
     }
 
     private void publicGet(String path, Handler handler) {
@@ -567,25 +545,6 @@ public class RequestRouter implements AutoCloseable {
             return true;
         }
         return false;
-    }
-
-    private static boolean handleGcAccount(FragmentationApiHandler fragmentationApiHandler, HttpServletRequest request,
-                                           HttpServletResponse response, String path) throws IOException {
-        String remaining = path.substring("/v1/gc/account/".length());
-        String method = request.getMethod();
-        if (remaining.contains("/pay") && "POST".equals(method)) {
-            fragmentationApiHandler.handlePayGCDebt(request, response, remaining.substring(0, remaining.indexOf("/pay")));
-        } else if (remaining.contains("/set-limit") && "POST".equals(method)) {
-            fragmentationApiHandler.handleSetDebtLimit(request, response, remaining.substring(0, remaining.indexOf("/set-limit")));
-        } else if (remaining.contains("/execute-pending") && "POST".equals(method)) {
-            fragmentationApiHandler.handleExecutePendingDebt(request, response,
-                remaining.substring(0, remaining.indexOf("/execute-pending")));
-        } else if ("GET".equals(method) && !remaining.contains("/")) {
-            fragmentationApiHandler.handleGetGCAccount(request, response, remaining);
-        } else {
-            return false;
-        }
-        return true;
     }
 
     // HEAD from AeronConsensusEngine (tracks latest HEAD correctly), FileStore as fallback.

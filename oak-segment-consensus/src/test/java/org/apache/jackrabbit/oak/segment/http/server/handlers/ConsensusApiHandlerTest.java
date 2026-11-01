@@ -18,7 +18,6 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
@@ -45,8 +44,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -431,22 +428,6 @@ public class ConsensusApiHandlerTest {
         verify(mockResponse).setContentType("application/json");
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // GC COST ESTIMATE ENDPOINT TESTS
-    // ═══════════════════════════════════════════════════════════════
-
-    @Test
-    public void testGCCostEstimateReturns503WhenNotAvailable() throws Exception {
-        // Given: GC cost estimator not configured
-        context.gcCostEstimator = null;
-        
-        // When: GC cost estimate requested
-        new GcCostHandler(context).handleGCCostEstimate(mockRequest, mockResponse);
-        
-        // Then: Should return 503 Service Unavailable (uses setStatus, not sendError)
-        verify(mockResponse).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-    }
-
     @Test
     public void testGetQueueStatsReturnsQueueSnapshot() throws Exception {
         ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
@@ -649,50 +630,6 @@ public class ConsensusApiHandlerTest {
                 lateHandler.close();
             }
         });
-    }
-
-    @Test
-    public void testApplyReplicatedWriteTracksFragmentationForNewTarFiles() throws Exception {
-        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
-        when(fileStore.getHead().getRecordId().toString()).thenReturn("previous-head");
-        when(fileStore.getHead().getRecordId().toString10()).thenReturn("tracked-head");
-
-        MemoryNodeStore nodeStore = new MemoryNodeStore();
-        Path storeDir = tempFolder.newFolder("fragmentation-store").toPath();
-        Files.write(storeDir.resolve("data00000a.tar"), new byte[16]);
-        Files.write(storeDir.resolve("data00001a.tar"), new byte[32]);
-
-        ServerContext fragmentationContext = new ServerContext(
-            fileStore,
-            nodeStore,
-            storeDir,
-            "http://localhost:8090"
-        );
-        fragmentationContext.fragmentationTracker = new FragmentationTracker();
-        ConsensusApiHandler fragmentationHandler = new ConsensusApiHandler(fragmentationContext);
-
-        fragmentationHandler.applyReplicatedWrite(
-            "0x1234567890abcdef1234567890abcdef12345678",
-            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
-            "page",
-            "{\"title\":\"Hello\"}",
-            "0xsig",
-            null,
-            null,
-            null,
-            null,
-            null
-        );
-
-        FragmentationTracker.EntityFragmentationMetrics metrics =
-            fragmentationContext.fragmentationTracker.getMetrics("0x1234567890abcdef1234567890abcdef12345678");
-        assertNotNull(metrics);
-        assertEquals(2, metrics.tarFilesCreated);
-        assertTrue(fragmentationContext.fragmentationTracker
-            .getTarFilesForEntity("0x1234567890abcdef1234567890abcdef12345678")
-            .contains("data00000a.tar"));
-        assertTrue(nodeExists(nodeStore,
-            "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1"));
     }
 
     @Test

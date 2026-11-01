@@ -74,12 +74,10 @@ public class WriteApplicationServiceTest {
         WriteApplicationService service = new WriteApplicationService(fileStore, nodeStore, null, flushService);
 
         AtomicReference<String> updatedHead = new AtomicReference<>();
-        AtomicReference<String> fragmentedWallet = new AtomicReference<>();
         AtomicReference<String> durableProposal = new AtomicReference<>();
         AtomicReference<String> durableHead = new AtomicReference<>();
         AtomicReference<String> sseEvent = new AtomicReference<>();
         service.setHeadUpdateCallback(updatedHead::set);
-        service.setFragmentationCallback(fragmentedWallet::set);
         service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
             @Override
             public void onDurable(String proposalId, String head) {
@@ -117,7 +115,6 @@ public class WriteApplicationServiceTest {
 
         assertEquals("new-head", newHead);
         assertEquals("new-head", updatedHead.get());
-        assertEquals(WALLET, fragmentedWallet.get());
         assertEquals("proposal-1", durableProposal.get());
         assertEquals("new-head", durableHead.get());
         assertEquals("content:" + PATH + ":" + WALLET + ":Acme:page", sseEvent.get());

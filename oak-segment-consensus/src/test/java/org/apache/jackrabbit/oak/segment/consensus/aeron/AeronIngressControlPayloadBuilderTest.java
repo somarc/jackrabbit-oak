@@ -82,24 +82,6 @@ public class AeronIngressControlPayloadBuilderTest {
         assertPayloadMatches(withoutError);
     }
 
-    @Test
-    public void gcMessagesDefaultHeadAndReasonFields() {
-        AeronEncodedMessage proposal = builder.buildGcProposal("gc-1", "0xwallet", null, 128L, null);
-        AeronEncodedMessage vote = builder.buildGcVote("gc-1", 5, true, null);
-        AeronEncodedMessage execute = builder.buildGcExecute("gc-1", 6);
-
-        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, proposal.templateId);
-        assertTrue(proposal.json.contains("\"targetRevision\":\"HEAD\""));
-        assertTrue(proposal.json.contains("\"estimatedCostUSDC\":\"0\""));
-        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GC_VOTE, vote.templateId);
-        assertTrue(vote.json.contains("\"reason\":\"\""));
-        assertEquals(SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE, execute.templateId);
-        assertTrue(execute.json.contains("\"executorId\":6"));
-        assertPayloadMatches(proposal);
-        assertPayloadMatches(vote);
-        assertPayloadMatches(execute);
-    }
-
     private static void assertPayloadMatches(AeronEncodedMessage encoded) {
         SimpleMessageHeader.HeaderInfo header = SimpleMessageHeader.decode(encoded.buffer, 0);
         byte[] payload = new byte[encoded.totalLength - SimpleMessageHeader.ENCODED_LENGTH];

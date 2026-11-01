@@ -27,7 +27,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Owns the write/delete application services that apply replicated mutations, and wires their
- * head, SSE, fragmentation, CID and durability callbacks. The consensus HTTP endpoints are
+ * head, SSE, CID and durability callbacks. The consensus HTTP endpoints are
  * routed by {@link org.apache.jackrabbit.oak.segment.http.server.RequestRouter} to their own handlers.
  */
 public class ConsensusApiHandler implements AutoCloseable {
@@ -105,11 +105,6 @@ public class ConsensusApiHandler implements AutoCloseable {
                     log.debug("Failed to emit SSE delete event: {}", e.getMessage());
                 }
             });
-        }
-        
-        // Fragmentation tracking callback
-        if (context.fragmentationTracker != null) {
-            writeApplicationService.setFragmentationCallback(this::trackFragmentation);
         }
         
         // CID mapping callback
@@ -252,48 +247,4 @@ public class ConsensusApiHandler implements AutoCloseable {
     // - resolveUrlToIP() - Only used by discoverLeaderFromPeerClusterState
     // - getNextValidatorInRotation() - Never called
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Track fragmentation: Check for new TAR files and associate with wallet address.
-     */
-    private void trackFragmentation(String walletAddress) {
-        if (context.fragmentationTracker == null || walletAddress == null || walletAddress.isEmpty()) {
-            return;
-        }
-        
-        try {
-            // Get current TAR files
-            java.util.List<String> currentTarFiles = new java.util.ArrayList<>();
-            try (java.util.stream.Stream<java.nio.file.Path> paths = java.nio.file.Files.list(context.storeDirectory)) {
-                currentTarFiles = paths
-                    .filter(p -> p.toString().endsWith(".tar"))
-                    .map(p -> p.getFileName().toString())
-                    .sorted()
-                    .collect(java.util.stream.Collectors.toList());
-            }
-            
-            // Find new TAR files (not yet tracked for this entity)
-            java.util.List<String> entityTarFiles = context.fragmentationTracker.getTarFilesForEntity(walletAddress);
-            java.util.Set<String> knownTarFiles = new java.util.HashSet<>(entityTarFiles);
-            
-            for (String tarFile : currentTarFiles) {
-                if (!knownTarFiles.contains(tarFile)) {
-                    // New TAR file - get its size
-                    java.nio.file.Path tarPath = context.storeDirectory.resolve(tarFile);
-                    long tarFileSize = java.nio.file.Files.exists(tarPath) 
-                        ? java.nio.file.Files.size(tarPath) 
-                        : 0;
-                    
-                    // Record write (this will create or update metrics)
-                    context.fragmentationTracker.recordWrite(walletAddress, tarFile, tarFileSize);
-                    
-                    log.debug("📊 Fragmentation tracked: entity={}, tarFile={}, size={}", 
-                        walletAddress, tarFile, tarFileSize);
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Failed to track fragmentation for entity {}: {}", walletAddress, e.getMessage());
-        }
-    }
-    
 }

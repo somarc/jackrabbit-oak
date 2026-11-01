@@ -283,8 +283,7 @@ public class RateLimiter {
         
         // Specific write endpoints
         return path.contains("/v1/write") || 
-               path.contains("/v1/delete") || 
-               path.contains("/v1/gc/propose");
+               path.contains("/v1/delete");
     }
     
     /**

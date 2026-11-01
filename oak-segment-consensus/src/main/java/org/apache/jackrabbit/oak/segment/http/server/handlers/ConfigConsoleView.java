@@ -29,7 +29,6 @@ import java.util.regex.Pattern;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfigTuningConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.FileStoreFlushTuningConfig;
-import org.apache.jackrabbit.oak.segment.consensus.config.GcEconomicsTuningConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.HttpTlsTuningConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.MetatypeCatalog;
 import org.apache.jackrabbit.oak.segment.consensus.config.NodeRuntimeTuningConfig;
@@ -64,7 +63,6 @@ final class ConfigConsoleView {
         map.put("tlsTuning", HttpTlsTuningConfig.class);
         map.put("tokenAuthTuning", TokenAuthTuningConfig.class);
         map.put("fileStoreFlushTuning", FileStoreFlushTuningConfig.class);
-        map.put("gcEconomicsTuning", GcEconomicsTuningConfig.class);
         map.put("runtimeUiTuning", RuntimeUiTuningConfig.class);
         COMPONENT_OCDS = Collections.unmodifiableMap(map);
     }

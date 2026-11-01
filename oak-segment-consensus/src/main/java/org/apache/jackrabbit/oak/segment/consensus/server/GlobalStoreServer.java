@@ -408,13 +408,6 @@ public class GlobalStoreServer {
         if (serverContext.evmBridge != null) {
             quietly(serverContext.evmBridge::stop, "✅ EVM bridge stopped", "Error stopping EVM bridge: {}");
         }
-        if (serverContext.gcProposalManager != null) {
-            quietly(serverContext.gcProposalManager::shutdown, "✅ GC proposal manager stopped",
-                "Error stopping GC proposal manager: {}");
-        }
-        if (serverContext.periodicGCJob != null) {
-            quietly(serverContext.periodicGCJob::stop, "✅ Periodic GC job stopped", "Error stopping periodic GC job: {}");
-        }
         if (serverContext.aeronPrometheusMetrics != null) {
             quietly(serverContext.aeronPrometheusMetrics::close, "✅ Aeron Prometheus metrics stopped",
                 "Error stopping Aeron Prometheus metrics: {}");

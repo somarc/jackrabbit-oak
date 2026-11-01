@@ -21,7 +21,6 @@ import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -1150,26 +1149,6 @@ public class WriteProposalHandlerTest {
         verify(response).setStatus(HttpServletResponse.SC_FORBIDDEN);
         assertTrue(body.toString().contains("\"code\":\"validator_binary_upload_disabled\""));
         assertEquals(1L, context.apiRejectedRequests.get());
-    }
-
-    @Test
-    public void testHandleProposeWriteBlocksWritesWhenGcDebtExceeded() throws Exception {
-        ServerContext context = readyContext();
-        GCAccountManager accountManager = new GCAccountManager();
-        accountManager.addDebt(VALID_WALLET.toLowerCase(), "/oak-chain/demo", 1200L);
-        accountManager.convertAllPendingToExecuted();
-        context.gcAccountManager = accountManager;
-        WriteProposalHandler handler = new WriteProposalHandler(context);
-        HttpServletRequest request = request();
-        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-
-        handler.handleProposeWrite(request, response);
-
-        verify(response).setStatus(402);
-        assertTrue(body.toString().contains("\"code\":\"write_blocked_gc_debt\""));
-        assertTrue(body.toString().contains("\"paymentUrl\":\"/v1/gc/account/" + VALID_WALLET.toLowerCase() + "/pay\""));
     }
 
     private static ServerContext readyContext() {

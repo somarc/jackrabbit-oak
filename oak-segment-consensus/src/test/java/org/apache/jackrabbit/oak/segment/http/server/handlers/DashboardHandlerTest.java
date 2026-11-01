@@ -98,7 +98,10 @@ public class DashboardHandlerTest {
         assertTrue(json.contains("\"path\":\"/v1/consensus/status\""));
         assertTrue(json.contains("\"path\":\"/v1/aeron/cluster-state\""));
         assertTrue(json.contains("\"path\":\"/v1/events/stats\""));
-        assertTrue(json.contains("\"path\":\"/v1/gc/status\""));
+        assertFalse(json.contains("\"path\":\"/v1/gc/"));
+        assertFalse(json.contains("\"path\":\"/v1/propose-gc\""));
+        assertFalse(json.contains("\"path\":\"/v1/compaction/proposals\""));
+        assertFalse(json.contains("\"path\":\"/v1/fragmentation/"));
         assertTrue(json.contains("\"path\":\"/metrics\""));
         assertTrue(json.contains("\"path\":\"/api/cid/stats\",\"description\":\"CID mapping stats\",\"category\":\"Storage\""));
         assertTrue(json.contains("\"path\":\"/v1/proposals/{id}/status\",\"description\":\"Proposal status by id (short-term: proposals this validator queued, until retention eviction)\""));

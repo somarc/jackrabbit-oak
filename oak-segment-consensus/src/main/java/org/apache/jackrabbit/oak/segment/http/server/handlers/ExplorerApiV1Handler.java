@@ -249,21 +249,6 @@ public class ExplorerApiV1Handler {
             }
             payload.put("recentContent", recentContent);
 
-            if (context.gcAccountManager != null) {
-                try {
-                    org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount account = context.gcAccountManager.getAccount(walletAddress.toLowerCase());
-                    if (account != null) {
-                        Map<String, Object> gc = new LinkedHashMap<>();
-                        gc.put("totalDebt", account.totalDebt != null ? account.totalDebt.toString() : "0");
-                        gc.put("pendingDebt", account.getPendingDebt() != null ? account.getPendingDebt().toString() : "0");
-                        gc.put("writesBlocked", account.writesBlocked);
-                        payload.put("gcAccount", gc);
-                    }
-                } catch (Exception ignored) {
-                    // Keep explorer endpoint resilient even if GC account introspection fails.
-                }
-            }
-
             JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
         } catch (Exception e) {
             log.error("Failed explorer wallet lookup {}", walletAddress, e);

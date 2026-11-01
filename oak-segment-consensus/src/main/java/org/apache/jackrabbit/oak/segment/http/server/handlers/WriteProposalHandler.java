@@ -27,7 +27,6 @@ import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
-import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
@@ -354,37 +353,6 @@ public class WriteProposalHandler {
                     normalizedWallet, ipfsCid, knownBlobId.get());
                 context.apiIpfsPolicyAcceptedEnterpriseCid.incrementAndGet();
                 ConsensusMetrics.recordEnterpriseCidAccepted();
-            }
-
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // WRITE BLOCKING: Check if entity has exceeded GC debt limit
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            if (context.gcAccountManager != null && !context.gcAccountManager.canWrite(normalizedWallet)) {
-                EntityGCAccount account = context.gcAccountManager.getAccount(normalizedWallet);
-
-                log.warn("🚫 Write BLOCKED: wallet={}, debt=${}, limit=${}",
-                         normalizedWallet, account.totalDebt, account.debtLimit);
-
-                response.setContentType("application/json");
-                Map<String, Object> errorPayload = new LinkedHashMap<>();
-                errorPayload.put("success", false);
-                errorPayload.put("error", "Writes blocked due to unpaid GC debt. Please pay debt to resume.");
-                errorPayload.put("code", "write_blocked_gc_debt");
-                errorPayload.put("status", 402);
-                errorPayload.put("timestamp", System.currentTimeMillis());
-                errorPayload.put("wallet", normalizedWallet);
-                errorPayload.put("totalDebt", account.totalDebt.toString());
-                errorPayload.put("executedDebt", account.executedDebt.toString());
-                errorPayload.put("pendingDebt", account.getPendingDebt().toString());
-                errorPayload.put("debtLimit", account.debtLimit.toString());
-                errorPayload.put("amountOverLimit", account.totalDebt.subtract(account.debtLimit).toString());
-                errorPayload.put("paymentUrl", "/v1/gc/account/" + normalizedWallet + "/pay");
-                errorPayload.put("statusUrl", "/v1/gc/account/" + normalizedWallet);
-                JsonOutputUtil.write(response, 402, errorPayload); // 402 Payment Required
-
-                log.info("💳 PAYMENT REQUIRED: Rejected write from {} (debt: ${})",
-                         normalizedWallet, account.totalDebt);
-                return;
             }
 
             // Default values for optional parameters

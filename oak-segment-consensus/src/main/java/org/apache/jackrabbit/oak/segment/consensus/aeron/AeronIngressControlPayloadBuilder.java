@@ -84,44 +84,4 @@ final class AeronIngressControlPayloadBuilder {
         json.append("}");
         return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED, json.toString());
     }
-
-    AeronEncodedMessage buildGcProposal(String proposalId,
-                                        String proposerWallet,
-                                        String targetRevision,
-                                        long estimatedReclaimableSizeMB,
-                                        String estimatedCostUSDC) {
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
-        json.append("\"proposerWallet\":\"").append(escapeJson(proposerWallet)).append("\",");
-        json.append("\"targetRevision\":\"")
-            .append(escapeJson(targetRevision != null ? targetRevision : "HEAD"))
-            .append("\",");
-        json.append("\"estimatedReclaimableSizeMB\":").append(estimatedReclaimableSizeMB).append(",");
-        json.append("\"estimatedCostUSDC\":\"")
-            .append(escapeJson(estimatedCostUSDC != null ? estimatedCostUSDC : "0"))
-            .append("\"");
-        json.append("}");
-        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, json.toString());
-    }
-
-    AeronEncodedMessage buildGcVote(String proposalId,
-                                    int validatorId,
-                                    boolean approve,
-                                    String reason) {
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
-        json.append("\"validatorId\":").append(validatorId).append(",");
-        json.append("\"approve\":").append(approve).append(",");
-        json.append("\"reason\":\"").append(escapeJson(reason != null ? reason : "")).append("\"");
-        json.append("}");
-        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_GC_VOTE, json.toString());
-    }
-
-    AeronEncodedMessage buildGcExecute(String proposalId, int executorId) {
-        String json = "{\"proposalId\":\"" + escapeJson(proposalId) + "\"," +
-            "\"executorId\":" + executorId + "}";
-        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE, json);
-    }
 }

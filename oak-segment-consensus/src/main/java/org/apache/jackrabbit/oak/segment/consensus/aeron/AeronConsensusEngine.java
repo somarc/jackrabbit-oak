@@ -45,7 +45,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Oak's {@link ClusteredService} on Aeron Cluster (Raft). Writes, deletes, GC commands, durability reports and
+ * Oak's {@link ClusteredService} on Aeron Cluster (Raft). Writes, deletes, federation commands, durability reports and
  * transaction boundaries reach every member through cluster ingress and are applied in log order on the service
  * thread; ingress, leader discovery, snapshots and genesis are delegated to the collaborators wired in the
  * constructor.
@@ -914,58 +914,11 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // GC REPLICATION THROUGH AERON CLUSTER
+    // CONTROL COMMANDS THROUGH AERON CLUSTER
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Send a GC proposal through Aeron ingress for cluster-wide replication.
-     * 
-     * <p>This ensures all validators receive the GC proposal and can vote on it.
-     * The proposal is replicated through Raft consensus before being applied.
-     * 
-     * @param proposalId unique proposal identifier
-     * @param proposerWallet wallet address of the proposer
-     * @param targetRevision target revision for GC (null = HEAD)
-     * @param estimatedReclaimableSizeMB estimated reclaimable size in MB
-     * @param estimatedCostUSDC estimated cost in USDC
-     * @return true if proposal was sent successfully
-     */
-    public boolean sendGCProposalThroughIngress(String proposalId, String proposerWallet, 
-                                                String targetRevision, long estimatedReclaimableSizeMB,
-                                                String estimatedCostUSDC) {
-        return sendGc("GC_PROPOSAL", () -> ingressControlPayloadBuilder.buildGcProposal(
-            proposalId, proposerWallet, targetRevision, estimatedReclaimableSizeMB, estimatedCostUSDC));
-    }
-    
-    /**
-     * Send a GC vote through Aeron ingress for cluster-wide replication.
-     * 
-     * @param proposalId the proposal being voted on
-     * @param validatorId the validator casting the vote
-     * @param approve true to approve, false to reject
-     * @param reason optional reason for the vote
-     * @return true if vote was sent successfully
-     */
-    public boolean sendGCVoteThroughIngress(String proposalId, int validatorId, 
-                                            boolean approve, String reason) {
-        return sendGc("GC_VOTE", () -> ingressControlPayloadBuilder.buildGcVote(proposalId, validatorId, approve, reason));
-    }
-    
-    /**
-     * Send a GC execute command through Aeron ingress for cluster-wide replication.
-     * 
-     * <p>Any member may send it; applying it is idempotent and only an APPROVED proposal starts executing.
-     * 
-     * @param proposalId the approved proposal to execute
-     * @param executorId the validator executing the GC
-     * @return true if execute command was sent successfully
-     */
-    public boolean sendGCExecuteThroughIngress(String proposalId, int executorId) {
-        return sendGc("GC_EXECUTE", () -> ingressControlPayloadBuilder.buildGcExecute(proposalId, executorId));
-    }
 
     /**
-     * Offers a CHARTER or DIRECTORY_UPDATE command. Like GC control messages these are not proposal writes,
+     * Offers a CHARTER or DIRECTORY_UPDATE command. Control messages are not proposal writes,
      * so they do not count toward write backpressure.
      */
     public boolean sendFederationThroughIngress(int templateId, String json) {
@@ -973,7 +926,7 @@ public class AeronConsensusEngine implements ClusteredService {
             && templateId != SimpleMessageHeader.TEMPLATE_ID_DIRECTORY_UPDATE) {
             throw new IllegalArgumentException("Not a federation command: " + templateId);
         }
-        return sendGc(templateId == SimpleMessageHeader.TEMPLATE_ID_CHARTER ? "charter" : "directory update",
+        return sendControl(templateId == SimpleMessageHeader.TEMPLATE_ID_CHARTER ? "charter" : "directory update",
             () -> AeronIngressPayloadSupport.encode(templateId, json));
     }
 
@@ -985,8 +938,8 @@ public class AeronConsensusEngine implements ClusteredService {
         return isLeader() && genesisVerified && !hasApplicationFailure();
     }
 
-    /** GC control messages are not proposal writes, so they do not count toward write backpressure. */
-    private boolean sendGc(String messageType, java.util.function.Supplier<AeronEncodedMessage> payload) {
+    /** Control messages are not proposal writes, so they do not count toward write backpressure. */
+    private boolean sendControl(String messageType, java.util.function.Supplier<AeronEncodedMessage> payload) {
         boolean sent = sendThroughIngress(messageType, payload, 0);
         if (sent) {
             log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", messageType);

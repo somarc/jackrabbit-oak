@@ -24,8 +24,6 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService;
 import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
-import org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -139,14 +137,10 @@ public class GlobalStoreServerLifecycleTest {
         ProposalQueueManagerOptimized proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
         BeaconChainClient beaconChainClient = mock(BeaconChainClient.class);
         EvmBridge evmBridge = mock(EvmBridge.class);
-        GCProposalManager gcProposalManager = mock(GCProposalManager.class);
-        PeriodicGCJob periodicGCJob = mock(PeriodicGCJob.class);
         AeronPrometheusMetrics aeronPrometheusMetrics = mock(AeronPrometheusMetrics.class);
         ServerContext context = new ServerContext(fileStore, mock(NodeStore.class), Paths.get("/tmp/test-store"), "http://self:8090");
         context.proposalQueueManager = proposalQueueManager;
         context.evmBridge = evmBridge;
-        context.gcProposalManager = gcProposalManager;
-        context.periodicGCJob = periodicGCJob;
         context.aeronPrometheusMetrics = aeronPrometheusMetrics;
         when(proposalQueueManager.getBeaconClient()).thenReturn(beaconChainClient);
         when(httpServer.getContext()).thenReturn(context);
@@ -159,8 +153,6 @@ public class GlobalStoreServerLifecycleTest {
         verify(proposalQueueManager).stop();
         verify(beaconChainClient).stopBackgroundPolling();
         verify(evmBridge).stop();
-        verify(gcProposalManager).shutdown();
-        verify(periodicGCJob).stop();
         verify(aeronPrometheusMetrics).close();
     }
 
