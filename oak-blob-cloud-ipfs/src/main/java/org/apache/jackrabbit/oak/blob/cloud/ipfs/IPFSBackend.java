@@ -37,6 +37,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -45,7 +46,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
@@ -85,6 +85,12 @@ public class IPFSBackend extends AbstractSharedBackend {
     private static final String LAST_MODIFIED = "lastModified";
     private static final Pattern SHA256_HEX = Pattern.compile("[0-9a-f]{64}");
 
+    /**
+     * Identifier-to-CID mappings kept in memory; older ones are read from the
+     * IPFS Files index again when needed.
+     */
+    static final int CID_CACHE_ENTRIES = 100_000;
+
     private final IpfsClientFactory ipfsClientFactory;
 
     /**
@@ -105,7 +111,20 @@ public class IPFSBackend extends AbstractSharedBackend {
     /**
      * In-memory cache for blob identifier-to-CID mappings.
      */
-    private final Map<DataIdentifier, String> cidCache = new ConcurrentHashMap<>();
+    private final Map<DataIdentifier, String> cidCache = Collections.synchronizedMap(
+        new LinkedHashMap<>(256, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<DataIdentifier, String> eldest) {
+                return size() > CID_CACHE_ENTRIES;
+            }
+        });
+
+    private final IpfsStatistics statistics = new IpfsStatistics();
+
+    /**
+     * The result of the last network check, or {@code null} if none ran.
+     */
+    private volatile IpfsNetworkPosture.Report networkReport;
 
     /**
      * Root directory in the IPFS Files namespace used for Oak metadata.
@@ -177,6 +196,7 @@ public class IPFSBackend extends AbstractSharedBackend {
                     report = null;
                 }
                 if (report != null) {
+                    networkReport = report;
                     IpfsNetworkPosture.enforce(networkPolicy, report, ipfsApiEndpoint);
                 }
             }
@@ -200,6 +220,16 @@ public class IPFSBackend extends AbstractSharedBackend {
 
     @Override
     public void write(DataIdentifier identifier, File file) throws DataStoreException {
+        try {
+            store(identifier, file);
+            statistics.written(file.length());
+        } catch (DataStoreException e) {
+            statistics.writeFailed();
+            throw e;
+        }
+    }
+
+    private void store(DataIdentifier identifier, File file) throws DataStoreException {
         try {
             if (touchIfStored(identifier, file.length())) {
                 replicate(identifier, resolveCid(identifier));
@@ -261,7 +291,14 @@ public class IPFSBackend extends AbstractSharedBackend {
      */
     private void replicate(DataIdentifier identifier, String cid) throws IOException {
         if (cluster != null) {
-            cluster.pinReplicated(cid, identifier.toString());
+            long start = System.nanoTime();
+            boolean replicated = false;
+            try {
+                cluster.pinReplicated(cid, identifier.toString());
+                replicated = true;
+            } finally {
+                statistics.clusterPinned((System.nanoTime() - start) / 1_000_000, replicated);
+            }
         }
     }
 
@@ -285,6 +322,17 @@ public class IPFSBackend extends AbstractSharedBackend {
 
     @Override
     public InputStream read(DataIdentifier identifier) throws DataStoreException {
+        try {
+            InputStream content = open(identifier);
+            statistics.read();
+            return content;
+        } catch (DataStoreException e) {
+            statistics.readFailed();
+            throw e;
+        }
+    }
+
+    private InputStream open(DataIdentifier identifier) throws DataStoreException {
         String cid = resolveCid(identifier);
         if (cid == null) {
             throw new DataStoreException("CID not found for identifier: " + identifier);
@@ -378,6 +426,16 @@ public class IPFSBackend extends AbstractSharedBackend {
      */
     @Override
     public void deleteRecord(DataIdentifier identifier) throws DataStoreException {
+        try {
+            delete(identifier);
+            statistics.deleted();
+        } catch (DataStoreException e) {
+            statistics.deleteFailed();
+            throw e;
+        }
+    }
+
+    private void delete(DataIdentifier identifier) throws DataStoreException {
         try {
             String cid = resolveCid(identifier);
             if (cid == null) {
@@ -519,6 +577,134 @@ public class IPFSBackend extends AbstractSharedBackend {
     }
 
     /**
+     * Reports whether the IPFS node and, when configured, the IPFS Cluster
+     * answer now, with the encryption and network settings in effect and the
+     * operation counts since startup. Never throws; failures are reported.
+     */
+    Map<String, Object> health() {
+        Map<String, Object> health = new LinkedHashMap<>();
+        Map<String, Object> kubo = new LinkedHashMap<>();
+        kubo.put("endpoint", ipfsApiEndpoint);
+        long start = System.nanoTime();
+        try {
+            kubo.put("version", String.valueOf(ipfs.version()));
+            kubo.put("status", "UP");
+        } catch (Exception e) {
+            kubo.put("status", "DOWN");
+            kubo.put("error", String.valueOf(e.getMessage()));
+        }
+        kubo.put("latencyMillis", (System.nanoTime() - start) / 1_000_000);
+        health.put("kubo", kubo);
+
+        Map<String, Object> clusterHealth = new LinkedHashMap<>();
+        clusterHealth.put("configured", cluster != null);
+        if (cluster != null) {
+            clusterHealth.put("endpoint", clusterSettings.endpoint());
+            clusterHealth.put("replicationMin", clusterSettings.replicationMin());
+            clusterHealth.put("replicationMax", clusterSettings.replicationMax());
+            try {
+                cluster.ping();
+                clusterHealth.put("status", "UP");
+            } catch (Exception e) {
+                clusterHealth.put("status", "DOWN");
+                clusterHealth.put("error", String.valueOf(e.getMessage()));
+            }
+        }
+        health.put("cluster", clusterHealth);
+
+        BlobKeyProvider keys = blobKeys;
+        Map<String, Object> encryption = new LinkedHashMap<>();
+        encryption.put("enabled", keys != null);
+        if (keys != null) {
+            encryption.put("currentKeyId", keys.current().keyId());
+        }
+        health.put("encryption", encryption);
+
+        Map<String, Object> network = new LinkedHashMap<>();
+        network.put("policy", networkPolicy.name().toLowerCase(Locale.ROOT));
+        IpfsNetworkPosture.Report report = networkReport;
+        if (report != null) {
+            network.put("privateSwarm", report.privateSwarm());
+            network.put("exposures", report.exposures());
+        }
+        health.put("network", network);
+        health.put("statistics", statistics.snapshot());
+        health.put("status", "UP".equals(kubo.get("status"))
+            && (cluster == null || "UP".equals(clusterHealth.get("status"))) ? "UP" : "DOWN");
+        return health;
+    }
+
+    Map<String, Long> statistics() {
+        return statistics.snapshot();
+    }
+
+    /**
+     * Checks up to {@code limit} blobs of the local index for retention: with
+     * IPFS Cluster, that at least the replication minimum of peers hold each
+     * one pinned; without it, that blobs stored through this node are pinned
+     * here. Blobs adopted from another node are counted, not checked, unless a
+     * cluster is configured.
+     *
+     * @return counts and up to 100 identifiers per problem
+     */
+    Map<String, Object> verify(int limit) throws DataStoreException {
+        List<DataIdentifier> identifiers = loadPersistedIdentifiers();
+        List<String> underReplicated = new ArrayList<>();
+        List<String> unpinned = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
+        int checked = 0;
+        int adopted = 0;
+        int problems = 0;
+        for (DataIdentifier identifier : identifiers) {
+            if (checked >= limit) {
+                break;
+            }
+            checked++;
+            try {
+                String cid = resolveCid(identifier);
+                if (cid == null) {
+                    continue;
+                }
+                if (cluster != null) {
+                    long pinned = cluster.statuses(cid).stream().filter(peer -> "pinned".equals(peer.status())).count();
+                    if (pinned < clusterSettings.replicationMin()) {
+                        problems++;
+                        addCapped(underReplicated, identifier + " (" + cid + ") pinned on " + pinned);
+                    }
+                } else if (!ipfs.fileExists(contentPath(identifier))) {
+                    adopted++;
+                } else if (!ipfs.isPinned(cid)) {
+                    problems++;
+                    addCapped(unpinned, identifier + " (" + cid + ")");
+                }
+            } catch (Exception e) {
+                problems++;
+                addCapped(errors, identifier + ": " + e.getMessage());
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("total", identifiers.size());
+        result.put("checked", checked);
+        result.put("complete", checked == identifiers.size());
+        result.put("problems", problems);
+        result.put("adoptedNotChecked", adopted);
+        if (cluster != null) {
+            result.put("replicationMin", clusterSettings.replicationMin());
+            result.put("underReplicated", underReplicated);
+        } else {
+            result.put("unpinned", unpinned);
+        }
+        result.put("errors", errors);
+        return result;
+    }
+
+    private static void addCapped(List<String> list, String entry) {
+        if (list.size() < 100) {
+            list.add(entry);
+        }
+    }
+
+    /**
      * Sets the keys that encrypt new blobs and decrypt encrypted ones;
      * {@code null} stores and reads plaintext.
      */
@@ -611,7 +797,11 @@ public class IPFSBackend extends AbstractSharedBackend {
         } catch (DataStoreException e) {
             LOG.debug("Failed to load persisted CID mappings: {}", e.getMessage());
         }
-        for (Map.Entry<DataIdentifier, String> entry : cidCache.entrySet()) {
+        List<Map.Entry<DataIdentifier, String>> cached;
+        synchronized (cidCache) {
+            cached = new ArrayList<>(cidCache.entrySet());
+        }
+        for (Map.Entry<DataIdentifier, String> entry : cached) {
             mappings.putIfAbsent(entry.getKey().toString(), entry.getValue());
         }
         return mappings;

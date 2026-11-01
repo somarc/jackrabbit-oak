@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
@@ -311,7 +312,24 @@ public class HealthHandler {
         clients.put("registeredValidators", registeredValidators.size());
         payload.put("clients", clients);
 
-        payload.put("blobStore", buildBlobStorePayload(new HashMap<>()));
+        Map<String, Object> blobStorePayload = buildBlobStorePayload(new HashMap<>());
+        IPFSDataStore ipfs = context == null ? null : context.ipfsDataStore();
+        if (ipfs != null) {
+            // Status only on this public route; details are at the guarded /v1/ops/ipfs/health.
+            Map<String, Object> health = ipfs.checkHealth();
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("status", health.get("status"));
+            summary.put("kubo", health.get("kubo") instanceof Map ? ((Map<?, ?>) health.get("kubo")).get("status") : null);
+            Object ipfsCluster = health.get("cluster");
+            summary.put("cluster", ipfsCluster instanceof Map
+                && Boolean.TRUE.equals(((Map<?, ?>) ipfsCluster).get("configured"))
+                ? ((Map<?, ?>) ipfsCluster).get("status") : "NOT_CONFIGURED");
+            blobStorePayload.put("ipfs", summary);
+            if (!"UP".equals(health.get("status"))) {
+                allHealthy = false;
+            }
+        }
+        payload.put("blobStore", blobStorePayload);
         payload.put("sharding", buildShardingPayload());
 
         Map<String, Object> overall = new HashMap<>();

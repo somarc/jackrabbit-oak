@@ -75,6 +75,20 @@ public class ServerContext {
     public volatile EventBroadcaster eventBroadcaster; // SSE event broadcasting (ADR 036)
     public volatile ShardingRuntimeConfig shardingRuntimeConfig = ShardingRuntimeConfig.disabled();
     
+    /**
+     * @return the IPFS DataStore behind {@link #blobStore}, or {@code null}
+     *         when binaries are not stored in IPFS
+     */
+    public org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore ipfsDataStore() {
+        org.apache.jackrabbit.oak.spi.blob.BlobStore store = blobStore;
+        return store instanceof org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore
+            && ((org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) store).getDataStore()
+                instanceof org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore
+            ? (org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore)
+                ((org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore) store).getDataStore()
+            : null;
+    }
+
     // API-level metrics (rejections before reaching queue)
     public final java.util.concurrent.atomic.AtomicLong apiRejectedRequests = new java.util.concurrent.atomic.AtomicLong(0);
     public final java.util.concurrent.atomic.AtomicLong apiAcceptedRequests = new java.util.concurrent.atomic.AtomicLong(0);

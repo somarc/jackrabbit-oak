@@ -221,6 +221,8 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "GET", "/v1/binary/check-intent/{token}", "Check binary intent", "Binary", null);
         addInternalIndexEntry(endpoints, "POST", "/v1/binary/complete-upload", "Complete binary upload", "Binary", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/binary/download-url/{blobId}?ttl=300", "Issue a signed, expiring download URL", "Binary", null);
+        addInternalIndexEntry(endpoints, "GET", "/v1/ops/ipfs/health", "IPFS node, cluster, encryption and network status with operation counts", "Binary", null);
+        addInternalIndexEntry(endpoints, "GET", "/v1/ops/ipfs/verify?limit=1000", "Check that stored binaries are pinned or replicated", "Binary", null);
 
         addLocalUiIndexEntry(endpoints, "GET", "/api-browser", "Validator-local diagnostic API browser", "UI");
         addLocalUiIndexEntry(endpoints, "GET", "/console/configMgr", "Read-only configuration manager (OSGi contract and effective values)", "Configuration");

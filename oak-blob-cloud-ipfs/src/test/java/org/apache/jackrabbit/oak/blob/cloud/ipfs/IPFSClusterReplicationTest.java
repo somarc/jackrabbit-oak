@@ -137,6 +137,24 @@ public class IPFSClusterReplicationTest {
         writer.close();
     }
 
+    @Test
+    public void testHealthAndVerifyReportClusterReplication() throws Exception {
+        DataStoreBlobStore writer = blobStore(2, 2, 3);
+        write(writer, randomBytes(200 * 1024));
+        IPFSDataStore dataStore = (IPFSDataStore) writer.getDataStore();
+
+        Map<String, Object> verified = dataStore.verifyRetention(1000);
+        assertEquals(verified.toString(), 0, verified.get("problems"));
+        assertEquals(1, verified.get("checked"));
+        assertEquals(java.util.List.of(), verified.get("underReplicated"));
+
+        Map<String, Object> health = dataStore.checkHealth();
+        assertEquals(health.toString(), "UP", health.get("status"));
+        assertEquals("UP", ((Map<?, ?>) health.get("cluster")).get("status"));
+        assertEquals(1L, ((Map<?, ?>) health.get("statistics")).get("clusterPins"));
+        writer.close();
+    }
+
     private String write(DataStoreBlobStore blobStore, byte[] content) throws IOException {
         String blobId = blobStore.writeBlob(new ByteArrayInputStream(content),
             new BlobOptions().setUpload(BlobOptions.UploadType.SYNCHRONOUS));

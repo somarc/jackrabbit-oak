@@ -99,6 +99,13 @@ interface IpfsClient {
     long fileSize(String path) throws Exception;
 
     /**
+     * Checks whether the node holds a recursive pin for the CID.
+     */
+    default boolean isPinned(String cid) throws Exception {
+        throw new UnsupportedOperationException("isPinned");
+    }
+
+    /**
      * Returns the node's configuration as JSON. Kubo leaves out its private key.
      */
     default String config() throws Exception {

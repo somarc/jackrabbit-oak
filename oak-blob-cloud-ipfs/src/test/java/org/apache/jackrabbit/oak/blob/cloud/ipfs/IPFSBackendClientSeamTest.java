@@ -440,6 +440,78 @@ public class IPFSBackendClientSeamTest {
     }
 
     @Test
+    public void testHealthReportsTheNodeSettingsAndOperationCounts() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setBlobKeyProvider(StaticBlobKeyProvider.fromSpec("k7;k7:" + key(7)));
+        backend.init();
+        File tempFile = File.createTempFile("oak-ipfs-health", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        DataIdentifier id = new DataIdentifier("blob-health");
+        backend.write(id, tempFile);
+        try {
+            backend.read(new DataIdentifier("missing"));
+            fail("Expected a missing blob to fail");
+        } catch (DataStoreException expected) {
+            // counted as a failed read
+        }
+
+        Map<String, Object> health = backend.health();
+        assertEquals("UP", health.get("status"));
+        assertEquals("UP", ((Map<?, ?>) health.get("kubo")).get("status"));
+        assertEquals(Map.of("configured", false), health.get("cluster"));
+        assertEquals(Map.of("enabled", true, "currentKeyId", "k7"), health.get("encryption"));
+        Map<?, ?> statistics = (Map<?, ?>) health.get("statistics");
+        assertEquals(1L, statistics.get("writes"));
+        assertEquals(5L, statistics.get("writtenBytes"));
+        assertEquals(1L, statistics.get("readFailures"));
+        assertFalse(health.toString().contains(key(7)));
+
+        client.versionFailure = new RuntimeException("connection refused");
+        health = backend.health();
+        assertEquals("DOWN", health.get("status"));
+        assertEquals("connection refused", ((Map<?, ?>) health.get("kubo")).get("error"));
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
+    public void testVerifyReportsBlobsThatLostTheirPin() throws Exception {
+        RecordingIpfsClient client = new RecordingIpfsClient();
+        client.addResults.add(CID_ONE);
+        client.addResults.add("QmZTR5bcpQD7cFgTorqxZDYaew1Wqgfbd2ud9QqGPAkK2V");
+        IPFSBackend backend = new IPFSBackend(endpoint -> client);
+        backend.setCidResolver(identifier -> "blob-adopted".equals(identifier)
+            ? new CidResolver.Resolution("QmYHNYAaYK5hm3ZhZFx5W9H6xydKDGimjdgJMrMSdnctEm", 3) : null);
+        backend.init();
+        File tempFile = File.createTempFile("oak-ipfs-verify", ".bin");
+        Files.writeString(tempFile.toPath(), "hello");
+        backend.write(new DataIdentifier("blob-a"), tempFile);
+        backend.write(new DataIdentifier("blob-b"), tempFile);
+        assertTrue(backend.exists(new DataIdentifier("blob-adopted")));
+
+        Map<String, Object> clean = backend.verify(100);
+        assertEquals(3, clean.get("total"));
+        assertEquals(0, clean.get("problems"));
+        assertEquals(1, clean.get("adoptedNotChecked"));
+        assertEquals(true, clean.get("complete"));
+
+        client.pins.remove(CID_ONE);
+        Map<String, Object> broken = backend.verify(100);
+        assertEquals(1, broken.get("problems"));
+        assertEquals(List.of("blob-a (" + CID_ONE + ")"), broken.get("unpinned"));
+
+        Map<String, Object> partial = backend.verify(1);
+        assertEquals(1, partial.get("checked"));
+        assertEquals(false, partial.get("complete"));
+
+        tempFile.delete();
+        backend.close();
+    }
+
+    @Test
     public void testReadVerifiesContentAgainstSha256Identifier() throws Exception {
         RecordingIpfsClient client = new RecordingIpfsClient();
         client.addResults.add(CID_ONE);
@@ -915,6 +987,7 @@ public class IPFSBackendClientSeamTest {
         private final Queue<String> addResults = new ArrayDeque<>();
         private final List<byte[]> addedContent = new ArrayList<>();
         private final List<File> addedFiles = new ArrayList<>();
+        private final Set<String> pins = new HashSet<>();
         private final Map<String, byte[]> catResults = new HashMap<>();
         private int addCalls;
         private final List<String> pinRemoveCalls = new ArrayList<>();
@@ -952,7 +1025,14 @@ public class IPFSBackendClientSeamTest {
             if (addResults.isEmpty()) {
                 throw new IOException("Kubo add returned no CID");
             }
-            return addResults.remove();
+            String cid = addResults.remove();
+            pins.add(cid);
+            return cid;
+        }
+
+        @Override
+        public boolean isPinned(String cid) {
+            return pins.contains(cid);
         }
 
         @Override
@@ -961,6 +1041,7 @@ public class IPFSBackendClientSeamTest {
                 throw pinRemoveFailure;
             }
             pinRemoveCalls.add(cid);
+            pins.remove(cid);
         }
 
         @Override

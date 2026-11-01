@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.plugins.blob.AbstractSharedCachingDataStore;
 import org.apache.jackrabbit.oak.spi.blob.AbstractSharedBackend;
 import org.apache.jackrabbit.oak.spi.blob.SharedBackend;
 import org.apache.jackrabbit.oak.spi.blob.data.DataIdentifier;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
 
 import java.util.Properties;
 
@@ -268,6 +269,43 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
         return ipfsBackend.getCID(identifier);
     }
     
+    /**
+     * Reports whether the IPFS node and, when configured, the IPFS Cluster
+     * answer now, the encryption and network settings in effect, and the
+     * operation counts since startup.
+     *
+     * @return the report, with {@code status} {@code UP} or {@code DOWN}
+     */
+    public java.util.Map<String, Object> checkHealth() {
+        if (ipfsBackend == null) {
+            return java.util.Map.of("status", "DOWN", "error", "not initialized");
+        }
+        return ipfsBackend.health();
+    }
+
+    /**
+     * Returns cumulative operation counts since startup (writes, bytes, reads,
+     * deletes, failures, IPFS Cluster pins and the time spent waiting for
+     * them) without calling IPFS.
+     */
+    public java.util.Map<String, Long> getStatistics() {
+        return ipfsBackend == null ? java.util.Map.of() : ipfsBackend.statistics();
+    }
+
+    /**
+     * Checks that up to {@code limit} stored binaries are retained: held by
+     * the IPFS Cluster replication minimum, or pinned on this node without a
+     * cluster. Makes one or two IPFS calls per binary.
+     *
+     * @return counts, and up to 100 identifiers per kind of problem
+     */
+    public java.util.Map<String, Object> verifyRetention(int limit) throws DataStoreException {
+        if (ipfsBackend == null) {
+            throw new DataStoreException("IPFS DataStore is not initialized");
+        }
+        return ipfsBackend.verify(limit);
+    }
+
     /**
      * Returns a snapshot of the backend's current identifier-to-CID mappings.
      *

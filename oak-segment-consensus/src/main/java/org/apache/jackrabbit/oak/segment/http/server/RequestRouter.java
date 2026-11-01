@@ -34,6 +34,7 @@ import org.apache.jackrabbit.oak.segment.http.server.handlers.FileHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.FragmentationApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.GcCostHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.HealthHandler;
+import org.apache.jackrabbit.oak.segment.http.server.handlers.IpfsOpsHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.MetricsHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.OsgiConfigApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.PeerDiscoveryHandler;
@@ -264,6 +265,9 @@ public class RequestRouter implements AutoCloseable {
 
         prefix("GET", "/v1/ops/operations/", (req, res, path) -> proposalQueryHandler.handleGetOperationStatus(req, res));
         get("/v1/ops/snapshots/queue", (req, res, path) -> proposalQueryHandler.handleGetOpsQueueSnapshot(res));
+        IpfsOpsHandler ipfsOpsHandler = new IpfsOpsHandler(context);
+        get("/v1/ops/ipfs/health", (req, res, path) -> ipfsOpsHandler.handleHealth(res));
+        get("/v1/ops/ipfs/verify", (req, res, path) -> ipfsOpsHandler.handleVerify(req, res));
         prefix("GET", "/v1/settlement/proposals/", (req, res, path) ->
             proposalQueryHandler.handleGetSettlementByProposalId(req, res));
         prefix("GET", "/v1/settlement/transactions/", (req, res, path) ->

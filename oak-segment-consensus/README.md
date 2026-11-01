@@ -228,6 +228,7 @@ See the repository [security policy](../SECURITY.md).
 | `GET /v1/ops/operations/{id}` | Operation state through to `COMMITTED`, `FAILED` or `TIMED_OUT`. |
 | `GET /v1/wallets/content?wallet=…`, `/v1/explorer/*` | Read and browse repository content. |
 | `GET /api/blob/{blobId}`, `/v1/binary/download-url/{blobId}` | Download a binary (plaintext, also when IPFS encryption is on), and issue a signed, expiring URL for it. |
+| `GET /v1/ops/ipfs/health`, `/v1/ops/ipfs/verify?limit=` | IPFS node and cluster status, encryption and network settings, operation counts; and a check that stored binaries are pinned or replicated. `/health/deep` carries the status only, and `/metrics` the `oak_ipfs_*_total` counters. |
 | `GET /v1/config/osgi*` | Effective configuration and its sources. |
 | `GET /metrics` | Prometheus metrics. |
 
