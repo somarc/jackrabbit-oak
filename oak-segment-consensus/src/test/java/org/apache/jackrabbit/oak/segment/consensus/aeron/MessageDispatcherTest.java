@@ -330,93 +330,81 @@ public class MessageDispatcherTest {
             "{\"walletAddress\":\"0xabc\",\"term\":5}"));
     }
 
+    private static final String RETIRED_GC_PROPOSAL = "{\"proposalId\":\"3f1d2c9e-8a4b-4c1e-9f7a-2b6d5e8c1a0f\","
+        + "\"proposerWallet\":\"0x742d35cc6634c0532925a3b844bc454e4438f44e\",\"targetRevision\":\"HEAD\","
+        + "\"estimatedReclaimableSizeMB\":128,\"estimatedCostUSDC\":\"12.80\"}";
+    private static final String RETIRED_GC_VOTE = "{\"proposalId\":\"3f1d2c9e-8a4b-4c1e-9f7a-2b6d5e8c1a0f\","
+        + "\"validatorId\":1,\"approve\":true,\"reason\":\"\"}";
+    private static final String RETIRED_GC_EXECUTE = "{\"proposalId\":\"3f1d2c9e-8a4b-4c1e-9f7a-2b6d5e8c1a0f\","
+        + "\"executorId\":0}";
+
     @Test
-    public void testGcProposalDispatch() {
-        AtomicReference<String> proposalId = new AtomicReference<>(null);
-        MessageDispatcher dispatcher = new MessageDispatcher();
-        dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
-            @Override
-            public void applyGCProposal(String proposalIdValue, String proposerWallet, String targetRevision,
-                                        long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
-                proposalId.set(proposalIdValue);
-            }
+    public void retiredGcEntriesAreAcceptedAndChangeNoState() {
+        MessageDispatcher.WriteCallback writes = mock(MessageDispatcher.WriteCallback.class);
+        MessageDispatcher.DurabilityCallback durability = mock(MessageDispatcher.DurabilityCallback.class);
+        MessageDispatcher.TransactionCallback transactions = mock(MessageDispatcher.TransactionCallback.class);
+        MessageDispatcher.FederationCallback federation = mock(MessageDispatcher.FederationCallback.class);
+        MessageDispatcher dispatcher = new MessageDispatcher(writes);
+        dispatcher.setDurabilityCallback(durability);
+        dispatcher.setTransactionCallback(transactions);
+        dispatcher.setFederationCallback(federation);
+        dispatcher.setTermProvider(() -> 4L);
+        AppliedLogPosition floor = new AppliedLogPosition(960, 0, 4);
+        dispatcher.setReplayFloor(floor);
 
-            @Override
-            public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
-            }
+        for (long position : new long[] {-1L, 640L, 960L, 4096L}) {
+            assertTrue(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, RETIRED_GC_PROPOSAL, position));
+            assertTrue(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE, RETIRED_GC_VOTE, position));
+            assertTrue(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE, RETIRED_GC_EXECUTE, position));
+        }
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE, "{\"proposalId\":\"gc-3\"}"));
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE, "not json"));
 
-            @Override
-            public void applyGCExecute(String proposalId, int executorId) {
-            }
-        });
+        Mockito.verifyNoInteractions(writes, durability, transactions, federation);
+        assertSame(floor, dispatcher.getReplayFloor());
 
-        String payload = "{\"proposalId\":\"gc-1\",\"proposerWallet\":\"0xabc\",\"targetRevision\":\"r1\",\"estimatedReclaimableSizeMB\":12,\"estimatedCostUSDC\":\"3.1\"}";
-        DirectBuffer buffer = bufferFor(buildMessageBytes(SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, payload));
-
-        boolean result = dispatcher.dispatch(System.currentTimeMillis(), buffer, 0,
-            SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length);
-
-        assertTrue(result);
-        assertEquals("gc-1", proposalId.get());
+        assertTrue(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL,
+            "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/after-gc\"}", 8192L));
+        Mockito.verify(writes).applyWrite(eq("0xabc"), eq("/oak-chain/after-gc"), any(), any(), any(), any(), any(),
+            any(), any(), any());
     }
 
     @Test
-    public void testGcVoteAndExecuteDispatch() {
-        AtomicReference<String> vote = new AtomicReference<>(null);
-        AtomicReference<String> execute = new AtomicReference<>(null);
-        MessageDispatcher dispatcher = new MessageDispatcher();
-        dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
-            @Override
-            public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                                        long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
+    public void retiredGcEntriesLogOnceAtInfoThenAtDebug() throws Exception {
+        java.lang.reflect.Field logged = MessageDispatcher.class.getDeclaredField("RETIRED_GC_ENTRY_LOGGED");
+        logged.setAccessible(true);
+        ((java.util.concurrent.atomic.AtomicBoolean) logged.get(null)).set(false);
+        ch.qos.logback.classic.Logger logger =
+            (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(MessageDispatcher.class);
+        ch.qos.logback.classic.Level level = logger.getLevel();
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+            new ch.qos.logback.core.read.ListAppender<>();
+        appender.setContext(logger.getLoggerContext());
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            MessageDispatcher dispatcher = new MessageDispatcher();
+            assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, RETIRED_GC_PROPOSAL));
+            assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE, RETIRED_GC_VOTE));
+            assertTrue(new MessageDispatcher().dispatch(1L, bufferFor(buildMessageBytes(
+                SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE, RETIRED_GC_EXECUTE)), 0,
+                SimpleMessageHeader.ENCODED_LENGTH + RETIRED_GC_EXECUTE.length()));
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(level);
+        }
+
+        List<String> info = new ArrayList<>();
+        List<String> debug = new ArrayList<>();
+        for (ch.qos.logback.classic.spi.ILoggingEvent event : appender.list) {
+            if (event.getFormattedMessage().contains("retired GC")) {
+                (event.getLevel() == ch.qos.logback.classic.Level.INFO ? info : debug).add(event.getFormattedMessage());
             }
-
-            @Override
-            public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
-                vote.set(proposalId + "|" + validatorId + "|" + approve + "|" + reason);
-            }
-
-            @Override
-            public void applyGCExecute(String proposalId, int executorId) {
-                execute.set(proposalId + "|" + executorId);
-            }
-        });
-
-        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE,
-            "{\"proposalId\":\"gc-2\",\"validatorId\":4,\"approve\":true,\"reason\":\"ok\"}"));
-        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE,
-            "{\"proposalId\":\"gc-2\",\"executorId\":7}"));
-
-        assertEquals("gc-2|4|true|ok", vote.get());
-        assertEquals("gc-2|7", execute.get());
-    }
-
-    @Test
-    public void testGcHandlersRejectMissingCallbackAndRequiredFields() {
-        MessageDispatcher dispatcher = new MessageDispatcher();
-
-        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE,
-            "{\"proposalId\":\"gc-3\",\"validatorId\":1,\"approve\":true}"));
-
-        dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
-            @Override
-            public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                                        long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
-            }
-
-            @Override
-            public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
-            }
-
-            @Override
-            public void applyGCExecute(String proposalId, int executorId) {
-            }
-        });
-
-        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE,
-            "{\"proposalId\":\"gc-3\",\"validatorId\":1}"));
-        assertFalse(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE,
-            "{\"proposalId\":\"gc-3\"}"));
+        }
+        assertEquals(1, info.size());
+        assertTrue(info.get(0).contains("templateId 103"));
+        assertEquals(2, debug.size());
     }
 
     @Test
@@ -622,20 +610,6 @@ public class MessageDispatcherTest {
     public void testLifecycleAndSetterMethodsAreCallable() {
         MessageDispatcher dispatcher = new MessageDispatcher();
         dispatcher.activate();
-        dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
-            @Override
-            public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                                        long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
-            }
-
-            @Override
-            public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
-            }
-
-            @Override
-            public void applyGCExecute(String proposalId, int executorId) {
-            }
-        });
         dispatcher.setDurabilityCallback(new MessageDispatcher.DurabilityCallback() {
             @Override
             public void onSegmentPersisted(String proposalId, int memberId, String durableHead, boolean success, String error,
@@ -676,23 +650,6 @@ public class MessageDispatcherTest {
                 throw termination;
             }
         });
-        dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
-            @Override
-            public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                                        long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
-                throw termination;
-            }
-
-            @Override
-            public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
-                throw termination;
-            }
-
-            @Override
-            public void applyGCExecute(String proposalId, int executorId) {
-                throw termination;
-            }
-        });
         dispatcher.setDurabilityCallback(new MessageDispatcher.DurabilityCallback() {
             @Override
             public void onSegmentPersisted(String proposalId, int memberId, String durableHead, boolean success,
@@ -722,11 +679,6 @@ public class MessageDispatcherTest {
             {String.valueOf(SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL), "{" + write + "}"},
             {String.valueOf(SimpleMessageHeader.TEMPLATE_ID_DELETE_PROPOSAL), "{" + write + "}"},
             {String.valueOf(SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH), "{\"batch\":[{" + write + "}]}"},
-            {String.valueOf(SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL),
-                "{\"proposalId\":\"gc\",\"proposerWallet\":\"0xabc\"}"},
-            {String.valueOf(SimpleMessageHeader.TEMPLATE_ID_GC_VOTE),
-                "{\"proposalId\":\"gc\",\"validatorId\":1,\"approve\":true}"},
-            {String.valueOf(SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE), "{\"proposalId\":\"gc\",\"executorId\":1}"},
             {String.valueOf(SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED),
                 "{\"proposalId\":\"p\",\"memberId\":1,\"success\":true}"},
             {String.valueOf(SimpleMessageHeader.TEMPLATE_ID_START_TRANSACTION), "{\"transactionId\":\"t\"}"},

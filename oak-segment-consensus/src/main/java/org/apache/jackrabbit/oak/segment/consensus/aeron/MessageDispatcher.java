@@ -32,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
@@ -93,16 +94,6 @@ public class MessageDispatcher {
     }
     
     /**
-     * Callback interface for GC operations.
-     */
-    public interface GCCallback {
-        void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                           long estimatedReclaimableSizeMB, String estimatedCostUSDC);
-        void applyGCVote(String proposalId, int validatorId, boolean approve, String reason);
-        void applyGCExecute(String proposalId, int executorId);
-    }
-
-    /**
      * Applies the replicated federation commands; a rejection throws {@link MutationRejectedException}.
      */
     public interface FederationCallback {
@@ -132,12 +123,12 @@ public class MessageDispatcher {
     }
     
     private WriteCallback writeCallback;
-    private GCCallback gcCallback;
     private DurabilityCallback durabilityCallback;
     private TransactionCallback transactionCallback;
     private FederationCallback federationCallback;
     private LongSupplier termProvider;
     private AppliedLogPosition replayFloor = AppliedLogPosition.NONE;
+    private static final AtomicBoolean RETIRED_GC_ENTRY_LOGGED = new AtomicBoolean();
     private static final long STALE_TERM_LOG_INTERVAL_MS = 5000;
     private final AtomicLong lastStaleTermLogMs = new AtomicLong(0);
     private final AtomicInteger staleTermSuppressed = new AtomicInteger(0);
@@ -147,7 +138,6 @@ public class MessageDispatcher {
      */
     public MessageDispatcher() {
         this.writeCallback = null;
-        this.gcCallback = null;
         this.durabilityCallback = null;
         this.transactionCallback = null;
     }
@@ -159,7 +149,6 @@ public class MessageDispatcher {
      */
     public MessageDispatcher(WriteCallback writeCallback) {
         this.writeCallback = writeCallback;
-        this.gcCallback = null;
         this.durabilityCallback = null;
         this.transactionCallback = null;
     }
@@ -180,14 +169,6 @@ public class MessageDispatcher {
         log.info("✅ MessageDispatcher deactivated (OSGi)");
     }
     
-    /**
-     * Set GC callback (for OSGi injection or programmatic use).
-     */
-    public void setGCCallback(GCCallback gcCallback) {
-        this.gcCallback = gcCallback;
-        log.info("✅ MessageDispatcher GC callback set");
-    }
-
     public void setDurabilityCallback(DurabilityCallback durabilityCallback) {
         this.durabilityCallback = durabilityCallback;
         log.info("✅ MessageDispatcher durability callback set");
@@ -232,8 +213,9 @@ public class MessageDispatcher {
      * Sets the applied watermark read from the Oak store at startup. Oak mutations of log entries at or below
      * it are already in the store, so replay skips them: WRITE_PROPOSAL, DELETE_PROPOSAL, WRITE_BATCH items and
      * GENESIS_PROPOSAL, CHARTER and DIRECTORY_UPDATE, which record the watermark in their own merge. Entries
-     * that rebuild in-memory or derived state are always processed: QUEUE_SEGMENT, SEGMENT_PERSISTED, ACK_SEGMENT_PERSISTED, GC_PROPOSAL, GC_VOTE,
-     * GC_EXECUTE (no Oak merge: FileStore cleanup plus in-memory proposal state) and the transaction commands.
+     * that rebuild in-memory or derived state are always processed: SEGMENT_PERSISTED and the transaction
+     * commands. Retired entries (QUEUE_SEGMENT, ACK_SEGMENT_PERSISTED and the paid-GC market's GC_PROPOSAL,
+     * GC_VOTE and GC_EXECUTE) are accepted and ignored at any position, so they have no floor to respect.
      */
     public void setReplayFloor(AppliedLogPosition floor) {
         this.replayFloor = floor != null ? floor : AppliedLogPosition.NONE;
@@ -303,16 +285,10 @@ public class MessageDispatcher {
                 return handleWriteBatch(timestamp, logPosition, buffer, payloadOffset, payloadLength);
                 
             case SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL:
-                return handleControl(gcCallback, "GC", "GC proposal", buffer, payloadOffset, payloadLength,
-                    this::applyGcProposal);
-                
             case SimpleMessageHeader.TEMPLATE_ID_GC_VOTE:
-                return handleControl(gcCallback, "GC", "GC vote", buffer, payloadOffset, payloadLength,
-                    this::applyGcVote);
-                
             case SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE:
-                return handleControl(gcCallback, "GC", "GC execute", buffer, payloadOffset, payloadLength,
-                    this::applyGcExecute);
+                ignoreRetiredGcEntry(header.templateId);
+                return true;
                 
             case SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED:
                 return handleControl(durabilityCallback, "Durability", "segment persisted", buffer, payloadOffset,
@@ -651,11 +627,24 @@ public class MessageDispatcher {
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // GC MESSAGE HANDLERS
+    // CONTROL MESSAGE HANDLERS
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
+
     /**
-     * Shared guard for the GC, durability and transaction commands: without a callback the entry is rejected; a
+     * GC is not paid and not replicated: space is left to Oak's own revision GC on each member. Older logs may still
+     * hold the retired GC entries, which are accepted so replay continues and change no state.
+     */
+    private static void ignoreRetiredGcEntry(int templateId) {
+        if (RETIRED_GC_ENTRY_LOGGED.compareAndSet(false, true)) {
+            log.info("Ignoring retired GC log entries (templateId {}; GC_PROPOSAL, GC_VOTE and GC_EXECUTE are no "
+                + "longer applied)", templateId);
+        } else {
+            log.debug("Ignoring retired GC log entry templateId={}", templateId);
+        }
+    }
+
+    /**
+     * Shared guard for the durability and transaction commands: without a callback the entry is rejected; a
      * parse or callback failure is logged and rejected, except agent termination, which stops the member.
      */
     private boolean handleControl(Object callback, String callbackName, String what, DirectBuffer buffer,
@@ -672,61 +661,6 @@ public class MessageDispatcher {
             log.error("Failed to handle {}", what, e);
             return false;
         }
-    }
-
-    private boolean applyGcProposal(Map<String, Object> json) {
-        String proposalId = stringField(json, "proposalId");
-        String proposerWallet = stringField(json, "proposerWallet");
-        String targetRevision = stringField(json, "targetRevision");
-        Long estimatedReclaimableSizeMB = longField(json, "estimatedReclaimableSizeMB");
-        String estimatedCostUSDC = stringField(json, "estimatedCostUSDC");
-
-        if (proposalId == null || proposerWallet == null) {
-            log.warn("Invalid GC proposal: missing required fields (proposalId={}, proposerWallet={})",
-                proposalId, proposerWallet);
-            return false;
-        }
-
-        log.info("🗑️  Received GC proposal: id={}, proposer={}, targetRevision={}",
-            proposalId, proposerWallet, targetRevision);
-        gcCallback.applyGCProposal(proposalId, proposerWallet, targetRevision,
-            estimatedReclaimableSizeMB != null ? estimatedReclaimableSizeMB : 0L,
-            estimatedCostUSDC);
-        return true;
-    }
-
-    private boolean applyGcVote(Map<String, Object> json) {
-        String proposalId = stringField(json, "proposalId");
-        Long validatorIdLong = longField(json, "validatorId");
-        Boolean approve = booleanField(json, "approve");
-        String reason = stringField(json, "reason");
-
-        if (proposalId == null || validatorIdLong == null || approve == null) {
-            log.warn("Invalid GC vote: missing required fields");
-            return false;
-        }
-
-        int validatorId = validatorIdLong.intValue();
-        log.info("🗳️  Received GC vote: proposalId={}, validatorId={}, approve={}",
-            proposalId, validatorId, approve);
-        gcCallback.applyGCVote(proposalId, validatorId, approve, reason);
-        return true;
-    }
-
-    private boolean applyGcExecute(Map<String, Object> json) {
-        String proposalId = stringField(json, "proposalId");
-        Long executorIdLong = longField(json, "executorId");
-
-        if (proposalId == null || executorIdLong == null) {
-            log.warn("Invalid GC execute: missing required fields");
-            return false;
-        }
-
-        int executorId = executorIdLong.intValue();
-        log.info("⚡ Received GC execute command: proposalId={}, executorId={}",
-            proposalId, executorId);
-        gcCallback.applyGCExecute(proposalId, executorId);
-        return true;
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

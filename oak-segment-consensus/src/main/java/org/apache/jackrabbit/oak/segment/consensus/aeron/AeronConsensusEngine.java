@@ -40,7 +40,6 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -131,7 +130,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     private WriteApplicationCallback writeCallback;
     private volatile DurabilityStatusCallback durabilityStatusCallback;
-    private volatile GCApplicationCallback gcApplicationCallback;
     private volatile TransactionLifecycleCallback transactionLifecycleCallback;
     
     // Ethereum integration
@@ -550,7 +548,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
 
     /**
-     * Reads the snapshot metadata and restores the durability tally and GC proposals. Store files are never
+     * Reads the snapshot metadata and restores the durability tally. Store files are never
      * touched: the Oak store persists itself, and the log is replayed only after the snapshot position, so the store
      * must already hold everything up to the snapshot.
      */
@@ -571,9 +569,6 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         currentEthereumEpoch = snapshot.epoch;
         durabilityTally.restore(snapshot.durability);
-        if (gcApplicationCallback != null) {
-            gcApplicationCallback.restoreProposals(snapshot.gcProposals);
-        }
         // Log replay resumes after the snapshot position, past the term event in force, so restore it here.
         if (snapshot.leadershipTermId >= 0) {
             currentTerm = (int) snapshot.leadershipTermId;
@@ -600,7 +595,7 @@ public class AeronConsensusEngine implements ClusteredService {
     
     /**
      * Invoked on every member at the same log position when the leader's consensus module appends a SNAPSHOT
-     * action. Writes the applied watermark, the term, the durability tally and the replicated GC proposals, after
+     * action. Writes the applied watermark, the term and the durability tally, after
      * Oak is flushed so the persisted store is at least that far. Any failure propagates: Aeron then acknowledges
      * the snapshot as failed and does not record it.
      */
@@ -614,8 +609,7 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         snapshotService.createSnapshot(snapshotPublication, idleStrategy(), new SnapshotService.SnapshotState(
             applied, leadershipTermKnown ? currentTerm : -1L, currentEthereumEpoch,
-            fileStore.getHead().getRecordId().toString10(), durabilityTally.snapshotEntries(),
-            gcApplicationCallback != null ? gcApplicationCallback.snapshotProposals() : Collections.emptyList()));
+            fileStore.getHead().getRecordId().toString10(), durabilityTally.snapshotEntries()));
         snapshotTrigger.onSnapshotTaken(System.currentTimeMillis());
     }
     
@@ -922,76 +916,6 @@ public class AeronConsensusEngine implements ClusteredService {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // GC REPLICATION THROUGH AERON CLUSTER
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Callback interface for GC operations replicated through Aeron.
-     */
-    public interface GCApplicationCallback {
-        /**
-         * Apply a replicated GC proposal (create proposal on all nodes).
-         *
-         * @param clusterTime cluster timestamp of the log entry
-         */
-        void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                            long estimatedReclaimableSizeMB, String estimatedCostUSDC, long clusterTime);
-        
-        /**
-         * Apply a replicated GC vote.
-         *
-         * @param clusterTime cluster timestamp of the log entry
-         */
-        void applyGCVote(String proposalId, int validatorId, boolean approve, String reason, long clusterTime);
-        
-        /**
-         * Apply a replicated GC execution command. Must not block: cleanup runs off the service thread.
-         */
-        void applyGCExecute(String proposalId, int executorId);
-
-        /**
-         * The replicated GC proposals for the Aeron snapshot, as JSON values. Called on the service thread.
-         */
-        default List<Map<String, Object>> snapshotProposals() {
-            return Collections.emptyList();
-        }
-
-        /**
-         * Replaces the replicated GC proposals with those of a snapshot. Must not start any execution.
-         */
-        default void restoreProposals(List<Map<String, Object>> proposals) {
-        }
-    }
-    
-    /**
-     * Set the GC application callback.
-     * 
-     * <p>Wires the callback to MessageDispatcher for delegated GC message handling.
-     */
-    public void setGCCallback(GCApplicationCallback callback) {
-        this.gcApplicationCallback = callback;
-        // Wire to MessageDispatcher for delegated GC message handling
-        if (messageDispatcher != null && callback != null) {
-            messageDispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
-                @Override
-                public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                                          long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
-                    callback.applyGCProposal(proposalId, proposerWallet, targetRevision,
-                                            estimatedReclaimableSizeMB, estimatedCostUSDC, cluster.time());
-                }
-                
-                @Override
-                public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
-                    callback.applyGCVote(proposalId, validatorId, approve, reason, cluster.time());
-                }
-                
-                @Override
-                public void applyGCExecute(String proposalId, int executorId) {
-                    callback.applyGCExecute(proposalId, executorId);
-                }
-            });
-        }
-        
-        log.info("✅ GC application callback set");
-    }
     
     /**
      * Send a GC proposal through Aeron ingress for cluster-wide replication.

@@ -27,6 +27,7 @@ import org.agrona.concurrent.AgentTerminationException;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.UnsafeBuffer;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -37,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
@@ -80,17 +82,12 @@ public class SnapshotServiceTest {
     }
 
     @Test
-    public void durabilityAndGcEntriesRoundTripInOrderAsOneFramePerEntry() {
+    public void durabilityEntriesRoundTripInOrderAsOneFramePerEntry() {
         List<Map<String, Object>> entries = Arrays.asList(
             entry("p-pending", "acked", Arrays.asList(0L), "failed", Arrays.asList(2L), "error", "disk \"full\""),
             entry("p-decided", "success", true, "durableHead", "head-7"));
-        Map<String, Object> vote = new LinkedHashMap<>();
-        vote.put("validatorId", 1L);
-        vote.put("approve", true);
-        List<Map<String, Object>> gcProposals = Arrays.asList(
-            entry("gc-1", "state", "VOTING", "votes", Arrays.asList(vote)));
         SnapshotService.SnapshotState written = new SnapshotService.SnapshotState(
-            new AppliedLogPosition(4096L, 0, 3L), 3L, 1, "head-1", entries, gcProposals);
+            new AppliedLogPosition(4096L, 0, 3L), 3L, 1, "head-1", entries);
         ExclusivePublication publication = mock(ExclusivePublication.class);
         List<byte[]> offered = new ArrayList<>();
         when(publication.offer(any(DirectBuffer.class), anyInt(), anyInt())).thenAnswer(invocation -> {
@@ -105,10 +102,49 @@ public class SnapshotServiceTest {
         SnapshotService.SnapshotState read =
             service.restoreSnapshot(imageOf(offered.toArray(new byte[0][])), mock(IdleStrategy.class));
 
-        assertEquals(4, offered.size());
+        assertEquals(3, offered.size());
+        for (byte[] frame : offered) {
+            assertNotEquals(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_GC_PROPOSAL,
+                SimpleMessageHeader.decode(new UnsafeBuffer(frame), 0).templateId);
+        }
         assertEquals(written.applied, read.applied);
         assertEquals(entries, read.durability);
-        assertEquals(gcProposals, read.gcProposals);
+    }
+
+    /**
+     * A snapshot taken before the paid-GC market was retired holds one frame per GC proposal after the durability
+     * entries, as the old writer laid them out. It must still load, with the GC frames skipped.
+     */
+    @Test
+    public void snapshotWithRetiredGcProposalFramesRestoresTheDurabilityTallyAndSkipsThem() {
+        List<Map<String, Object>> entries = Arrays.asList(
+            entry("p-pending", "acked", Arrays.asList(0L), "failed", Arrays.asList(), "error", null),
+            entry("p-decided", "success", true, "durableHead", "head-7"));
+        SnapshotService.SnapshotState metadata =
+            new SnapshotService.SnapshotState(new AppliedLogPosition(4096L, 1, 3L), 3L, 9, "head-1");
+        Map<String, Object> vote = new LinkedHashMap<>();
+        vote.put("validatorId", 1L);
+        vote.put("approve", true);
+        vote.put("reason", "");
+        vote.put("timestamp", 1_000L);
+        Map<String, Object> gcProposal = entry("3f1d2c9e-8a4b-4c1e-9f7a-2b6d5e8c1a0f",
+            "proposerWallet", "0x742d35cc6634c0532925a3b844bc454e4438f44e", "targetRevision", "HEAD",
+            "estimatedReclaimableSizeMB", 128L, "estimatedCostUSDC", "12.80", "state", "VOTING",
+            "votes", Arrays.asList(vote));
+
+        SnapshotService.SnapshotState read = service.restoreSnapshot(imageOf(
+            frame(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT, SnapshotService.encode(metadata)),
+            frame(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_DURABILITY, JsonParser.toJson(entries.get(0))),
+            frame(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_DURABILITY, JsonParser.toJson(entries.get(1))),
+            frame(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_GC_PROPOSAL, JsonParser.toJson(gcProposal)),
+            frame(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_GC_PROPOSAL, "{\"proposalId\":\"gc-2\",\"state\":\"EXECUTED\"}")),
+            mock(IdleStrategy.class));
+
+        assertEquals(metadata.applied, read.applied);
+        assertEquals(3L, read.leadershipTermId);
+        assertEquals(9, read.epoch);
+        assertEquals("head-1", read.head);
+        assertEquals(entries, read.durability);
     }
 
     @Test
@@ -151,7 +187,8 @@ public class SnapshotServiceTest {
     public void snapshotWithoutWatermarkMetadataIsRejected() {
         String legacy = "{\"type\":\"metadata\",\"head\":\"h\",\"ethereumEpoch\":1,\"timestamp\":2}";
         try {
-            service.restoreSnapshot(imageOf(frame(legacy)), mock(IdleStrategy.class));
+            service.restoreSnapshot(imageOf(frame(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT, legacy)),
+                mock(IdleStrategy.class));
             fail("Expected the store-streaming snapshot format to be rejected");
         } catch (ClusterException e) {
             assertTrue(e.getMessage(), e.getMessage().contains("unsupported"));
@@ -180,16 +217,17 @@ public class SnapshotServiceTest {
         return entry;
     }
 
-    private static byte[] frame(String json) {
+    /** One snapshot frame laid out as {@code SnapshotService} writes it. */
+    static byte[] frame(int templateId, String json) {
         byte[] payload = json.getBytes(StandardCharsets.UTF_8);
         UnsafeBuffer buffer = new UnsafeBuffer(new byte[SimpleMessageHeader.ENCODED_LENGTH + payload.length]);
-        SimpleMessageHeader.encode(buffer, 0, payload.length, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT);
+        SimpleMessageHeader.encode(buffer, 0, payload.length, templateId);
         buffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, payload);
         return buffer.byteArray();
     }
 
     /** An image that delivers each frame as one unfragmented message per poll, then ends. */
-    private static Image imageOf(byte[]... frames) {
+    static Image imageOf(byte[]... frames) {
         Image image = mock(Image.class);
         int[] delivered = {0};
         when(image.isEndOfStream()).thenAnswer(invocation -> delivered[0] == frames.length);

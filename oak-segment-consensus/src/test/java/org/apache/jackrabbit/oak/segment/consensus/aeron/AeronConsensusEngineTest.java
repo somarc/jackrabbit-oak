@@ -640,35 +640,41 @@ public class AeronConsensusEngineTest {
         verify(decisions, never()).onDurable(eq("p-decided"), any());
     }
 
+    /** A snapshot taken before GC was retired ends with GC proposal frames; restoring it keeps the tally. */
     @Test
-    public void snapshotCarriesTheReplicatedGcProposalsAndRestoreHandsThemBack() throws Exception {
-        List<Map<String, Object>> gcProposals = List.of(Map.of("proposalId", "gc-1"));
-        AeronConsensusEngine.GCApplicationCallback gc = mock(AeronConsensusEngine.GCApplicationCallback.class);
-        when(gc.snapshotProposals()).thenReturn(gcProposals);
-        SnapshotService snapshotService = mock(SnapshotService.class);
-        AeronConsensusEngine source = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), snapshotService,
-            new AeronBackgroundCoordinator(), new MemoryNodeStore());
-        source.setGCCallback(gc);
+    public void aSnapshotWithRetiredGcProposalFramesRestoresTheDurabilityTally() throws Exception {
+        List<String> threeMembers = List.of("http://peer-1:8080", "http://peer-2:8080");
+        AeronConsensusEngine source = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), new SnapshotService(),
+            new AeronBackgroundCoordinator(), new MemoryNodeStore(), threeMembers);
         IdleStrategy idleStrategy = mock(IdleStrategy.class);
         setField(source, "idleStrategy", idleStrategy);
+        segmentPersisted(source, "p-straddling", 0, 1_000L);
         io.aeron.ExclusivePublication publication = mock(io.aeron.ExclusivePublication.class);
-
+        List<byte[]> frames = new ArrayList<>();
+        when(publication.offer(any(DirectBuffer.class), anyInt(), anyInt())).thenAnswer(invocation -> {
+            DirectBuffer buffer = invocation.getArgument(0);
+            byte[] frame = new byte[(int) invocation.getArgument(2)];
+            buffer.getBytes((int) invocation.getArgument(1), frame);
+            frames.add(frame);
+            return 128L;
+        });
         source.onTakeSnapshot(publication);
+        frames.add(SnapshotServiceTest.frame(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_GC_PROPOSAL,
+            "{\"proposalId\":\"3f1d2c9e-8a4b-4c1e-9f7a-2b6d5e8c1a0f\",\"proposerWallet\":\"0xabc\","
+                + "\"state\":\"APPROVED\",\"votes\":[{\"validatorId\":0,\"approve\":true}]}"));
 
-        ArgumentCaptor<SnapshotService.SnapshotState> state = ArgumentCaptor.forClass(SnapshotService.SnapshotState.class);
-        verify(snapshotService).createSnapshot(eq(publication), eq(idleStrategy), state.capture());
-        assertEquals(gcProposals, state.getValue().gcProposals);
-        Image snapshotImage = mock(Image.class);
-        SnapshotService restoreService = mock(SnapshotService.class);
-        when(restoreService.restoreSnapshot(snapshotImage, idleStrategy)).thenReturn(state.getValue());
-        AeronConsensusEngine restored = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), restoreService,
-            new AeronBackgroundCoordinator(new RecordingTaskScheduler(), 2000L, 3000L, 5000L), storeWithGenesis());
-        AeronConsensusEngine.GCApplicationCallback restoredGc = mock(AeronConsensusEngine.GCApplicationCallback.class);
-        restored.setGCCallback(restoredGc);
+        AeronConsensusEngine restored = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), new SnapshotService(),
+            new AeronBackgroundCoordinator(new RecordingTaskScheduler(), 2000L, 3000L, 5000L), storeWithGenesis(),
+            threeMembers);
+        restored.onStart(snapshotCluster(Cluster.Role.FOLLOWER, idleStrategy),
+            SnapshotServiceTest.imageOf(frames.toArray(new byte[0][])));
+        AeronConsensusEngine.DurabilityStatusCallback decisions =
+            mock(AeronConsensusEngine.DurabilityStatusCallback.class);
+        restored.setDurabilityStatusCallback(decisions);
 
-        restored.onStart(snapshotCluster(Cluster.Role.FOLLOWER, idleStrategy), snapshotImage);
+        segmentPersisted(restored, "p-straddling", 1, 2_000L);
 
-        verify(restoredGc).restoreProposals(gcProposals);
+        verify(decisions).onDurable("p-straddling", "head");
     }
 
     private static void segmentPersisted(AeronConsensusEngine engine, String proposalId, int memberId, long clusterTime)

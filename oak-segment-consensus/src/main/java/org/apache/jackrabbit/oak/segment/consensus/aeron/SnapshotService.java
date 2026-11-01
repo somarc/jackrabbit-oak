@@ -40,8 +40,10 @@ import java.util.Map;
  * Writes and reads the clustered service's Aeron snapshot.
  *
  * <p>The snapshot holds the Oak applied-log watermark, the leadership term and the Ethereum epoch in force, the
- * Oak head record id for diagnostics, then one frame per proposal tracked by the durability tally and one per
- * replicated GC proposal. Snapshots without those frames restore them empty. Oak content is never streamed: the
+ * Oak head record id for diagnostics, then one frame per proposal tracked by the durability tally. A snapshot
+ * without those frames restores the tally empty. Frames of the retired paid-GC market
+ * ({@link SimpleMessageHeader#TEMPLATE_ID_SNAPSHOT_GC_PROPOSAL}) are no longer written and are skipped when an
+ * older snapshot is read. Oak content is never streamed: the
  * store persists itself and records the watermark with every replicated merge, so on restart the store only has
  * to be at least as far as the snapshot. Each member snapshots its own store at the same log position.
  */
@@ -59,26 +61,23 @@ public class SnapshotService {
         public final String head;
         /** Durability tally entries, as written by {@code DurabilityTally#snapshotEntries}. */
         public final List<Map<String, Object>> durability;
-        /** Replicated GC proposals, as written by {@code GCProposalManager#snapshotProposals}. */
-        public final List<Map<String, Object>> gcProposals;
 
         public SnapshotState(AppliedLogPosition applied, long leadershipTermId, int epoch, String head) {
-            this(applied, leadershipTermId, epoch, head, Collections.emptyList(), Collections.emptyList());
+            this(applied, leadershipTermId, epoch, head, Collections.emptyList());
         }
 
         public SnapshotState(AppliedLogPosition applied, long leadershipTermId, int epoch, String head,
-                             List<Map<String, Object>> durability, List<Map<String, Object>> gcProposals) {
+                             List<Map<String, Object>> durability) {
             this.applied = applied;
             this.leadershipTermId = leadershipTermId;
             this.epoch = epoch;
             this.head = head;
             this.durability = durability;
-            this.gcProposals = gcProposals;
         }
     }
 
     /**
-     * Offers the snapshot metadata, then the durability entries and GC proposals. Uses Aeron's own snapshot offer
+     * Offers the snapshot metadata, then the durability entries. Uses Aeron's own snapshot offer
      * loop: back pressure idles on the cluster idle strategy, a CLOSED, NOT_CONNECTED or MAX_POSITION_EXCEEDED
      * publication throws ClusterException and an interrupt throws AgentTerminationException, so a failed snapshot
      * is never acknowledged as taken.
@@ -89,11 +88,8 @@ public class SnapshotService {
         for (Map<String, Object> entry : state.durability) {
             writer.write(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_DURABILITY, JsonParser.toJson(entry));
         }
-        for (Map<String, Object> proposal : state.gcProposals) {
-            writer.write(SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_GC_PROPOSAL, JsonParser.toJson(proposal));
-        }
-        log.info("📸 Snapshot written: applied {}, term {}, head {}, {} durability entries, {} GC proposals",
-            state.applied, state.leadershipTermId, state.head, state.durability.size(), state.gcProposals.size());
+        log.info("📸 Snapshot written: applied {}, term {}, head {}, {} durability entries",
+            state.applied, state.leadershipTermId, state.head, state.durability.size());
     }
 
     /**
@@ -104,7 +100,7 @@ public class SnapshotService {
     public SnapshotState restoreSnapshot(Image snapshotImage, IdleStrategy idleStrategy) {
         SnapshotState[] state = new SnapshotState[1];
         List<Map<String, Object>> durability = new ArrayList<>();
-        List<Map<String, Object>> gcProposals = new ArrayList<>();
+        int[] retiredGcFrames = new int[1];
         FragmentAssembler assembler = new FragmentAssembler((buffer, offset, length, header) -> {
             if (length < SimpleMessageHeader.ENCODED_LENGTH) {
                 return;
@@ -115,7 +111,7 @@ public class SnapshotService {
             } else if (templateId == SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_DURABILITY) {
                 durability.add(JsonParser.parseObject(payload(buffer, offset, length)));
             } else if (templateId == SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT_GC_PROPOSAL) {
-                gcProposals.add(JsonParser.parseObject(payload(buffer, offset, length)));
+                retiredGcFrames[0]++;
             }
         });
         idleStrategy.reset();
@@ -125,10 +121,13 @@ public class SnapshotService {
         if (state[0] == null) {
             throw new ClusterException("Aeron snapshot holds no " + FORMAT + " metadata");
         }
-        log.info("📦 Snapshot read: applied {}, term {}, head {}, {} durability entries, {} GC proposals",
-            state[0].applied, state[0].leadershipTermId, state[0].head, durability.size(), gcProposals.size());
+        log.info("📦 Snapshot read: applied {}, term {}, head {}, {} durability entries",
+            state[0].applied, state[0].leadershipTermId, state[0].head, durability.size());
+        if (retiredGcFrames[0] > 0) {
+            log.info("Skipped {} retired GC proposal frames in the snapshot", retiredGcFrames[0]);
+        }
         return new SnapshotState(state[0].applied, state[0].leadershipTermId, state[0].epoch, state[0].head,
-            durability, gcProposals);
+            durability);
     }
 
     static String encode(SnapshotState state) {
