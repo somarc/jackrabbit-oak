@@ -17,6 +17,8 @@
 package org.apache.jackrabbit.oak.segment.consensus.service;
 
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
@@ -29,6 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doAnswer;
@@ -318,6 +321,27 @@ public class DeleteApplicationServiceTest {
 
         assertFalse(nodeAt(nodeStore, EXISTING_PATH).exists());
         assertEquals(0L, walletLong(nodeStore, "contentCount"));
+    }
+
+    @Test
+    public void federatedDeletesFollowTheCommittedDirectory() throws Exception {
+        MemoryNodeStore nodeStore = FederationFixtures.store(FederationFixtures.charterA(),
+            FederationFixtures.directory(1, FederationFixtures.entryA("ACTIVE")));
+        String path = FederationFixtures.pathUnder(FederationFixtures.NAMESPACE_A);
+        NodeBuilder root = nodeStore.getRoot().builder();
+        NodeBuilder node = root;
+        for (String part : path.substring(1).split("/")) {
+            node = node.child(part);
+        }
+        nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        DeleteApplicationService service = new DeleteApplicationService(
+            fileStoreWithHeads("prev-head", "new-head"), nodeStore, mock(FileStoreFlushService.class));
+
+        assertThrows(MutationRejectedException.class,
+            () -> service.applyDelete(FederationFixtures.STRANGER, path, "0xsig", "p-1"));
+        assertTrue(nodeAt(nodeStore, path).exists());
+        service.applyDelete(FederationFixtures.WRITER_A, path, "0xsig", "p-2");
+        assertFalse(nodeAt(nodeStore, path).exists());
     }
 
     private static long walletLong(MemoryNodeStore nodeStore, String property) {

@@ -129,7 +129,10 @@ public class DeleteProposalHandler {
                 return;
             }
 
-            if (!ProposalRequestSupport.allowShardAndLeader(context, normalizedWallet, "/v1/propose-delete", response)) {
+            String namespace = ProposalRequestSupport.resolveNamespace(
+                request.getParameter("namespace"), normalizedWallet, response);
+            if (namespace == null || !ProposalRequestSupport.allowShardAndLeader(
+                    context, normalizedWallet, namespace, "/v1/propose-delete", response)) {
                 return;
             }
 
@@ -176,7 +179,7 @@ public class DeleteProposalHandler {
 
             // Verify path ownership: allow deleting either the wallet root itself
             // or any descendant beneath it.
-            String shardRoot = WalletPathUtil.getShardRoot(normalizedWallet);
+            String shardRoot = WalletPathUtil.getShardRoot(namespace);
             String normalizedContentPath = contentPath.toLowerCase();
             String normalizedShardRoot = shardRoot.toLowerCase();
             boolean ownsPath = normalizedContentPath.equals(normalizedShardRoot)

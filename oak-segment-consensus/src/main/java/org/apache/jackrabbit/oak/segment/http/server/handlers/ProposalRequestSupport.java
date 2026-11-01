@@ -17,8 +17,11 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
+import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
+import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
+import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUtil;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -52,8 +55,32 @@ final class ProposalRequestSupport {
     /** Sends the redirect/rejection and returns false unless this node owns the shard and leads. */
     static boolean allowShardAndLeader(ServerContext context, String normalizedWallet, String route,
                                        HttpServletResponse response) throws IOException {
-        return ShardWriteAuthorityEnforcer.allowLocalWrite(context, normalizedWallet, route, response)
+        return allowShardAndLeader(context, normalizedWallet, normalizedWallet, route, response);
+    }
+
+    /** As above for a signer writing into {@code namespace}, which a federated cluster may allow. */
+    static boolean allowShardAndLeader(ServerContext context, String signer, String namespace, String route,
+                                       HttpServletResponse response) throws IOException {
+        return ShardWriteAuthorityEnforcer.allowLocalWrite(context, signer, namespace, route, response)
             && LeaderWriteRedirectUtil.allowLeaderWrite(context, route, response);
+    }
+
+    /**
+     * The optional {@code namespace} parameter, lower-cased, or the signer's wallet when absent; null after
+     * sending a 400 for a malformed value.
+     */
+    static String resolveNamespace(String rawNamespace, String signer, HttpServletResponse response)
+            throws IOException {
+        if (rawNamespace == null || rawNamespace.trim().isEmpty()) {
+            return signer;
+        }
+        ValidationResult<String> validation = WalletValidator.validate(rawNamespace.trim());
+        if (!validation.isValid()) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "invalid_namespace",
+                "namespace must be a 0x-prefixed address: " + validation.getError());
+            return null;
+        }
+        return validation.getNormalizedValue();
     }
 
     /** Looks the client up by wallet first, then by explicit X-Client-Id header or clientId parameter. */

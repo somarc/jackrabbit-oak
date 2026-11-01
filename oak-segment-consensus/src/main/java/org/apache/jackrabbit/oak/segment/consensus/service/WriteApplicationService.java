@@ -23,6 +23,7 @@ import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob;
 import org.apache.jackrabbit.oak.segment.consensus.config.IpfsGatewayUrls;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.consensus.federation.NamespaceAuthority;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
@@ -203,6 +204,8 @@ public class WriteApplicationService {
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
                      walletAddress, path, intentToken, blobId, ipfsCid);
             NodeStore nodeStore = MutationApplySupport.requireNodeStore(nodeStoreSupplier);
+            // Federated clusters decide ownership from the committed directory; null means unfederated
+            String namespace = NamespaceAuthority.requireWritable(nodeStore.getRoot(), walletAddress, path);
             BlobStore blobStore = blobStoreSupplier.get();
             
             // Get current HEAD for logging
@@ -256,7 +259,8 @@ public class WriteApplicationService {
 
             // Enrich wallet node with metadata
             if (walletNode != null && walletNodeName != null) {
-                enrichWalletNode(walletNode, walletNodeName, walletAddress, !contentNodeExists, appliedAt);
+                enrichWalletNode(walletNode, walletNodeName, namespace != null ? namespace : walletAddress,
+                    !contentNodeExists, appliedAt);
             }
             
             // Set properties

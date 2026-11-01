@@ -106,6 +106,7 @@ public class WriteProposalHandler {
             String clientProposalId = null;
             String intentToken = null;
             String organization = null;  // ADR 037: Organization-scoped content paths
+            String rawNamespace = null;   // Enterprise namespace a listed writer writes into (federated only)
             String ipfsCid = null;        // ADR 016: Client-side IPFS upload - CID from client
             byte[] binaryBytes = null;
             String mimeType = null;
@@ -146,6 +147,7 @@ public class WriteProposalHandler {
                             case "proposalId": clientProposalId = value; break;
                             case "intentToken": intentToken = value; break;
                             case "organization": organization = value; break;  // ADR 037
+                            case "namespace": rawNamespace = value; break;
                             case "ipfsCid": ipfsCid = value; break;  // ADR 016: Client-side IPFS CID
                         }
                     }
@@ -163,6 +165,7 @@ public class WriteProposalHandler {
                 clientProposalId = request.getParameter("proposalId");
                 intentToken = request.getParameter("intentToken");
                 organization = request.getParameter("organization");  // ADR 037
+                rawNamespace = request.getParameter("namespace");
                 ipfsCid = request.getParameter("ipfsCid");  // ADR 016: Client-side IPFS CID
 
                 // Legacy base64 binary (for backward compatibility, but discouraged)
@@ -194,7 +197,14 @@ public class WriteProposalHandler {
                 return;
             }
 
-            if (!ProposalRequestSupport.allowShardAndLeader(context, normalizedWallet, "/v1/propose-write", response)) {
+            String namespace = ProposalRequestSupport.resolveNamespace(rawNamespace, normalizedWallet, response);
+            if (namespace != null && CanonicalGenesisContent.isReservedMutation(namespace, null)) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_FORBIDDEN,
+                    "genesis_namespace_reserved", "The zero-wallet namespace is reserved for canonical genesis.");
+                return;
+            }
+            if (namespace == null || !ProposalRequestSupport.allowShardAndLeader(
+                    context, normalizedWallet, namespace, "/v1/propose-write", response)) {
                 return;
             }
 
@@ -534,9 +544,9 @@ public class WriteProposalHandler {
             }
 
             // Build wallet-scoped content path (with optional organization - ADR 037)
-            String[] shardLevels = WalletPathUtil.getShardLevels(normalizedWallet);
+            String[] shardLevels = WalletPathUtil.getShardLevels(namespace);
             String shardId = String.join("-", shardLevels);
-            String contentRoot = WalletPathUtil.getContentPath(normalizedWallet, organization);
+            String contentRoot = WalletPathUtil.getContentPath(namespace, organization);
             log.debug("🪣 Using wallet shard: {} (org: {}, contentRoot: {})", shardId,
                 organization != null ? organization : "none", contentRoot);
 
