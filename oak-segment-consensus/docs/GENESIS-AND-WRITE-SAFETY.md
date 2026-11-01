@@ -29,8 +29,11 @@ Genesis declares:
 - formats dates in UTC, with JCR `NAME`, `DATE`, and `BINARY` property types;
 - omits node-local gateway URLs, backend enablement flags, and BlobStore IDs;
 - stores the bundled image through the NodeStore, with a pinned byte SHA-256;
-- records `version=2.0.0`, `integrityFormat=oak-chain-genesis-v1`, and an
-  `integrityDigest` over the entire zero-wallet subtree.
+- records `version=2.1.0`, `integrityFormat=oak-chain-genesis-v1`, and an
+  `integrityDigest` over the entire zero-wallet subtree;
+- publishes the content shapes at `genesis/shapes` (records, claims, attestations,
+  assets, receipts). Each shape carries a typed example record; the shapes change
+  only with a new genesis version.
 
 The image remains the original 22,216-byte `genesis-assets/do-it-live.jpeg`:
 `ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442`.
