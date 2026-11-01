@@ -52,7 +52,8 @@ final class ConsensusServicesInitializer {
         this(BlockchainConfig::getInstance,
             blockchainConfig -> blockchainConfig.isMockMode()
                 ? new SimpleEvmBridge(blockchainConfig.getNetwork(), blockchainConfig.getContractAddress())
-                : new EventDrivenEvmBridge(blockchainConfig.getNetwork(), blockchainConfig.getContractAddress()),
+                : new EventDrivenEvmBridge(blockchainConfig.getNetwork(), blockchainConfig.getContractAddress(),
+                    blockchainConfig.getContractCodeHash()),
             BeaconChainClient::new,
             ProposalQueueManagerOptimized::new,
             RuntimeConfigValueResolver::readString);
