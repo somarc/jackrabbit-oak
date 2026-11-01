@@ -1653,7 +1653,7 @@ public class ProposalQueueIntegrationTest {
             proposalId,
             walletAddress,
             "0xdef456...",
-            BigInteger.valueOf(2_000_000),  // Higher cost for delete (GC debt)
+            BigInteger.valueOf(2_000_000),  // Higher cost for delete
             12350L,
             ethereumTxHash
         );

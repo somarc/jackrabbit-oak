@@ -236,6 +236,10 @@ See the repository [security policy](../SECURITY.md).
 | `GET /v1/config/osgi*` | Effective configuration and its sources. |
 | `GET /metrics` | Prometheus metrics. |
 
+Writes and deletes are paid through the payment contract; garbage collection is not
+paid and has no endpoints. A delete removes the content node, and Oak's own revision
+GC will reclaim the space; it is not yet scheduled.
+
 The governed read routes are published as an
 [OpenAPI contract](https://somarc.github.io/oak-chain-docs/openapi-validator-source.yaml).
 The built-in dashboard (`/`), `/explorer`, `/api-browser` and `/console/configMgr`

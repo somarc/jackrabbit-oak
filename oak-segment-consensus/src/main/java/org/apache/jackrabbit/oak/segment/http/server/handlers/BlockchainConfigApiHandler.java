@@ -95,7 +95,7 @@ public class BlockchainConfigApiHandler {
         proposalKinds.put("WRITE", buildProposalKind(config, 0,
             "Additive content mutation. Verified proposals are scheduled adaptively under Aeron backpressure."));
         proposalKinds.put("DELETE", buildProposalKind(config, 0,
-            "Additive delete tombstone. Downstream cleanup, GC debt, and storage reclamation remain delete-specific."));
+            "Removes the content node. Space is reclaimed by Oak's own GC; there is no GC payment."));
         json.put("proposalKinds", proposalKinds);
 
         // Send response

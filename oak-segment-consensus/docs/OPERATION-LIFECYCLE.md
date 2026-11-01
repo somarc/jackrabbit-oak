@@ -21,7 +21,6 @@ the request:
 | `307` with `Location`, `code=wrong_leader` | This validator is a follower. Resend to the leader. Followers never forward. |
 | `503`, `code=leader_unknown`, `Retry-After: 1` | No leader is known yet. Retry. |
 | `503` | The cluster is unhealthy, including before genesis is verified on every member. |
-| `402` | The wallet has unpaid storage (GC) debt. |
 | `400` / `401` / `403` / `422` | Malformed fields, a failed signature check outside mock mode, a reserved or unregistered wallet, or an unusable `ipfsCid`. |
 | `202 Accepted` | Queued on the leader. **Not yet committed.** |
 
@@ -110,7 +109,9 @@ validator that accepted the request.
 
 ## Garbage collection
 
-GC proposals (`POST /v1/propose-gc`) take a separate path: they go straight to the
-Aeron log without the proposal queue or leader redirect and return `200`. Members
-vote, and a proposal is approved when `⌊2n/3⌋ + 1` members approve. GC is not
-covered by the durability contract above and is not yet production-validated.
+GC is not paid and has no endpoints. A delete removes the content node in its
+replicated merge, and Oak's own revision GC on each member will reclaim the space;
+it is not yet scheduled. Aeron logs and snapshots written before the paid-GC market
+was retired may hold GC proposal, vote and execute entries (templates 103-105) and
+GC proposal snapshot frames (115). Members accept and ignore them, and those ids
+are never reused.

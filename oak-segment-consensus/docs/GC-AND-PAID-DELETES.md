@@ -3,6 +3,9 @@
 Status: draft for decision. Written against `trunk` at `42fb205ece`. Evidence comes from the
 [compaction and paid-deletes review](#evidence) and was re-checked on this branch.
 
+Update: D1 is decided and section 4.1 is implemented (phase 1a). Section 1 describes the code at
+`42fb205ece`, before that change.
+
 This note explains how deletes, garbage and GC work today, then proposes a simpler model: validators
 run GC as routine maintenance, and only writes and deletes are paid on chain. Section 6 lists the
 decisions needed before code.
