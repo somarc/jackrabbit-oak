@@ -48,6 +48,7 @@ public class StorageBackendConfigTest {
         "ipfs.cluster.replication-min",
         "ipfs.cluster.replication-max",
         "ipfs.cluster.pin-timeout-ms",
+        "ipfs.encryption.keys",
         "oak.blob.azure.connection-string",
         "oak.blob.azure.container",
         "oak.blob.aws.bucket",
@@ -251,6 +252,14 @@ public class StorageBackendConfigTest {
         assertEquals(3, cfg.getBlobIpfsClusterReplicationMin());
         assertEquals(5, cfg.getBlobIpfsClusterReplicationMax());
         assertEquals(30_000, cfg.getBlobIpfsClusterPinTimeoutMs());
+    }
+
+    @Test
+    public void testIpfsEncryptionIsOffByDefaultAndConfigurable() {
+        assertNull(StorageBackendConfig.load().getBlobIpfsEncryptionKeys());
+
+        System.setProperty("ipfs.encryption.keys", " k1;k1:AAAA ");
+        assertEquals("k1;k1:AAAA", StorageBackendConfig.load().getBlobIpfsEncryptionKeys());
     }
 
     @Test

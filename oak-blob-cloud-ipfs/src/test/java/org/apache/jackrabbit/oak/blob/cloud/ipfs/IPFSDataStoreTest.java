@@ -274,6 +274,28 @@ public class IPFSDataStoreTest {
     }
 
     @Test
+    public void testEncryptionKeysAreParsedWhenTheBackendIsCreated() {
+        String secret = java.util.Base64.getEncoder().encodeToString(new byte[31]);
+        Properties props = new Properties();
+        props.setProperty(IPFSDataStore.ENCRYPTION_KEYS, "k1;k1:" + secret);
+        dataStore.setProperties(props);
+        try {
+            dataStore.createBackend();
+            fail("Expected a 31-byte key to be rejected");
+        } catch (IllegalArgumentException e) {
+            assertFalse(e.getMessage(), e.getMessage().contains(secret));
+        }
+
+        dataStore.setBlobKeyProvider(StaticBlobKeyProvider.fromSpec(
+            "k2;k2:" + java.util.Base64.getEncoder().encodeToString(new byte[32])));
+        assertNotNull("a provider takes precedence over the spec", dataStore.createBackend());
+
+        dataStore.setBlobKeyProvider(null);
+        props.setProperty(IPFSDataStore.ENCRYPTION_KEYS, "k1;k1:" + java.util.Base64.getEncoder().encodeToString(new byte[32]));
+        assertNotNull(dataStore.createBackend());
+    }
+
+    @Test
     public void testSetIpfsApiEndpointUpdatesCreatedBackend() {
         IPFSBackend backend = (IPFSBackend) dataStore.createBackend();
 

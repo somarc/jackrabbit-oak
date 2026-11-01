@@ -130,6 +130,13 @@ public class IPFSDataStoreService extends AbstractDataStoreService {
         boolean ipfsClusterUnpinOnDelete() default false;
 
         @AttributeDefinition(
+            name = "IPFS Encryption Keys",
+            description = "Encrypts binaries with AES-256-GCM before they reach IPFS. Keyring 'current;id:base64Key;id2:base64Key' with 32-byte keys: new binaries use 'current', older ones are read with the key named in their header. Every repository reading the same binaries needs the same keys. Empty stores plaintext.",
+            type = AttributeType.PASSWORD
+        )
+        String ipfsEncryptionKeys() default "";
+
+        @AttributeDefinition(
             name = "IPFS Files Root",
             description = "Root path in the IPFS Files namespace used to persist Oak CID mappings and metadata. Use a unique root per Oak repository when sharing one IPFS repository."
         )
