@@ -22,6 +22,7 @@ import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.commons.json.JsopBuilder;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -39,6 +40,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doAnswer;
@@ -242,7 +244,7 @@ public class WriteApplicationServiceTest {
         WriteApplicationService service = new WriteApplicationService(
             fileStore,
             nodeStoreRef::get,
-            () -> (BlobStore) null,
+            () -> mock(BlobStore.class),
             flushService);
 
         AtomicReference<String> binaryEvent = new AtomicReference<>();
@@ -275,8 +277,26 @@ public class WriteApplicationServiceTest {
 
         assertEquals("new-head", newHead);
         assertEquals(PATH + "|" + WALLET + "|Acme|null|image/jpeg", binaryEvent.get());
-        assertEquals("deadbeef#123", stringProperty(contentNode(authoritativeStore, PATH), "jcr:data"));
+        assertEquals("deadbeef#123", stringProperty(contentNode(authoritativeStore, PATH), "jcr:blobId"));
         verify(flushService).onChangeApplied(any());
+    }
+
+    @Test
+    public void binaryWriteWithoutBlobStoreFailsAsNodeLocalInsteadOfWritingAStringReference() {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        WriteApplicationService service = new WriteApplicationService(
+            fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore, () -> (BlobStore) null, flushService);
+
+        RuntimeException failure = assertThrows(RuntimeException.class, () -> service.applyWrite(
+            WALLET, PATH, "file", "m", "0xsig", null, "deadbeef#123", "image/jpeg", null, "proposal-binary"));
+
+        assertFalse("a node-local failure must not be a deterministic rejection",
+            MutationRejectedException.isCauseOf(failure));
+        assertTrue(failure.getCause() instanceof IllegalStateException);
+        assertTrue(failure.getCause().getMessage(), failure.getCause().getMessage().contains("BlobStore unavailable"));
+        assertFalse("nothing may be committed", contentNode(nodeStore, PATH).exists());
+        verifyNoInteractions(flushService);
     }
 
     @Test
