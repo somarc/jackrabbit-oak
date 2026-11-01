@@ -20,6 +20,8 @@ import java.lang.reflect.Proxy;
 
 import org.apache.jackrabbit.oak.segment.RecordId;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcMonitor;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -121,7 +123,8 @@ public class ServerInfrastructureInitializerTest {
         when(factory.createIpfsBlobStore(any(), eq(tempFolder.getRoot()))).thenReturn(blobStore);
         storageFactory.when(() -> StorageBackendFactory.createStorageRuntime(eq(tempFolder.getRoot()), eq(blobStore),
             any(org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig.class)))
-            .thenReturn(new ServerStorageRuntime(fileStore, nodeStore, nodeStore, null, RemoteMounts.NONE));
+            .thenReturn(new ServerStorageRuntime(fileStore, nodeStore, nodeStore, null, RemoteMounts.NONE,
+                RevisionGcConfig.load(), new RevisionGcMonitor()));
         when(factory.createHttpServer(tempFolder.getRoot(), 8090, fileStore, nodeStore)).thenReturn(httpServer);
         when(factory.createCidMappingService(tempFolder.getRoot().toPath())).thenReturn(
             mock(org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService.class)

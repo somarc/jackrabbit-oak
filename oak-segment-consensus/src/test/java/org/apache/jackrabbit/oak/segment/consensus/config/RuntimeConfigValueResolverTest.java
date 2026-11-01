@@ -65,6 +65,18 @@ public class RuntimeConfigValueResolverTest {
     }
 
     @Test
+    public void testReadLongAndBooleanWithEnvFallback() {
+        assertEquals(7L, RuntimeConfigValueResolver.readLong(PROP_VALUE, "OAK_TEST_UNSET_LONG", 7L));
+        assertTrue(RuntimeConfigValueResolver.readBoolean(PROP_VALUE, "OAK_TEST_UNSET_BOOLEAN", true));
+
+        System.setProperty(PROP_VALUE, "86400000");
+        assertEquals(86_400_000L, RuntimeConfigValueResolver.readLong(PROP_VALUE, "OAK_TEST_UNSET_LONG", 7L));
+
+        System.setProperty(PROP_VALUE, "false");
+        assertFalse(RuntimeConfigValueResolver.readBoolean(PROP_VALUE, "OAK_TEST_UNSET_BOOLEAN", true));
+    }
+
+    @Test
     public void testConfiguredValueReflectsOverrideAndSystemProperty() {
         assertFalse(RuntimeConfigValueResolver.hasConfiguredValue(PROP_VALUE));
 

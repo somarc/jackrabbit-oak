@@ -68,6 +68,11 @@ public final class RuntimeConfigValueResolver {
         return Boolean.parseBoolean(raw.trim());
     }
 
+    public static boolean readBoolean(String sysProp, String envVar, boolean defaultValue) {
+        String raw = readString(sysProp, envVar, null);
+        return hasText(raw) ? Boolean.parseBoolean(raw.trim()) : defaultValue;
+    }
+
     public static int readInt(String sysProp, int defaultValue) {
         return parseInt(readString(sysProp, (String) null), defaultValue);
     }
@@ -78,6 +83,10 @@ public final class RuntimeConfigValueResolver {
 
     public static long readLong(String sysProp, long defaultValue) {
         return parseLong(readString(sysProp, (String) null), defaultValue);
+    }
+
+    public static long readLong(String sysProp, String envVar, long defaultValue) {
+        return parseLong(readString(sysProp, envVar, null), defaultValue);
     }
 
     public static long readLongEnvFirst(String sysProp, String envVar, long defaultValue) {

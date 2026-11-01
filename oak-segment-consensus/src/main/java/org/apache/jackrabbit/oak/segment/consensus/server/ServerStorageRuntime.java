@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcMonitor;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -26,5 +28,7 @@ record ServerStorageRuntime(FileStore fileStore,
                             NodeStore authoritativeNodeStore,
                             NodeStore readViewNodeStore,
                             Closeable readViewResources,
-                            RemoteMounts remoteMounts) {
+                            RemoteMounts remoteMounts,
+                            RevisionGcConfig gcConfig,
+                            RevisionGcMonitor gcMonitor) {
 }
