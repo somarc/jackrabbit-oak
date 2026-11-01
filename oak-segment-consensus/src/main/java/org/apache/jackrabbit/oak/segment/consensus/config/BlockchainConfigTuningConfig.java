@@ -27,7 +27,7 @@ public @interface BlockchainConfigTuningConfig {
 
     @AttributeDefinition(
         name = "Mode",
-        description = "Blockchain mode override (mock, sepolia, mainnet). Empty keeps env/system default."
+        description = "Blockchain mode override (mock, local, sepolia, mainnet); other values fail startup. Empty keeps env/system default."
     )
     String mode() default "";
 

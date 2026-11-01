@@ -93,4 +93,23 @@ public class BlockchainConfigApiHandlerTest {
         assertTrue(json.contains("\"releaseBehavior\":\"Additive delete tombstone. Downstream cleanup, GC debt, and storage reclamation remain delete-specific.\""));
         assertTrue(json.contains("\"maxDelay\":\"Adaptive (no fixed epoch wait)\""));
     }
+
+    @Test
+    public void testHandleReportsLocalChainIdFromTheMode() throws Exception {
+        System.setProperty(PROP_MODE, "local");
+        BlockchainConfig.reset();
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(response.getWriter()).thenReturn(new PrintWriter(body));
+        ServerContext context = new ServerContext(mock(FileStore.class), mock(NodeStore.class),
+            Paths.get("/tmp/store"), "http://validator-1:8090");
+
+        new BlockchainConfigApiHandler(context).handle(response);
+
+        String json = body.toString();
+        assertTrue(json, json.contains("\"mode\":\"local\""));
+        assertTrue(json, json.contains("\"chainId\":31337"));
+        assertTrue(json, json.contains("\"requiresMetaMask\":true"));
+    }
 }

@@ -58,7 +58,7 @@ public class BlockchainConfigApiHandler {
         json.put("contractVersion", "blockchain.config.v1");
         json.put("mode", config.getMode().getKey());
         json.put("network", getNetworkName(config.getMode()));
-        json.put("chainId", getChainId(config.getMode()));
+        json.put("chainId", config.getMode().getExpectedChainId());
         json.put("contractAddress", config.getContractAddress());
         json.put("rpcConfigured", config.getRpcUrl() != null && !config.getRpcUrl().trim().isEmpty());
         json.put("requiresMetaMask", config.getMode() != BlockchainConfig.Mode.MOCK);
@@ -109,23 +109,17 @@ public class BlockchainConfigApiHandler {
     private String getNetworkName(BlockchainConfig.Mode mode) {
         switch (mode) {
             case MOCK: return "Mock (Simulated)";
+            case LOCAL: return "Local Dev Chain";
             case SEPOLIA: return "Sepolia Testnet";
             case MAINNET: return "Ethereum Mainnet";
             default: return "Unknown";
         }
     }
 
-    private int getChainId(BlockchainConfig.Mode mode) {
-        switch (mode) {
-            case SEPOLIA: return 11155111;
-            case MAINNET: return 1;
-            default: return 0; // Mock
-        }
-    }
-
     private String getDisplayName(BlockchainConfig.Mode mode) {
         switch (mode) {
             case MOCK: return "🎭 MOCK MODE";
+            case LOCAL: return "🧪 LOCAL CHAIN";
             case SEPOLIA: return "✅ SEPOLIA TESTNET";
             case MAINNET: return "🔴 MAINNET";
             default: return "UNKNOWN";
@@ -135,6 +129,7 @@ public class BlockchainConfigApiHandler {
     private String getBadgeColor(BlockchainConfig.Mode mode) {
         switch (mode) {
             case MOCK: return "#fbbf24"; // yellow
+            case LOCAL: return "#3b82f6"; // blue
             case SEPOLIA: return "#10b981"; // green
             case MAINNET: return "#ef4444"; // red
             default: return "#6b7280"; // gray

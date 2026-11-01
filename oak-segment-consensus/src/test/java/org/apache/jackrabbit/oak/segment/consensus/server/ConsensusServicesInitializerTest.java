@@ -65,6 +65,7 @@ public class ConsensusServicesInitializerTest {
         BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
         when(blockchainConfig.isMockMode()).thenReturn(true);
         when(blockchainConfig.getNetwork()).thenReturn("mock");
+        when(blockchainConfig.getMode()).thenReturn(BlockchainConfig.Mode.MOCK);
         when(blockchainConfig.getContractAddress()).thenReturn("0xabc");
 
         EvmBridge evmBridge = mock(EvmBridge.class);
@@ -117,7 +118,8 @@ public class ConsensusServicesInitializerTest {
         BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
         when(blockchainConfig.isMockMode()).thenReturn(false);
         when(blockchainConfig.getNetwork()).thenReturn("sepolia");
-        when(blockchainConfig.getContractAddress()).thenReturn("0xdef");
+        when(blockchainConfig.getMode()).thenReturn(BlockchainConfig.Mode.SEPOLIA);
+        when(blockchainConfig.getContractAddress()).thenReturn("0x00000000000000000000000000000000000000de");
         when(blockchainConfig.getRpcUrl()).thenReturn("https://rpc.example.invalid");
 
         EvmBridge evmBridge = mock(EvmBridge.class);
@@ -159,6 +161,7 @@ public class ConsensusServicesInitializerTest {
         BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
         when(blockchainConfig.isMockMode()).thenReturn(false);
         when(blockchainConfig.getNetwork()).thenReturn("mainnet");
+        when(blockchainConfig.getMode()).thenReturn(BlockchainConfig.Mode.MAINNET);
         when(blockchainConfig.getRpcUrl()).thenReturn("https://rpc.example.invalid");
         when(blockchainConfig.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
 
@@ -191,6 +194,7 @@ public class ConsensusServicesInitializerTest {
         BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
         when(blockchainConfig.isMockMode()).thenReturn(false);
         when(blockchainConfig.getNetwork()).thenReturn("sepolia");
+        when(blockchainConfig.getMode()).thenReturn(BlockchainConfig.Mode.SEPOLIA);
         when(blockchainConfig.getRpcUrl()).thenReturn(null);
         when(blockchainConfig.getContractAddress()).thenReturn("0x1111111111111111111111111111111111111111");
 
@@ -223,6 +227,7 @@ public class ConsensusServicesInitializerTest {
         BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
         when(blockchainConfig.isMockMode()).thenReturn(false);
         when(blockchainConfig.getNetwork()).thenReturn("sepolia");
+        when(blockchainConfig.getMode()).thenReturn(BlockchainConfig.Mode.SEPOLIA);
         when(blockchainConfig.getRpcUrl()).thenReturn("https://rpc.example.invalid");
         when(blockchainConfig.getContractAddress()).thenReturn("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
 
@@ -255,6 +260,7 @@ public class ConsensusServicesInitializerTest {
         BlockchainConfig blockchainConfig = mock(BlockchainConfig.class);
         when(blockchainConfig.isMockMode()).thenReturn(true);
         when(blockchainConfig.getNetwork()).thenReturn("mock");
+        when(blockchainConfig.getMode()).thenReturn(BlockchainConfig.Mode.MOCK);
         when(blockchainConfig.getContractAddress()).thenReturn("0xabc");
         MutationAuditMetadata writeAudit = writeAudit("proposal-2");
         MutationAuditMetadata deleteAudit = deleteAudit("proposal-3");

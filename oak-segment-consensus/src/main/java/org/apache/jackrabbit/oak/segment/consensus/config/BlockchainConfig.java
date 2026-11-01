@@ -20,13 +20,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigInteger;
+import java.util.Locale;
+import java.util.StringJoiner;
 
 /**
  * Unified configuration for blockchain mode settings.
  *
- * <p>Supports three blockchain mode names for configuration:
+ * <p>Supports four blockchain mode names for configuration. Any other value is rejected:
  * <ul>
  *   <li><strong>MOCK</strong> - Pure simulation (instant, no blockchain verification)</li>
+ *   <li><strong>LOCAL</strong> - Chain-backed against a local dev chain (chainId 31337), local-clock epochs</li>
  *   <li><strong>SEPOLIA</strong> - Chain-backed testnet mode (requires deployed Oak contract + RPC)</li>
  *   <li><strong>MAINNET</strong> - Reserved namespace; disabled for oak-chain v1 runtime</li>
  * </ul>
@@ -40,9 +43,11 @@ import java.math.BigInteger;
  *
  * <p>Environment Variables:
  * <ul>
- *   <li>{@code OAK_BLOCKCHAIN_MODE} - Mode: "mock", "sepolia", "mainnet" (default: "mock")</li>
- *   <li>{@code OAK_BLOCKCHAIN_CONTRACT_ADDRESS} - Contract address (optional, has defaults)</li>
- *   <li>{@code OAK_BLOCKCHAIN_RPC_URL} - RPC URL for Web3j (required for sepolia/mainnet)</li>
+ *   <li>{@code OAK_BLOCKCHAIN_MODE} - Mode: "mock", "local", "sepolia", "mainnet" (default: "mock")</li>
+ *   <li>{@code OAK_BLOCKCHAIN_CONTRACT_ADDRESS} - Contract address (required for chain-backed modes)</li>
+ *   <li>{@code OAK_BLOCKCHAIN_RPC_URL} - RPC URL for Web3j (required for chain-backed modes)</li>
+ *   <li>{@code OAK_BLOCKCHAIN_CONTRACT_CODEHASH} - keccak256 of the contract's deployed bytecode (optional
+ *       for local/sepolia, mandatory for mainnet)</li>
  *   <li>{@code OAK_BLOCKCHAIN_GAS_PRICE_GWEI} - Gas price assumption in gwei for pricing estimates</li>
  *   <li>{@code OAK_BLOCKCHAIN_GAS_WRITE_STANDARD} - Measured gas units for STANDARD write tx</li>
  *   <li>{@code OAK_BLOCKCHAIN_GAS_WRITE_EXPRESS} - Measured gas units for EXPRESS write tx</li>
@@ -54,6 +59,7 @@ import java.math.BigInteger;
  *   <li>{@code oak.blockchain.mode}</li>
  *   <li>{@code oak.blockchain.contractAddress}</li>
  *   <li>{@code oak.blockchain.rpcUrl}</li>
+ *   <li>{@code oak.blockchain.contract.codehash}</li>
  *   <li>{@code oak.blockchain.gasPriceGwei}</li>
  *   <li>{@code oak.blockchain.gas.write.standard}</li>
  *   <li>{@code oak.blockchain.gas.write.express}</li>
@@ -69,35 +75,84 @@ public class BlockchainConfig {
      */
     public enum Mode {
         /** Pure mock mode - instant payment simulation, no blockchain */
-        MOCK("mock"),
+        MOCK("mock", 0L, 1),
+
+        /** Local dev chain (e.g. anvil/hardhat) - chain-backed verification, local-clock epochs */
+        LOCAL("local", 31337L, 1),
 
         /** Sepolia testnet - chain-backed verification with testnet infrastructure */
-        SEPOLIA("sepolia"),
+        SEPOLIA("sepolia", 11155111L, 3),
 
         /** Ethereum mainnet - config namespace retained, but runtime is disabled for v1 */
-        MAINNET("mainnet");
+        MAINNET("mainnet", 1L, 1);
 
         private final String key;
+        private final long expectedChainId;
+        private final int defaultRequiredConfirmations;
 
-        Mode(String key) {
+        Mode(String key, long expectedChainId, int defaultRequiredConfirmations) {
             this.key = key;
+            this.expectedChainId = expectedChainId;
+            this.defaultRequiredConfirmations = defaultRequiredConfirmations;
         }
 
         public String getKey() {
             return key;
         }
 
+        /** The EIP-155 chain id the RPC endpoint must report; 0 for mock (no chain). */
+        public long getExpectedChainId() {
+            return expectedChainId;
+        }
+
+        public boolean isChainBacked() {
+            return this != MOCK;
+        }
+
+        /** Mock and local derive beacon epochs from the local clock; no beacon provider is contacted. */
+        public boolean usesLocalClockEpochs() {
+            return this == MOCK || this == LOCAL;
+        }
+
+        /** Payment confirmations required when none are configured explicitly. */
+        public int getDefaultRequiredConfirmations() {
+            return defaultRequiredConfirmations;
+        }
+
+        /** Mainnet payments count only once their block is at or below the {@code finalized} block tag. */
+        public boolean usesFinalizedTag() {
+            return this == MAINNET;
+        }
+
+        /** Mainnet must pin the payment contract's code hash; elsewhere it is recommended. */
+        public boolean requiresContractCodeHash() {
+            return this == MAINNET;
+        }
+
+        /**
+         * Parses a configured mode. An unset (null or blank) value means {@link #MOCK}; any other unknown value
+         * is rejected so that a typo cannot silently disable chain verification.
+         */
         public static Mode fromString(String str) {
-            if (str == null) {
-                return MOCK; // Default
+            if (str == null || str.trim().isEmpty()) {
+                return MOCK;
             }
-            String lower = str.toLowerCase().trim();
+            String lower = str.toLowerCase(Locale.ROOT).trim();
             for (Mode mode : values()) {
                 if (mode.key.equals(lower)) {
                     return mode;
                 }
             }
-            return MOCK; // Default
+            throw new IllegalArgumentException("Unknown blockchain mode '" + str.trim() + "' ("
+                + PROP_MODE + " / " + ENV_MODE + "); allowed values: " + allowedValues());
+        }
+
+        static String allowedValues() {
+            StringJoiner joiner = new StringJoiner(", ");
+            for (Mode mode : values()) {
+                joiner.add(mode.key);
+            }
+            return joiner.toString();
         }
     }
 
@@ -105,6 +160,7 @@ public class BlockchainConfig {
     private static final String ENV_MODE = "OAK_BLOCKCHAIN_MODE";
     private static final String ENV_CONTRACT_ADDRESS = "OAK_BLOCKCHAIN_CONTRACT_ADDRESS";
     private static final String ENV_RPC_URL = "OAK_BLOCKCHAIN_RPC_URL";
+    private static final String ENV_CONTRACT_CODEHASH = "OAK_BLOCKCHAIN_CONTRACT_CODEHASH";
     private static final String ENV_GAS_PRICE_GWEI = "OAK_BLOCKCHAIN_GAS_PRICE_GWEI";
     private static final String ENV_GAS_WRITE_STANDARD = "OAK_BLOCKCHAIN_GAS_WRITE_STANDARD";
     private static final String ENV_GAS_WRITE_EXPRESS = "OAK_BLOCKCHAIN_GAS_WRITE_EXPRESS";
@@ -114,6 +170,7 @@ public class BlockchainConfig {
     private static final String PROP_MODE = "oak.blockchain.mode";
     private static final String PROP_CONTRACT_ADDRESS = "oak.blockchain.contractAddress";
     private static final String PROP_RPC_URL = "oak.blockchain.rpcUrl";
+    private static final String PROP_CONTRACT_CODEHASH = "oak.blockchain.contract.codehash";
     private static final String PROP_GAS_PRICE_GWEI = "oak.blockchain.gasPriceGwei";
     private static final String PROP_GAS_WRITE_STANDARD = "oak.blockchain.gas.write.standard";
     private static final String PROP_GAS_WRITE_EXPRESS = "oak.blockchain.gas.write.express";
@@ -140,6 +197,7 @@ public class BlockchainConfig {
     private final Mode mode;
     private final String contractAddress;
     private final String rpcUrl;
+    private final String contractCodeHash;
     private final long gasPriceGwei;
     private final long gasWriteStandard;
     private final long gasWriteExpress;
@@ -175,6 +233,7 @@ public class BlockchainConfig {
 
         // Read RPC URL (env var > system property > null)
         this.rpcUrl = readStringConfig(ENV_RPC_URL, PROP_RPC_URL, null);
+        this.contractCodeHash = readStringConfig(ENV_CONTRACT_CODEHASH, PROP_CONTRACT_CODEHASH, null);
 
         // Read measured gas assumptions used for user-facing write pricing estimates
         this.gasPriceGwei = readLongConfig(ENV_GAS_PRICE_GWEI, PROP_GAS_PRICE_GWEI, DEFAULT_GAS_PRICE_GWEI);
@@ -196,7 +255,11 @@ public class BlockchainConfig {
         switch (mode) {
             case MOCK:
                 log.warn("⚠️  MOCK MODE - Instant payment simulation (no blockchain)");
-                log.warn("   Set {}=sepolia or {}=mainnet for real verification", ENV_MODE, ENV_MODE);
+                log.warn("   Set {}=local or {}=sepolia for real verification", ENV_MODE, ENV_MODE);
+                break;
+
+            case LOCAL:
+                log.info("✅ LOCAL MODE - Local dev chain verification (chainId {})", mode.getExpectedChainId());
                 break;
 
             case SEPOLIA:
@@ -263,7 +326,7 @@ public class BlockchainConfig {
     /**
      * Get the configured blockchain mode.
      *
-     * @return MOCK, SEPOLIA, or MAINNET
+     * @return MOCK, LOCAL, SEPOLIA, or MAINNET
      */
     public Mode getMode() {
         return mode;
@@ -294,6 +357,15 @@ public class BlockchainConfig {
      */
     public String getContractAddress() {
         return contractAddress;
+    }
+
+    /**
+     * Get the expected keccak256 hash of the payment contract's deployed bytecode.
+     *
+     * @return 0x-prefixed hash, or null if not configured
+     */
+    public String getContractCodeHash() {
+        return contractCodeHash;
     }
 
     /**

@@ -429,9 +429,9 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public void initializeEthereumIntegration() {
         this.beaconClient = new BeaconChainClient();
-        if (beaconClient.getNetworkMode() == BlockchainConfig.Mode.MOCK) {
-            log.info("Initializing Ethereum epoch integration - mode=MOCK, source=local-clock, "
-                + "externalNetworkPolling=false, currentEpoch={}", currentEthereumEpoch);
+        if (beaconClient.getNetworkMode().usesLocalClockEpochs()) {
+            log.info("Initializing Ethereum epoch integration - mode={}, source=local-clock, "
+                + "externalNetworkPolling=false, currentEpoch={}", beaconClient.getNetworkMode(), currentEthereumEpoch);
         } else {
             log.info("Initializing Ethereum epoch integration - mode={}, providers={}, currentEpoch={}",
                 beaconClient.getNetworkMode(), beaconClient.getHealthStatus().get("providers"), currentEthereumEpoch);
