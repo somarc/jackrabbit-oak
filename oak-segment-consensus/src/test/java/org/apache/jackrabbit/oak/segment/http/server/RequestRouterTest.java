@@ -24,6 +24,9 @@ import org.apache.jackrabbit.oak.segment.SegmentIdProvider;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcMonitor;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcScheduler;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
@@ -386,7 +389,10 @@ public class RequestRouterTest {
         });
     }
 
-    /** The paid-GC market and the fragmentation tracker that priced it were removed with their routes. */
+    /**
+     * The paid-GC market and the fragmentation tracker that priced it were removed with their routes;
+     * {@code GET /v1/gc/status} came back as a read-only report of member-local GC.
+     */
     @Test
     public void testRetiredGcAndFragmentationRoutesReturn404() throws Exception {
         withRoutingProperties(true, () -> {
@@ -401,7 +407,7 @@ public class RequestRouterTest {
                 {"POST", "/v1/gc/account/0xwallet/set-limit"},
                 {"POST", "/v1/gc/account/0xwallet/execute-pending"},
                 {"GET", "/v1/gc/estimate"},
-                {"GET", "/v1/gc/status"},
+                {"POST", "/v1/gc/status"},
                 {"GET", "/v1/compaction/proposals"},
                 {"GET", "/v1/fragmentation/metrics"},
                 {"GET", "/v1/fragmentation/metrics/0xwallet"},
@@ -1519,6 +1525,63 @@ public class RequestRouterTest {
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString(), body.toString().contains("\"charter\":null"));
             assertTrue(body.toString(), body.toString().contains("\"directory\":null"));
+            assertTrue(body.toString(), body.toString().contains("\"gc\":null"));
+        });
+    }
+
+    @Test
+    public void gcStatusRouteServesSegmentStatusAndAnUnwiredBinaryStatus() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.segmentGcStatus = new RevisionGcScheduler(new RevisionGcConfig(true, 86_400_000L,
+                604_800_000L, 2, 0, 0, 15), context.fileStore, new RevisionGcMonitor(), () -> true)::status;
+            RequestRouter router = new RequestRouter(context);
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request("GET", "/v1/gc/status"), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            String json = body.toString();
+            assertTrue(json, json.startsWith("{\"segment\":{\"enabled\":true,\"retainedGenerations\":2,"));
+            assertTrue(json, json.contains("\"tailIntervalMs\":86400000,\"fullIntervalMs\":604800000"));
+            assertTrue(json, json.contains("\"forceTimeoutSeconds\":0"));
+            assertTrue(json, json.contains("\"readerWindowMs\":86400000"));
+            assertTrue(json, json.contains("\"memberIndex\":0,\"memberCount\":1,\"memberOffsetMs\":0"));
+            assertTrue(json, json.contains("\"lastRun\":{\"tail\":null,\"full\":null}"));
+            assertTrue(json, json.contains("\"nextRun\":{\"tail\":null,\"full\":null}"));
+            assertTrue(json, json.endsWith(",\"binary\":null}"));
+        });
+    }
+
+    @Test
+    public void gcStatusRouteServesTheBinaryStatusOnceWiredAndNullsBeforeTheStore() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.binaryGcStatus = () -> Collections.singletonMap("enabled", false);
+            RequestRouter router = new RequestRouter(context);
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request("GET", "/v1/gc/status"), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertEquals("{\"segment\":null,\"binary\":{\"enabled\":false}}", body.toString());
+        });
+    }
+
+    @Test
+    public void federationRoutePublishesTheReaderWindow() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.segmentGcStatus = new RevisionGcScheduler(new RevisionGcConfig(true, 3_600_000L,
+                86_400_000L, 3, 0, 0, 15), context.fileStore, new RevisionGcMonitor(), () -> true)::status;
+            RequestRouter router = new RequestRouter(context);
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request("GET", "/v1/federation"), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString(), body.toString().contains("\"gc\":{\"enabled\":true,\"retainedGenerations\":3,"
+                + "\"tailIntervalMs\":3600000,\"fullIntervalMs\":86400000,\"readerWindowMs\":7200000}"));
         });
     }
 

@@ -98,7 +98,11 @@ public class DashboardHandlerTest {
         assertTrue(json.contains("\"path\":\"/v1/consensus/status\""));
         assertTrue(json.contains("\"path\":\"/v1/aeron/cluster-state\""));
         assertTrue(json.contains("\"path\":\"/v1/events/stats\""));
-        assertFalse(json.contains("\"path\":\"/v1/gc/"));
+        assertTrue(json.contains("\"path\":\"/v1/gc/status\""));
+        assertFalse(json.contains("\"path\":\"/v1/gc/estimate\""));
+        assertFalse(json.contains("\"path\":\"/v1/gc/trigger\""));
+        assertFalse(json.contains("\"path\":\"/v1/gc/vote\""));
+        assertFalse(json.contains("\"path\":\"/v1/gc/account"));
         assertFalse(json.contains("\"path\":\"/v1/propose-gc\""));
         assertFalse(json.contains("\"path\":\"/v1/compaction/proposals\""));
         assertFalse(json.contains("\"path\":\"/v1/fragmentation/"));

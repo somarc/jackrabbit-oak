@@ -126,6 +126,7 @@ public class HealthHandler {
 
         payload.put("sharding", buildShardingPayload());
         payload.put("federation", buildFederationPayload());
+        payload.put("gc", context != null ? context.gcStatusPayload() : null);
 
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
@@ -336,6 +337,7 @@ public class HealthHandler {
         payload.put("blobStore", blobStorePayload);
         payload.put("sharding", buildShardingPayload());
         payload.put("federation", buildFederationPayload());
+        payload.put("gc", context != null ? context.gcStatusPayload() : null);
 
         Map<String, Object> overall = new HashMap<>();
         overall.put("status", allHealthy ? "UP" : "DEGRADED");

@@ -254,6 +254,8 @@ public class RequestRouter implements AutoCloseable {
 
         get("/v1/head", (req, res, path) -> handleHead(res));
         get("/v1/federation", (req, res, path) -> handleFederation(res));
+        get("/v1/gc/status", (req, res, path) ->
+            JsonOutputUtil.write(res, HttpServletResponse.SC_OK, context.gcStatusPayload()));
         get("/v1/consensus/status", (req, res, path) -> consensusStatusHandler.handleGetConsensusStatus(res));
         get("/v1/consensus/leader", (req, res, path) -> consensusStatusHandler.handleGetConsensusLeader(
             "true".equals(req.getParameter(LeaderDiscoveryService.LOCAL_ONLY_PARAM)), res));
@@ -572,6 +574,7 @@ public class RequestRouter implements AutoCloseable {
         payload.put("directory", directory != null ? directory.toMap() : null);
         payload.put("directoryDigest", directory != null ? directory.digest() : null);
         payload.put("status", coordinator != null ? coordinator.getStatus().toMap() : null);
+        payload.put("gc", context.gcFederationPayload());
         JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
     }
 

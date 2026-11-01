@@ -20,6 +20,9 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.MediaDriverHealthMonitor;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcMonitor;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcScheduler;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
@@ -473,6 +476,26 @@ public class HealthHandlerTest {
         assertTrue(json.contains("\"type\":\"s3\""));
         assertTrue(json.contains("\"error\":\"BlobStore not initialized\""));
         assertTrue(json.matches("(?s).*\"overall\":\\{[^}]*\"status\":\"DEGRADED\"[^}]*}.*"));
+    }
+
+    @Test
+    public void testHealthAndDeepHealthReportGcState() throws Exception {
+        ServerContext context = newContext(Files.createTempDirectory("health-gc"));
+        context.segmentGcStatus = new RevisionGcScheduler(new RevisionGcConfig(true, 86_400_000L, 604_800_000L,
+            2, 0, 0, 15), context.fileStore, new RevisionGcMonitor(), () -> true)::status;
+        HealthHandler handler = newHandler(context);
+
+        StringWriter shallow = new StringWriter();
+        handler.handleHealth(responseWithBody(shallow));
+        StringWriter deep = new StringWriter();
+        handler.handleDeepHealth(responseWithBody(deep));
+
+        for (String json : new String[] {shallow.toString(), deep.toString()}) {
+            assertTrue(json, json.contains("\"gc\":{\"segment\":{\"enabled\":true,\"retainedGenerations\":2,"));
+            assertTrue(json, json.contains("\"readerWindowMs\":86400000"));
+            assertTrue(json, json.contains("\"oakStatus\":\"idle\""));
+            assertTrue(json, json.contains("\"binary\":null}"));
+        }
     }
 
     @Test

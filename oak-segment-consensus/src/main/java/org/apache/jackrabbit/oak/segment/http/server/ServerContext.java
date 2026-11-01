@@ -71,6 +71,23 @@ public class ServerContext {
     public volatile RemoteMounts remoteMounts = RemoteMounts.NONE; // Remote read-only mounts in nodeStore
     public volatile FederationCoordinator federationCoordinator; // Charter/directory status; null until Aeron starts
     public volatile Supplier<RevisionGcStatus> segmentGcStatus; // Member-local segment GC; null until the store is built
+    public volatile Supplier<Map<String, Object>> binaryGcStatus; // Binary GC; null until binary GC is wired
+
+    /** {@code {"segment": ..., "binary": ...}}, as served by {@code GET /v1/gc/status}; null where not wired. */
+    public Map<String, Object> gcStatusPayload() {
+        Supplier<RevisionGcStatus> segment = segmentGcStatus;
+        Supplier<Map<String, Object>> binary = binaryGcStatus;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("segment", segment != null ? segment.get().toMap() : null);
+        payload.put("binary", binary != null ? binary.get() : null);
+        return payload;
+    }
+
+    /** The GC settings remote readers rely on, for {@code GET /v1/federation}; null before the store is built. */
+    public Map<String, Object> gcFederationPayload() {
+        Supplier<RevisionGcStatus> segment = segmentGcStatus;
+        return segment != null ? segment.get().toFederationMap() : null;
+    }
     
     /**
      * @return the IPFS DataStore behind {@link #blobStore}, or {@code null}
