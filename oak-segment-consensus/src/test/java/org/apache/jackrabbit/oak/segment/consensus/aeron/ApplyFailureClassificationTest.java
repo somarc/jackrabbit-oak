@@ -99,6 +99,25 @@ public class ApplyFailureClassificationTest {
         assertEquals(new AppliedLogPosition(POSITION, 0, TERM), AppliedLogPosition.read(diskFullOnSecondMerge.getRoot()));
     }
 
+    @Test
+    public void binaryWriteOnAMemberWithoutBlobStoreStopsThatMember() {
+        QueuedProposal binary = item("p-0", BASE + "img");
+        binary.setBlobId("deadbeef#123");
+        binary.setMimeType("image/png");
+        AeronEncodedMessage batch = new AeronIngressWritePayloadBuilder().buildWriteBatch(Arrays.asList(binary), TERM);
+        MemoryNodeStore store = new MemoryNodeStore();
+
+        try {
+            dispatcher(store).dispatch(1_000L, POSITION, batch.buffer, 0, batch.totalLength);
+            fail("a member without a BlobStore must not skip or rewrite a binary write");
+        } catch (MessageDispatcher.ReplicatedApplyException e) {
+            assertTrue(hasCause(e, IllegalStateException.class));
+        }
+
+        assertFalse(node(store, BASE + "img").exists());
+        assertEquals(AppliedLogPosition.NONE, AppliedLogPosition.read(store.getRoot()));
+    }
+
     private static MessageDispatcher dispatcher(MemoryNodeStore store) {
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         FileStoreFlushService flush = mock(FileStoreFlushService.class);

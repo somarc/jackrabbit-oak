@@ -450,6 +450,9 @@ public class WriteApplicationService {
     
     /**
      * Handle binary content with BlobStore.
+     *
+     * <p>A missing BlobStore is node-local wiring, not a property of the replicated entry: writing anything else
+     * would make this member's state differ from the others, so the apply fails and the member stops.
      */
     private void handleBinaryContent(
             NodeBuilder contentNode,
@@ -459,12 +462,8 @@ public class WriteApplicationService {
             String ipfsCid) {
         
         if (blobStore == null) {
-            log.warn("BlobStore not available, storing blobId as string reference");
-            contentNode.setProperty("jcr:data", blobId);
-            if (mimeType != null && !mimeType.isEmpty()) {
-                contentNode.setProperty("jcr:mimeType", mimeType);
-            }
-            return;
+            throw new IllegalStateException("BlobStore unavailable on this member: cannot apply replicated binary "
+                + "write for blobId " + blobId + " (node-local failure; stopping instead of diverging)");
         }
         
         // Create proper Blob object from blob ID

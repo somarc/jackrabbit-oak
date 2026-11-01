@@ -442,9 +442,9 @@ public class AeronConsensusEngine implements ClusteredService {
      */
     public void initializeEthereumIntegration() {
         this.beaconClient = new BeaconChainClient();
-        if (beaconClient.getNetworkMode() == BlockchainConfig.Mode.MOCK) {
-            log.info("Initializing Ethereum epoch integration - mode=MOCK, source=local-clock, "
-                + "externalNetworkPolling=false, currentEpoch={}", currentEthereumEpoch);
+        if (beaconClient.getNetworkMode().usesLocalClockEpochs()) {
+            log.info("Initializing Ethereum epoch integration - mode={}, source=local-clock, "
+                + "externalNetworkPolling=false, currentEpoch={}", beaconClient.getNetworkMode(), currentEthereumEpoch);
         } else {
             log.info("Initializing Ethereum epoch integration - mode={}, providers={}, currentEpoch={}",
                 beaconClient.getNetworkMode(), beaconClient.getHealthStatus().get("providers"), currentEthereumEpoch);
@@ -1660,7 +1660,7 @@ public class AeronConsensusEngine implements ClusteredService {
             }
             AeronEncodedMessage encoded = AeronIngressPayloadSupport.encode(
                 SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL,
-                AeronGenesisInitializer.GenesisProposal.create(0L, null).toJson());
+                AeronGenesisInitializer.GenesisProposal.triggerJson(configuredMembers()));
             boolean sent = internalIngressClientManager.offer(
                 encoded.buffer, encoded.totalLength, "genesis ingress", INGRESS_CLIENT_REQUEST_WAIT_MS
             ) == AeronInternalIngressClientManager.SendResult.SENT;
@@ -1677,13 +1677,27 @@ public class AeronConsensusEngine implements ClusteredService {
         }
     }
     
+    /** The canonical sorted HTTP member URL set this member is configured with (self and peers). */
+    private java.util.SortedSet<String> configuredMembers() {
+        java.util.SortedSet<String> members = new java.util.TreeSet<>(peerUrls);
+        members.add(selfUrl);
+        return members;
+    }
+
     /**
-     * Apply a replicated genesis proposal on all nodes.
+     * Apply a replicated genesis proposal on all nodes. The trigger carries the leader's member set; a member whose
+     * own configured set differs fails stop, so the recorded genesisValidator cannot differ between members.
      */
     private void applyGenesisCreation(long timestamp, String genesisProposalJson, AppliedLogPosition logPosition) {
-        AeronGenesisInitializer.GenesisProposal.validateTrigger(genesisProposalJson);
-        java.util.SortedSet<String> configuredMembers = new java.util.TreeSet<>(peerUrls);
-        configuredMembers.add(selfUrl);
+        List<String> committedMembers =
+            AeronGenesisInitializer.GenesisProposal.parseTriggerMembers(genesisProposalJson);
+        java.util.SortedSet<String> configuredMembers = configuredMembers();
+        // A legacy parameter-free trigger (older logs) keeps deriving the bootstrap member from local config.
+        if (committedMembers != null && !committedMembers.equals(new java.util.ArrayList<>(configuredMembers))) {
+            throw new IllegalStateException("Genesis member set mismatch: the committed CREATE_GENESIS carries "
+                + committedMembers + " but this member is configured with " + configuredMembers
+                + "; stopping instead of authoring a divergent genesis");
+        }
         String bootstrapValidator = configuredMembers.first();
         genesisInitializer.initializeGenesisContent(
             AeronGenesisInitializer.GenesisProposal.create(timestamp, bootstrapValidator), logPosition);

@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+import org.apache.jackrabbit.oak.commons.json.JsopBuilder;
 import org.apache.jackrabbit.oak.commons.json.JsopReader;
 import org.apache.jackrabbit.oak.commons.json.JsopTokenizer;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
@@ -29,6 +30,11 @@ import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.SortedSet;
+import java.util.TreeSet;
 
 final class AeronGenesisInitializer {
 
@@ -109,7 +115,15 @@ final class AeronGenesisInitializer {
             return new GenesisProposal(normalizedTimestamp, normalizedValidator);
         }
 
-        static void validateTrigger(String json) {
+        /**
+         * Parses a committed CREATE_GENESIS trigger. The current form carries the leader's canonical sorted member
+         * URL set ({@code {"command":"CREATE_GENESIS","members":[...]}}); the parameter-free legacy form, still in
+         * existing logs, returns null. Anything else (other fields, unsorted or empty members) is rejected the same
+         * way on every member.
+         *
+         * @return the committed member URLs in canonical order, or null for a legacy trigger
+         */
+        static List<String> parseTriggerMembers(String json) {
             try {
                 JsopTokenizer reader = new JsopTokenizer(json);
                 reader.read('{');
@@ -120,11 +134,38 @@ final class AeronGenesisInitializer {
                 if (!"CREATE_GENESIS".equals(reader.readString())) {
                     throw new IllegalArgumentException("Expected CREATE_GENESIS");
                 }
+                List<String> members = null;
+                if (reader.matches(',')) {
+                    if (!"members".equals(reader.readString())) {
+                        throw new IllegalArgumentException("Expected members");
+                    }
+                    reader.read(':');
+                    reader.read('[');
+                    members = new ArrayList<>();
+                    do {
+                        members.add(reader.readString());
+                    } while (reader.matches(','));
+                    reader.read(']');
+                    if (!members.equals(new ArrayList<>(new TreeSet<>(members))) || members.contains("")) {
+                        throw new IllegalArgumentException("Members must be unique, non-empty and sorted");
+                    }
+                }
                 reader.read('}');
                 reader.read(JsopReader.END);
+                return members;
             } catch (RuntimeException e) {
-                throw new MutationRejectedException("Genesis requires a parameter-free CREATE_GENESIS trigger", e);
+                throw new MutationRejectedException(
+                    "Genesis requires a CREATE_GENESIS trigger with at most a canonical member set", e);
             }
+        }
+
+        static String triggerJson(SortedSet<String> members) {
+            JsopBuilder json = new JsopBuilder().object().key("command").value("CREATE_GENESIS")
+                .key("members").array();
+            for (String member : members) {
+                json.value(member);
+            }
+            return json.endArray().endObject().toString();
         }
 
         long getTimestamp() {
@@ -135,8 +176,5 @@ final class AeronGenesisInitializer {
             return genesisValidatorUrl;
         }
 
-        String toJson() {
-            return "{\"command\":\"CREATE_GENESIS\"}";
-        }
     }
 }

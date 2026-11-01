@@ -114,7 +114,7 @@ final class OakPaymentEventParser {
         }
         String signature = ethLog.getTopics().get(0);
         if (EventEncoder.encode(WRITE_AUTHORIZED_EVENT).equalsIgnoreCase(signature)) {
-            return parseWriteAuthorizedLog(ethLog);
+            return parseWriteAuthorizedLog(ethLog, currentBlock);
         }
         if (EventEncoder.encode(PROPOSAL_PAID_EVENT).equalsIgnoreCase(signature)) {
             return parseProposalPaidLog(ethLog, currentBlock);
@@ -128,7 +128,11 @@ final class OakPaymentEventParser {
         return null;
     }
 
-    private EventDrivenEvmBridge.WriteAuthorizedEvent parseWriteAuthorizedLog(Log ethLog) {
+    /**
+     * The event's own {@code uint32 blockNumber} data word is caller-controlled contract data; the block that
+     * includes the log is taken from the log itself.
+     */
+    private EventDrivenEvmBridge.WriteAuthorizedEvent parseWriteAuthorizedLog(Log ethLog, long currentBlock) {
         if (ethLog.getTopics() == null || ethLog.getTopics().size() < 4) {
             return null;
         }
@@ -141,19 +145,19 @@ final class OakPaymentEventParser {
             return null;
         }
         BigInteger amount = Numeric.toBigInt(data.substring(0, 66));
-        long blockNumber = Numeric.toBigInt(data.substring(66, 130)).longValue();
 
         return new EventDrivenEvmBridge.WriteAuthorizedEvent(
             proposalId,
             payer,
             shardHash,
             amount,
-            blockNumber,
+            logBlockNumber(ethLog, currentBlock),
             ethLog.getTransactionHash(),
             null,
             PaymentProof.ProposalKind.WRITE,
             PaymentProof.PaymentToken.UNKNOWN,
-            0
+            0,
+            ethLog.getAddress()
         );
     }
 
@@ -171,12 +175,13 @@ final class OakPaymentEventParser {
             "0x" + ethLog.getTopics().get(2).substring(26),
             "0x0",
             Numeric.toBigInt(data.substring(0, 66)),
-            ethLog.getBlockNumber() != null ? ethLog.getBlockNumber().longValue() : currentBlock,
+            logBlockNumber(ethLog, currentBlock),
             ethLog.getTransactionHash(),
             decodePaymentTier(data.substring(66, 130)),
             PaymentProof.ProposalKind.WRITE,
             decodePaymentToken(ethLog.getTopics().size() > 3 ? ethLog.getTopics().get(3) : null),
-            0
+            0,
+            ethLog.getAddress()
         );
     }
 
@@ -199,12 +204,13 @@ final class OakPaymentEventParser {
             "0x" + ethLog.getTopics().get(2).substring(26),
             "0x0",
             Numeric.toBigInt(dataWord(data, 2)),
-            ethLog.getBlockNumber() != null ? ethLog.getBlockNumber().longValue() : currentBlock,
+            logBlockNumber(ethLog, currentBlock),
             ethLog.getTransactionHash(),
             decodePaymentTier(dataWord(data, 1)),
             proposalKind,
             decodePaymentToken(ethLog.getTopics().get(3)),
-            Numeric.toBigInt(dataWord(data, 3)).intValue()
+            Numeric.toBigInt(dataWord(data, 3)).intValue(),
+            ethLog.getAddress()
         );
     }
 
@@ -227,13 +233,18 @@ final class OakPaymentEventParser {
             "0x" + ethLog.getTopics().get(2).substring(26),
             "0x0",
             Numeric.toBigInt(dataWord(data, 1)),
-            ethLog.getBlockNumber() != null ? ethLog.getBlockNumber().longValue() : currentBlock,
+            logBlockNumber(ethLog, currentBlock),
             ethLog.getTransactionHash(),
             null,
             proposalKind,
             PaymentProof.PaymentToken.ETH,
-            Numeric.toBigInt(dataWord(data, 2)).intValue()
+            Numeric.toBigInt(dataWord(data, 2)).intValue(),
+            ethLog.getAddress()
         );
+    }
+
+    private static long logBlockNumber(Log ethLog, long currentBlock) {
+        return ethLog.getBlockNumber() != null ? ethLog.getBlockNumber().longValue() : currentBlock;
     }
 
     private static String dataWord(String data, int wordIndex) {

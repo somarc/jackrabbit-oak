@@ -33,7 +33,8 @@ public @interface ProposalQueueTuningConfig {
 
     @AttributeDefinition(
         name = "Required Confirmations",
-        description = "Minimum payment confirmations required before a verified proposal can leave the verifier stage."
+        description = "Minimum payment confirmations required before a verified proposal can leave the verifier stage. "
+            + "0 uses the blockchain mode default (local 1, sepolia 3; mainnet counts only finalized blocks)."
     )
     int required_confirmations() default ProposalQueueTuning.DEFAULT_REQUIRED_CONFIRMATIONS;
 

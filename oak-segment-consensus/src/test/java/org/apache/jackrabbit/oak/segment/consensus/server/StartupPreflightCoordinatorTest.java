@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
@@ -30,6 +31,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class StartupPreflightCoordinatorTest {
 
@@ -57,6 +60,24 @@ public class StartupPreflightCoordinatorTest {
         assertFalse(result.needsBootstrapBeforeBuild());
         assertEquals("", result.verifiedBootstrapPrimaryHost());
         assertEquals(0, result.verifiedBootstrapPrimaryPort());
+    }
+
+    @Test
+    public void testPrepareValidatesBlockchainRuntimeBeforeCreatingStore() throws Exception {
+        Path storeDir = tempFolder.getRoot().toPath().resolve("never-created");
+        BlockchainConfig config = mock(BlockchainConfig.class);
+        when(config.getMode()).thenReturn(BlockchainConfig.Mode.SEPOLIA);
+        when(config.getRpcUrl()).thenReturn("https://rpc.example.invalid");
+        when(config.getContractAddress()).thenReturn("0x0000000000000000000000000000000000000000");
+
+        try {
+            new StartupPreflightCoordinator(new BootstrapPreflightPlanner(url -> false), () -> config)
+                .prepare(storeDir.toString(), 8090, aeronConfig(new String[0]));
+            fail("Expected IllegalStateException");
+        } catch (IllegalStateException e) {
+            assertTrue(e.getMessage().contains("example and zero-address defaults are not valid"));
+        }
+        assertFalse(Files.exists(storeDir));
     }
 
     @Test

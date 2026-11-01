@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+
 record ProposalQueueTuning(long confirmationTimeoutMs,
                            int requiredConfirmations,
                            long restoreTimeoutMs,
@@ -45,7 +47,8 @@ record ProposalQueueTuning(long confirmationTimeoutMs,
     }
 
     static final long DEFAULT_CONFIRMATION_TIMEOUT_MS = 300_000;
-    static final int DEFAULT_REQUIRED_CONFIRMATIONS = 1;
+    /** 0 selects the blockchain mode's default (local 1, sepolia 3, mainnet 1 at or below the finalized tag). */
+    static final int DEFAULT_REQUIRED_CONFIRMATIONS = 0;
     static final int DEFAULT_MAX_MESSAGE_BATCH = 10;
     static final int DEFAULT_MAX_RETRY_COUNT = 5;
     static final int DEFAULT_FINALIZATION_CHUNK_SIZE = 3;
@@ -76,11 +79,11 @@ record ProposalQueueTuning(long confirmationTimeoutMs,
             "oak.proposal.restore.timeout.ms",
             confirmationTimeoutMs
         );
-        int requiredConfirmations = readIntProp(
+        int requiredConfirmations = resolveRequiredConfirmations(readIntProp(
             "oak.proposal.confirmation.required",
             DEFAULT_REQUIRED_CONFIRMATIONS,
-            1
-        );
+            0
+        ));
         int maxMessageBatch = readIntProp("oak.proposal.batch.max", DEFAULT_MAX_MESSAGE_BATCH, 1);
         int maxRetryCount = readIntProp("oak.proposal.max.retry.count", DEFAULT_MAX_RETRY_COUNT, 1);
         int finalizationChunkSize = readIntProp("oak.proposal.finalization.chunk.size", DEFAULT_FINALIZATION_CHUNK_SIZE, 1);
@@ -182,7 +185,7 @@ record ProposalQueueTuning(long confirmationTimeoutMs,
 
     static ProposalQueueTuning fromConfig(ProposalQueueTuningConfig config) {
         long confirmationTimeoutMs = Math.max(1L, config.confirmation_timeout_ms());
-        int requiredConfirmations = clampInt(config.required_confirmations(), 1);
+        int requiredConfirmations = resolveRequiredConfirmations(config.required_confirmations());
         long restoreTimeoutMs = config.restore_timeout_ms() > 0
             ? config.restore_timeout_ms()
             : confirmationTimeoutMs;
@@ -216,6 +219,12 @@ record ProposalQueueTuning(long confirmationTimeoutMs,
             clampLong(config.hard_max_pending_proposals(), 1L),
             config.payload_spill_dir()
         );
+    }
+
+    static int resolveRequiredConfirmations(int configured) {
+        return configured > 0
+            ? configured
+            : BlockchainConfig.getInstance().getMode().getDefaultRequiredConfirmations();
     }
 
     private static int readIntProp(String key, int defaultValue, int minValue) {

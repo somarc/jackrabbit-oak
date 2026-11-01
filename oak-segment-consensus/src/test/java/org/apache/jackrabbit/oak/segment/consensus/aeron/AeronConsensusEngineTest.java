@@ -772,7 +772,7 @@ public class AeronConsensusEngineTest {
 
         CapturedOffer offer = captureOffer(client);
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, offer.templateId);
-        assertEquals("{\"command\":\"CREATE_GENESIS\"}", offer.json);
+        assertEquals("{\"command\":\"CREATE_GENESIS\",\"members\":[\"http://self:8080\"]}", offer.json);
         assertEquals("genesis-retry", scheduler.tasks.get(0).name);
     }
 
@@ -799,6 +799,105 @@ public class AeronConsensusEngineTest {
         NodeState genesis = org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent.getGenesisNode(store.getRoot());
         assertEquals(Long.valueOf(123456789L), genesis.getProperty("genesisTimestamp").getValue(Type.LONG));
         assertEquals("http://aaa-seed:8090", genesis.getProperty("genesisValidator").getValue(Type.STRING));
+    }
+
+    @Test
+    public void genesisTriggerCarriesSortedMemberSetAndMatchingMembersApplyIt() throws Exception {
+        RecordingTaskScheduler scheduler = new RecordingTaskScheduler();
+        MemoryNodeStore store = new MemoryNodeStore();
+        AeronConsensusEngine engine = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), null,
+            new AeronBackgroundCoordinator(scheduler, 1L, 1L, 1L), store, List.of("http://zzz:8090", "http://aaa-seed:8090"));
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+
+        Method method = AeronConsensusEngine.class.getDeclaredMethod("createGenesisViaConsensus");
+        method.setAccessible(true);
+        method.invoke(engine);
+        String trigger = captureOffer(client).json;
+        assertEquals("{\"command\":\"CREATE_GENESIS\",\"members\":"
+            + "[\"http://aaa-seed:8090\",\"http://self:8080\",\"http://zzz:8090\"]}", trigger);
+
+        engine.onSessionMessage(mock(ClientSession.class), 123456789L, genesisBuffer(trigger), 0,
+            genesisBuffer(trigger).capacity(), mock(Header.class));
+
+        assertFalse(engine.hasApplicationFailure());
+        NodeState genesis = org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent
+            .getGenesisNode(store.getRoot());
+        assertEquals("http://aaa-seed:8090", genesis.getProperty("genesisValidator").getValue(Type.STRING));
+    }
+
+    @Test
+    public void genesisMemberSetMismatchFailStopsTheMemberWithoutAuthoringGenesis() {
+        MemoryNodeStore store = new MemoryNodeStore();
+        AeronConsensusEngine engine = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), null,
+            new AeronBackgroundCoordinator(new RecordingTaskScheduler(), 1L, 1L, 1L), store,
+            List.of("http://bbb:8090"));
+        String leaderTrigger = "{\"command\":\"CREATE_GENESIS\",\"members\":[\"http://aaa:8090\",\"http://self:8080\"]}";
+        org.agrona.concurrent.UnsafeBuffer buffer = genesisBuffer(leaderTrigger);
+
+        try {
+            engine.onSessionMessage(mock(ClientSession.class), 1L, buffer, 0, buffer.capacity(), mock(Header.class));
+            fail("a member whose configured set differs must stop");
+        } catch (RuntimeException e) {
+            assertTrue(e.getClass().getName(), e instanceof org.agrona.concurrent.AgentTerminationException);
+        }
+
+        assertTrue(engine.hasApplicationFailure());
+        assertFalse(org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent
+            .getGenesisNode(store.getRoot()).exists());
+    }
+
+    @Test
+    public void genesisDigestIsUnchangedForTheSameConfigWithMemberCarryingTrigger() {
+        String legacy = "{\"command\":\"CREATE_GENESIS\"}";
+        String current = "{\"command\":\"CREATE_GENESIS\",\"members\":[\"http://aaa-seed:8090\",\"http://self:8080\"]}";
+        NodeState legacyGenesis = applyGenesisTrigger(legacy);
+        NodeState currentGenesis = applyGenesisTrigger(current);
+
+        assertEquals(legacyGenesis.getProperty("integrityDigest"), currentGenesis.getProperty("integrityDigest"));
+        assertEquals(legacyGenesis, currentGenesis);
+    }
+
+    @Test
+    public void malformedMemberCarryingTriggersAreRejectedOnEveryMember() {
+        String[] malformed = {
+            "{\"command\":\"CREATE_GENESIS\",\"members\":[]}",
+            "{\"command\":\"CREATE_GENESIS\",\"members\":[\"http://self:8080\",\"http://aaa-seed:8090\"]}",
+            "{\"command\":\"CREATE_GENESIS\",\"members\":[\"http://self:8080\",\"http://self:8080\"]}",
+            "{\"command\":\"CREATE_GENESIS\",\"members\":[\"http://self:8080\"],\"genesisValidator\":\"x\"}"
+        };
+        for (String trigger : malformed) {
+            MemoryNodeStore store = new MemoryNodeStore();
+            AeronConsensusEngine engine = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), null,
+                new AeronBackgroundCoordinator(new RecordingTaskScheduler(), 1L, 1L, 1L), store,
+                List.of("http://aaa-seed:8090"));
+            org.agrona.concurrent.UnsafeBuffer buffer = genesisBuffer(trigger);
+
+            engine.onSessionMessage(mock(ClientSession.class), 1L, buffer, 0, buffer.capacity(), mock(Header.class));
+
+            assertFalse(trigger, engine.hasApplicationFailure());
+            assertFalse(trigger, org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent
+                .getGenesisNode(store.getRoot()).exists());
+        }
+    }
+
+    private NodeState applyGenesisTrigger(String trigger) {
+        MemoryNodeStore store = new MemoryNodeStore();
+        AeronConsensusEngine engine = createEngine(mock(FileStore.class, RETURNS_DEEP_STUBS), null,
+            new AeronBackgroundCoordinator(new RecordingTaskScheduler(), 1L, 1L, 1L), store,
+            List.of("http://aaa-seed:8090"));
+        org.agrona.concurrent.UnsafeBuffer buffer = genesisBuffer(trigger);
+        engine.onSessionMessage(mock(ClientSession.class), 123456789L, buffer, 0, buffer.capacity(), mock(Header.class));
+        assertFalse(engine.hasApplicationFailure());
+        return org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent.getGenesisNode(store.getRoot());
+    }
+
+    private static org.agrona.concurrent.UnsafeBuffer genesisBuffer(String trigger) {
+        byte[] json = trigger.getBytes(StandardCharsets.UTF_8);
+        org.agrona.concurrent.UnsafeBuffer buffer = new org.agrona.concurrent.UnsafeBuffer(
+            new byte[SimpleMessageHeader.ENCODED_LENGTH + json.length]);
+        SimpleMessageHeader.encode(buffer, 0, json.length, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL);
+        buffer.putBytes(SimpleMessageHeader.ENCODED_LENGTH, json);
+        return buffer;
     }
 
     @Test

@@ -246,7 +246,7 @@ public class WriteApplicationServiceTest {
         WriteApplicationService service = new WriteApplicationService(
             fileStore,
             nodeStoreRef::get,
-            () -> (BlobStore) null,
+            () -> mock(BlobStore.class),
             flushService);
 
         AtomicReference<String> binaryEvent = new AtomicReference<>();
@@ -279,8 +279,26 @@ public class WriteApplicationServiceTest {
 
         assertEquals("new-head", newHead);
         assertEquals(PATH + "|" + WALLET + "|Acme|null|image/jpeg", binaryEvent.get());
-        assertEquals("deadbeef#123", stringProperty(contentNode(authoritativeStore, PATH), "jcr:data"));
+        assertEquals("deadbeef#123", stringProperty(contentNode(authoritativeStore, PATH), "jcr:blobId"));
         verify(flushService).onChangeApplied(any());
+    }
+
+    @Test
+    public void binaryWriteWithoutBlobStoreFailsAsNodeLocalInsteadOfWritingAStringReference() {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        WriteApplicationService service = new WriteApplicationService(
+            fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore, () -> (BlobStore) null, flushService);
+
+        RuntimeException failure = assertThrows(RuntimeException.class, () -> service.applyWrite(
+            WALLET, PATH, "file", "m", "0xsig", null, "deadbeef#123", "image/jpeg", null, "proposal-binary"));
+
+        assertFalse("a node-local failure must not be a deterministic rejection",
+            MutationRejectedException.isCauseOf(failure));
+        assertTrue(failure.getCause() instanceof IllegalStateException);
+        assertTrue(failure.getCause().getMessage(), failure.getCause().getMessage().contains("BlobStore unavailable"));
+        assertFalse("nothing may be committed", contentNode(nodeStore, PATH).exists());
+        verifyNoInteractions(flushService);
     }
 
     @Test
