@@ -1,6 +1,6 @@
 # Garbage collection and paid deletes
 
-Status: direction decided; phase 1 implemented on `feature/consensus-gc-safety`. Written against
+Status: direction decided; phases 1 and 2 implemented on `feature/consensus-gc-safety`. Written against
 `trunk` at `42fb205ece`. Evidence comes from the [compaction and paid-deletes review](#evidence) and
 was re-checked on this branch.
 
@@ -10,6 +10,9 @@ and D2 below and defers D4 to the pricing rethink.
 
 Update: D1 is decided and section 4.1 is implemented (phase 1a). Section 1 describes the code at
 `42fb205ece`, before that change.
+
+Update: segment GC (section 4.2, phase 2) is implemented and on by default, as the owner decided.
+The 3x2 harness run in section 5 is still to do.
 
 This note explains how deletes, garbage and GC work today, then proposes a simpler model: validators
 run GC as routine maintenance, and only writes and deletes are paid on chain. Section 6 lists the
@@ -143,7 +146,34 @@ full compaction on a long one, each followed by cleanup.
 - **Reported.** `/health` and `GET /v1/federation` publish each member's GC state: full and tail
   generation, last compaction (type, finish time, reclaimed bytes, outcome), `retainedGenerations`,
   the minimum interval between full compactions, and the next scheduled run.
-- **Off by default** behind a toggle until the harness gate in section 5 passes.
+- **On by default** (owner decision), with `oak.gc.enabled=false` to turn it off.
+
+Implemented in phase 2 (`consensus/gc`; README "Garbage collection"). Where the code differs from
+the sketch above:
+
+- **Slots on the wall clock.** Runs happen at *j* x period + *i* x period / *n* (epoch ms), where
+  the period is the shorter of the tail and full intervals. Offsets measured from each member's
+  start-up would drift apart on every restart, and a member restarted more often than the full
+  interval would never run full GC. The first run is the first slot at least 15 minutes (or one
+  period, if shorter) after start-up.
+- **One grid for both types.** Every slot runs one compaction: full GC on every
+  (full interval / tail interval)-th slot, tail GC on the others. Independent tail and full
+  schedules would put the two runs close together for some cluster sizes, and Oak skips any run
+  within `oak.gc.backoff` (10 hours) of the last successful one, which could skip the weekly full
+  GC every week.
+- **No forced compaction.** `forceTimeout` defaults to 0, which Oak treats as "skip the force
+  phase" (`AbstractCompactionStrategy`). A compaction that cannot catch up after its 5 retry
+  cycles gives up; cleanup still runs and the next slot retries. A positive
+  `oak.gc.force.timeout.seconds` bounds writer blocking to that many seconds.
+- **Member index and count.** The index is `aeron.cluster.nodeId`, the id the Aeron cluster was
+  launched with; the count is the configured Aeron membership
+  (`AeronConsensusEngine.getTotalMemberCount()`). Without Aeron a validator is member 0 of 1.
+- **Reported** in `GET /v1/gc/status` (`{"segment": ..., "binary": ...}`), in the `gc` block of
+  `/health` and `/health/deep`, and, for remote readers, in the `gc` block of
+  `GET /v1/federation`.
+- **Estimation and memory guards** stay on with Oak's defaults (1 GiB growth since the last full
+  GC, 15 % free heap) and are settings: `oak.gc.estimation.size.delta.bytes`,
+  `oak.gc.memory.threshold.percent`.
 
 ### 4.3 Remote readers
 
@@ -159,8 +189,13 @@ the owner, those segments are gone.
 - There is no retry inside the request: handlers answer their own errors and commit the response,
   so a retry would need response buffering. Implemented in phase 1 and tested against a real owner
   store compacted twice under a held head (`MountReaderAcrossRemoteCompactionTest`).
-- A mount that has not refreshed for longer than the owner's published window (minimum interval
-  between full compactions x (`retainedGenerations` - 1)) stops serving until it refreshes.
+- A mount that has not refreshed for longer than the owner's published window stops serving until
+  it refreshes. The owner publishes the window as `readerWindowMs` in `GET /v1/federation`:
+  the shorter GC interval x (`retainedGenerations` - 1), one day with the defaults. It is the
+  shorter interval, not the full one, because tail compactions also start a generation, and
+  cleanup after either type removes non-compacted segments `retainedGenerations` generations
+  old (`Reclaimers`). Not yet implemented: the mount does not yet compare its last refresh with
+  the window.
 - Contract for owners: never publish a window shorter than the readers' refresh interval plus a
   margin.
 
@@ -214,9 +249,11 @@ One way to make the cluster-wide step safe, from replicated state:
    - Update the infra scripts that call the GC endpoints (`10-e2e-write-delete-gc.sh`,
      `11-e2e-write-namespace-delete-gc.sh`, `oak_api_smoke.sh`) and the `/operators/segment-gc` docs
      page.
-2. **Segment GC.** Scheduled, staggered member-local GC behind a toggle (4.2), GC state reporting,
-   and a 3x2 harness run where cluster B compacts while cluster A reads through its mount. Turn the
-   toggle on by default only after that run passes with no 500s or missing content on A.
+2. **Segment GC.** Scheduled, staggered member-local GC (4.2) and GC state reporting.
+   Implemented, on by default (owner decision), with an offline test that runs two scheduled full
+   GCs on a store built like the validator's and one that keeps merging during compaction. Still
+   to do: a 3x2 harness run where cluster B compacts while cluster A reads through its mount, with
+   no 500s or missing content on A.
 3. **Binary GC** (4.4).
 4. **Binary pricing** (4.5).
 
@@ -225,10 +262,10 @@ One way to make the cluster-wide step safe, from replicated state:
 | # | Decision | Outcome |
 |---|---|---|
 | D1 | Replace paid GC with operational GC (option B) and remove the GC market, debt accounts and votes | Decided: yes. Done in phase 1 |
-| D2 | Segment GC member-local and staggered, not a replicated decision | Decided: Oak's own mechanisms, unabated |
+| D2 | Segment GC member-local and staggered, not a replicated decision | Decided: Oak's own mechanisms, unabated. Done in phase 2, on by default |
 | D3 | Binary GC: Oak's blob GC per validator for local entries; cluster unpin only behind a barrier ordered against writes, only on an IPFS Cluster dedicated to the enterprise cluster | Open, phase 3 |
 | D4 | Binary size and pricing | Deferred to the pricing rethink |
-| D5 | Default schedule: tail compaction daily, full compaction weekly, `retainedGenerations` 2 | Open, tune after the harness run |
+| D5 | Default schedule: tail compaction daily, full compaction weekly, `retainedGenerations` 2 | Implemented as defaults; tune after the harness run |
 
 ## Evidence
 

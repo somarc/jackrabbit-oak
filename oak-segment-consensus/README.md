@@ -174,6 +174,11 @@ the environment variable wins. Settings listed without an environment variable a
 | `ipfs.api.authorization` | `IPFS_API_AUTHORIZATION` | unset | `Authorization` header for the Kubo RPC API, for example `Bearer <token>` matching Kubo's `API.Authorizations`. Set it through the environment variable: a `-D` value is visible in process listings. The value is never reported. Use an `https://` endpoint or a `/https` multiaddr to send it over TLS. |
 | `ipfs.api.connect-timeout-ms`, `ipfs.api.request-timeout-ms`, `ipfs.api.max-attempts` | `IPFS_API_CONNECT_TIMEOUT_MS`, `IPFS_API_REQUEST_TIMEOUT_MS`, `IPFS_API_MAX_ATTEMPTS` | `10000`, `60000`, `3` | Kubo RPC timeouts and attempts. Transport failures and HTTP 502/503/504 are retried with backoff; uploads get one extra second per MiB. |
 | `oak.segment.backend` | `OAK_SEGMENT_BACKEND` | `local` | `local`, `azure` or `aws`. Cloud backends need further settings; see [`StorageBackendConfig`](src/main/java/org/apache/jackrabbit/oak/segment/consensus/config/StorageBackendConfig.java). |
+| `oak.gc.enabled` | `OAK_GC_ENABLED` | `true` | Member-local segment GC; see [Garbage collection](#garbage-collection). `false` schedules nothing and pauses Oak's compaction. |
+| `oak.gc.tail.interval.ms`, `oak.gc.full.interval.ms` | `OAK_GC_TAIL_INTERVAL_MS`, `OAK_GC_FULL_INTERVAL_MS` | `86400000` (1 day), `604800000` (7 days) | How often tail and full GC run. At least `60000`; smaller values are raised. The full interval is rounded to a whole number of tail intervals. |
+| `oak.gc.retained.generations` | `OAK_GC_RETAINED_GENERATIONS` | `2` | GC generations cleanup keeps. At least `2`. Sets how long remote readers can read an old head. |
+| `oak.gc.force.timeout.seconds` | `OAK_GC_FORCE_TIMEOUT_SECONDS` | `0` (no forced compaction) | How long Oak may block writers to finish a compaction that cannot catch up with concurrent commits. Keep it at `0` or a few seconds: replicated writes apply on Aeron's service thread and wait for the store. |
+| `oak.gc.estimation.size.delta.bytes`, `oak.gc.memory.threshold.percent` | `OAK_GC_ESTIMATION_SIZE_DELTA_BYTES`, `OAK_GC_MEMORY_THRESHOLD_PERCENT` | `1073741824`, `15` | Oak's guards: a run compacts only when the store grew by more than the delta since the last full GC (`0` always compacts), and stops when free heap drops below the threshold (`0` turns the check off). |
 | `oak.blockchain.mode` | `OAK_BLOCKCHAIN_MODE` | `mock` | `mock` simulates payments. `local` (chain id 31337, epochs from the local clock) and `sepolia` (chain id 11155111) verify payments on chain and need the RPC URL and contract address. `mainnet` (chain id 1) is rejected in this version. Any other value fails startup. Checked before the store, HTTP or Aeron start. |
 | `oak.blockchain.rpcUrl` | `OAK_BLOCKCHAIN_RPC_URL` | unset | Absolute `http(s)`/`ws(s)` URL with a host. At bridge start `eth_chainId` must equal the mode's chain id; a mismatch or an unreachable endpoint fails startup. |
 | `oak.blockchain.contractAddress` | `OAK_BLOCKCHAIN_CONTRACT_ADDRESS` | example address | Deployed Oak payment contract. The zero and example addresses are rejected; the address must hold code. Only logs emitted by this address are accepted. |
@@ -234,11 +239,12 @@ See the repository [security policy](../SECURITY.md).
 | `GET /api/blob/{blobId}`, `/v1/binary/download-url/{blobId}` | Download a binary (plaintext, also when IPFS encryption is on), and issue a signed, expiring URL for it. |
 | `GET /v1/ops/ipfs/health`, `/v1/ops/ipfs/verify?limit=` | IPFS node and cluster status, encryption and network settings, operation counts; and a check that stored binaries are pinned or replicated. `/health/deep` carries the status only, and `/metrics` the `oak_ipfs_*_total` counters. |
 | `GET /v1/config/osgi*` | Effective configuration and its sources. |
+| `GET /v1/gc/status` | This member's segment GC state; see [Garbage collection](#garbage-collection). |
 | `GET /metrics` | Prometheus metrics. |
 
 Writes and deletes are paid through the payment contract; garbage collection is not
-paid and has no endpoints. A delete removes the content node, and Oak's own revision
-GC will reclaim the space; it is not yet scheduled.
+paid and cannot be triggered over HTTP. A delete removes the content node, and Oak's
+own revision GC reclaims the space; see [Garbage collection](#garbage-collection).
 
 The governed read routes are published as an
 [OpenAPI contract](https://somarc.github.io/oak-chain-docs/openapi-validator-source.yaml).
@@ -310,6 +316,55 @@ remote enterprises; within one mount the lookup is a sorted-set search over its
 namespace roots. Listing the children of a node above a mounted namespace (`/`,
 `/oak-chain` or a shard level) still scans every mounted namespace root once
 (`MountInfo.isDirectlyUnder`), linear in the total number of remote namespaces.
+
+## Garbage collection
+
+Each validator runs Oak's online revision GC on its own segment store. GC is
+member-local and has nothing to do with payments or Ethereum: there is no vote,
+no replicated decision and no HTTP trigger. Members' stores already differ
+physically (segment ids are random), and GC does not change the content, so
+there is nothing to agree on.
+
+- **What runs.** Oak's `FileStore.tailGC()` and `fullGC()`: estimation,
+  compaction, then cleanup of segments older than `retainedGenerations`. Tail GC
+  runs every tail interval (daily) and full GC every full interval (weekly), on
+  a dedicated daemon thread, one run at a time. A slot that falls due for both
+  runs full GC only. Oak's guards stay on: a run is skipped when estimation finds
+  too little growth, when memory is low, or within `oak.gc.backoff` (10 hours)
+  of the last successful run.
+- **Staggered.** Runs happen in wall-clock slots. Member *i* of *n* (its
+  `aeron.cluster.nodeId` and the configured Aeron membership; 0 of 1 without
+  Aeron) runs at an offset of *i* × interval / *n*, so with the defaults three
+  members run at 00:00, 08:00 and 16:00 UTC and at most one compacts at a time.
+  Slots are anchored to the clock, not to start-up, so restarts keep the stagger;
+  the first run is the first slot at least 15 minutes after start-up. A run
+  waits until genesis is committed (it is recorded as skipped until then).
+- **Writers are not stalled.** Replicated writes apply on Aeron's service thread
+  and need the store's head. Oak's last compaction phase can force its way in by
+  blocking all writers for up to `forceTimeout` seconds (Oak's default is 60).
+  The validator sets it to 0, which Oak treats as "never force": a compaction
+  that cannot catch up with concurrent commits after its retries gives up,
+  cleanup still runs, and the next slot tries again. Merges keep landing during
+  compaction.
+- **Remote readers.** Every compaction, tail or full, starts a new generation,
+  and cleanup removes non-compacted segments `retainedGenerations` generations
+  old. A head that another cluster has mounted therefore stays readable for
+  about `readerWindowMs` = shorter interval × (`retainedGenerations` − 1), one
+  day with the defaults. `GET /v1/federation` publishes it in its `gc` block
+  (`retainedGenerations`, `tailIntervalMs`, `fullIntervalMs`, `readerWindowMs`).
+  A mount refreshes far more often (`oak.federation.pollMs`), and a read that
+  still hits a removed segment answers `503 mount_stale` and refreshes.
+- **Status.** `GET /v1/gc/status` returns `{"segment": …, "binary": …}`; the
+  same object is the `gc` block of `/health` and `/health/deep`. `segment` holds
+  the settings, the member index, count and offset, the head's GC generation
+  (`full`, `generation`, `compacted`), Oak's current phase (`oakStatus`), the run
+  in progress, the last tail and full run (start and finish times, `completed`,
+  `skipped`, `failed` or `cancelled`, reclaimed bytes, store size before and
+  after, and the reason or error) and the next tail and full run. `binary` is
+  `null` until binary GC reports.
+
+Shutdown cancels a run in progress through Oak's own cancellation before the
+store closes. Oak records each cleanup in `gc.log` in the store directory.
 
 ## Build and test
 
