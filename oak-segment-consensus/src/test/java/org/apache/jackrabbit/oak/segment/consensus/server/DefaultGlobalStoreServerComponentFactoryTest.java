@@ -29,7 +29,8 @@ public class DefaultGlobalStoreServerComponentFactoryTest {
 
     @After
     public void clearProps() {
-        for (String prop : new String[] {"ipfs.api.endpoint", "ipfs.api.authorization", "ipfs.api.max-attempts"}) {
+        for (String prop : new String[] {"ipfs.api.endpoint", "ipfs.api.authorization", "ipfs.api.max-attempts",
+                "ipfs.cluster.endpoint", "ipfs.cluster.authorization"}) {
             System.clearProperty(prop);
         }
     }
@@ -51,10 +52,26 @@ public class DefaultGlobalStoreServerComponentFactoryTest {
     }
 
     @Test
-    public void testNoAuthorizationIsSentWhenNoneIsConfigured() {
+    public void testNoAuthorizationOrClusterIsSentWhenNoneIsConfigured() {
         Properties properties = DefaultGlobalStoreServerComponentFactory.ipfsDataStoreProperties(
             StorageBackendConfig.load());
 
         assertFalse(properties.containsKey("ipfsApiAuthorization"));
+        assertFalse(properties.containsKey("ipfsClusterEndpoint"));
+    }
+
+    @Test
+    public void testClusterSettingsReachTheDataStore() {
+        System.setProperty("ipfs.cluster.endpoint", "/dns4/cluster0/tcp/9094");
+        System.setProperty("ipfs.cluster.authorization", "Basic abc");
+
+        Properties properties = DefaultGlobalStoreServerComponentFactory.ipfsDataStoreProperties(
+            StorageBackendConfig.load());
+
+        assertEquals("/dns4/cluster0/tcp/9094", properties.getProperty("ipfsClusterEndpoint"));
+        assertEquals("Basic abc", properties.getProperty("ipfsClusterAuthorization"));
+        assertEquals("2", properties.getProperty("ipfsClusterReplicationMin"));
+        assertEquals("3", properties.getProperty("ipfsClusterReplicationMax"));
+        assertEquals("120000", properties.getProperty("ipfsClusterPinTimeoutMillis"));
     }
 }

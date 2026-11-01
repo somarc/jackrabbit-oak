@@ -93,6 +93,43 @@ public class IPFSDataStoreService extends AbstractDataStoreService {
         int ipfsMaxAttempts() default 3;
 
         @AttributeDefinition(
+            name = "IPFS Cluster Endpoint",
+            description = "IPFS Cluster REST API (multiaddr or http(s) URL). When set, a write is acknowledged only after the replication minimum of cluster peers hold it. Empty disables replication."
+        )
+        String ipfsClusterEndpoint() default "";
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Authorization",
+            description = "Authorization header value for the IPFS Cluster REST API (Basic or Bearer). Empty sends no header.",
+            type = AttributeType.PASSWORD
+        )
+        String ipfsClusterAuthorization() default "";
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Replication Minimum",
+            description = "Cluster peers that must hold a binary before its write is acknowledged."
+        )
+        int ipfsClusterReplicationMin() default 2;
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Replication Maximum",
+            description = "Cluster peers that should hold each binary."
+        )
+        int ipfsClusterReplicationMax() default 3;
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Pin Timeout (ms)",
+            description = "How long a write waits for the replication minimum before it fails."
+        )
+        int ipfsClusterPinTimeoutMillis() default 120_000;
+
+        @AttributeDefinition(
+            name = "IPFS Cluster Unpin On Delete",
+            description = "Unpin deleted binaries across the cluster. Enable only when the cluster stores this Oak repository alone: cluster pins have no owner, so unpinning drops content that any other user of the same CID still needs."
+        )
+        boolean ipfsClusterUnpinOnDelete() default false;
+
+        @AttributeDefinition(
             name = "IPFS Files Root",
             description = "Root path in the IPFS Files namespace used to persist Oak CID mappings and metadata. Use a unique root per Oak repository when sharing one IPFS repository."
         )

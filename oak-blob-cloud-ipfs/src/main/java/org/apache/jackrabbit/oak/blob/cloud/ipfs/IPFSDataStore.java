@@ -71,6 +71,12 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
                 ipfsBackend.setIpfsFilesRoot(filesRoot);
             }
             ipfsBackend.setClientSettings(IpfsClientSettings.fromProperties(properties));
+            IpfsClusterSettings cluster = IpfsClusterSettings.fromProperties(properties);
+            ipfsBackend.setClusterSettings(cluster);
+            if (cluster.enabled()) {
+                // Every write then waits for replication, so no caller is acknowledged early.
+                setStagingSplitPercentage(0);
+            }
         }
         ipfsBackend.setCidResolver(cidResolver);
         return ipfsBackend;
@@ -96,7 +102,11 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
      *
      * <p>The backend consumes {@code ipfsApiEndpoint}, {@code ipfsFilesRoot},
      * {@code ipfsApiAuthorization}, {@code ipfsConnectTimeoutMillis},
-     * {@code ipfsRequestTimeoutMillis} and {@code ipfsMaxAttempts}.</p>
+     * {@code ipfsRequestTimeoutMillis}, {@code ipfsMaxAttempts}, and, for
+     * replication through IPFS Cluster, {@code ipfsClusterEndpoint},
+     * {@code ipfsClusterAuthorization}, {@code ipfsClusterReplicationMin},
+     * {@code ipfsClusterReplicationMax}, {@code ipfsClusterPinTimeoutMillis} and
+     * {@code ipfsClusterUnpinOnDelete}.</p>
      *
      * @param properties datastore and backend configuration properties
      */
