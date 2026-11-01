@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
+import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
@@ -33,8 +35,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Comparator;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -76,7 +81,7 @@ public class CidApiHandlerTest {
                 String json = body.toString();
                 assertTrue(json.contains("\"oakBlobId\":\"" + OAK_BLOB_ID + "\""));
                 assertTrue(json.contains("\"ipfsCid\":\"" + CID + "\""));
-                assertTrue(json.contains("\"gatewayUrl\":\"https://ipfs.io/ipfs/" + CID + "\""));
+                assertFalse("no public gateway by default", json.contains("gatewayUrl"));
                 assertTrue(json.contains("\"localUrl\":\"http://127.0.0.1:8099/ipfs/" + CID + "\""));
             }
         } finally {
@@ -138,21 +143,91 @@ public class CidApiHandlerTest {
     }
 
     @Test
-    public void testHandleGatewayRedirectRedirectsToGateway() throws Exception {
+    public void testHandleGatewayRedirectRedirectsToTheConfiguredGateway() throws Exception {
         Path storageDir = Files.createTempDirectory("cid-gateway");
+        try {
+            withProperty("ipfs.gateway.base", "https://gateway.example/ipfs", () -> {
+                ServerContext context = newContext(storageDir);
+                try (CidMappingService cidMappingService = new CidMappingService(storageDir)) {
+                    context.cidMappingService = cidMappingService;
+                    cidMappingService.registerMapping(OAK_BLOB_ID, CID);
+
+                    HttpServletResponse response = mock(HttpServletResponse.class);
+                    HttpServletRequest request = request("/api/cid/gateway/" + OAK_BLOB_ID);
+
+                    new CidApiHandler(context).handleGatewayRedirect(request, response);
+
+                    verify(response).sendRedirect("https://gateway.example/ipfs/" + CID);
+                }
+            });
+        } finally {
+            deleteRecursively(storageDir);
+        }
+    }
+
+    @Test
+    public void testHandleGatewayRedirectWithoutAGatewayIsNotFound() throws Exception {
+        Path storageDir = Files.createTempDirectory("cid-gateway-none");
         try {
             ServerContext context = newContext(storageDir);
             try (CidMappingService cidMappingService = new CidMappingService(storageDir)) {
                 context.cidMappingService = cidMappingService;
                 cidMappingService.registerMapping(OAK_BLOB_ID, CID);
 
-                HttpServletResponse response = mock(HttpServletResponse.class);
-                HttpServletRequest request = request("/api/cid/gateway/" + OAK_BLOB_ID);
+                StringWriter body = new StringWriter();
+                HttpServletResponse response = responseWithBody(body);
 
-                new CidApiHandler(context).handleGatewayRedirect(request, response);
+                new CidApiHandler(context).handleGatewayRedirect(request("/api/cid/gateway/" + OAK_BLOB_ID), response);
 
-                verify(response).sendRedirect("https://ipfs.io/ipfs/" + CID);
+                verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+                verify(response, never()).sendRedirect(anyString());
+                assertTrue(body.toString().contains("ipfs_gateway_not_configured"));
             }
+        } finally {
+            deleteRecursively(storageDir);
+        }
+    }
+
+    @Test
+    public void testHandleGetCidFallsBackToTheIpfsDataStore() throws Exception {
+        Path storageDir = Files.createTempDirectory("cid-replicated");
+        try {
+            ServerContext context = newContext(storageDir);
+            IPFSDataStore dataStore = mock(IPFSDataStore.class);
+            when(dataStore.getCID(NORMALIZED_OAK_BLOB_ID)).thenReturn(CID);
+            context.blobStore = new DataStoreBlobStore(dataStore);
+            try (CidMappingService cidMappingService = new CidMappingService(storageDir)) {
+                context.cidMappingService = cidMappingService;
+
+                StringWriter body = new StringWriter();
+                HttpServletResponse response = responseWithBody(body);
+
+                new CidApiHandler(context).handleGetCid(request("/api/cid/" + OAK_BLOB_ID), response);
+
+                verify(response).setStatus(HttpServletResponse.SC_OK);
+                assertTrue(body.toString(), body.toString().contains("\"ipfsCid\":\"" + CID + "\""));
+            }
+        } finally {
+            deleteRecursively(storageDir);
+        }
+    }
+
+    @Test
+    public void testAnUnreachableIpfsNodeIsNotReportedAsAnUnknownBlob() throws Exception {
+        Path storageDir = Files.createTempDirectory("cid-unavailable");
+        try {
+            ServerContext context = newContext(storageDir);
+            IPFSDataStore dataStore = mock(IPFSDataStore.class);
+            when(dataStore.getCID(NORMALIZED_OAK_BLOB_ID)).thenThrow(new IllegalStateException("Kubo refused"));
+            context.blobStore = new DataStoreBlobStore(dataStore);
+
+            StringWriter body = new StringWriter();
+            HttpServletResponse response = responseWithBody(body);
+            new CidApiHandler(context).handleGetCid(request("/api/cid/" + OAK_BLOB_ID), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            assertTrue(body.toString().contains("ipfs_unavailable"));
+            assertFalse(body.toString().contains("Kubo refused"));
         } finally {
             deleteRecursively(storageDir);
         }
