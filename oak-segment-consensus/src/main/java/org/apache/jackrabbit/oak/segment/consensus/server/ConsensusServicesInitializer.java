@@ -117,8 +117,9 @@ final class ConsensusServicesInitializer {
         if (aeronEngine != null) {
             proposalQueueManager.setReplicatedDurability(aeronEngine::durabilityDecision);
         }
-        proposalQueueManager.start();
         ServerContext context = httpServer.getContext();
+        proposalQueueManager.setCommittedRootSupplier(context::authoritativeRoot);
+        proposalQueueManager.start();
         context.setProposalQueueManager(proposalQueueManager);
         context.evmBridge = evmBridge;
         log.info("✅ Proposal Queue Manager initialized (adaptive packing/release + 3-checkpoint security)");

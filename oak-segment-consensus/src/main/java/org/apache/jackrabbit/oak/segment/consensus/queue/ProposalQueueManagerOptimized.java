@@ -26,10 +26,14 @@ import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.federation.DirectorySnapshot;
+import org.apache.jackrabbit.oak.segment.consensus.federation.NamespaceAuthority;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
+import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,6 +53,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Optimized proposal queue manager with production throughput patterns.
@@ -218,6 +223,37 @@ public class ProposalQueueManagerOptimized {
      * @param backpressureManager Backpressure manager for flow control
      * @param beaconClient Beacon Chain client for real-time Ethereum epoch tracking
      */
+    private volatile Supplier<NodeState> committedRoot;
+
+    /**
+     * Gives the authorization checkpoint the committed store, so that once a federation directory is committed it
+     * decides exactly as ingress and replicated apply do; without it the legacy own-wallet rule applies.
+     */
+    public void setCommittedRootSupplier(Supplier<NodeState> committedRoot) {
+        this.committedRoot = committedRoot;
+    }
+
+    /**
+     * Null when {@code wallet} may write {@code path}: by the committed directory when there is one, otherwise only
+     * under the wallet's own root.
+     */
+    static String authorizationError(NodeState committedRoot, String wallet, String path) {
+        if (committedRoot != null && DirectorySnapshot.read(committedRoot) != null) {
+            try {
+                NamespaceAuthority.requireWritable(committedRoot, wallet, path);
+                return null;
+            } catch (MutationRejectedException e) {
+                return "Wallet " + wallet + " cannot write " + path + ": " + e.getMessage();
+            }
+        }
+        String expectedShardRoot = WalletPathUtil.getShardRoot(wallet);
+        if (path.equals(expectedShardRoot) || path.startsWith(expectedShardRoot + "/")) {
+            return null;
+        }
+        return "Wallet " + wallet + " cannot write to path outside its shard: " + path
+            + " (expected shard root: " + expectedShardRoot + ")";
+    }
+
     public ProposalQueueManagerOptimized(
             EvmBridge evmBridge,
             RaftAppendCallback raftAppendCallback,
@@ -2234,16 +2270,13 @@ public class ProposalQueueManagerOptimized {
                     // - Path follows sharding rules (wallet can only write to own shard)
                     // ═══════════════════════════════════════════════════════════
                     
-                    // Verify path belongs to wallet's shard (using WalletPathUtil for wallet-scoped paths)
                     long authStartNs = System.nanoTime();
-                    String expectedShardRoot = WalletPathUtil.getShardRoot(proposal.getWalletAddress());
-                    boolean ownsPath = proposal.getPath().equals(expectedShardRoot)
-                        || proposal.getPath().startsWith(expectedShardRoot + "/");
-                    if (!ownsPath) {
+                    Supplier<NodeState> rootSupplier = committedRoot;
+                    String authError = authorizationError(rootSupplier != null ? rootSupplier.get() : null,
+                        proposal.getWalletAddress(), proposal.getPath());
+                    if (authError != null) {
                         verifierRejectedCount.incrementAndGet();
-                        rejectProposal(proposal, "Wallet " + proposal.getWalletAddress() + 
-                            " cannot write to path outside its shard: " + proposal.getPath() + 
-                            " (expected shard root: " + expectedShardRoot + ")");
+                        rejectProposal(proposal, authError);
                         continue;
                     }
                     long authNanos = System.nanoTime() - authStartNs;
