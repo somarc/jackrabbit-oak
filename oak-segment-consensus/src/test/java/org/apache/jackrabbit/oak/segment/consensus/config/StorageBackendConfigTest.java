@@ -49,6 +49,8 @@ public class StorageBackendConfigTest {
         "ipfs.cluster.replication-max",
         "ipfs.cluster.pin-timeout-ms",
         "ipfs.encryption.keys",
+        "ipfs.network.policy",
+        "ipfs.swarm.probe-address",
         "oak.blob.azure.connection-string",
         "oak.blob.azure.container",
         "oak.blob.aws.bucket",
@@ -260,6 +262,19 @@ public class StorageBackendConfigTest {
 
         System.setProperty("ipfs.encryption.keys", " k1;k1:AAAA ");
         assertEquals("k1;k1:AAAA", StorageBackendConfig.load().getBlobIpfsEncryptionKeys());
+    }
+
+    @Test
+    public void testIpfsNetworkPolicyWarnsByDefault() {
+        StorageBackendConfig defaults = StorageBackendConfig.load();
+        assertEquals("warn", defaults.getBlobIpfsNetworkPolicy());
+        assertNull(defaults.getBlobIpfsSwarmProbeAddress());
+
+        System.setProperty("ipfs.network.policy", "private");
+        System.setProperty("ipfs.swarm.probe-address", " kubo:4001 ");
+        StorageBackendConfig cfg = StorageBackendConfig.load();
+        assertEquals("private", cfg.getBlobIpfsNetworkPolicy());
+        assertEquals("kubo:4001", cfg.getBlobIpfsSwarmProbeAddress());
     }
 
     @Test

@@ -88,6 +88,10 @@ public final class DefaultGlobalStoreServerComponentFactory implements GlobalSto
             properties.setProperty("ipfsClusterReplicationMax", String.valueOf(config.getBlobIpfsClusterReplicationMax()));
             properties.setProperty("ipfsClusterPinTimeoutMillis", String.valueOf(config.getBlobIpfsClusterPinTimeoutMs()));
         }
+        properties.setProperty("ipfsNetworkPolicy", config.getBlobIpfsNetworkPolicy());
+        if (config.getBlobIpfsSwarmProbeAddress() != null) {
+            properties.setProperty("ipfsSwarmProbeAddress", config.getBlobIpfsSwarmProbeAddress());
+        }
         if (config.getBlobIpfsEncryptionKeys() != null) {
             properties.setProperty("ipfsEncryptionKeys", config.getBlobIpfsEncryptionKeys());
         }

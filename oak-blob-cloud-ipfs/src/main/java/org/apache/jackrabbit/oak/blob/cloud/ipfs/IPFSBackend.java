@@ -129,6 +129,14 @@ public class IPFSBackend extends AbstractSharedBackend {
      */
     private volatile BlobKeyProvider blobKeys;
 
+    private IpfsNetworkPosture.Policy networkPolicy = IpfsNetworkPosture.Policy.WARN;
+
+    /**
+     * The node's swarm listener as reachable from Oak ({@code host:port}), used
+     * to prove a private network key; {@code null} skips that check.
+     */
+    private String swarmProbeAddress;
+
     /**
      * Creates a backend using the default HTTP IPFS client implementation.
      */
@@ -154,6 +162,23 @@ public class IPFSBackend extends AbstractSharedBackend {
                 cluster.ping();
                 LOG.info("Writes are acknowledged once {} IPFS Cluster peers hold them (at most {}), via {}",
                     clusterSettings.replicationMin(), clusterSettings.replicationMax(), clusterSettings.endpoint());
+            }
+
+            if (networkPolicy != IpfsNetworkPosture.Policy.OFF) {
+                IpfsNetworkPosture.Report report;
+                try {
+                    report = IpfsNetworkPosture.inspect(ipfs, swarmProbeAddress, settings.connectTimeout());
+                } catch (Exception e) {
+                    if (networkPolicy == IpfsNetworkPosture.Policy.PRIVATE) {
+                        throw new IOException("ipfsNetworkPolicy=private, but the IPFS node's network settings"
+                            + " could not be read: " + e.getMessage(), e);
+                    }
+                    LOG.warn("Could not check whether IPFS node {} is private: {}", ipfsApiEndpoint, e.toString());
+                    report = null;
+                }
+                if (report != null) {
+                    IpfsNetworkPosture.enforce(networkPolicy, report, ipfsApiEndpoint);
+                }
             }
 
             // Version lookup is informational; the namespace setup below is
@@ -499,6 +524,16 @@ public class IPFSBackend extends AbstractSharedBackend {
      */
     void setBlobKeyProvider(BlobKeyProvider blobKeys) {
         this.blobKeys = blobKeys;
+    }
+
+    /**
+     * Sets how {@link #init()} treats a node that may expose content outside a
+     * private network, and the swarm listener used to prove its network key.
+     */
+    void setNetworkPolicy(IpfsNetworkPosture.Policy networkPolicy, String swarmProbeAddress) {
+        this.networkPolicy = networkPolicy;
+        this.swarmProbeAddress = swarmProbeAddress == null || swarmProbeAddress.isBlank()
+            ? null : swarmProbeAddress.trim();
     }
 
     /**

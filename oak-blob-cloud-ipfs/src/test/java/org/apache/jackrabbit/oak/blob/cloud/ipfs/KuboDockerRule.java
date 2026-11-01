@@ -34,8 +34,9 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 
 /**
- * Starts an offline Kubo daemon in Docker for tests that need real IPFS
- * semantics, optionally requiring a bearer token on its RPC API
+ * Starts a Kubo daemon in Docker for tests that need real IPFS semantics:
+ * offline by default, or {@link #online} with or without a private network
+ * key, optionally requiring a bearer token on its RPC API
  * ({@code API.Authorizations}). Tests are skipped when Docker is unavailable;
  * any other startup failure fails them.
  */
@@ -43,10 +44,13 @@ public class KuboDockerRule extends ExternalResource {
 
     private static final DockerImageName IMAGE = DockerImageName.parse("ipfs/kubo:v0.43.1");
     private static final int API_PORT = 5001;
+    private static final int SWARM_PORT = 4001;
 
     private final String bearerToken;
     private final StringBuilder configCommands = new StringBuilder();
     private GenericContainer<?> container;
+    private boolean online;
+    private String swarmKey;
 
     public KuboDockerRule() {
         this(null);
@@ -67,16 +71,39 @@ public class KuboDockerRule extends ExternalResource {
         return this;
     }
 
+    /**
+     * Runs the daemon with its swarm listening (port 4001 exposed) but without
+     * public bootstrap peers, routing or AutoConf, so it stays off the public
+     * network.
+     *
+     * @param swarmKey private network key file content, or {@code null} for a
+     *                 node without one
+     */
+    public KuboDockerRule online(String swarmKey) {
+        this.online = true;
+        this.swarmKey = swarmKey;
+        configured("Bootstrap", "[]");
+        configured("AutoConf.Enabled", "false");
+        configured("Routing.Type", "\"none\"");
+        configured("Routing.DelegatedRouters", "[]");
+        configured("Ipns.DelegatedPublishers", "[]");
+        configured("DNS.Resolvers", "{}");
+        return this;
+    }
+
     @Override
     protected void before() {
         container = new GenericContainer<>(IMAGE)
-            .withCommand("daemon", "--offline")
-            .withExposedPorts(API_PORT)
+            .withCommand(online ? new String[] {"daemon"} : new String[] {"daemon", "--offline"})
+            .withExposedPorts(online ? new Integer[] {API_PORT, SWARM_PORT} : new Integer[] {API_PORT})
             .waitingFor(Wait.forLogMessage(".*Daemon is ready.*", 1))
             .withStartupTimeout(Duration.ofSeconds(90));
         if (bearerToken != null) {
             configured("API.Authorizations",
                 "{\"oak\":{\"AuthSecret\":\"bearer:" + bearerToken + "\",\"AllowedPaths\":[\"/api/v0\"]}}");
+        }
+        if (swarmKey != null) {
+            container.withEnv("IPFS_SWARM_KEY", swarmKey).withEnv("LIBP2P_FORCE_PNET", "1");
         }
         if (configCommands.length() > 0) {
             container.withCopyToContainer(Transferable.of("#!/bin/sh\nset -e\n" + configCommands, 0755),
@@ -113,6 +140,14 @@ public class KuboDockerRule extends ExternalResource {
      */
     public String apiEndpoint() {
         return "/ip4/127.0.0.1/tcp/" + container.getMappedPort(API_PORT);
+    }
+
+    /**
+     * Returns the swarm listener on the host as {@code host:port}; requires
+     * {@link #online}.
+     */
+    public String swarmAddress() {
+        return "127.0.0.1:" + container.getMappedPort(SWARM_PORT);
     }
 
     /**

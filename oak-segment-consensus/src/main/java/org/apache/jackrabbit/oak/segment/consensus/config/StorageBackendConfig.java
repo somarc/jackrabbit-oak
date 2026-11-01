@@ -61,6 +61,8 @@ public final class StorageBackendConfig {
     private final int blobIpfsClusterReplicationMax;
     private final int blobIpfsClusterPinTimeoutMs;
     private final String blobIpfsEncryptionKeys; // null = plaintext; never logged
+    private final String blobIpfsNetworkPolicy; // off | warn | private
+    private final String blobIpfsSwarmProbeAddress; // null = no wire probe
 
     // azure
     private final String blobAzureConnectionString;
@@ -92,6 +94,8 @@ public final class StorageBackendConfig {
         this.blobIpfsClusterReplicationMax = b.blobIpfsClusterReplicationMax;
         this.blobIpfsClusterPinTimeoutMs = b.blobIpfsClusterPinTimeoutMs;
         this.blobIpfsEncryptionKeys = b.blobIpfsEncryptionKeys;
+        this.blobIpfsNetworkPolicy = b.blobIpfsNetworkPolicy;
+        this.blobIpfsSwarmProbeAddress = b.blobIpfsSwarmProbeAddress;
         this.blobAzureConnectionString = b.blobAzureConnectionString;
         this.blobAzureContainer = b.blobAzureContainer;
         this.blobAwsBucket = b.blobAwsBucket;
@@ -169,6 +173,10 @@ public final class StorageBackendConfig {
                 "ipfs.cluster.pin-timeout-ms", "IPFS_CLUSTER_PIN_TIMEOUT_MS", 120_000);
             b.blobIpfsEncryptionKeys = textOrNull(RuntimeConfigValueResolver.readString(
                 "ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null));
+            b.blobIpfsNetworkPolicy = RuntimeConfigValueResolver.readString(
+                "ipfs.network.policy", "IPFS_NETWORK_POLICY", "warn").trim();
+            b.blobIpfsSwarmProbeAddress = textOrNull(RuntimeConfigValueResolver.readString(
+                "ipfs.swarm.probe-address", "IPFS_SWARM_PROBE_ADDRESS", null));
         }
 
         if (b.blobBackend == BlobBackend.AZURE) {
@@ -236,6 +244,8 @@ public final class StorageBackendConfig {
     public int getBlobIpfsClusterReplicationMax() { return blobIpfsClusterReplicationMax; }
     public int getBlobIpfsClusterPinTimeoutMs() { return blobIpfsClusterPinTimeoutMs; }
     public String getBlobIpfsEncryptionKeys() { return blobIpfsEncryptionKeys; }
+    public String getBlobIpfsNetworkPolicy() { return blobIpfsNetworkPolicy; }
+    public String getBlobIpfsSwarmProbeAddress() { return blobIpfsSwarmProbeAddress; }
 
     public String getBlobAzureConnectionString() { return blobAzureConnectionString; }
     public String getBlobAzureContainer() { return blobAzureContainer; }
@@ -302,6 +312,8 @@ public final class StorageBackendConfig {
         int blobIpfsClusterReplicationMax;
         int blobIpfsClusterPinTimeoutMs;
         String blobIpfsEncryptionKeys;
+        String blobIpfsNetworkPolicy;
+        String blobIpfsSwarmProbeAddress;
         String blobAzureConnectionString;
         String blobAzureContainer;
         String blobAwsBucket;

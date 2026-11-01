@@ -79,6 +79,7 @@ OSGi configuration PID:
 | `ipfsClusterReplicationMin`, `ipfsClusterReplicationMax`, `ipfsClusterPinTimeoutMillis` | Defaults 2, 3 and 120 s: peers that must hold a binary before its write returns, peers that should hold it, and how long to wait |
 | `ipfsClusterUnpinOnDelete` | Default `false`. Set `true` only when the cluster stores this Oak repository alone; deletes then unpin across the cluster |
 | `ipfsEncryptionKeys` | Keyring `current;id:base64Key;...` (32-byte keys) that encrypts every new binary before it reaches IPFS; empty stores plaintext. Never logged. See [Encryption](#encryption) |
+| `ipfsNetworkPolicy`, `ipfsSwarmProbeAddress` | Default `warn` and unset. See [Private network](#private-network) |
 | `ipfsConnectTimeoutMillis`, `ipfsRequestTimeoutMillis`, `ipfsMaxAttempts` | Defaults 10 s, 60 s and 3. Transport failures and HTTP 502/503/504 are retried with exponential backoff; Kubo command errors are not. Uploads get one extra second per MiB |
 | `ipfsFilesRoot` | MFS namespace for mappings and metadata; use a distinct root per Oak repository |
 | `minRecordLength` | Binary threshold, default 16 KiB; smaller values stay inline |
@@ -98,6 +99,48 @@ The module has no third-party IPFS dependencies.
 Treat the IPFS API as an administrative endpoint: require a token with Kubo's
 `API.Authorizations`, and put TLS in front of it when it leaves the host. Select cache, staging, disk, and concurrency limits before
 running a campaign; the inherited cache defaults are not a laptop test budget.
+
+## Private network
+
+A Kubo node with default settings joins the public IPFS network: it bootstraps
+to public peers, announces every block it stores to the public DHT, asks public
+HTTP routers about content, and is reachable through public relays. Anyone who
+learns a CID can then fetch the content. At startup the DataStore reads the
+node's configuration and listeners and reports each such exposure:
+
+| `ipfsNetworkPolicy` | Effect |
+|---|---|
+| `warn` (default) | Logs every exposure as a warning |
+| `private` | Refuses to start unless the node is proven to use a private network key and exposes nothing |
+| `off` | No check |
+
+The configuration does not show whether the node has a private network key
+(`swarm.key`), so set `ipfsSwarmProbeAddress` to the node's swarm listener as
+Oak reaches it (for example `kubo:4001`). Startup then opens a connection to it:
+a node with a key answers with a random nonce, one without with the plaintext
+libp2p multistream header. `private` requires this proof. Delegated HTTP routers
+and AutoConf are reported even on a private network, because they are plain
+HTTPS calls the key does not cover.
+
+A minimal private Kubo node (v0.43): a `swarm.key` shared by all nodes, the
+daemon started with `LIBP2P_FORCE_PNET=1` so it refuses to run without one, and
+
+```
+ipfs bootstrap rm --all
+ipfs config --json AutoConf.Enabled false
+ipfs config Routing.Type none        # or dht for larger swarms that are not fully peered
+ipfs config --json Routing.DelegatedRouters '[]'
+ipfs config --json Ipns.DelegatedPublishers '[]'
+ipfs config --json DNS.Resolvers '{}'
+ipfs config --json Provide.Enabled false   # with Routing.Type none
+ipfs config --json Swarm.RelayClient.Enabled false
+ipfs config --json Swarm.Transports.Network.Websocket false
+ipfs config --json Gateway.NoFetch true
+```
+
+with `Peering.Peers` listing every other node. `IPFSNetworkPostureKuboTest`
+shows the DataStore starting under `private` on such a node and refusing one
+without a key.
 
 ## Encryption
 
@@ -190,8 +233,9 @@ binary through its CID alone, and that a wrong key or no key fails.
   approval and a recovery plan.
 - Content is plaintext unless `ipfsEncryptionKeys` is set (see
   [Encryption](#encryption)), and a Kubo node with default settings announces
-  what it stores to the public IPFS network. Use a private network
-  (`swarm.key`) as well as encryption for content that must stay private.
+  what it stores to the public IPFS network; startup warns about that (see
+  [Private network](#private-network)). Use a private network as well as
+  encryption for content that must stay private.
 
 These are capability boundaries of an actively maintained product module, not a
 claim of production readiness. See the

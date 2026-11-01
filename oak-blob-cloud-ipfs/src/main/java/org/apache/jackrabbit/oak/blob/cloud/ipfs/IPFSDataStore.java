@@ -54,6 +54,18 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
      */
     static final String ENCRYPTION_KEYS = "ipfsEncryptionKeys";
 
+    /**
+     * {@code off}, {@code warn} (default) or {@code private}: how startup treats
+     * an IPFS node that may expose content outside a private network.
+     */
+    static final String NETWORK_POLICY = "ipfsNetworkPolicy";
+
+    /**
+     * The IPFS node's swarm listener as reachable from Oak, {@code host:port},
+     * used to prove that it uses a private network key.
+     */
+    static final String SWARM_PROBE_ADDRESS = "ipfsSwarmProbeAddress";
+
     private volatile CidResolver cidResolver;
 
     private BlobKeyProvider blobKeyProvider;
@@ -79,6 +91,8 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
                 ipfsBackend.setIpfsFilesRoot(filesRoot);
             }
             ipfsBackend.setClientSettings(IpfsClientSettings.fromProperties(properties));
+            ipfsBackend.setNetworkPolicy(IpfsNetworkPosture.Policy.parse(properties.getProperty(NETWORK_POLICY)),
+                properties.getProperty(SWARM_PROBE_ADDRESS));
             IpfsClusterSettings cluster = IpfsClusterSettings.fromProperties(properties);
             ipfsBackend.setClusterSettings(cluster);
             if (cluster.enabled()) {
@@ -133,8 +147,9 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
      * replication through IPFS Cluster, {@code ipfsClusterEndpoint},
      * {@code ipfsClusterAuthorization}, {@code ipfsClusterReplicationMin},
      * {@code ipfsClusterReplicationMax}, {@code ipfsClusterPinTimeoutMillis} and
-     * {@code ipfsClusterUnpinOnDelete}, and, for encryption,
-     * {@code ipfsEncryptionKeys}.</p>
+     * {@code ipfsClusterUnpinOnDelete}, for encryption,
+     * {@code ipfsEncryptionKeys}, and, for the network check,
+     * {@code ipfsNetworkPolicy} and {@code ipfsSwarmProbeAddress}.</p>
      *
      * @param properties datastore and backend configuration properties
      */

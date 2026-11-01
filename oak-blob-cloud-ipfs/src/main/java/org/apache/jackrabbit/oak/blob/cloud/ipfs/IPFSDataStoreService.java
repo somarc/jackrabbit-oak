@@ -137,6 +137,18 @@ public class IPFSDataStoreService extends AbstractDataStoreService {
         String ipfsEncryptionKeys() default "";
 
         @AttributeDefinition(
+            name = "IPFS Network Policy",
+            description = "How startup treats an IPFS node that may expose content outside a private network: 'warn' logs each exposure (public bootstrap, public HTTP routing, announcing blocks, relays, no swarm key), 'private' refuses to start unless the node is proven private, 'off' skips the check."
+        )
+        String ipfsNetworkPolicy() default "warn";
+
+        @AttributeDefinition(
+            name = "IPFS Swarm Probe Address",
+            description = "The IPFS node's swarm listener as reachable from Oak (host:port, e.g. kubo:4001). When set, startup proves on the wire that the node uses a private network key; 'private' requires it."
+        )
+        String ipfsSwarmProbeAddress() default "";
+
+        @AttributeDefinition(
             name = "IPFS Files Root",
             description = "Root path in the IPFS Files namespace used to persist Oak CID mappings and metadata. Use a unique root per Oak repository when sharing one IPFS repository."
         )

@@ -30,7 +30,8 @@ public class DefaultGlobalStoreServerComponentFactoryTest {
     @After
     public void clearProps() {
         for (String prop : new String[] {"ipfs.api.endpoint", "ipfs.api.authorization", "ipfs.api.max-attempts",
-                "ipfs.cluster.endpoint", "ipfs.cluster.authorization", "ipfs.encryption.keys"}) {
+                "ipfs.cluster.endpoint", "ipfs.cluster.authorization", "ipfs.encryption.keys",
+                "ipfs.network.policy", "ipfs.swarm.probe-address"}) {
             System.clearProperty(prop);
         }
     }
@@ -59,6 +60,20 @@ public class DefaultGlobalStoreServerComponentFactoryTest {
         assertFalse(properties.containsKey("ipfsApiAuthorization"));
         assertFalse(properties.containsKey("ipfsClusterEndpoint"));
         assertFalse(properties.containsKey("ipfsEncryptionKeys"));
+    }
+
+    @Test
+    public void testNetworkPolicyReachesTheDataStore() {
+        assertEquals("warn", DefaultGlobalStoreServerComponentFactory.ipfsDataStoreProperties(
+            StorageBackendConfig.load()).getProperty("ipfsNetworkPolicy"));
+
+        System.setProperty("ipfs.network.policy", "private");
+        System.setProperty("ipfs.swarm.probe-address", "kubo:4001");
+        Properties properties = DefaultGlobalStoreServerComponentFactory.ipfsDataStoreProperties(
+            StorageBackendConfig.load());
+
+        assertEquals("private", properties.getProperty("ipfsNetworkPolicy"));
+        assertEquals("kubo:4001", properties.getProperty("ipfsSwarmProbeAddress"));
     }
 
     @Test
