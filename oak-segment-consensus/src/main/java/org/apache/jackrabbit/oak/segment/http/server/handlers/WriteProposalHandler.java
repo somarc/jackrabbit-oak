@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
+import org.apache.jackrabbit.oak.spi.blob.BlobOptions;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier;
@@ -50,8 +51,6 @@ public class WriteProposalHandler {
 
     private static final Logger log = LoggerFactory.getLogger(WriteProposalHandler.class);
     private static final int CAPABILITY_VALIDATOR_HOSTED_BINARY = 1 << 0;
-    private static final int CID_LOOKUP_ATTEMPTS = 5;
-    private static final long CID_LOOKUP_RETRY_MS = 200L;
 
     private final ServerContext context;
     private final LongSupplier clock;
@@ -107,6 +106,7 @@ public class WriteProposalHandler {
             String intentToken = null;
             String organization = null;  // ADR 037: Organization-scoped content paths
             String ipfsCid = null;        // ADR 016: Client-side IPFS upload - CID from client
+            jakarta.servlet.http.Part binaryPart = null;
             byte[] binaryBytes = null;
             String mimeType = null;
             String fileName = null;
@@ -127,11 +127,9 @@ public class WriteProposalHandler {
                         fileName = part.getSubmittedFileName();
                         mimeType = part.getContentType();
 
-                        // Read file bytes directly (no base64!)
-                        try (java.io.InputStream is = part.getInputStream()) {
-                            binaryBytes = is.readAllBytes();
-                        }
-                        log.debug("📎 Received file: {} ({} bytes, {})", fileName, binaryBytes.length, mimeType);
+                        // Streamed into the blob store later; the container spools large parts to disk.
+                        binaryPart = part;
+                        log.debug("📎 Received file: {} ({} bytes, {})", fileName, part.getSize(), mimeType);
 
                     } else {
                         // This is a form field
@@ -302,7 +300,8 @@ public class WriteProposalHandler {
             }
 
             boolean hasClientIpfsCid = ipfsCid != null;
-            boolean hasBinaryPayload = binaryBytes != null && binaryBytes.length > 0;
+            long binaryLength = binaryPart != null ? binaryPart.getSize() : binaryBytes != null ? binaryBytes.length : 0;
+            boolean hasBinaryPayload = binaryLength > 0;
             boolean hasIntentToken = intentToken != null;
             boolean usesValidatorHostedBinary = hasBinaryPayload || hasIntentToken;
 
@@ -493,45 +492,6 @@ public class WriteProposalHandler {
                     "For default client-side IPFS, upload to IPFS and pass ipfsCid instead.");
                 return;
             }
-            // ============================================================
-            // BINARY UPLOAD TO BLOBSTORE
-            // Supports: Multipart (preferred), base64 (legacy), ADR 020 (future)
-            // ============================================================
-            String blobId = null;
-
-            // 📦 EAGER BINARY UPLOAD: If binary bytes are available, upload to BlobStore
-            if (hasBinaryPayload && context.blobStore != null) {
-                try {
-                    log.debug("📦 Uploading binary to BlobStore ({} bytes, {})", binaryBytes.length, mimeType);
-
-                    // Upload to BlobStore (IPFS or other configured store)
-                    java.io.InputStream binaryStream = new java.io.ByteArrayInputStream(binaryBytes);
-                    blobId = context.blobStore.writeBlob(binaryStream);
-
-                    log.debug("✅ Binary uploaded to BlobStore: {} ({} bytes, mime: {})",
-                        blobId, binaryBytes.length, mimeType != null ? mimeType : "unknown");
-
-                    // The CID is decided here and carried in the proposal: apply never asks IPFS.
-                    ipfsCid = ingestedIpfsCid(blobId);
-                    if (ipfsCid != null && context.cidMappingService != null) {
-                        try {
-                            context.cidMappingService.registerMapping(blobId, ipfsCid);
-                            log.debug("📎 Registered CID mapping: {} → {}", blobId, ipfsCid);
-                        } catch (Exception e) {
-                            log.debug("Could not register CID mapping: {}", e.getMessage());
-                        }
-                    }
-
-                } catch (IllegalArgumentException e) {
-                    log.warn("⚠️  Invalid base64 binary data: {}", e.getMessage());
-                    // Continue without binary - don't fail the whole request
-                    blobId = null;
-                } catch (Exception e) {
-                    log.error("❌ Failed to upload binary to BlobStore: {}", e.getMessage());
-                    // Continue without binary - don't fail the whole request
-                    blobId = null;
-                }
-            }
 
             // Build wallet-scoped content path (with optional organization - ADR 037)
             String[] shardLevels = WalletPathUtil.getShardLevels(normalizedWallet);
@@ -565,6 +525,40 @@ public class WriteProposalHandler {
                 reject(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, null,
                     "Proposal queue unavailable. Clients must use queued verification.");
                 return;
+            }
+
+            // 📦 Store the binary only once the request is otherwise valid, and before it is queued.
+            String blobId = null;
+            if (hasBinaryPayload) {
+                if (context.blobStore == null) {
+                    reject(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "binary_upload_failed",
+                        "No blob store is available, so the write was not queued.");
+                    return;
+                }
+                try (java.io.InputStream binaryStream = binaryPart != null
+                        ? binaryPart.getInputStream() : new java.io.ByteArrayInputStream(binaryBytes)) {
+                    // Synchronous, so the bytes are in the store and their CID is known before queueing.
+                    blobId = context.blobStore.writeBlob(binaryStream,
+                        new BlobOptions().setUpload(BlobOptions.UploadType.SYNCHRONOUS));
+                } catch (Exception e) {
+                    log.error("❌ Failed to store binary ({} bytes): {}", binaryLength, e.getMessage(), e);
+                    reject(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "binary_upload_failed",
+                        "The binary could not be stored, so the write was not queued. Retry later.");
+                    return;
+                }
+                log.debug("✅ Binary stored: {} ({} bytes, mime: {})",
+                    blobId, binaryLength, mimeType != null ? mimeType : "unknown");
+
+                // The CID is decided here and carried in the proposal: apply never asks IPFS.
+                ipfsCid = ingestedIpfsCid(blobId);
+                if (ipfsCid != null && context.cidMappingService != null) {
+                    try {
+                        context.cidMappingService.registerMapping(blobId, ipfsCid);
+                        log.debug("📎 Registered CID mapping: {} → {}", blobId, ipfsCid);
+                    } catch (Exception e) {
+                        log.debug("Could not register CID mapping: {}", e.getMessage());
+                    }
+                }
             }
 
             // Queue proposal (waiting for Ethereum confirmation)
@@ -634,29 +628,15 @@ public class WriteProposalHandler {
     }
 
     /**
-     * The IPFS CID of a blob this node has just written, or null when the blob store is not IPFS or the CID is not
-     * known after a short wait (the caching data store may still be uploading).
+     * The IPFS CID of a blob this node has just stored synchronously, or null when the blob store is not IPFS or
+     * the blob is small enough to be inlined in its id.
      */
     private String ingestedIpfsCid(String blobId) {
-        if (!(context.blobStore instanceof DataStoreBlobStore)) {
-            return null;
+        if (context.blobStore instanceof DataStoreBlobStore
+                && ((DataStoreBlobStore) context.blobStore).getDataStore() instanceof IPFSDataStore) {
+            return ((IPFSDataStore) ((DataStoreBlobStore) context.blobStore).getDataStore()).getCID(blobId);
         }
-        Object dataStore = ((DataStoreBlobStore) context.blobStore).getDataStore();
-        if (!(dataStore instanceof IPFSDataStore)) {
-            return null;
-        }
-        try {
-            for (int attempt = 1; ; attempt++) {
-                String cid = ((IPFSDataStore) dataStore).getCID(blobId);
-                if (cid != null || attempt == CID_LOOKUP_ATTEMPTS) {
-                    return cid;
-                }
-                Thread.sleep(CID_LOOKUP_RETRY_MS);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
-        }
+        return null;
     }
 
 

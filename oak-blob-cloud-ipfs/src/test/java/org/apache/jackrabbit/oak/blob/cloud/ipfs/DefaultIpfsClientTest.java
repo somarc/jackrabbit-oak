@@ -24,6 +24,7 @@ import io.ipfs.api.NamedStreamable;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -37,6 +38,8 @@ import java.util.Set;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public class DefaultIpfsClientTest {
@@ -56,9 +59,9 @@ public class DefaultIpfsClientTest {
             assertEquals(1, nodes.size());
             assertEquals(CID, nodes.get(0).hash.toString());
 
-            client.pinAdd(CID);
-            assertArrayEquals(CONTENT, client.cat(CID));
-            assertEquals(Map.of("Size", CONTENT.length), client.blockStat(CID));
+            try (InputStream content = client.cat(CID)) {
+                assertArrayEquals(CONTENT, content.readAllBytes());
+            }
             client.pinRemove(CID);
             client.ensureDirectory("/oak/ipfs/metadata");
             client.writeFile("/oak/ipfs/metadata/payload.bin", CONTENT);
@@ -78,26 +81,19 @@ public class DefaultIpfsClientTest {
 
             RequestSnapshot addRequest = node.firstRequest("/api/v0/add");
             assertEquals("POST", addRequest.method);
-            assertTrue(addRequest.query.contains("stream-channels=true"));
+            assertTrue(addRequest.query.contains("cid-version=0"));
+            assertTrue(addRequest.query.contains("hash=sha2-256"));
+            assertTrue(addRequest.query.contains("chunker=size-262144"));
+            assertTrue(addRequest.query.contains("pin=true"));
             assertTrue(addRequest.contentType.startsWith("multipart/form-data; boundary="));
             String multipartBody = new String(addRequest.body, StandardCharsets.UTF_8);
             assertTrue(multipartBody.contains("payload.bin"));
             assertTrue(multipartBody.contains("payload-data"));
 
-            RequestSnapshot pinAddRequest = node.firstRequest("/api/v0/pin/add");
-            assertEquals("POST", pinAddRequest.method);
-            assertEquals("application/json", pinAddRequest.contentType);
-            assertTrue(pinAddRequest.query.contains("arg=" + CID));
-
             RequestSnapshot catRequest = node.firstRequest("/api/v0/cat");
             assertEquals("POST", catRequest.method);
             assertEquals("application/json", catRequest.contentType);
             assertTrue(catRequest.query.contains("arg=" + CID));
-
-            RequestSnapshot blockStatRequest = node.firstRequest("/api/v0/block/stat");
-            assertEquals("POST", blockStatRequest.method);
-            assertEquals("application/json", blockStatRequest.contentType);
-            assertTrue(blockStatRequest.query.contains("arg=" + CID));
 
             RequestSnapshot pinRemoveRequest = node.firstRequest("/api/v0/pin/rm");
             assertEquals("POST", pinRemoveRequest.method);
@@ -129,10 +125,55 @@ public class DefaultIpfsClientTest {
             assertEquals("POST", readRequest.method);
             assertTrue(readRequest.query.contains("arg=%2Foak%2Fipfs%2Fmetadata%2Fpayload.bin"));
 
-            RequestSnapshot rmRequest = node.firstRequest("/api/v0/files/rm");
+            RequestSnapshot rmRequest = node.lastRequest("/api/v0/files/rm");
             assertEquals("POST", rmRequest.method);
             assertTrue(rmRequest.query.contains("arg=%2Foak%2Fipfs%2Fmetadata%2Fpayload.bin"));
         }
+    }
+
+    @Test
+    public void testMissingPathsAreReportedAndOtherFailuresAreThrown() throws Exception {
+        try (FakeIpfsNode node = new FakeIpfsNode()) {
+            DefaultIpfsClient client = new DefaultIpfsClient(node.endpoint());
+
+            assertFalse(client.fileExists("/oak/ipfs/blob-index/missing"));
+            assertNull(client.readFile("/oak/ipfs/blob-index/missing"));
+            client.deleteFile("/oak/ipfs/blob-index/missing");
+
+            node.failAll = true;
+            assertThrowsNonNotFound(() -> client.fileExists("/oak/ipfs/blob-index/missing"));
+            assertThrowsNonNotFound(() -> client.readFile("/oak/ipfs/blob-index/missing"));
+            assertThrowsNonNotFound(() -> {
+                client.deleteFile("/oak/ipfs/blob-index/missing");
+                return null;
+            });
+        }
+    }
+
+    @Test
+    public void testCidV1IsAccepted() throws Exception {
+        try (FakeIpfsNode node = new FakeIpfsNode()) {
+            DefaultIpfsClient client = new DefaultIpfsClient(node.endpoint());
+            String cidV1 = "bafkreidgvpkjawlxz6sffxzwgooowe5yt7i6wsyg236mfoks77nywkptdq";
+
+            try (InputStream content = client.cat(cidV1)) {
+                assertArrayEquals(CONTENT, content.readAllBytes());
+            }
+            client.pinRemove(cidV1);
+
+            assertTrue(node.firstRequest("/api/v0/cat").query.contains("arg=" + cidV1));
+            assertTrue(node.firstRequest("/api/v0/pin/rm").query.contains("arg=" + cidV1));
+        }
+    }
+
+    private static void assertThrowsNonNotFound(java.util.concurrent.Callable<?> call) {
+        try {
+            call.call();
+        } catch (Exception e) {
+            assertFalse(DefaultIpfsClient.isNotFound(e));
+            return;
+        }
+        throw new AssertionError("Expected a failure that is not reported as a missing path");
     }
 
     private static final class FakeIpfsNode implements AutoCloseable {
@@ -141,6 +182,7 @@ public class DefaultIpfsClientTest {
         private final List<RequestSnapshot> requests = new ArrayList<>();
         private final Map<String, byte[]> files = new LinkedHashMap<>();
         private final Set<String> directories = new HashSet<>();
+        private volatile boolean failAll;
 
         private FakeIpfsNode() throws IOException {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -151,6 +193,15 @@ public class DefaultIpfsClientTest {
 
         private String endpoint() {
             return "/ip4/127.0.0.1/tcp/" + server.getAddress().getPort();
+        }
+
+        private RequestSnapshot lastRequest(String path) {
+            for (int i = requests.size() - 1; i >= 0; i--) {
+                if (requests.get(i).path.equals(path)) {
+                    return requests.get(i);
+                }
+            }
+            throw new AssertionError("No request recorded for path " + path);
         }
 
         private RequestSnapshot firstRequest(String path) {
@@ -174,6 +225,10 @@ public class DefaultIpfsClientTest {
             ));
 
             String path = exchange.getRequestURI().getPath();
+            if (failAll) {
+                respondError(exchange, "{\"Message\":\"context deadline exceeded\",\"Code\":0,\"Type\":\"error\"}");
+                return;
+            }
             if ("/api/v0/version".equals(path)) {
                 respondJson(exchange, "{\"Version\":\"" + VERSION + "\"}");
                 return;
@@ -182,16 +237,12 @@ public class DefaultIpfsClientTest {
                 respondJson(exchange, "{\"Name\":\"payload.bin\",\"Hash\":\"" + CID + "\",\"Size\":\"" + CONTENT.length + "\"}");
                 return;
             }
-            if ("/api/v0/pin/add".equals(path) || "/api/v0/pin/rm".equals(path)) {
+            if ("/api/v0/pin/rm".equals(path)) {
                 respondJson(exchange, "{\"Pins\":[\"" + CID + "\"]}");
                 return;
             }
             if ("/api/v0/cat".equals(path)) {
                 respondBytes(exchange, CONTENT, "application/octet-stream");
-                return;
-            }
-            if ("/api/v0/block/stat".equals(path)) {
-                respondJson(exchange, "{\"Size\":" + CONTENT.length + "}");
                 return;
             }
             if ("/api/v0/files/mkdir".equals(path)) {
@@ -225,8 +276,7 @@ public class DefaultIpfsClientTest {
                     respondJson(exchange, "{\"Size\":0}");
                     return;
                 }
-                exchange.sendResponseHeaders(404, -1);
-                exchange.close();
+                respondNotFound(exchange);
                 return;
             }
             if ("/api/v0/files/ls".equals(path)) {
@@ -247,18 +297,21 @@ public class DefaultIpfsClientTest {
                 String target = queryArg(exchange);
                 byte[] data = files.get(target);
                 if (data == null) {
-                    exchange.sendResponseHeaders(404, -1);
-                    exchange.close();
+                    respondNotFound(exchange);
                     return;
                 }
                 respondBytes(exchange, data, "application/octet-stream");
                 return;
             }
             if ("/api/v0/files/rm".equals(path)) {
-                files.remove(queryArg(exchange));
+                if (files.remove(queryArg(exchange)) == null) {
+                    respondNotFound(exchange);
+                    return;
+                }
                 respondJson(exchange, "{\"Message\":\"ok\"}");
                 return;
             }
+
 
             exchange.sendResponseHeaders(404, -1);
             exchange.close();
@@ -333,6 +386,18 @@ public class DefaultIpfsClientTest {
                 dataEnd = payload.length();
             }
             return payload.substring(dataStart, dataEnd).getBytes(StandardCharsets.ISO_8859_1);
+        }
+
+        private static void respondNotFound(HttpExchange exchange) throws IOException {
+            respondError(exchange, "{\"Message\":\"file does not exist\",\"Code\":0,\"Type\":\"error\"}");
+        }
+
+        private static void respondError(HttpExchange exchange, String body) throws IOException {
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(500, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
         }
 
         private static void respondJson(HttpExchange exchange, String body) throws IOException {

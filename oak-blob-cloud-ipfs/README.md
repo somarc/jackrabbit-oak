@@ -5,9 +5,9 @@ It implements Oak's DataStore backend and is built as part of this permanent
 [downstream distribution](../docs/FORK-MAIN-CONTRACT.md).
 
 Structured repository content stays in Oak Segment/TAR storage. Large binaries
-can be delegated to an IPFS endpoint. `IPFSBackend` uploads and pins data and
-persists Oak blob-ID-to-CID mappings and metadata in IPFS Files (MFS). A local
-cache accelerates those lookups; it is not the authoritative mapping store.
+can be delegated to an IPFS endpoint. `IPFSBackend` imports and pins data and
+keeps its durable state in IPFS Files (MFS). A local cache accelerates lookups;
+it is not the authoritative store.
 
 ## Compatibility and build
 
@@ -22,15 +22,44 @@ With Maven 3.6.1+ and JDK 17 or 21, from the repository root:
 mvn -B -ntp -pl oak-blob-cloud-ipfs -am verify -DskipITs
 ```
 
-The ordinary unit suite uses a client seam/mocks and does not require a live IPFS
-daemon. Live upload, pinning, retrieval, restart, and recovery evidence must be
-reported separately. CI does not publish this development artifact.
+Most unit tests use a client seam and need no IPFS daemon. `IPFSKuboTest` runs
+the backend, the DataStore and Oak's `MarkSweepGarbageCollector` against a real
+Kubo daemon (`ipfs/kubo:v0.43.1`) in Docker, and is skipped when Docker is not
+available. Live cluster evidence must still be reported separately. CI does not
+publish this development artifact.
 
 ## Integration
 
 - `IPFSDataStore`: the shared caching DataStore implementation.
 - `IPFSBackend`: IPFS operations and durable MFS metadata/mappings.
 - `IPFSDataStoreService`: OSGi configuration and Oak BlobStore registration.
+
+### Storage layout
+
+Under `ipfsFilesRoot`, keyed by the base64url-encoded Oak identifier (the
+SHA-256 of the content):
+
+| Path | Holds |
+|---|---|
+| `blob-index/<id>` | The CID. The format is unchanged, so older builds can still read it. |
+| `blob-attrs/<id>` | `length` and `lastModified`, which DataStore GC compares against. |
+| `content/<id>` | A link to the CID that keeps the blocks retained independently of pins. |
+| `metadata/<name>`, `metadata-attrs/<name>` | Shared DataStore metadata records and their write time. |
+
+Content is imported with CIDv0, SHA2-256 and 256 KiB chunks set explicitly, so
+a node's `Import.*` defaults for those cannot change the CIDs Oak records;
+DAG-layout settings such as maximum links are still the node's. CIDv1 strings
+are accepted wherever a CID is read. Reads are streamed and checked against the
+SHA-256 identifier, so a truncated or wrong payload fails instead of being
+cached. Writing an existing blob refreshes its `lastModified`, and a different
+length for the same identifier is rejected as a collision, as with S3 and Azure.
+
+Entries written before `blob-attrs` existed report their UnixFS file size and,
+the first time they are read, record the current time as their last-modified
+time. They therefore become eligible for GC one full safety window after the
+upgrade, never earlier. Failing to reach IPFS is reported as an error rather
+than as missing data, and enumerating records for GC fails instead of reporting
+an unknown length.
 
 Programmatic users wrap `IPFSDataStore` in Oak's `DataStoreBlobStore` before
 passing it to `FileStoreBuilder.withBlobStore(...)`; a DataStore is not itself a
@@ -58,16 +87,26 @@ running a campaign; the inherited cache defaults are not a laptop test budget.
 ## Current boundaries
 
 - Persistent mappings survive backend restarts **against the same IPFS
-  repository**. Independent IPFS repositories are not automatically coordinated.
+  repository**. Independent IPFS repositories are not automatically coordinated:
+  a blob can only be resolved through the repository and files root that stored it.
 - Pinning is local to the configured endpoint. There is no module-level guarantee
   of replica count or cluster-wide placement.
 - An accepted/committed Oak mutation is not by itself proof that arbitrary remote
   IPFS peers can retrieve its binary; verify retrieval and the payload checksum.
 - There is no automatic S3 fallback. IPFS availability and replication are
   operational responsibilities.
+- Records carry real lengths and write times. Against a real Kubo node,
+  `IPFSKuboTest` shows `MarkSweepGarbageCollector` deleting an unreferenced blob
+  older than its safety window while keeping referenced, fresh and legacy blobs.
+  Earlier builds reported the size of the root IPFS block and the backend start
+  time instead, which made every IPFS blob a GC candidate; do not run GC with
+  those builds, and do not run it while old and new builds share one files root.
 - Binary deletion and unpinning affect persistent data. Do not run garbage
   collection or delete campaigns against an existing repository without explicit
   approval and a recovery plan.
+- Content is not encrypted, and a Kubo node with default settings announces
+  what it stores to the public IPFS network. Use a private network
+  (`swarm.key`) for content that must stay private.
 
 These are capability boundaries of an actively maintained product module, not a
 claim of production readiness. See the

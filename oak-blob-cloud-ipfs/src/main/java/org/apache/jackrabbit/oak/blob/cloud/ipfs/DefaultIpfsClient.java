@@ -16,12 +16,14 @@
  */
 package org.apache.jackrabbit.oak.blob.cloud.ipfs;
 
+import io.ipfs.api.AddArgs;
 import io.ipfs.api.IPFS;
 import io.ipfs.api.MerkleNode;
 import io.ipfs.api.NamedStreamable;
 import io.ipfs.api.WriteFilesArgs;
-import io.ipfs.multihash.Multihash;
+import io.ipfs.cid.Cid;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +32,17 @@ import java.util.Map;
  * Production {@link IpfsClient} adapter backed by the Java IPFS HTTP client.
  */
 final class DefaultIpfsClient implements IpfsClient {
+
+    /**
+     * Kubo's historical defaults, pinned so a node's {@code Import.*} settings
+     * cannot silently change the CIDs Oak records.
+     */
+    static final AddArgs IMPORT_ARGS = AddArgs.Builder.newInstance()
+        .setCidVersion(0)
+        .setHash("sha2-256")
+        .setChunker("size-262144")
+        .setPin()
+        .build();
 
     private final IPFS ipfs;
 
@@ -50,34 +63,22 @@ final class DefaultIpfsClient implements IpfsClient {
 
     @Override
     public List<MerkleNode> add(NamedStreamable upload) throws Exception {
-        return ipfs.add(upload);
-    }
-
-    @Override
-    public void pinAdd(String cid) throws Exception {
-        ipfs.pin.add(Multihash.fromBase58(cid));
+        return ipfs.add(upload, IMPORT_ARGS);
     }
 
     @Override
     public void pinRemove(String cid) throws Exception {
-        ipfs.pin.rm(Multihash.fromBase58(cid));
+        ipfs.pin.rm(Cid.decode(cid));
     }
 
     @Override
-    public byte[] cat(String cid) throws Exception {
-        return ipfs.cat(Multihash.fromBase58(cid));
-    }
-
-    @Override
-    public Map<String, Object> blockStat(String cid) throws Exception {
-        return ipfs.block.stat(Multihash.fromBase58(cid));
+    public InputStream cat(String cid) throws Exception {
+        return ipfs.catStream(Cid.decode(cid));
     }
 
     @Override
     public void ensureDirectory(String path) throws Exception {
-        if (!fileExists(path)) {
-            ipfs.files.mkdir(path, true);
-        }
+        ipfs.files.mkdir(path, true);
     }
 
     @Override
@@ -92,16 +93,20 @@ final class DefaultIpfsClient implements IpfsClient {
 
     @Override
     public void linkCid(String cid, String path) throws Exception {
-        ensureDirectory(parent(path));
-        if (fileExists(path)) {
-            ipfs.files.rm(path, false, true);
-        }
+        deleteFile(path);
         ipfs.files.cp("/ipfs/" + cid, path, true);
     }
 
     @Override
     public byte[] readFile(String path) throws Exception {
-        return ipfs.files.read(path);
+        try {
+            return ipfs.files.read(path);
+        } catch (Exception e) {
+            if (isNotFound(e)) {
+                return null;
+            }
+            throw e;
+        }
     }
 
     @Override
@@ -110,7 +115,10 @@ final class DefaultIpfsClient implements IpfsClient {
             ipfs.files.stat(path);
             return true;
         } catch (Exception e) {
-            return false;
+            if (isNotFound(e)) {
+                return false;
+            }
+            throw e;
         }
     }
 
@@ -133,8 +141,12 @@ final class DefaultIpfsClient implements IpfsClient {
 
     @Override
     public void deleteFile(String path) throws Exception {
-        if (fileExists(path)) {
+        try {
             ipfs.files.rm(path, false, true);
+        } catch (Exception e) {
+            if (!isNotFound(e)) {
+                throw e;
+            }
         }
     }
 
@@ -147,16 +159,22 @@ final class DefaultIpfsClient implements IpfsClient {
         return Long.parseLong(String.valueOf(size));
     }
 
+    /**
+     * Kubo reports a missing MFS path as an error whose message contains
+     * "file does not exist"; everything else is a real failure.
+     */
+    static boolean isNotFound(Throwable e) {
+        for (Throwable current = e; current != null; current = current.getCause()) {
+            String message = current.getMessage();
+            if (message != null && message.contains("does not exist")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static String extractName(String path) {
         int separator = path.lastIndexOf('/');
         return separator >= 0 ? path.substring(separator + 1) : path;
-    }
-
-    private static String parent(String path) {
-        int separator = path.lastIndexOf('/');
-        if (separator <= 0) {
-            return "/";
-        }
-        return path.substring(0, separator);
     }
 }
