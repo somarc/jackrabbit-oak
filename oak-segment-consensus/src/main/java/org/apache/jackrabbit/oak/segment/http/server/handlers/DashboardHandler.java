@@ -541,6 +541,10 @@ public class DashboardHandler {
                 modeClass = "mode-mock";
                 modeLabel = "MOCK MODE";
                 break;
+            case LOCAL:
+                modeClass = "mode-sepolia";
+                modeLabel = "LOCAL CHAIN";
+                break;
             case SEPOLIA:
                 modeClass = "mode-sepolia";
                 modeLabel = "SEPOLIA";

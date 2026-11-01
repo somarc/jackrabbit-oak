@@ -19,7 +19,9 @@ package org.apache.jackrabbit.oak.segment.consensus.sharding;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 public class ShardingRuntimeConfigTest {
 
@@ -46,5 +48,30 @@ public class ShardingRuntimeConfigTest {
         assertEquals(ShardingRuntimeConfig.Ownership.UNCLAIMED, unclaimed.getOwnership());
         assertEquals("99", unclaimed.getL1Prefix());
         assertNull(unclaimed.getRedirectBaseUrl());
+    }
+
+    @Test
+    public void testConfigDigestIsCanonicalAcrossEquivalentSpecs() {
+        String digest = ShardingRuntimeConfig.fromSpecs(true, "00-1f,80",
+            "20-2f=http://cluster-b:8090;aa=http://cluster-c:8090").configDigest();
+
+        assertTrue(digest.matches("[0-9a-f]{64}"));
+        assertEquals(digest, ShardingRuntimeConfig.fromSpecs(true, " 80 , 00-1F ",
+            "AA=http://cluster-c:8090;20-2f=http://cluster-b:8090").configDigest());
+    }
+
+    @Test
+    public void testConfigDigestChangesWhenOwnershipOrRoutesChange() {
+        String digest = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://cluster-b:8190").configDigest();
+
+        assertNotEquals(digest, ShardingRuntimeConfig.fromSpecs(true, "00-7e", "80-ff=http://cluster-b:8190").configDigest());
+        assertNotEquals(digest, ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://cluster-c:8190").configDigest());
+        assertNotEquals(digest, ShardingRuntimeConfig.disabled().configDigest());
+    }
+
+    @Test
+    public void testDisabledConfigDigestIgnoresLeftoverSpecs() {
+        assertEquals(ShardingRuntimeConfig.disabled().configDigest(),
+            ShardingRuntimeConfig.fromSpecs(false, "00-7f", "80-ff=http://cluster-b:8190").configDigest());
     }
 }

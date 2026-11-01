@@ -34,7 +34,7 @@ import org.apache.jackrabbit.oak.segment.aws.AwsContext;
 import org.apache.jackrabbit.oak.segment.aws.AwsPersistence;
 import org.apache.jackrabbit.oak.segment.azure.AzurePersistence;
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
-import org.apache.jackrabbit.oak.segment.consensus.mount.ValidatorReadViewBuilder;
+import org.apache.jackrabbit.oak.segment.consensus.mount.FederatedReadView;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
@@ -67,10 +67,9 @@ final class StorageBackendFactory {
 
         FileStore fileStore = buildFileStore(storeDir, blobStore, config);
         NodeStore nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
-        ValidatorReadViewBuilder.BuildResult readView = new ValidatorReadViewBuilder()
-            .build(nodeStore, ShardingRuntimeConfig.load());
+        FederatedReadView readView = new FederatedReadView(nodeStore, ShardingRuntimeConfig.load());
         return new ServerStorageRuntime(fileStore, nodeStore,
-            readView.getReadViewNodeStore(), readView);
+            readView.nodeStore(), readView, readView.remoteMounts());
     }
 
     private static FileStore buildFileStore(File storeDir,

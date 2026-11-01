@@ -18,6 +18,9 @@ package org.apache.jackrabbit.oak.segment.http.server;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeaderDiscoveryService;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
+import org.apache.jackrabbit.oak.segment.consensus.federation.Charter;
+import org.apache.jackrabbit.oak.segment.consensus.federation.DirectorySnapshot;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
 import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.AeronApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.BinaryUploadHandler;
@@ -46,6 +49,7 @@ import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
+import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -243,10 +247,7 @@ public class RequestRouter implements AutoCloseable {
         });
 
         // Proposals and binary upload (ADR 020)
-        post("/v1/propose-write", (req, res, path) -> {
-            logShardRoute(req);
-            writeProposalHandler.handleProposeWrite(req, res);
-        });
+        post("/v1/propose-write", (req, res, path) -> writeProposalHandler.handleProposeWrite(req, res));
         post("/v1/propose-delete", (req, res, path) -> deleteProposalHandler.handleDeleteProposal(req, res));
         post("/v1/binary/declare-intent", (req, res, path) -> binaryUploadHandler.handleDeclareIntent(req, res));
         prefix("GET", "/v1/binary/check-intent/", (req, res, path) -> binaryUploadHandler.handleCheckIntent(req, res));
@@ -255,6 +256,7 @@ public class RequestRouter implements AutoCloseable {
         post("/v1/binary/complete-upload", (req, res, path) -> binaryUploadHandler.handleCompleteUpload(req, res));
 
         get("/v1/head", (req, res, path) -> handleHead(res));
+        get("/v1/federation", (req, res, path) -> handleFederation(res));
         get("/v1/consensus/status", (req, res, path) -> consensusStatusHandler.handleGetConsensusStatus(res));
         get("/v1/consensus/leader", (req, res, path) -> consensusStatusHandler.handleGetConsensusLeader(
             "true".equals(req.getParameter(LeaderDiscoveryService.LOCAL_ONLY_PARAM)), res));
@@ -586,28 +588,23 @@ public class RequestRouter implements AutoCloseable {
         return true;
     }
 
-    // Phase 1: shard routing is logged only; all requests still process locally.
-    private void logShardRoute(HttpServletRequest request) {
-        if (context.shardRouter == null) {
-            return;
-        }
-        String walletAddress = request.getParameter("walletAddress");
-        if (walletAddress == null || walletAddress.isEmpty()) {
-            walletAddress = request.getParameter("wallet");
-        }
-        if (walletAddress != null && !walletAddress.isEmpty()) {
-            try {
-                String leaderUrl = context.shardRouter.routeRequest(walletAddress);
-                if (leaderUrl != null) {
-                    log.debug("🔀 Shard routing: wallet {} → leader {}", walletAddress, leaderUrl);
-                }
-            } catch (Exception e) {
-                log.debug("Shard routing check failed: {}", e.getMessage());
-            }
-        }
+    // HEAD from AeronConsensusEngine (tracks latest HEAD correctly), FileStore as fallback.
+    /** The committed charter and directory with this member's federation status; public by design. */
+    private void handleFederation(HttpServletResponse response) throws IOException {
+        NodeState root = context.authoritativeRoot();
+        Charter charter = Charter.read(root);
+        DirectorySnapshot directory = DirectorySnapshot.read(root);
+        FederationCoordinator coordinator = context.federationCoordinator;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("charter", charter != null ? charter.toMap() : null);
+        payload.put("charterDigest", charter != null ? charter.digest() : null);
+        payload.put("clusterId", coordinator != null ? coordinator.getStatus().getClusterId() : null);
+        payload.put("directory", directory != null ? directory.toMap() : null);
+        payload.put("directoryDigest", directory != null ? directory.digest() : null);
+        payload.put("status", coordinator != null ? coordinator.getStatus().toMap() : null);
+        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
     }
 
-    // HEAD from AeronConsensusEngine (tracks latest HEAD correctly), FileStore as fallback.
     private void handleHead(HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
         response.setStatus(HttpServletResponse.SC_OK);

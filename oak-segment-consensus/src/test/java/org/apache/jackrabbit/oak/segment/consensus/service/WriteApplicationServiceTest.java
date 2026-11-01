@@ -23,6 +23,9 @@ import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.commons.json.JsopBuilder;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
+import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -40,6 +43,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doAnswer;
@@ -252,7 +256,7 @@ public class WriteApplicationServiceTest {
         WriteApplicationService service = new WriteApplicationService(
             fileStore,
             nodeStoreRef::get,
-            () -> (BlobStore) null,
+            () -> mock(BlobStore.class),
             flushService);
 
         AtomicReference<String> binaryEvent = new AtomicReference<>();
@@ -285,8 +289,26 @@ public class WriteApplicationServiceTest {
 
         assertEquals("new-head", newHead);
         assertEquals(PATH + "|" + WALLET + "|Acme|null|image/jpeg", binaryEvent.get());
-        assertEquals("deadbeef#123", stringProperty(contentNode(authoritativeStore, PATH), "jcr:data"));
+        assertEquals("deadbeef#123", stringProperty(contentNode(authoritativeStore, PATH), "jcr:blobId"));
         verify(flushService).onChangeApplied(any());
+    }
+
+    @Test
+    public void binaryWriteWithoutBlobStoreFailsAsNodeLocalInsteadOfWritingAStringReference() {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        WriteApplicationService service = new WriteApplicationService(
+            fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore, () -> (BlobStore) null, flushService);
+
+        RuntimeException failure = assertThrows(RuntimeException.class, () -> service.applyWrite(
+            WALLET, PATH, "file", "m", "0xsig", null, "deadbeef#123", "image/jpeg", null, "proposal-binary"));
+
+        assertFalse("a node-local failure must not be a deterministic rejection",
+            MutationRejectedException.isCauseOf(failure));
+        assertTrue(failure.getCause() instanceof IllegalStateException);
+        assertTrue(failure.getCause().getMessage(), failure.getCause().getMessage().contains("BlobStore unavailable"));
+        assertFalse("nothing may be committed", contentNode(nodeStore, PATH).exists());
+        verifyNoInteractions(flushService);
     }
 
     @Test
@@ -558,6 +580,32 @@ public class WriteApplicationServiceTest {
             fileStoreWithHeads("prev-head", "new-head"), nodeStore, null, mock(FileStoreFlushService.class));
         service.applyWrite(WALLET, PATH, "page", message, "0xsig", null, null, null, null, "proposal-1");
         return contentNode(nodeStore, PATH);
+    }
+
+    @Test
+    public void federatedWritesFollowTheCommittedDirectory() throws Exception {
+        MemoryNodeStore nodeStore = FederationFixtures.store(FederationFixtures.charterA(),
+            FederationFixtures.directory(1, FederationFixtures.entryA("ACTIVE"), FederationFixtures.entryB()));
+        WriteApplicationService service = new WriteApplicationService(
+            fileStoreWithHeads("prev-head", "new-head"), nodeStore, null, mock(FileStoreFlushService.class));
+        String delegated = FederationFixtures.pathUnder(FederationFixtures.NAMESPACE_A2);
+
+        service.applyWrite(FederationFixtures.WRITER_A, delegated, "page", "{\"t\":1}", "0xsig",
+            null, null, null, null, "p-1");
+        assertTrue(contentNode(nodeStore, delegated).exists());
+        NodeState walletNode = contentNode(nodeStore, WalletPathUtil.getShardRoot(FederationFixtures.NAMESPACE_A2));
+        assertEquals("the namespace, not the delegated writer, owns the wallet node",
+            FederationFixtures.NAMESPACE_A2, stringProperty(walletNode, "wallet"));
+
+        for (String[] attempt : new String[][] {
+            {FederationFixtures.NAMESPACE_B, FederationFixtures.pathUnder(FederationFixtures.NAMESPACE_B)},
+            {FederationFixtures.STRANGER, FederationFixtures.pathUnder(FederationFixtures.NAMESPACE_A)},
+            {FederationFixtures.STRANGER, FederationFixtures.pathUnder(FederationFixtures.STRANGER)},
+            {FederationFixtures.WRITER_A, "/oak-chain/aa/bb/cc/" + FederationFixtures.NAMESPACE_A + "/content/x"}}) {
+            assertThrows(MutationRejectedException.class, () -> service.applyWrite(attempt[0], attempt[1], "page",
+                "{\"t\":1}", "0xsig", null, null, null, null, "p-2"));
+            assertFalse(contentNode(nodeStore, attempt[1]).exists());
+        }
     }
 
     private static NodeState applyBinaryWrite(IPFSDataStore localIpfs, String proposalCid) {

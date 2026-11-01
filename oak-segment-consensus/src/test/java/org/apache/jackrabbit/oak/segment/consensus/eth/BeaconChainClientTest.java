@@ -76,6 +76,20 @@ public class BeaconChainClientTest {
     }
 
     @Test
+    public void testLocalModeUsesLocalClockWithoutBeaconHttp() {
+        BeaconChainClient client = new BeaconChainClient(BlockchainConfig.Mode.LOCAL, endpoint -> {
+            throw new AssertionError("Local mode must not fetch " + endpoint);
+        });
+
+        Map<String, Object> health = client.getHealthStatus();
+
+        assertEquals("local-clock", health.get("epochSource"));
+        assertEquals(false, health.get("externalNetworkPolling"));
+        assertFalse(String.valueOf(health.get("providers")).contains("beaconcha.in"));
+        assertTrue(client.getCachedCurrentEpoch() >= 2L);
+    }
+
+    @Test
     public void testUsesLatestEndpointFallbackWhenFinalizedEndpointFails() {
         AtomicInteger fetchCount = new AtomicInteger();
         BeaconChainClient client = new BeaconChainClient(BlockchainConfig.Mode.SEPOLIA, endpoint -> {

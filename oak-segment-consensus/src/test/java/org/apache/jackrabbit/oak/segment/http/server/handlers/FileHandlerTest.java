@@ -41,6 +41,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -106,16 +107,19 @@ public class FileHandlerTest {
     }
 
     @Test
-    public void testHandleSegmentHeadReturnsNotFoundWhenNoTarFilesExist() throws Exception {
+    public void testHandleSegmentHeadReturnsNotFoundWhenStoreLacksSegmentEvenIfTarFilesExist() throws Exception {
         Path storeDirectory = Files.createTempDirectory("segment-head-missing");
         try {
+            Files.write(storeDirectory.resolve("data00000a.tar"), new byte[] {1});
+            UUID uuid = UUID.randomUUID();
+            FileStore fileStore = fileStoreContaining(uuid, false);
             StringWriter body = new StringWriter();
             HttpServletResponse response = responseWithBody(body);
 
-            new FileHandler(mock(FileStore.class), storeDirectory)
-                .handleSegmentHead(response, UUID.randomUUID().toString());
+            new FileHandler(fileStore, storeDirectory).handleSegmentHead(response, uuid.toString());
 
             verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+            verify(response, never()).setHeader("X-Segment-Found", "true");
             assertTrue(body.toString().contains("Segment not found"));
         } finally {
             deleteRecursively(storeDirectory);
@@ -123,17 +127,33 @@ public class FileHandlerTest {
     }
 
     @Test
-    public void testHandleSegmentHeadReturnsOkWhenTarFileExists() throws Exception {
+    public void testHandleSegmentHeadReturnsOkOnlyWhenStoreContainsSegment() throws Exception {
         Path storeDirectory = Files.createTempDirectory("segment-head");
         try {
-            Files.write(storeDirectory.resolve("data00000a.tar"), new byte[] {1});
+            UUID uuid = UUID.randomUUID();
             HttpServletResponse response = mock(HttpServletResponse.class);
 
-            new FileHandler(mock(FileStore.class), storeDirectory)
-                .handleSegmentHead(response, UUID.randomUUID().toString());
+            new FileHandler(fileStoreContaining(uuid, true), storeDirectory)
+                .handleSegmentHead(response, uuid.toString());
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
             verify(response).setHeader("X-Segment-Found", "true");
+        } finally {
+            deleteRecursively(storeDirectory);
+        }
+    }
+
+    @Test
+    public void testHandleSegmentHeadRejectsInvalidUuid() throws Exception {
+        Path storeDirectory = Files.createTempDirectory("segment-head-invalid");
+        try {
+            StringWriter body = new StringWriter();
+            HttpServletResponse response = responseWithBody(body);
+
+            new FileHandler(mock(FileStore.class), storeDirectory).handleSegmentHead(response, "not-a-uuid");
+
+            verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            assertTrue(body.toString().contains("Invalid segment UUID"));
         } finally {
             deleteRecursively(storeDirectory);
         }
@@ -225,6 +245,16 @@ public class FileHandlerTest {
         when(request.getRemotePort()).thenReturn(remotePort);
         when(request.getHeader("User-Agent")).thenReturn(userAgent);
         return request;
+    }
+
+    private static FileStore fileStoreContaining(UUID uuid, boolean contains) {
+        FileStore fileStore = mock(FileStore.class);
+        SegmentIdProvider provider = mock(SegmentIdProvider.class);
+        SegmentId segmentId = mock(SegmentId.class);
+        when(fileStore.getSegmentIdProvider()).thenReturn(provider);
+        when(provider.newSegmentId(uuid.getMostSignificantBits(), uuid.getLeastSignificantBits())).thenReturn(segmentId);
+        when(fileStore.containsSegment(segmentId)).thenReturn(contains);
+        return fileStore;
     }
 
     private static HttpServletResponse responseWithBody(StringWriter body) throws Exception {

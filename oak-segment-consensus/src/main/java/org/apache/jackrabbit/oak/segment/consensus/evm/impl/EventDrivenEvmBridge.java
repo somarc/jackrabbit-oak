@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.evm.RpcDomainAttestor;
 import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -30,6 +31,7 @@ import org.web3j.protocol.Web3j;
 import org.web3j.protocol.core.DefaultBlockParameter;
 import org.web3j.protocol.core.DefaultBlockParameterName;
 import org.web3j.protocol.core.methods.request.EthFilter;
+import org.web3j.protocol.core.methods.response.EthBlock;
 import org.web3j.protocol.core.methods.response.EthLog;
 import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
 import org.web3j.protocol.core.methods.response.TransactionReceipt;
@@ -63,7 +65,9 @@ public class EventDrivenEvmBridge implements EvmBridge {
     private static final BigInteger EVENT_LOOKBACK_BLOCKS = BigInteger.valueOf(10_000L);
     
     private final String networkName;
+    private final BlockchainConfig.Mode mode;
     private final String contractAddress;
+    private final String expectedCodeHash;
     private final OakPaymentEventParser paymentEventParser;
     private final Web3jFactory web3jFactory;
     private final ReconnectScheduler reconnectScheduler;
@@ -95,6 +99,18 @@ public class EventDrivenEvmBridge implements EvmBridge {
      * @param contractAddress Contract address (0x...)
      */
     public EventDrivenEvmBridge(@NotNull String networkName, @NotNull String contractAddress) {
+        this(networkName, contractAddress, null);
+    }
+
+    /**
+     * Create event-driven EVM bridge whose RPC domain is attested at start.
+     *
+     * @param networkName blockchain mode key ("local", "sepolia", ...); fixes the expected chain id
+     * @param contractAddress Contract address (0x...)
+     * @param expectedCodeHash keccak256 of the contract's deployed code, or null if not pinned
+     */
+    public EventDrivenEvmBridge(@NotNull String networkName, @NotNull String contractAddress,
+                                @Nullable String expectedCodeHash) {
         this(
             networkName,
             contractAddress,
@@ -111,7 +127,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
                 }, threadName);
                 reconnectThread.setDaemon(true);
                 reconnectThread.start();
-            }
+            },
+            expectedCodeHash
         );
     }
 
@@ -120,8 +137,19 @@ public class EventDrivenEvmBridge implements EvmBridge {
                          @NotNull OakPaymentEventParser paymentEventParser,
                          @NotNull Web3jFactory web3jFactory,
                          @NotNull ReconnectScheduler reconnectScheduler) {
+        this(networkName, contractAddress, paymentEventParser, web3jFactory, reconnectScheduler, null);
+    }
+
+    EventDrivenEvmBridge(@NotNull String networkName,
+                         @NotNull String contractAddress,
+                         @NotNull OakPaymentEventParser paymentEventParser,
+                         @NotNull Web3jFactory web3jFactory,
+                         @NotNull ReconnectScheduler reconnectScheduler,
+                         @Nullable String expectedCodeHash) {
         this.networkName = networkName;
+        this.mode = BlockchainConfig.Mode.fromString(networkName);
         this.contractAddress = contractAddress;
+        this.expectedCodeHash = expectedCodeHash;
         this.paymentEventParser = paymentEventParser;
         this.web3jFactory = web3jFactory;
         this.reconnectScheduler = reconnectScheduler;
@@ -168,11 +196,20 @@ public class EventDrivenEvmBridge implements EvmBridge {
         return contractAddress;
     }
     
+    /**
+     * Connects, attests the RPC domain and subscribes. An RPC domain that cannot be attested (wrong chain,
+     * missing or different contract code, unreachable endpoint) fails the start.
+     */
     @Override
     public void start() {
         running = true;
         log.info("🌐 EventDrivenEvmBridge started (network: {}, contract: {})", networkName, contractAddress);
-        startWeb3jEventSubscription();
+        try {
+            startWeb3jEventSubscription();
+        } catch (RpcDomainAttestor.AttestationException e) {
+            stop();
+            throw e;
+        }
     }
     
     @Override
@@ -216,8 +253,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
         try {
             // Initialize Web3j client
             log.info("🔗 Connecting to Ethereum RPC: {}", paymentEventParser.maskRpcUrl(rpcUrl));
-            web3j = web3jFactory.create(rpcUrl);
-            
+            web3j = attestedClient(web3jFactory.create(rpcUrl));
+
             // Verify connection
             String clientVersion = web3j.web3ClientVersion().send().getWeb3ClientVersion();
             log.info("✅ Connected to Ethereum node: {}", clientVersion);
@@ -267,12 +304,31 @@ public class EventDrivenEvmBridge implements EvmBridge {
             
             log.info("✅ Web3j event subscription started");
             
+        } catch (RpcDomainAttestor.AttestationException e) {
+            log.error("❌ RPC domain attestation failed - payment verification stays disabled: {}", e.getMessage());
+            throw e;
         } catch (Exception e) {
             log.error("❌ Failed to start Web3j event subscription", e);
             log.warn("⚠️  Chain-backed verification is unavailable until the Web3j subscription can connect and recover");
         }
     }
     
+    /** Returns the client only once its chain and contract are attested; a failed client is never kept. */
+    private Web3j attestedClient(Web3j client) {
+        if (!mode.isChainBacked()) {
+            return client;
+        }
+        web3j = null;
+        try {
+            new RpcDomainAttestor(client, mode.getExpectedChainId()).attest(mode, contractAddress, expectedCodeHash);
+        } catch (RpcDomainAttestor.AttestationException e) {
+            client.shutdown();
+            throw e;
+        }
+        log.info("✅ RPC domain attested: chainId={}, contract={}", mode.getExpectedChainId(), contractAddress);
+        return client;
+    }
+
     /**
      * Schedule reconnection attempt after subscription failure.
      */
@@ -282,7 +338,11 @@ public class EventDrivenEvmBridge implements EvmBridge {
         reconnectScheduler.schedule("Web3j-Reconnect", 30000L, () -> {
             if (running) {
                 log.info("🔄 Attempting to reconnect Web3j subscription...");
-                startWeb3jEventSubscription();
+                try {
+                    startWeb3jEventSubscription();
+                } catch (RpcDomainAttestor.AttestationException e) {
+                    // Logged; the bridge stays unsubscribed rather than trust a substituted RPC domain.
+                }
             }
         });
     }
@@ -323,7 +383,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
                 org.web3j.protocol.core.methods.response.Log logEntry =
                     (org.web3j.protocol.core.methods.response.Log) value;
                 WriteAuthorizedEvent event = parsePaymentLog(logEntry);
-                if (event == null) {
+                if (event == null || !proposalId.equalsIgnoreCase(event.proposalId)) {
                     continue;
                 }
                 processWriteAuthorizedEvent(event);
@@ -409,10 +469,32 @@ public class EventDrivenEvmBridge implements EvmBridge {
         return refreshed;
     }
 
-    private int confirmationsForBlock(long blockNumber) {
+    /**
+     * Confirmations are counted against the latest block. In finalized-tag modes (mainnet) a payment has none
+     * until its block is at or below the {@code finalized} block.
+     */
+    int confirmationsForBlock(long blockNumber) {
         long latestBlock = resolveLatestBlockNumber();
+        if (mode.usesFinalizedTag() && !isFinalized(blockNumber)) {
+            return 0;
+        }
         long confirmations = latestBlock >= blockNumber ? (latestBlock - blockNumber) + 1L : 1L;
         return confirmations > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) confirmations;
+    }
+
+    private boolean isFinalized(long blockNumber) {
+        if (web3j == null) {
+            return false;
+        }
+        try {
+            EthBlock response = web3j.ethGetBlockByNumber(DefaultBlockParameterName.FINALIZED, false).send();
+            EthBlock.Block finalized = response != null && !response.hasError() ? response.getBlock() : null;
+            return finalized != null && finalized.getNumber() != null
+                && blockNumber <= finalized.getNumber().longValue();
+        } catch (Exception e) {
+            log.debug("Unable to read the finalized block; treating block {} as not finalized", blockNumber, e);
+            return false;
+        }
     }
 
     private long resolveLatestBlockNumber() {
@@ -427,8 +509,28 @@ public class EventDrivenEvmBridge implements EvmBridge {
         return currentBlock;
     }
 
+    /**
+     * The single gate for every log the bridge reads (subscription, log query, receipt): only mined, non-removed
+     * logs emitted by the configured contract are parsed.
+     */
     private WriteAuthorizedEvent parsePaymentLog(
             org.web3j.protocol.core.methods.response.Log ethLog) {
+        if (ethLog == null) {
+            return null;
+        }
+        if (ethLog.isRemoved()) {
+            log.warn("Skipping removed (reorged) payment log: tx={}", ethLog.getTransactionHash());
+            return null;
+        }
+        if (ethLog.getAddress() == null || !contractAddress.equalsIgnoreCase(ethLog.getAddress())) {
+            log.warn("Rejecting payment log from {} (configured contract {}): tx={}",
+                ethLog.getAddress(), contractAddress, ethLog.getTransactionHash());
+            return null;
+        }
+        if (ethLog.getBlockNumber() == null) {
+            log.debug("Skipping pending payment log without a block number: tx={}", ethLog.getTransactionHash());
+            return null;
+        }
         return paymentEventParser.parsePaymentLog(ethLog, currentBlock);
     }
     
@@ -446,7 +548,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
             event.txHash,
             event.blockNumber,
             event.payer,
-            contractAddress,
+            event.emitterAddress != null ? event.emitterAddress : contractAddress,
             event.proposalId,
             event.amount.toString(),
             event.paymentTier,
@@ -479,6 +581,8 @@ public class EventDrivenEvmBridge implements EvmBridge {
         public final PaymentProof.ProposalKind proposalKind;
         public final PaymentProof.PaymentToken paymentToken;
         public final int capabilityFlags;
+        /** Address of the contract that emitted the log; null for events that did not come from a log. */
+        public final String emitterAddress;
         
         public WriteAuthorizedEvent(
                 String proposalId,
@@ -491,6 +595,22 @@ public class EventDrivenEvmBridge implements EvmBridge {
                 PaymentProof.ProposalKind proposalKind,
                 PaymentProof.PaymentToken paymentToken,
                 int capabilityFlags) {
+            this(proposalId, payer, shardHash, amount, blockNumber, txHash, paymentTier, proposalKind, paymentToken,
+                capabilityFlags, null);
+        }
+
+        public WriteAuthorizedEvent(
+                String proposalId,
+                String payer,
+                String shardHash,
+                BigInteger amount,
+                long blockNumber,
+                String txHash,
+                ValidatorEarningsTracker.PaymentTier paymentTier,
+                PaymentProof.ProposalKind proposalKind,
+                PaymentProof.PaymentToken paymentToken,
+                int capabilityFlags,
+                String emitterAddress) {
             this.proposalId = proposalId;
             this.payer = payer;
             this.shardHash = shardHash;
@@ -501,6 +621,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
             this.proposalKind = proposalKind;
             this.paymentToken = paymentToken;
             this.capabilityFlags = capabilityFlags;
+            this.emitterAddress = emitterAddress;
         }
         
         @Override

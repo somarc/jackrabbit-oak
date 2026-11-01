@@ -23,9 +23,12 @@ import java.util.List;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationConfig;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
+import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
@@ -116,6 +119,7 @@ public final class AeronClusterBootstrapper {
 
         // Wire Aeron engine to HTTP server context
         httpServer.setAeronConsensusEngine(aeronEngine);
+        startFederationCoordinator(aeronEngine, httpServer.getContext());
 
         AeronClusterLauncher aeronClusterLauncher =
             new AeronClusterLaunchCoordinator().launch(nodeId, hostnamesList, clusterBaseDir, aeronEngine);
@@ -140,13 +144,36 @@ public final class AeronClusterBootstrapper {
 
         new AeronClusterRuntimeAttacher().attach(httpServer, aeronClusterLauncher);
 
-        try {
-            new ShardRouterInitializer().initialize(httpServer, selfUrl, peerUrls, logClusterStateDetails);
-        } catch (Exception e) {
-            log.warn("⚠️  WARNING: Failed to initialize Shard Router: {}", e.getMessage(), e);
-            log.warn("   -> Shard routing disabled, requests will route directly");
-        }
-
         return new AeronClusterStartupResult(aeronEngine, aeronClusterLauncher, hostnamesList, nodeId);
+    }
+
+    /**
+     * Runs the charter/directory coordinator beside the engine. Invalid federation settings fail startup:
+     * a member must not join a cluster expecting a charter it cannot express.
+     */
+    private static void startFederationCoordinator(AeronConsensusEngine aeronEngine, ServerContext context) {
+        FederationConfig config;
+        try {
+            config = FederationConfig.fromRuntime();
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("Invalid federation configuration: " + e.getMessage(), e);
+        }
+        FederationCoordinator coordinator = FederationCoordinator.fromConfig(config, context::authoritativeRoot,
+            new FederationCoordinator.Proposer() {
+                @Override
+                public boolean canPropose() {
+                    return aeronEngine.canProposeClusterCommands();
+                }
+
+                @Override
+                public boolean propose(int templateId, String json) {
+                    return aeronEngine.sendFederationThroughIngress(templateId, json);
+                }
+            });
+        context.federationCoordinator = coordinator;
+        coordinator.start(config.getPollMs());
+        log.info("Federation coordinator started (enterprise: {}, directory source: {})",
+            config.getCharter() != null ? config.getCharter().getEnterpriseId() : "none",
+            config.getDirectoryFile() != null ? config.getDirectoryFile() : "none");
     }
 }

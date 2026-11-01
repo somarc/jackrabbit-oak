@@ -954,14 +954,6 @@ public class OsgiConfigApiHandler {
             "Optional plain HTTP port when TLS is enabled",
             "http.port"));
         schema.add(schemaEntry(
-            "nodeRuntimeTuning.sharding_num_shards",
-            "int",
-            1,
-            "startup-only",
-            "guarded",
-            "Configured shard count",
-            "sharding.numShards|NUM_SHARDS"));
-        schema.add(schemaEntry(
             "nodeRuntimeTuning.mock_epoch_duration_seconds",
             "long",
             300L,
@@ -1129,8 +1121,6 @@ public class OsgiConfigApiHandler {
         values.put("ipfs_encryption_configured", RuntimeConfigValueResolver.hasText(
             RuntimeConfigValueResolver.readString("ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null)));
         values.put("http_port", readInt("http.port", 0));
-        values.put("sharding_num_shards",
-            RuntimeConfigValueResolver.readInt("sharding.numShards", "NUM_SHARDS", 1));
         values.put("mock_epoch_duration_seconds",
             RuntimeConfigValueResolver.readLongEnvFirst(
                 "oak.mock.epoch.duration.seconds",

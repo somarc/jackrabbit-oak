@@ -20,12 +20,14 @@ import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
+import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
@@ -791,6 +793,62 @@ public class WriteProposalHandlerTest {
         String second = paths.getAllValues().get(1);
         assertTrue(first, first.endsWith("/acme/content/page-1791134070821-3f2a9c1e"));
         assertTrue(second, second.endsWith("/acme/content/page-1791134070821-7b00aa11"));
+    }
+
+    @Test
+    public void aListedWriterWritesIntoItsEnterpriseNamespace() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        java.util.Map<String, Object> entry = FederationFixtures.entryA("ACTIVE");
+        entry.put("writers", java.util.List.of(VALID_WALLET));
+        context.setAuthoritativeNodeStore(FederationFixtures.store(FederationFixtures.charterA(),
+            FederationFixtures.directory(1, entry)));
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        WriteProposalHandler handler = new WriteProposalHandler(context, () -> 1791134070821L);
+
+        HttpServletRequest request = request();
+        when(request.getParameter("namespace")).thenReturn(FederationFixtures.NAMESPACE_A2.toUpperCase().replace("0X", "0x"));
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("organization")).thenReturn("acme");
+        when(request.getParameter("message")).thenReturn("hello");
+        when(request.getParameter("contentType")).thenReturn("page");
+        HttpServletResponse response = responseWithBody(new StringWriter());
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
+        ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
+        verify(queueManager).queueProposal(anyString(), anyString(), eq(VALID_WALLET), path.capture(), anyString(),
+            anyString(), anyString(), nullable(String.class), nullable(String.class), anyString(),
+            nullable(String.class));
+        assertTrue(path.getValue(), path.getValue().startsWith(
+            WalletPathUtil.getContentPath(FederationFixtures.NAMESPACE_A2, "acme") + "/page-"));
+    }
+
+    @Test
+    public void anotherWalletsNamespaceNeedsAFederationDirectory() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        WriteProposalHandler handler = new WriteProposalHandler(context, () -> 1791134070821L);
+        for (String[] attempt : new String[][] {
+            {FederationFixtures.NAMESPACE_A, "namespace_requires_federation"}, {"0x1234", "invalid_namespace"}}) {
+            HttpServletRequest request = request();
+            when(request.getParameter("namespace")).thenReturn(attempt[0]);
+            when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+            StringWriter body = new StringWriter();
+            HttpServletResponse response = responseWithBody(body);
+            handler.handleProposeWrite(request, response);
+            verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+            assertTrue(body.toString(), body.toString().contains(attempt[1]));
+        }
+        verify(context.proposalQueueManager, times(0)).queueProposal(anyString(), anyString(), anyString(),
+            anyString(), anyString(), anyString(), anyString(), nullable(String.class), nullable(String.class),
+            anyString(), nullable(String.class));
     }
 
     private static void proposeWrite(WriteProposalHandler handler, String proposalId) throws Exception {

@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.api.Type;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
@@ -59,6 +60,9 @@ public class WalletQueryHandler {
             response.setContentType("application/json");
             Object payload;
             if (wallet != null && !wallet.isEmpty()) {
+                if (RemoteMountGate.rejectIfWalletUnavailable(context, response, wallet)) {
+                    return;
+                }
                 // Single wallet stats
                 payload = queryWalletNode(wallet);
             } else {
@@ -87,6 +91,9 @@ public class WalletQueryHandler {
         }
 
         try {
+            if (RemoteMountGate.rejectIfWalletUnavailable(context, response, wallet)) {
+                return;
+            }
             response.setContentType("application/json");
             response.getWriter().write(JsonOutputUtil.toJson(queryWalletContent(wallet)));
 
@@ -184,6 +191,16 @@ public class WalletQueryHandler {
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("wallets", wallets);
+        List<Map<String, Object>> unavailable = new ArrayList<>();
+        for (RemoteMountStatus status : context.remoteMounts.statuses()) {
+            if (!status.available()) {
+                unavailable.add(status.toMap());
+            }
+        }
+        if (!unavailable.isEmpty()) {
+            out.put("partial", true);
+            out.put("unavailableRemoteMounts", unavailable);
+        }
         return out;
     }
 

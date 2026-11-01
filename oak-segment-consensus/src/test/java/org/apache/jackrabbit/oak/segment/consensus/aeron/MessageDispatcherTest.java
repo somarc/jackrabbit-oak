@@ -18,7 +18,9 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.AgentTerminationException;
+import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
+import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.junit.Test;
 import org.mockito.Mockito;
 
@@ -740,6 +742,61 @@ public class MessageDispatcherTest {
                 assertSame(termination, e);
             }
         }
+    }
+
+    @Test
+    public void federationCommandsReachTheCallbackWithTheirLogPosition() {
+        List<String> calls = new ArrayList<>();
+        MessageDispatcher dispatcher = new MessageDispatcher();
+        dispatcher.setTermProvider(() -> 4L);
+        dispatcher.setFederationCallback(new MessageDispatcher.FederationCallback() {
+            @Override
+            public void applyCharter(java.util.Map<String, Object> command, AppliedLogPosition position) {
+                calls.add("charter " + command.keySet() + " " + position);
+            }
+
+            @Override
+            public void applyDirectory(java.util.Map<String, Object> command, AppliedLogPosition position) {
+                calls.add("directory " + command.keySet() + " " + position);
+            }
+        });
+
+        assertTrue(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_CHARTER, "{\"charter\":{}}", 640));
+        assertTrue(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DIRECTORY_UPDATE, "{\"directory\":{}}", 960));
+        assertEquals(List.of("charter [charter] position=640 item=0 term=4",
+            "directory [directory] position=960 item=0 term=4"), calls);
+
+        dispatcher.setReplayFloor(new AppliedLogPosition(960, 0, 4));
+        assertTrue(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DIRECTORY_UPDATE, "{\"directory\":{}}", 960));
+        assertEquals(2, calls.size());
+    }
+
+    @Test
+    public void federationRejectionsSkipTheEntryAndNodeLocalFailuresStopTheMember() {
+        MessageDispatcher dispatcher = new MessageDispatcher();
+        assertThrows(MessageDispatcher.ReplicatedApplyException.class,
+            () -> dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_CHARTER, "{}", 64));
+        dispatcher.setFederationCallback(new MessageDispatcher.FederationCallback() {
+            @Override
+            public void applyCharter(java.util.Map<String, Object> command, AppliedLogPosition position) {
+                throw new MutationRejectedException("charter already committed");
+            }
+
+            @Override
+            public void applyDirectory(java.util.Map<String, Object> command, AppliedLogPosition position) {
+                throw new IllegalStateException("disk full");
+            }
+        });
+        assertFalse(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_CHARTER, "{}", 64));
+        assertFalse(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_CHARTER, "not json", 64));
+        assertThrows(MessageDispatcher.ReplicatedApplyException.class,
+            () -> dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_DIRECTORY_UPDATE, "{}", 64));
+    }
+
+    private boolean dispatchAt(MessageDispatcher dispatcher, int templateId, String payload, long logPosition) {
+        DirectBuffer buffer = bufferFor(buildMessageBytes(templateId, payload));
+        return dispatcher.dispatch(System.currentTimeMillis(), logPosition, buffer, 0,
+            SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length);
     }
 
     private boolean dispatch(MessageDispatcher dispatcher, int templateId, String payload) {

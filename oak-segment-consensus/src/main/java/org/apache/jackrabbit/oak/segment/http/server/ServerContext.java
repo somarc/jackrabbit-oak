@@ -27,7 +27,8 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
@@ -65,7 +66,6 @@ public class ServerContext {
     public volatile ProposalQueueManagerOptimized proposalQueueManager;
     public volatile FragmentationTracker fragmentationTracker;
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
-    public volatile ShardRouter shardRouter; // Optional - for sharded routing
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager; // ADR 020 lazy binary upload
     public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
     public volatile org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore; // For eager binary uploads
@@ -74,6 +74,8 @@ public class ServerContext {
     public volatile String clusterWalletAddress = "0x0000000000000000000000000000000000000000"; // Cluster payment wallet (ADR 046)
     public volatile EventBroadcaster eventBroadcaster; // SSE event broadcasting (ADR 036)
     public volatile ShardingRuntimeConfig shardingRuntimeConfig = ShardingRuntimeConfig.disabled();
+    public volatile RemoteMounts remoteMounts = RemoteMounts.NONE; // Remote read-only mounts in nodeStore
+    public volatile FederationCoordinator federationCoordinator; // Charter/directory status; null until Aeron starts
     
     /**
      * @return the IPFS DataStore behind {@link #blobStore}, or {@code null}
@@ -250,11 +252,6 @@ public class ServerContext {
         log.info("✅ GC Proposal Manager initialized");
     }
     
-    public void setShardRouter(ShardRouter shardRouter) {
-        this.shardRouter = shardRouter;
-        log.info("✅ Shard Router initialized");
-    }
-    
     public void setUploadSessionManager(org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager) {
         this.uploadSessionManager = uploadSessionManager;
         log.info("✅ Upload Session Manager initialized (ADR 020 lazy binary upload)");
@@ -285,6 +282,12 @@ public class ServerContext {
         if (loaded > 0) {
             log.info("✅ Restored {} durable client registrations", loaded);
         }
+    }
+
+    /** The local committed root, never the composite read view; null before storage is wired. */
+    public NodeState authoritativeRoot() {
+        NodeStore store = authoritativeNodeStore != null ? authoritativeNodeStore : nodeStore;
+        return store != null ? store.getRoot() : null;
     }
 
     private synchronized ClientRegistration recoverClientRegistrationFromWalletContent(String normalizedWallet) {

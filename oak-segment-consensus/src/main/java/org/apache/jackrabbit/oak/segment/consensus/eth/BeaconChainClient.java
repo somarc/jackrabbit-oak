@@ -72,7 +72,7 @@ public class BeaconChainClient {
 
     /** Package-private: used by tests to inject a mock {@link HttpFetcher}. */
     BeaconChainClient(BlockchainConfig.Mode mode, HttpFetcher fetcher) {
-        this(mode, mode == BlockchainConfig.Mode.MOCK
+        this(mode, mode.usesLocalClockEpochs()
             ? buildMockProvider()
             : new FallbackBeaconChainProvider(
                 new CircuitBreakingBeaconProvider(
@@ -108,7 +108,7 @@ public class BeaconChainClient {
         }, POLL_INTERVAL_MS, POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
         log.info("Epoch refresh scheduled (interval={}s, providers={}, externalNetworkPolling={})",
-            POLL_INTERVAL_MS / 1000, provider.getProviderNames(), networkMode != BlockchainConfig.Mode.MOCK);
+            POLL_INTERVAL_MS / 1000, provider.getProviderNames(), !networkMode.usesLocalClockEpochs());
     }
 
     public void stopBackgroundPolling() {
@@ -185,8 +185,8 @@ public class BeaconChainClient {
         h.put("timeSinceUpdateMs", System.currentTimeMillis() - lastUpdateTime);
         h.put("lastError",         lastError);
         h.put("chainContext",      networkMode == BlockchainConfig.Mode.MAINNET ? "mainnet" : "sepolia");
-        h.put("epochSource",       networkMode == BlockchainConfig.Mode.MOCK ? "local-clock" : "beacon-provider");
-        h.put("externalNetworkPolling", networkMode != BlockchainConfig.Mode.MOCK);
+        h.put("epochSource",       networkMode.usesLocalClockEpochs() ? "local-clock" : "beacon-provider");
+        h.put("externalNetworkPolling", !networkMode.usesLocalClockEpochs());
         return h;
     }
 
@@ -199,7 +199,7 @@ public class BeaconChainClient {
     }
 
     private static FallbackBeaconChainProvider buildDefaultProvider(BlockchainConfig.Mode mode) {
-        if (mode == BlockchainConfig.Mode.MOCK) {
+        if (mode.usesLocalClockEpochs()) {
             return buildMockProvider();
         }
         return FallbackBeaconChainProvider.buildDefault(

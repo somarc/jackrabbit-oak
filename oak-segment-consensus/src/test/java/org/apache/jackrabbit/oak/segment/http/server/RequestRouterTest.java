@@ -22,6 +22,8 @@ import org.apache.jackrabbit.oak.segment.Segment;
 import org.apache.jackrabbit.oak.segment.SegmentId;
 import org.apache.jackrabbit.oak.segment.SegmentIdProvider;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
@@ -40,7 +42,6 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOpt
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
@@ -1584,6 +1585,52 @@ public class RequestRouterTest {
     }
 
     @Test
+    public void federationRouteServesTheCommittedCharterAndDirectory() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.setAuthoritativeNodeStore(FederationFixtures.store(FederationFixtures.charterA(),
+                FederationFixtures.directory(4, FederationFixtures.entryA("ACTIVE"), FederationFixtures.entryB())));
+            FederationCoordinator coordinator = new FederationCoordinator(null, null, context::authoritativeRoot,
+                new FederationCoordinator.Proposer() {
+                    @Override
+                    public boolean canPropose() {
+                        return false;
+                    }
+
+                    @Override
+                    public boolean propose(int templateId, String json) {
+                        return false;
+                    }
+                }, System::currentTimeMillis, 1000L);
+            coordinator.tick();
+            context.federationCoordinator = coordinator;
+            RequestRouter router = new RequestRouter(context);
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request("GET", "/v1/federation"), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            String json = body.toString();
+            assertTrue(json, json.contains(FederationFixtures.charterA().digest()));
+            assertTrue(json, json.contains(FederationFixtures.charterA().clusterId(FederationFixtures.GENESIS_DIGEST)));
+            assertTrue(json, json.contains("\"directoryEpoch\":4"));
+            assertTrue(json, json.contains(FederationFixtures.NAMESPACE_B));
+        });
+    }
+
+    @Test
+    public void federationRouteReportsAnUnfederatedCluster() throws Exception {
+        withRoutingProperties(true, () -> {
+            RequestRouter router = new RequestRouter(newContext());
+            HttpServletResponse response = responseWithBody();
+            router.route(request("GET", "/v1/federation"), response);
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString(), body.toString().contains("\"charter\":null"));
+            assertTrue(body.toString(), body.toString().contains("\"directory\":null"));
+        });
+    }
+
+    @Test
     public void testHeadRouteFallsBackToFileStoreHeadWhenAeronStateMissing() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContextWithHead("fallback-file-head");
@@ -2178,26 +2225,6 @@ public class RequestRouterTest {
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"limit\":100"));
             assertTrue(body.toString().contains("\"memberUrl\":\"http://validator-2:8090\""));
-        });
-    }
-
-    @Test
-    public void testProposeWriteRouteUsesWalletFallbackForShardRouting() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            ShardRouter shardRouter = mock(ShardRouter.class);
-            when(shardRouter.routeRequest("0xwallet")).thenReturn("http://validator-7:8090");
-            context.shardRouter = shardRouter;
-
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/v1/propose-write");
-            when(request.getParameter("walletAddress")).thenReturn(null);
-            when(request.getParameter("wallet")).thenReturn("0xwallet");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(shardRouter).routeRequest("0xwallet");
         });
     }
 

@@ -174,7 +174,11 @@ the environment variable wins. Settings listed without an environment variable a
 | `ipfs.api.authorization` | `IPFS_API_AUTHORIZATION` | unset | `Authorization` header for the Kubo RPC API, for example `Bearer <token>` matching Kubo's `API.Authorizations`. Set it through the environment variable: a `-D` value is visible in process listings. The value is never reported. Use an `https://` endpoint or a `/https` multiaddr to send it over TLS. |
 | `ipfs.api.connect-timeout-ms`, `ipfs.api.request-timeout-ms`, `ipfs.api.max-attempts` | `IPFS_API_CONNECT_TIMEOUT_MS`, `IPFS_API_REQUEST_TIMEOUT_MS`, `IPFS_API_MAX_ATTEMPTS` | `10000`, `60000`, `3` | Kubo RPC timeouts and attempts. Transport failures and HTTP 502/503/504 are retried with backoff; uploads get one extra second per MiB. |
 | `oak.segment.backend` | `OAK_SEGMENT_BACKEND` | `local` | `local`, `azure` or `aws`. Cloud backends need further settings; see [`StorageBackendConfig`](src/main/java/org/apache/jackrabbit/oak/segment/consensus/config/StorageBackendConfig.java). |
-| `oak.blockchain.mode` | `OAK_BLOCKCHAIN_MODE` | `mock` | `mock` simulates payments. `sepolia` needs `OAK_BLOCKCHAIN_RPC_URL`. `mainnet` is rejected in this version. Unknown values fall back to `mock`. |
+| `oak.blockchain.mode` | `OAK_BLOCKCHAIN_MODE` | `mock` | `mock` simulates payments. `local` (chain id 31337, epochs from the local clock) and `sepolia` (chain id 11155111) verify payments on chain and need the RPC URL and contract address. `mainnet` (chain id 1) is rejected in this version. Any other value fails startup. Checked before the store, HTTP or Aeron start. |
+| `oak.blockchain.rpcUrl` | `OAK_BLOCKCHAIN_RPC_URL` | unset | Absolute `http(s)`/`ws(s)` URL with a host. At bridge start `eth_chainId` must equal the mode's chain id; a mismatch or an unreachable endpoint fails startup. |
+| `oak.blockchain.contractAddress` | `OAK_BLOCKCHAIN_CONTRACT_ADDRESS` | example address | Deployed Oak payment contract. The zero and example addresses are rejected; the address must hold code. Only logs emitted by this address are accepted. |
+| `oak.blockchain.contract.codehash` | `OAK_BLOCKCHAIN_CONTRACT_CODEHASH` | unset | keccak256 of the contract's deployed code (`eth_getCode`). A mismatch fails startup. Optional for `local` and `sepolia` (a warning prints the observed hash); required for `mainnet`. |
+| `oak.proposal.confirmation.required` | | `0` (mode default) | Payment confirmations, counted against the latest block. `0` uses the mode default: `local` 1, `sepolia` 3; `mainnet` counts only blocks at or below the `finalized` tag. |
 | `oak.consensus.safety.enabled` | | `true` | `false` stops the validator from starting; genesis v2 requires the safety invariants on every member. |
 | `aeron.rcv.initial.window.length`, `aeron.socket.so_rcvbuf` | | Aeron defaults | If you set `so_rcvbuf`, make it at least the window length, or Aeron refuses to start. |
 
@@ -241,6 +245,60 @@ badges.
 Health endpoints are observations, not correctness proofs. Validators also serve
 their segment files (`/segments/`, `/journal.log`, `/manifest`) for read-only
 mounts; replication itself happens only through the Aeron log.
+
+With sharding enabled, wallet prefixes owned by another cluster are read through
+a read-only mount of one of its validators. While that mount is unavailable,
+wallet and explorer reads under its prefixes answer `503 mount_unavailable`
+rather than "not found", and the all-wallets listing is marked `partial`.
+`/health` reports each mount under `sharding.remoteMounts` (connected,
+available, circuit, revision, last refresh, last error) together with
+`sharding.configDigest`, which is identical on validators configured alike.
+
+An enterprise cluster commits its charter and federation directory through
+consensus. Set `oak.federation.enterpriseId` (`OAK_FEDERATION_ENTERPRISE_ID`, a
+0x-prefixed 32-byte id) on every member; the leader then proposes the charter
+once after genesis, and every member reports in `/health` and the public
+`GET /v1/federation` whether its configuration still matches the committed one.
+A member whose settings differ refuses writes (`503 charter_mismatch`).
+
+| Property / variable | Meaning |
+|---|---|
+| `oak.federation.mode` / `OAK_FEDERATION_MODE` | `mock`, `local`, `sepolia` or `mainnet`; defaults to the blockchain mode |
+| `oak.federation.chainId` / `OAK_FEDERATION_CHAIN_ID` | defaults per mode: 0, 31337, 11155111, 1 (sepolia and mainnet are enforced) |
+| `oak.federation.registry` / `OAK_FEDERATION_REGISTRY` | the EnterpriseRegistry address, or `static` (mock and local only) |
+| `oak.federation.rpcUrl` / `OAK_FEDERATION_RPC_URL` | RPC endpoint for the registry; falls back to `oak.blockchain.rpcUrl` |
+| `oak.federation.registry.codehash` / `OAK_FEDERATION_REGISTRY_CODEHASH` | keccak256 of the registry's runtime code; required on mainnet |
+| `oak.federation.directoryFile` / `OAK_FEDERATION_DIRECTORY_FILE` | static directory JSON (`directoryEpoch`, `entries`) for a `static` registry |
+| `oak.federation.pollMs` | how often the directory is checked (default 10000) |
+
+The leader reads a registry at the finalized block (the latest on a `local`
+chain), after checking that the RPC reports the charter's chain and the address
+holds the expected code, and proposes each newer `directoryEpoch` chained after
+the committed snapshot. Once a directory is committed, writes are decided from
+it at ingress and again at replicated apply: a namespace may be written by its
+own wallet or by its enterprise's listed writers (`namespace` request parameter),
+only on the cluster of the enterprise that owns it, and only while that
+enterprise is `ACTIVE`; other clusters' namespaces answer `307 wrong_cluster`.
+
+Once a federation directory is committed, it replaces those static routes: each
+namespace of every `ACTIVE` enterprise other than the local charter's is mounted
+read-only at its address root (`/oak-chain/XX/YY/ZZ/0x<address>`); local and
+unclaimed paths stay on the local store. Reads use the first of the enterprise's
+listed endpoints whose `GET /v1/federation` reports the entry's `enterpriseId`
+(and `clusterId`, when the entry pins one), whose breaker is closed and that is
+connected, and fall over in order; an endpoint is checked again after its breaker
+resets. The validator polls the committed directory every `oak.federation.pollMs`,
+rebuilds the read view when it changes and swaps it in place. `/health` then
+reports `sharding.mountSource: directory`, the `directoryEpoch`, and per mount
+the `enterpriseId`, `namespaces`, `endpoints`, `activeEndpoint` and `verified`.
+
+Each remote enterprise is one Oak mount listing all of its namespace roots.
+Oak's `SimpleMountInfoProvider` resolves a path by scanning every mount, and a
+composite root reads every mount's root, so both costs grow with the number of
+remote enterprises; within one mount the lookup is a sorted-set search over its
+namespace roots. Listing the children of a node above a mounted namespace (`/`,
+`/oak-chain` or a shard level) still scans every mounted namespace root once
+(`MountInfo.isDirectlyUnder`), linear in the total number of remote namespaces.
 
 ## Build and test
 

@@ -103,6 +103,15 @@ public class MessageDispatcher {
     }
 
     /**
+     * Applies the replicated federation commands; a rejection throws {@link MutationRejectedException}.
+     */
+    public interface FederationCallback {
+        void applyCharter(Map<String, Object> command, AppliedLogPosition position);
+
+        void applyDirectory(Map<String, Object> command, AppliedLogPosition position);
+    }
+
+    /**
      * Callback interface for per-member durability reports (ADR 026).
      */
     public interface DurabilityCallback {
@@ -126,6 +135,7 @@ public class MessageDispatcher {
     private GCCallback gcCallback;
     private DurabilityCallback durabilityCallback;
     private TransactionCallback transactionCallback;
+    private FederationCallback federationCallback;
     private LongSupplier termProvider;
     private AppliedLogPosition replayFloor = AppliedLogPosition.NONE;
     private static final long STALE_TERM_LOG_INTERVAL_MS = 5000;
@@ -183,6 +193,10 @@ public class MessageDispatcher {
         log.info("✅ MessageDispatcher durability callback set");
     }
 
+    public void setFederationCallback(FederationCallback federationCallback) {
+        this.federationCallback = federationCallback;
+    }
+
     public void setTransactionCallback(TransactionCallback transactionCallback) {
         this.transactionCallback = transactionCallback;
         log.info("✅ MessageDispatcher transaction callback set");
@@ -217,8 +231,8 @@ public class MessageDispatcher {
     /**
      * Sets the applied watermark read from the Oak store at startup. Oak mutations of log entries at or below
      * it are already in the store, so replay skips them: WRITE_PROPOSAL, DELETE_PROPOSAL, WRITE_BATCH items and
-     * GENESIS_PROPOSAL, which record the watermark in their own merge. Entries that rebuild in-memory or derived
-     * state are always processed: QUEUE_SEGMENT, SEGMENT_PERSISTED, ACK_SEGMENT_PERSISTED, GC_PROPOSAL, GC_VOTE,
+     * GENESIS_PROPOSAL, CHARTER and DIRECTORY_UPDATE, which record the watermark in their own merge. Entries
+     * that rebuild in-memory or derived state are always processed: QUEUE_SEGMENT, SEGMENT_PERSISTED, ACK_SEGMENT_PERSISTED, GC_PROPOSAL, GC_VOTE,
      * GC_EXECUTE (no Oak merge: FileStore cleanup plus in-memory proposal state) and the transaction commands.
      */
     public void setReplayFloor(AppliedLogPosition floor) {
@@ -321,6 +335,14 @@ public class MessageDispatcher {
             case SimpleMessageHeader.TEMPLATE_ID_ABORT_TRANSACTION:
                 return handleControl(transactionCallback, "Transaction", "abort transaction", buffer, payloadOffset,
                     payloadLength, this::applyAbortTransaction);
+
+            case SimpleMessageHeader.TEMPLATE_ID_CHARTER:
+                return handleFederation(logPosition, buffer, payloadOffset, payloadLength, "charter",
+                    (callback, json, entry) -> callback.applyCharter(json, entry));
+
+            case SimpleMessageHeader.TEMPLATE_ID_DIRECTORY_UPDATE:
+                return handleFederation(logPosition, buffer, payloadOffset, payloadLength, "directory update",
+                    (callback, json, entry) -> callback.applyDirectory(json, entry));
 
 
             default:
@@ -483,6 +505,32 @@ public class MessageDispatcher {
         log.info("🗑️  Applying delete: wallet={}, path={}", walletAddress, path);
         try {
             requireWriteCallback().applyDelete(walletAddress, path, signature, auditMetadata);
+        } catch (RuntimeException e) {
+            return rejectIfInvalid(e, what);
+        }
+        return true;
+    }
+
+    private interface FederationApply {
+        void apply(FederationCallback callback, Map<String, Object> json, AppliedLogPosition entry);
+    }
+
+    /** Charter and directory entries change the Oak store, so they follow the write rules: watermark and rejection. */
+    private boolean handleFederation(long logPosition, DirectBuffer buffer, int payloadOffset, int payloadLength,
+                                     String what, FederationApply apply) {
+        AppliedLogPosition entry = entryPosition(logPosition, 0);
+        if (isAlreadyApplied(entry)) {
+            return true;
+        }
+        if (federationCallback == null) {
+            throw new ReplicatedApplyException("Federation callback unavailable - cannot apply " + what, null);
+        }
+        Map<String, Object> json = readPayloadOrNull(buffer, payloadOffset, payloadLength, what);
+        if (json == null) {
+            return false;
+        }
+        try {
+            apply.apply(federationCallback, json, entry);
         } catch (RuntimeException e) {
             return rejectIfInvalid(e, what);
         }

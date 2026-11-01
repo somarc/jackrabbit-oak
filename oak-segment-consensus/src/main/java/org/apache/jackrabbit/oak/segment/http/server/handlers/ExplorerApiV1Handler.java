@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.WriteMetadata;
@@ -201,6 +202,9 @@ public class ExplorerApiV1Handler {
         }
 
         try {
+            if (RemoteMountGate.rejectIfWalletUnavailable(context, response, walletAddress)) {
+                return;
+            }
             String[] levels = org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil.getShardLevels(walletAddress);
             NodeState root = context.nodeStore.getRoot();
             NodeState walletNode = root.getChildNode("oak-chain")
@@ -363,6 +367,10 @@ public class ExplorerApiV1Handler {
                 return;
             }
 
+            if (RemoteMountGate.rejectIfUnavailable(context, response, path)) {
+                return;
+            }
+
             NodeState node = getNode(path);
             if (!node.exists()) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
@@ -434,6 +442,11 @@ public class ExplorerApiV1Handler {
             mountsByEndpoint.computeIfAbsent(mount.getEndpoint(), k -> new ArrayList<>()).add(mount);
         }
 
+        Map<String, Boolean> availableByEndpoint = new LinkedHashMap<>();
+        for (RemoteMountStatus status : context.remoteMounts.statuses()) {
+            availableByEndpoint.put(status.endpoint(), status.available());
+        }
+
         int ordinal = 1;
         for (Map.Entry<String, List<ShardingRuntimeConfig.ReadOnlyMount>> entry : mountsByEndpoint.entrySet()) {
             List<String> allowedRoots = new ArrayList<>();
@@ -454,7 +467,7 @@ public class ExplorerApiV1Handler {
                 entry.getKey(),
                 "Lazy read-only remote cluster",
                 "HTTP segment transfer",
-                "visible",
+                Boolean.TRUE.equals(availableByEndpoint.get(entry.getKey())) ? "visible" : "unavailable",
                 "Remote cluster remains outside local consensus and is visible through read-only mounts."
             ));
             ordinal++;

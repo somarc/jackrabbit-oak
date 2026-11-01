@@ -20,6 +20,7 @@ import org.agrona.concurrent.AgentTerminationException;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.consensus.federation.NamespaceAuthority;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
@@ -147,6 +148,7 @@ public class DeleteApplicationService {
             CanonicalGenesisContent.requireMutable(walletAddress, path);
             log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
             NodeStore nodeStore = MutationApplySupport.requireNodeStore(nodeStoreSupplier);
+            NamespaceAuthority.requireWritable(nodeStore.getRoot(), walletAddress, path);
             
             // Get current HEAD for logging
             String previousHead = fileStore.getHead().getRecordId().toString();

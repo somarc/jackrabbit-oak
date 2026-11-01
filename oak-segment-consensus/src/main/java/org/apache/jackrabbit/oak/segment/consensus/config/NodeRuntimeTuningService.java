@@ -69,7 +69,6 @@ public final class NodeRuntimeTuningService {
         putIfText(overrides, "blobstore.type", config.blobstore_type());
         putIfText(overrides, "ipfs.api.endpoint", config.ipfs_api_endpoint());
         putIfPositive(overrides, "http.port", config.http_port());
-        putIfPositive(overrides, "sharding.numShards", config.sharding_num_shards());
         putIfPositive(overrides, "oak.mock.epoch.duration.seconds", config.mock_epoch_duration_seconds());
         putIfText(overrides, "aeron.dir.name", config.aeron_dir_name());
         putIfText(overrides, "aeron.cluster.hostnames", config.aeron_cluster_hostnames());

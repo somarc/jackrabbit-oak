@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.junit.After;
 import org.junit.Rule;
@@ -26,18 +27,22 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 public class GlobalStoreServerStartupValidationTest {
 
     private static final String PROP_BLOBSTORE_TYPE = "blobstore.type";
     private static final String PROP_CONSENSUS_MODE = "consensus.mode";
+    private static final String PROP_BLOCKCHAIN_MODE = "oak.blockchain.mode";
 
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
@@ -46,6 +51,36 @@ public class GlobalStoreServerStartupValidationTest {
     public void tearDown() {
         System.clearProperty(PROP_BLOBSTORE_TYPE);
         System.clearProperty(PROP_CONSENSUS_MODE);
+        System.clearProperty(PROP_BLOCKCHAIN_MODE);
+        BlockchainConfig.reset();
+    }
+
+    @Test
+    public void testStartRejectsInvalidBlockchainRuntimeBeforeStorageHttpOrAeron() throws Exception {
+        System.setProperty(PROP_BLOCKCHAIN_MODE, "local");
+        BlockchainConfig.reset();
+        Path storeDir = tempFolder.getRoot().toPath().resolve("segmentstore-chain");
+        GlobalStoreServer server = newServer(storeDir);
+        GlobalStoreServerComponentFactory factory = serverFactory(server);
+
+        IllegalStateException error = assertThrows(IllegalStateException.class, server::start);
+
+        assertTrue(error.getMessage(), error.getMessage().contains("OAK_BLOCKCHAIN_RPC_URL"));
+        assertFalse("store directory must not be created", Files.exists(storeDir));
+        verify(factory).createEthereumWallet(anyString());
+        verifyNoMoreInteractions(factory);
+    }
+
+    @Test
+    public void testStartRejectsUnknownBlockchainModeBeforeStorage() throws Exception {
+        System.setProperty(PROP_BLOCKCHAIN_MODE, "sepolai");
+        BlockchainConfig.reset();
+        Path storeDir = tempFolder.getRoot().toPath().resolve("segmentstore-typo");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> newServer(storeDir).start());
+
+        assertTrue(error.getMessage(), error.getMessage().contains("allowed values"));
+        assertFalse(Files.exists(storeDir));
     }
 
     @Test

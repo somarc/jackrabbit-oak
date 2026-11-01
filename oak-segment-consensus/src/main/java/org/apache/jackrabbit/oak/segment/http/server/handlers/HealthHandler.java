@@ -22,6 +22,9 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
+import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
+import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
@@ -122,6 +125,7 @@ public class HealthHandler {
         }
 
         payload.put("sharding", buildShardingPayload());
+        payload.put("federation", buildFederationPayload());
 
         response.getWriter().write(JsonOutputUtil.toJson(payload));
     }
@@ -331,6 +335,7 @@ public class HealthHandler {
         }
         payload.put("blobStore", blobStorePayload);
         payload.put("sharding", buildShardingPayload());
+        payload.put("federation", buildFederationPayload());
 
         Map<String, Object> overall = new HashMap<>();
         overall.put("status", allHealthy ? "UP" : "DEGRADED");
@@ -718,6 +723,18 @@ public class HealthHandler {
         return total;
     }
 
+    private Map<String, Object> buildFederationPayload() {
+        FederationCoordinator coordinator = context.federationCoordinator;
+        if (coordinator == null) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("available", false);
+            return payload;
+        }
+        Map<String, Object> payload = coordinator.getStatus().toMap();
+        payload.put("available", true);
+        return payload;
+    }
+
     private Map<String, Object> buildShardingPayload() {
         Map<String, Object> sharding = new HashMap<>();
         if (context == null || context.shardingRuntimeConfig == null) {
@@ -725,16 +742,41 @@ public class HealthHandler {
             sharding.put("localPrefixes", "none");
             sharding.put("remoteMountCount", 0);
             sharding.put("authoritativeStoreSeparated", false);
+            sharding.put("configDigest", ShardingRuntimeConfig.disabled().configDigest());
+            sharding.put("remoteEndpointCount", 0);
+            sharding.put("remoteEndpointsAvailable", 0);
+            sharding.put("remoteMounts", List.of());
             return sharding;
         }
 
         sharding.put("enabled", context.shardingRuntimeConfig.isEnabled());
         sharding.put("localPrefixes", context.shardingRuntimeConfig.describeLocalRanges());
-        sharding.put("remoteMountCount", context.shardingRuntimeConfig.expandRemoteReadOnlyMounts().size());
         sharding.put(
             "authoritativeStoreSeparated",
             context.authoritativeNodeStore != null && context.authoritativeNodeStore != context.nodeStore
         );
+        sharding.put("configDigest", context.shardingRuntimeConfig.configDigest());
+
+        List<Map<String, Object>> remoteMounts = new ArrayList<>();
+        int available = 0;
+        int namespaces = 0;
+        for (RemoteMountStatus status : context.remoteMounts.statuses()) {
+            remoteMounts.add(status.toMap());
+            if (status.available()) {
+                available++;
+            }
+            if (status.federation() != null) {
+                namespaces += status.federation().namespaces().size();
+            }
+        }
+        boolean fromDirectory = context.remoteMounts.fromDirectory();
+        sharding.put("mountSource", fromDirectory ? "directory" : "static");
+        sharding.put("directoryEpoch", fromDirectory ? context.remoteMounts.directoryEpoch() : null);
+        sharding.put("remoteMountCount", fromDirectory ? namespaces
+            : context.shardingRuntimeConfig.expandRemoteReadOnlyMounts().size());
+        sharding.put("remoteEndpointCount", remoteMounts.size());
+        sharding.put("remoteEndpointsAvailable", available);
+        sharding.put("remoteMounts", remoteMounts);
         return sharding;
     }
 

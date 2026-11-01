@@ -22,8 +22,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.function.Supplier;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainRuntimeValidator;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,16 +36,26 @@ final class StartupPreflightCoordinator {
     private static final Logger log = LoggerFactory.getLogger(StartupPreflightCoordinator.class);
 
     private final BootstrapPreflightPlanner bootstrapPreflightPlanner;
+    private final Supplier<BlockchainConfig> blockchainConfigSupplier;
 
     StartupPreflightCoordinator() {
         this(new BootstrapPreflightPlanner());
     }
 
     StartupPreflightCoordinator(BootstrapPreflightPlanner bootstrapPreflightPlanner) {
+        this(bootstrapPreflightPlanner, BlockchainConfig::getInstance);
+    }
+
+    StartupPreflightCoordinator(BootstrapPreflightPlanner bootstrapPreflightPlanner,
+                                Supplier<BlockchainConfig> blockchainConfigSupplier) {
         this.bootstrapPreflightPlanner = bootstrapPreflightPlanner;
+        this.blockchainConfigSupplier = blockchainConfigSupplier;
     }
 
     PreflightResult prepare(String storeDirectory, int port, AeronClusterConfig aeronConfig) throws IOException {
+        // Fail on a bad blockchain runtime before any storage, HTTP or Aeron resource exists.
+        BlockchainRuntimeValidator.validate(blockchainConfigSupplier.get());
+
         Path storePath = Paths.get(storeDirectory);
         if (!Files.exists(storePath)) {
             Files.createDirectories(storePath);

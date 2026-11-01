@@ -21,6 +21,7 @@ import io.reactivex.disposables.Disposable;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
+import org.apache.jackrabbit.oak.segment.consensus.evm.RpcDomainAttestor;
 import org.junit.After;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
@@ -31,11 +32,16 @@ import org.web3j.abi.datatypes.Event;
 import org.web3j.abi.datatypes.generated.Bytes32;
 import org.web3j.abi.datatypes.generated.Uint256;
 import org.web3j.abi.datatypes.generated.Uint8;
+import org.web3j.crypto.Hash;
 import org.web3j.protocol.Web3j;
+import org.web3j.protocol.core.DefaultBlockParameterName;
 import org.web3j.protocol.core.Request;
 import org.web3j.protocol.core.methods.request.EthFilter;
 import org.web3j.protocol.core.methods.request.Filter;
+import org.web3j.protocol.core.methods.response.EthBlock;
 import org.web3j.protocol.core.methods.response.EthBlockNumber;
+import org.web3j.protocol.core.methods.response.EthChainId;
+import org.web3j.protocol.core.methods.response.EthGetCode;
 import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
 import org.web3j.protocol.core.methods.response.EthLog;
 import org.web3j.protocol.core.methods.response.Log;
@@ -53,16 +59,28 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class EventDrivenEvmBridgeRuntimeTest {
+
+    private static final String CONTRACT = "0x1234567890abcdef1234567890abcdef12345678";
+    private static final String CODE = "0x6080604052";
+    private static final String PROPOSAL_ID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private static final String FOREIGN = "0x9999999999999999999999999999999999999999";
+    private static final String PAYER = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    private static final String TX_HASH = "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    private static final BigInteger AMOUNT = new BigInteger("1000000000000000");
 
     private static final Event PROPOSAL_PAID_EVENT = new Event("ProposalPaid",
         Arrays.asList(
@@ -231,7 +249,7 @@ public class EventDrivenEvmBridgeRuntimeTest {
         System.setProperty("oak.blockchain.rpcUrl", "https://rpc.example/v3/abcdef1234567890");
         BlockchainConfig.reset();
 
-        Web3j web3j = mock(Web3j.class);
+        Web3j web3j = attestableWeb3j(11155111L, CODE);
         doReturn(clientVersionRequest("test-client")).when(web3j).web3ClientVersion();
         doReturn(blockNumberRequest(123456L)).when(web3j).ethBlockNumber();
         when(web3j.ethLogFlowable(any(EthFilter.class))).thenReturn(Flowable.error(new RuntimeException("boom")));
@@ -277,6 +295,247 @@ public class EventDrivenEvmBridgeRuntimeTest {
 
         verify(web3j, times(2)).web3ClientVersion();
         verify(web3j, times(2)).ethBlockNumber();
+    }
+
+    @Test
+    public void startFailsClosedWhenRpcServesAnotherChain() throws Exception {
+        System.setProperty("oak.blockchain.rpcUrl", "http://127.0.0.1:8545");
+        BlockchainConfig.reset();
+        Web3j web3j = attestableWeb3j(1L, CODE);
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("local", CONTRACT, new OakPaymentEventParser(),
+            rpcUrl -> web3j, (threadName, delayMs, task) -> { throw new AssertionError("no reconnect"); });
+
+        RpcDomainAttestor.AttestationException e =
+            assertThrows(RpcDomainAttestor.AttestationException.class, bridge::start);
+
+        assertTrue(e.getMessage(), e.getMessage().contains("expected 31337"));
+        assertNull(getField(bridge, "web3j"));
+        verify(web3j).shutdown();
+        verify(web3j, never()).ethLogFlowable(any(EthFilter.class));
+        assertNull(bridge.verifyPayment(PROPOSAL_ID));
+    }
+
+    @Test
+    public void startFailsClosedOnPinnedCodeHashMismatchOrMissingCode() throws Exception {
+        System.setProperty("oak.blockchain.rpcUrl", "http://127.0.0.1:8545");
+        BlockchainConfig.reset();
+        String[][] cases = {{CODE, "0x" + "22".repeat(32), "does not match the pinned"}, {"0x", null, "No contract code"}};
+        for (String[] c : cases) {
+            Web3j web3j = attestableWeb3j(31337L, c[0]);
+            EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("local", CONTRACT, new OakPaymentEventParser(),
+                rpcUrl -> web3j, (threadName, delayMs, task) -> { }, c[1]);
+
+            RpcDomainAttestor.AttestationException e =
+                assertThrows(RpcDomainAttestor.AttestationException.class, bridge::start);
+
+            assertTrue(e.getMessage(), e.getMessage().contains(c[2]));
+            verify(web3j, never()).ethLogFlowable(any(EthFilter.class));
+        }
+    }
+
+    @Test
+    public void startAttestsThenSubscribesWithPinnedCodeHash() throws Exception {
+        System.setProperty("oak.blockchain.rpcUrl", "http://127.0.0.1:8545");
+        BlockchainConfig.reset();
+        Web3j web3j = attestableWeb3j(31337L, CODE);
+        doReturn(clientVersionRequest("anvil")).when(web3j).web3ClientVersion();
+        doReturn(blockNumberRequest(10L)).when(web3j).ethBlockNumber();
+        when(web3j.ethLogFlowable(any(EthFilter.class))).thenReturn(Flowable.never());
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("local", CONTRACT, new OakPaymentEventParser(),
+            rpcUrl -> web3j, (threadName, delayMs, task) -> { }, Hash.sha3(CODE));
+
+        try {
+            bridge.start();
+            assertSame(web3j, getField(bridge, "web3j"));
+            verify(web3j).ethChainId();
+            verify(web3j).ethLogFlowable(any(EthFilter.class));
+        } finally {
+            bridge.stop();
+        }
+    }
+
+    @Test
+    public void reconnectToASubstitutedRpcDomainLeavesVerificationDisabled() throws Exception {
+        System.setProperty("oak.blockchain.rpcUrl", "http://127.0.0.1:8545");
+        BlockchainConfig.reset();
+        Web3j good = attestableWeb3j(31337L, CODE);
+        doReturn(clientVersionRequest("anvil")).when(good).web3ClientVersion();
+        doReturn(blockNumberRequest(10L)).when(good).ethBlockNumber();
+        when(good.ethLogFlowable(any(EthFilter.class))).thenReturn(Flowable.error(new RuntimeException("dropped")));
+        Web3j substituted = attestableWeb3j(31337L, "0x");
+        AtomicInteger connects = new AtomicInteger();
+        AtomicReference<Runnable> reconnect = new AtomicReference<>();
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("local", CONTRACT, new OakPaymentEventParser(),
+            rpcUrl -> connects.getAndIncrement() == 0 ? good : substituted,
+            (threadName, delayMs, task) -> reconnect.set(task));
+
+        try {
+            bridge.start();
+            reconnect.get().run();
+
+            assertNull(getField(bridge, "web3j"));
+            verify(substituted).shutdown();
+            verify(substituted, never()).ethLogFlowable(any(EthFilter.class));
+        } finally {
+            bridge.stop();
+        }
+    }
+
+    @Test
+    public void subscriptionRejectsLogsFromAForeignEmitter() throws Exception {
+        System.setProperty("oak.blockchain.rpcUrl", "http://127.0.0.1:8545");
+        BlockchainConfig.reset();
+        String own = "0x" + "11".repeat(32);
+        Web3j web3j = attestableWeb3j(11155111L, CODE);
+        doReturn(clientVersionRequest("node")).when(web3j).web3ClientVersion();
+        doReturn(blockNumberRequest(200L)).when(web3j).ethBlockNumber();
+        when(web3j.ethLogFlowable(any(EthFilter.class))).thenReturn(Flowable.fromArray(
+            proposalPaidLog(FOREIGN, PROPOSAL_ID, PAYER, AMOUNT, 100L, TX_HASH),
+            proposalPaidLog(CONTRACT, own, PAYER, AMOUNT, 101L, TX_HASH)));
+        EventDrivenEvmBridge bridge = chainBridge("sepolia", web3j);
+
+        try {
+            bridge.start();
+        } finally {
+            bridge.stop();
+        }
+
+        assertNull(bridge.payments.get(PROPOSAL_ID));
+        assertNotNull(bridge.payments.get(own));
+    }
+
+    @Test
+    public void logQueryRejectsForeignEmitterRemovedPendingAndOtherProposalLogs() throws Exception {
+        Log foreign = proposalPaidLog(FOREIGN, PROPOSAL_ID, PAYER, AMOUNT, 100L, TX_HASH);
+        Log removed = proposalPaidLog(CONTRACT, PROPOSAL_ID, PAYER, AMOUNT, 100L, TX_HASH);
+        removed.setRemoved(true);
+        Log pending = proposalPaidLog(CONTRACT, PROPOSAL_ID, PAYER, AMOUNT, 100L, TX_HASH);
+        pending.setBlockNumber(null);
+        Log otherProposal = proposalPaidLog(CONTRACT, "0x" + "22".repeat(32), PAYER, AMOUNT, 100L, TX_HASH);
+
+        for (Log rejected : new Log[] {foreign, removed, pending, otherProposal}) {
+            Web3j web3j = mock(Web3j.class);
+            doReturn(blockNumberRequest(200L)).when(web3j).ethBlockNumber();
+            doReturn(logRequest(logsResponse(rejected))).when(web3j).ethGetLogs(any(EthFilter.class));
+            EventDrivenEvmBridge bridge = chainBridge("sepolia", web3j);
+            setField(bridge, "web3j", web3j);
+
+            assertNull(bridge.verifyPayment(PROPOSAL_ID));
+            assertTrue(bridge.payments.isEmpty());
+        }
+    }
+
+    @Test
+    public void receiptLookupParsesOnlyLogsEmittedByTheConfiguredContract() throws Exception {
+        String foreignProposal = "0x" + "33".repeat(32);
+        Web3j web3j = mock(Web3j.class);
+        doReturn(blockNumberRequest(200L)).when(web3j).ethBlockNumber();
+        doReturn(receiptRequest(receiptResponse(
+            proposalPaidLog(FOREIGN, foreignProposal, PAYER, AMOUNT, 100L, TX_HASH),
+            proposalPaidLog(FOREIGN, PROPOSAL_ID, PAYER, AMOUNT, 100L, TX_HASH)
+        ))).when(web3j).ethGetTransactionReceipt(TX_HASH);
+        EventDrivenEvmBridge bridge = chainBridge("sepolia", web3j);
+        setField(bridge, "web3j", web3j);
+
+        assertNull(bridge.getSettlementDetailsByTransactionHash(TX_HASH));
+        assertTrue("foreign receipt logs must not enter the payment cache", bridge.payments.isEmpty());
+    }
+
+    @Test
+    public void proofCarriesTheEmittingAddress() throws Exception {
+        String emitted = CONTRACT.toUpperCase().replace("0X", "0x");
+        Web3j web3j = mock(Web3j.class);
+        doReturn(blockNumberRequest(200L)).when(web3j).ethBlockNumber();
+        doReturn(logRequest(logsResponse(proposalPaidLog(emitted, PROPOSAL_ID, PAYER, AMOUNT, 100L, TX_HASH))))
+            .when(web3j).ethGetLogs(any(EthFilter.class));
+        EventDrivenEvmBridge bridge = chainBridge("sepolia", web3j);
+        setField(bridge, "web3j", web3j);
+
+        PaymentProof proof = bridge.verifyPayment(PROPOSAL_ID);
+
+        assertNotNull(proof);
+        assertEquals(emitted, proof.getContractAddress());
+        assertEquals(101, proof.getConfirmations());
+    }
+
+    @Test
+    public void finalizedTagModeCountsConfirmationsOnlyForFinalizedBlocks() throws Exception {
+        Web3j web3j = mock(Web3j.class);
+        doReturn(blockNumberRequest(200L)).when(web3j).ethBlockNumber();
+        EthBlock.Block finalizedBlock = new EthBlock.Block();
+        finalizedBlock.setNumber(hex(150L));
+        EthBlock finalized = new EthBlock();
+        finalized.setResult(finalizedBlock);
+        doReturn(genericRequest(finalized)).when(web3j).ethGetBlockByNumber(DefaultBlockParameterName.FINALIZED, false);
+        EventDrivenEvmBridge mainnet = chainBridge("mainnet", web3j);
+        setField(mainnet, "web3j", web3j);
+
+        assertEquals(0, mainnet.confirmationsForBlock(151L));
+        assertEquals(51, mainnet.confirmationsForBlock(150L));
+
+        EventDrivenEvmBridge sepolia = chainBridge("sepolia", web3j);
+        setField(sepolia, "web3j", web3j);
+        assertEquals(50, sepolia.confirmationsForBlock(151L));
+        verify(web3j, times(2)).ethGetBlockByNumber(DefaultBlockParameterName.FINALIZED, false);
+    }
+
+    @Test
+    public void finalizedTagModeHasNoConfirmationsWhenFinalityCannotBeRead() throws Exception {
+        Web3j web3j = mock(Web3j.class);
+        doReturn(blockNumberRequest(200L)).when(web3j).ethBlockNumber();
+        EthBlock error = new EthBlock();
+        error.setError(new org.web3j.protocol.core.Response.Error(-32000, "finalized not supported"));
+        doReturn(genericRequest(error)).when(web3j).ethGetBlockByNumber(DefaultBlockParameterName.FINALIZED, false);
+        EventDrivenEvmBridge mainnet = chainBridge("mainnet", web3j);
+        setField(mainnet, "web3j", web3j);
+
+        assertEquals(0, mainnet.confirmationsForBlock(10L));
+    }
+
+    private static EventDrivenEvmBridge chainBridge(String mode, Web3j web3j) {
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(mode, CONTRACT, new OakPaymentEventParser(),
+            rpcUrl -> web3j, (threadName, delayMs, task) -> { });
+        bridge.currentBlock = 0L;
+        return bridge;
+    }
+
+    private static EthLog logsResponse(Log log) {
+        EthLog response = new EthLog();
+        response.setResult(Collections.singletonList((EthLog.LogResult) log));
+        return response;
+    }
+
+    private static EthGetTransactionReceipt receiptResponse(Log... logs) {
+        TransactionReceipt receipt = new TransactionReceipt();
+        receipt.setLogs(Arrays.asList(logs));
+        EthGetTransactionReceipt response = new EthGetTransactionReceipt();
+        response.setResult(receipt);
+        return response;
+    }
+
+    private static Web3j attestableWeb3j(long chainId, String code) throws Exception {
+        Web3j web3j = mock(Web3j.class);
+        EthChainId chainIdResponse = new EthChainId();
+        chainIdResponse.setResult(hex(chainId));
+        doReturn(genericRequest(chainIdResponse)).when(web3j).ethChainId();
+        EthGetCode codeResponse = new EthGetCode();
+        codeResponse.setResult(code);
+        doReturn(genericRequest(codeResponse)).when(web3j).ethGetCode(anyString(), any());
+        return web3j;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends org.web3j.protocol.core.Response<?>> Request<?, T> genericRequest(T response)
+            throws Exception {
+        Request<?, T> request = mock(Request.class);
+        when(request.send()).thenReturn(response);
+        return request;
+    }
+
+    private static Object getField(Object target, String fieldName) throws Exception {
+        Field field = EventDrivenEvmBridge.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field.get(target);
     }
 
     private static Log proposalPaidLog(String contractAddress,

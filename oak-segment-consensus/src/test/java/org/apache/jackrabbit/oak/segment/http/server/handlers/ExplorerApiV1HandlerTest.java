@@ -21,6 +21,8 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
 import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
+import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
@@ -357,6 +359,58 @@ public class ExplorerApiV1HandlerTest {
         assertTrue(json.contains("\"wallet\":\"" + WALLET + "\""));
         assertTrue(json.contains("\"ownership\":\"local\""));
     }
+
+    @Test
+    public void testWalletAndContentReadsAnswerServiceUnavailableWhenRemoteMountIsDown() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        seedTreeNode(nodeStore, "/oak-chain/90/bb/stale-doc");
+        ServerContext context = newContext(nodeStore);
+        context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
+        RemoteMountStatus down = new RemoteMountStatus(
+            "http://validator-2:8090", "80-ff", true, false, "OPEN", "rev-3", 1L, "journal unreachable");
+        RemoteMounts remoteMounts = mock(RemoteMounts.class);
+        when(remoteMounts.unavailableFor("/oak-chain/90/bb")).thenReturn(down);
+        when(remoteMounts.unavailableFor(WalletPathUtil.getShardRoot(REMOTE_WALLET))).thenReturn(down);
+        when(remoteMounts.statuses()).thenReturn(java.util.List.of(down));
+        context.remoteMounts = remoteMounts;
+        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
+
+        StringWriter walletBody = new StringWriter();
+        HttpServletResponse walletResponse = responseWithBody(walletBody);
+        handler.handleWalletByAddress(walletResponse, REMOTE_WALLET);
+
+        StringWriter nodeBody = new StringWriter();
+        HttpServletResponse nodeResponse = responseWithBody(nodeBody);
+        handler.handleContentNode(nodeResponse, REMOTE_CLUSTER_ID, "/oak-chain/90/bb");
+
+        StringWriter navBody = new StringWriter();
+        handler.handleContentNav(responseWithBody(navBody));
+
+        verify(walletResponse).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(walletBody.toString().contains("\"code\":\"mount_unavailable\""));
+        verify(nodeResponse).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        assertTrue(nodeBody.toString().contains("journal unreachable"));
+        assertFalse(nodeBody.toString().contains("stale-doc"));
+        assertTrue(navBody.toString().contains("\"status\":\"unavailable\""));
+    }
+
+    @Test
+    public void testContentNavShowsAvailableRemoteClusterAsVisible() throws Exception {
+        ServerContext context = newContext(new MemoryNodeStore());
+        context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
+        RemoteMounts remoteMounts = mock(RemoteMounts.class);
+        when(remoteMounts.statuses()).thenReturn(java.util.List.of(new RemoteMountStatus(
+            "http://validator-2:8090", "80-ff", true, true, "CLOSED", "rev-3", 1L, null)));
+        context.remoteMounts = remoteMounts;
+        StringWriter body = new StringWriter();
+
+        new ExplorerApiV1Handler(context).handleContentNav(responseWithBody(body));
+
+        assertTrue(body.toString().contains("\"status\":\"visible\""));
+        assertFalse(body.toString().contains("\"status\":\"unavailable\""));
+    }
+
+    private static final String REMOTE_WALLET = "0x9034567890abcdef1234567890abcdef12345678";
 
     private static ServerContext newContext(MemoryNodeStore nodeStore) {
         return new ServerContext(

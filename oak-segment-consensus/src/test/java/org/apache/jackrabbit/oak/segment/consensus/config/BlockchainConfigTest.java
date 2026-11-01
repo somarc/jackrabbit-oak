@@ -33,6 +33,7 @@ public class BlockchainConfigTest {
     private static final String PROP_RPC_URL = "oak.blockchain.rpcUrl";
     private static final String PROP_GAS_PRICE_GWEI = "oak.blockchain.gasPriceGwei";
     private static final String PROP_GAS_WRITE_STANDARD = "oak.blockchain.gas.write.standard";
+    private static final String PROP_CODEHASH = "oak.blockchain.contract.codehash";
 
     @Before
     public void setUp() {
@@ -93,12 +94,73 @@ public class BlockchainConfigTest {
     }
 
     @Test
-    public void testInvalidModeFallsBackToMock() {
+    public void testUnknownModeIsRejectedWithAllowedValues() {
         System.setProperty(PROP_MODE, "not-a-real-mode");
+
+        try {
+            BlockchainConfig.getInstance();
+            fail("An unknown mode must not fall back to mock");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains("not-a-real-mode"));
+            assertTrue(e.getMessage(), e.getMessage().contains("mock, local, sepolia, mainnet"));
+        }
+    }
+
+    @Test
+    public void testUnknownModeFromOsgiOverrideIsRejected() {
+        RuntimePropertyOverrideRegistry.setOverrides(BlockchainConfigTuningService.NAMESPACE,
+            Collections.singletonMap(PROP_MODE, "sepolia-typo"));
+
+        try {
+            BlockchainConfig.getInstance();
+            fail("An unknown mode must not fall back to mock");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains("sepolia-typo"));
+        }
+    }
+
+    @Test
+    public void testBlankModeMeansUnsetAndDefaultsToMock() {
+        assertEquals(BlockchainConfig.Mode.MOCK, BlockchainConfig.Mode.fromString(null));
+        assertEquals(BlockchainConfig.Mode.MOCK, BlockchainConfig.Mode.fromString("  "));
+        assertEquals(BlockchainConfig.Mode.LOCAL, BlockchainConfig.Mode.fromString(" LOCAL "));
+    }
+
+    @Test
+    public void testLocalModeIsChainBackedWithLocalChainIdAndClockEpochs() {
+        System.setProperty(PROP_MODE, "local");
 
         BlockchainConfig config = BlockchainConfig.getInstance();
 
-        assertEquals(BlockchainConfig.Mode.MOCK, config.getMode());
+        assertEquals(BlockchainConfig.Mode.LOCAL, config.getMode());
+        assertFalse(config.isMockMode());
+        assertTrue(config.getMode().isChainBacked());
+        assertTrue(config.getMode().usesLocalClockEpochs());
+        assertEquals(31337L, config.getMode().getExpectedChainId());
+    }
+
+    @Test
+    public void testExpectedChainIdsAndConfirmationDefaultsPerMode() {
+        assertEquals(0L, BlockchainConfig.Mode.MOCK.getExpectedChainId());
+        assertEquals(31337L, BlockchainConfig.Mode.LOCAL.getExpectedChainId());
+        assertEquals(11155111L, BlockchainConfig.Mode.SEPOLIA.getExpectedChainId());
+        assertEquals(1L, BlockchainConfig.Mode.MAINNET.getExpectedChainId());
+
+        assertEquals(1, BlockchainConfig.Mode.LOCAL.getDefaultRequiredConfirmations());
+        assertEquals(3, BlockchainConfig.Mode.SEPOLIA.getDefaultRequiredConfirmations());
+        assertTrue(BlockchainConfig.Mode.MAINNET.usesFinalizedTag());
+        assertFalse(BlockchainConfig.Mode.SEPOLIA.usesFinalizedTag());
+        assertTrue(BlockchainConfig.Mode.MAINNET.requiresContractCodeHash());
+        assertFalse(BlockchainConfig.Mode.LOCAL.requiresContractCodeHash());
+        assertFalse(BlockchainConfig.Mode.SEPOLIA.usesLocalClockEpochs());
+    }
+
+    @Test
+    public void testSystemPropertySetsContractCodeHash() {
+        String hash = "0x" + "ab".repeat(32);
+        System.setProperty(PROP_CODEHASH, hash);
+
+        assertEquals(hash, BlockchainConfig.getInstance().getContractCodeHash());
     }
 
     @Test
@@ -148,5 +210,6 @@ public class BlockchainConfigTest {
         System.clearProperty(PROP_RPC_URL);
         System.clearProperty(PROP_GAS_PRICE_GWEI);
         System.clearProperty(PROP_GAS_WRITE_STANDARD);
+        System.clearProperty(PROP_CODEHASH);
     }
 }

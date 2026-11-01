@@ -22,6 +22,7 @@ import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
+import org.apache.jackrabbit.oak.segment.consensus.federation.NamespaceAuthority;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
@@ -202,6 +203,8 @@ public class WriteApplicationService {
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
                      walletAddress, path, intentToken, blobId, ipfsCid);
             NodeStore nodeStore = MutationApplySupport.requireNodeStore(nodeStoreSupplier);
+            // Federated clusters decide ownership from the committed directory; null means unfederated
+            String namespace = NamespaceAuthority.requireWritable(nodeStore.getRoot(), walletAddress, path);
             BlobStore blobStore = blobStoreSupplier.get();
             
             // Get current HEAD for logging
@@ -255,7 +258,8 @@ public class WriteApplicationService {
 
             // Enrich wallet node with metadata
             if (walletNode != null && walletNodeName != null) {
-                enrichWalletNode(walletNode, walletNodeName, walletAddress, !contentNodeExists, appliedAt);
+                enrichWalletNode(walletNode, walletNodeName, namespace != null ? namespace : walletAddress,
+                    !contentNodeExists, appliedAt);
             }
             
             // Set properties
@@ -449,6 +453,9 @@ public class WriteApplicationService {
     
     /**
      * Handle binary content with BlobStore.
+     *
+     * <p>A missing BlobStore is node-local wiring, not a property of the replicated entry: writing anything else
+     * would make this member's state differ from the others, so the apply fails and the member stops.
      */
     private void handleBinaryContent(
             NodeBuilder contentNode,
@@ -458,12 +465,8 @@ public class WriteApplicationService {
             String ipfsCid) {
         
         if (blobStore == null) {
-            log.warn("BlobStore not available, storing blobId as string reference");
-            contentNode.setProperty("jcr:data", blobId);
-            if (mimeType != null && !mimeType.isEmpty()) {
-                contentNode.setProperty("jcr:mimeType", mimeType);
-            }
-            return;
+            throw new IllegalStateException("BlobStore unavailable on this member: cannot apply replicated binary "
+                + "write for blobId " + blobId + " (node-local failure; stopping instead of diverging)");
         }
         
         // Create proper Blob object from blob ID

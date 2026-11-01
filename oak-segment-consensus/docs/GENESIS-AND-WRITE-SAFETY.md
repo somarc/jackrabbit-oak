@@ -24,8 +24,10 @@ Genesis declares:
 
 `CanonicalGenesisContent` is the single authoring implementation. Genesis v2:
 
-- accepts only a parameter-free `CREATE_GENESIS` trigger, takes creation time from
-  Aeron, and derives the bootstrap member URL from configured membership;
+- accepts only a `CREATE_GENESIS` trigger whose sole parameter is the leader's
+  canonical sorted member URL set (`{"command":"CREATE_GENESIS","members":[...]}`),
+  takes creation time from Aeron, and records the first URL of that set as the
+  bootstrap member;
 - formats dates in UTC, with JCR `NAME`, `DATE`, and `BINARY` property types;
 - omits node-local gateway URLs, backend enablement flags, and BlobStore IDs;
 - stores the bundled image through the NodeStore, with a pinned byte SHA-256;
@@ -54,8 +56,20 @@ or mutate the repository. Corrupt, incomplete, unsupported-version, or different
 authored content is rejected. The `genesisValidator` field denotes the configured
 bootstrap endpoint: the lexicographically first URL in the common configured HTTP
 member set. It is not an Aeron member-ID, ingress-caller, or elected-leader claim.
-All members must have the same configured HTTP endpoint set; the local
-three-validator promotion campaign checks this alongside the genesis digest.
+All members must have the same configured HTTP endpoint set. The leader puts its
+set in the committed trigger and every member compares it with its own at apply:
+on a mismatch the member fails stop (a member-local apply failure, see below)
+instead of recording a different `genesisValidator`. A trigger with other fields,
+or with an empty, duplicated or unsorted member list, is rejected identically on
+every member. The parameter-free trigger written by earlier versions is still
+accepted so existing logs replay unchanged; it derives the bootstrap member from
+local configuration as before. The trigger is not part of genesis content: for the
+same configuration and Aeron timestamp both forms author an identical tree and
+`integrityDigest`, so the genesis version is unchanged. A member that replays the
+genesis entry with a configured set different from the one committed (for example a
+replacement validator with a new URL replaying from the start of the log) also
+fails stop; restore it from a snapshot instead. The local three-validator promotion
+campaign checks the member set alongside the genesis digest.
 Configured self and peer URLs share a pure lexical canonicalizer (including the
 `localhost`/`::1` loopback alias); public hostnames remain hostnames. DNS resolution
 is not allowed to change the identity recorded in genesis.
@@ -90,6 +104,9 @@ commands using a locally synthesized HTTP leadership term: the term it compares 
 Aeron's `leadershipTermId`, applied in log order from `onNewLeadershipTermEvent`, so
 every member reaches the same decision. Malformed/stale input rejection
 (`MutationRejectedException`) remains distinct from a member-local apply failure.
+
+A replicated binary write on a member without a BlobStore is such a member-local
+failure: it is not rewritten as a STRING `jcr:data` reference.
 
 A valid committed write/delete/genesis that cannot be applied latches a quarantine
 and terminates the Aeron clustered-service agent with a FATAL cause, which takes the
