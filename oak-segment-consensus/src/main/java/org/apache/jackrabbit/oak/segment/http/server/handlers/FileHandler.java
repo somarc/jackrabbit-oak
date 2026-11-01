@@ -99,16 +99,17 @@ public class FileHandler {
     }
     
     /**
-     * Handle HEAD request for a segment (check existence).
+     * Handle HEAD request for a segment: 200 only when the FileStore holds it, exactly as GET would serve it.
      */
     public void handleSegmentHead(HttpServletResponse response, String segmentId) throws IOException {
-        Path segmentPath = findSegmentInTarFiles(segmentId);
-        
-        if (segmentPath == null) {
+        SegmentId sid = parseSegmentId(response, segmentId);
+        if (sid == null) {
+            return;
+        }
+        if (!fileStore.containsSegment(sid)) {
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Segment not found: " + segmentId);
             return;
         }
-        
         response.setStatus(HttpServletResponse.SC_OK);
         response.setHeader("X-Segment-Found", "true");
     }
@@ -126,20 +127,15 @@ public class FileHandler {
         log.info("📦 Segment GET: {} FROM {}:{} [UA: {}]", 
                  segmentId, remoteAddr, remotePort, userAgent != null ? userAgent : "unknown");
         
-        // Convert UUID string to msb/lsb
-        UUID uuid;
-        try {
-            uuid = UUID.fromString(segmentId);
-        } catch (IllegalArgumentException e) {
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid segment UUID: " + segmentId);
+        SegmentId sid = parseSegmentId(response, segmentId);
+        if (sid == null) {
             return;
         }
         
-        // Read segment from TAR files
-        byte[] segmentData = readSegmentFromTar(uuid);
+        byte[] segmentData = readSegment(sid);
         
         if (segmentData == null) {
-            log.warn("Segment not found in TAR files: {}", segmentId);
+            log.warn("Segment not found: {}", segmentId);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Segment not found: " + segmentId);
             return;
         }
@@ -158,81 +154,35 @@ public class FileHandler {
         log.info("Served segment {} ({} bytes)", segmentId, segmentData.length);
     }
     
-    /**
-     * Read a segment from TAR files.
-     */
-    private byte[] readSegmentFromTar(UUID segmentId) {
-        // Look for data*.tar files
-        java.io.File[] tarFiles = storeDirectory.toFile().listFiles((dir, name) -> 
-            name.startsWith("data") && name.endsWith(".tar"));
-        
-        if (tarFiles == null || tarFiles.length == 0) {
-            log.warn("No TAR files found in {}", storeDirectory);
+    private SegmentId parseSegmentId(HttpServletResponse response, String segmentId) throws IOException {
+        UUID uuid;
+        try {
+            uuid = UUID.fromString(segmentId);
+        } catch (IllegalArgumentException e) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, "Invalid segment UUID: " + segmentId);
             return null;
         }
-        
-        // Try each TAR file
-        for (java.io.File tarFile : tarFiles) {
-            try {
-                byte[] segment = readSegmentFromTarFile(tarFile, segmentId);
-                if (segment != null) {
-                    return segment;
-                }
-            } catch (IOException e) {
-                log.warn("Error reading from TAR file {}: {}", tarFile.getName(), e.getMessage());
-            }
-        }
-        
-        return null;
+        return fileStore.getSegmentIdProvider()
+            .newSegmentId(uuid.getMostSignificantBits(), uuid.getLeastSignificantBits());
     }
     
     /**
-     * Read a specific segment from TAR files using Oak's FileStore.
-     * Uses the same pattern as Cold Standby segment replication.
+     * Serialize a segment from the live FileStore, as Cold Standby does; works for any segment persistence.
      */
-    private byte[] readSegmentFromTarFile(java.io.File tarFile, UUID segmentId) throws IOException {
+    private byte[] readSegment(SegmentId sid) {
         try {
-            long msb = segmentId.getMostSignificantBits();
-            long lsb = segmentId.getLeastSignificantBits();
-            
-            // Create SegmentId using FileStore's provider (Cold Standby pattern)
-            SegmentId sid = fileStore.getSegmentIdProvider().newSegmentId(msb, lsb);
-            
-            // Check if segment exists
             if (!fileStore.containsSegment(sid)) {
-                log.debug("Segment {} not found in store", segmentId);
                 return null;
             }
-            
-            // Read segment and serialize to bytes (Cold Standby pattern)
             Segment segment = fileStore.readSegment(sid);
             try (ByteArrayOutputStream stream = new ByteArrayOutputStream()) {
                 segment.writeTo(stream);
-                byte[] data = stream.toByteArray();
-                log.info("Read segment {} from TAR ({} bytes)", segmentId, data.length);
-                return data;
+                return stream.toByteArray();
             }
         } catch (Exception e) {
-            log.warn("Error reading segment {}: {}", segmentId, e.getMessage());
+            log.warn("Error reading segment {}: {}", sid, e.getMessage());
             return null;
         }
-    }
-    
-    /**
-     * Find a segment in TAR files (simplified - just check if any TAR files exist).
-     */
-    private Path findSegmentInTarFiles(String segmentId) throws IOException {
-        // Look for data*.tar files
-        java.io.File[] tarFiles = storeDirectory.toFile().listFiles((dir, name) -> 
-            name.startsWith("data") && name.endsWith(".tar"));
-        
-        if (tarFiles != null && tarFiles.length > 0) {
-            // Segment might exist - return the first TAR file
-            // Full implementation would need to parse TAR internals
-            return tarFiles[0].toPath();
-        }
-        
-        return null;
     }
 }
 
