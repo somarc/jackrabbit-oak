@@ -1,7 +1,12 @@
 # Garbage collection and paid deletes
 
-Status: draft for decision. Written against `trunk` at `42fb205ece`. Evidence comes from the
-[compaction and paid-deletes review](#evidence) and was re-checked on this branch.
+Status: direction decided; phase 1 implemented on `feature/consensus-gc-safety`. Written against
+`trunk` at `42fb205ece`. Evidence comes from the [compaction and paid-deletes review](#evidence) and
+was re-checked on this branch.
+
+Decided by the owner: GC is fully decoupled from Ethereum; writes and deletes stay paid through the
+ETH contract; Oak's own GC mechanisms run unabated; pricing gets a separate rethink. That settles D1
+and D2 below and defers D4 to the pricing rethink.
 
 Update: D1 is decided and section 4.1 is implemented (phase 1a). Section 1 describes the code at
 `42fb205ece`, before that change.
@@ -145,10 +150,15 @@ full compaction on a long one, each followed by cleanup.
 A reader on another cluster holds record ids from the owner's store. After two full compactions on
 the owner, those segments are gone.
 
-- A mount answers `503 mount_unavailable` for transport errors, instead of raising
-  `SegmentNotFoundException`.
-- On a missing segment, the mount refreshes its root and retries once, then answers
-  `503 mount_stale`. Neither case reaches the generic 500 handler.
+- The HTTP segment reader records, per request, why a remote fetch failed: the owner answered 404
+  (missing) or the request failed (transport). Oak reports both as `SegmentNotFoundException`.
+- When such a request would answer 500, it answers 503 with `Retry-After: 1` instead:
+  `mount_unavailable` for a transport failure, which also counts against the endpoint's circuit
+  breaker so a federated mount fails over; `mount_stale` for a missing segment, which refreshes the
+  mount's head at once so the retry reads current content.
+- There is no retry inside the request: handlers answer their own errors and commit the response,
+  so a retry would need response buffering. Implemented in phase 1 and tested against a real owner
+  store compacted twice under a held head (`MountReaderAcrossRemoteCompactionTest`).
 - A mount that has not refreshed for longer than the owner's published window (minimum interval
   between full compactions x (`retainedGenerations` - 1)) stops serving until it refreshes.
 - Contract for owners: never publish a window shorter than the readers' refresh interval plus a
@@ -156,8 +166,23 @@ the owner, those segments are gone.
 
 ### 4.4 Binary GC
 
-Unpinning on a shared IPFS Cluster affects every member, so this part has to be decided once, from
-replicated state.
+Research on Oak's own blob GC (shared-DataStore mark-sweep) with `IPFSDataStore`:
+
+- `IPFSDataStore` already implements what Oak's mark-sweep needs (`SharedDataStore` metadata
+  records, record enumeration with last-modified times, `deleteRecord`), and
+  `SegmentBlobReferenceRetriever` works on the validator `FileStore`. Each validator can run Oak's
+  blob GC against its own segment store and its own Kubo index today.
+- Two things limit what it can reclaim. Until segment compaction runs (4.2), every blob stays
+  referenced, so sweep deletes nothing. And while the validators share no metadata, Oak's "sweep
+  after every repository has marked" barrier covers only one validator, so it may only drop that
+  validator's local index entries and links, never an IPFS Cluster pin. That is the current wiring:
+  `unpinOnDelete` is never set.
+- Unpinning a cluster pin is the one step that needs ordering against writes. Another member can
+  take a new upload of the same bytes and re-pin it after this member marked.
+- A write that only names an existing `ipfsCid` stores a string, which mark does not see. Phase 3
+  must store the mapped blob id instead, so that content stays referenced.
+
+One way to make the cluster-wide step safe, from replicated state:
 
 - **Reference counts.** The binary index entry gains a reference count, maintained at apply: a write
   that stores or references a binary increments it, and a delete or overwrite that drops a reference
@@ -197,13 +222,13 @@ replicated state.
 
 ## 6. Decisions needed
 
-| # | Decision | Recommendation |
+| # | Decision | Outcome |
 |---|---|---|
-| D1 | Replace paid GC with operational GC (option B) and remove the GC market, debt accounts and votes | Yes |
-| D2 | Segment GC member-local and staggered, not a replicated decision | Yes |
-| D3 | Binary GC by replicated reference counts, leader unpin after a grace period, and only on an IPFS Cluster dedicated to the enterprise cluster | Yes, as phase 3 |
-| D4 | Binary size: cap at ingress now, size-aware price in the next contract version | Cap now |
-| D5 | Default schedule: tail compaction daily, full compaction weekly, `retainedGenerations` 2 | Start here, tune after the harness run |
+| D1 | Replace paid GC with operational GC (option B) and remove the GC market, debt accounts and votes | Decided: yes. Done in phase 1 |
+| D2 | Segment GC member-local and staggered, not a replicated decision | Decided: Oak's own mechanisms, unabated |
+| D3 | Binary GC: Oak's blob GC per validator for local entries; cluster unpin only behind a barrier ordered against writes, only on an IPFS Cluster dedicated to the enterprise cluster | Open, phase 3 |
+| D4 | Binary size and pricing | Deferred to the pricing rethink |
+| D5 | Default schedule: tail compaction daily, full compaction weekly, `retainedGenerations` 2 | Open, tune after the harness run |
 
 ## Evidence
 
