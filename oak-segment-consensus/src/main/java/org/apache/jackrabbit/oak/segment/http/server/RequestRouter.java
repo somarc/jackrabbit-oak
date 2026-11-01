@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueReso
 import org.apache.jackrabbit.oak.segment.consensus.federation.Charter;
 import org.apache.jackrabbit.oak.segment.consensus.federation.DirectorySnapshot;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
+import org.apache.jackrabbit.oak.segment.consensus.mount.MountReadFailures;
 import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.AeronApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.BinaryUploadHandler;
@@ -341,6 +342,16 @@ public class RequestRouter implements AutoCloseable {
      * @throws IOException if an I/O error occurs
      */
     public void route(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        // remote segment reads that fail while serving this request turn its 500 into a 503 (see ApiErrorUtil)
+        MountReadFailures.begin(context.remoteMounts);
+        try {
+            routeRequest(request, response);
+        } finally {
+            MountReadFailures.end();
+        }
+    }
+
+    private void routeRequest(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getRequestURI();
         String method = request.getMethod();
         

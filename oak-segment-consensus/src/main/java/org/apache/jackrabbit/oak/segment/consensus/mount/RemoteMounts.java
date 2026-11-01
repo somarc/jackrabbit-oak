@@ -24,8 +24,10 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The remote endpoints mounted into the validator read view, and which read
@@ -96,9 +98,38 @@ public final class RemoteMounts {
         return status.available() ? null : status;
     }
 
+    /**
+     * Reports remote segment reads that failed while serving a request to the mounts that made them. A missing
+     * segment refreshes that mount's head now; a transport failure counts against the endpoint's circuit breaker,
+     * so repeated failures trip it and a federated mount fails over.
+     *
+     * @return true when at least one failure came from one of these mounts
+     */
+    public boolean reportReadFailures(@NotNull List<MountReadFailures.Failure> failures) {
+        boolean ours = false;
+        Set<String> seen = new LinkedHashSet<>();
+        for (MountReadFailures.Failure failure : failures) {
+            if (!seen.add(failure.kind() + " " + failure.endpoint())) {
+                continue;
+            }
+            for (StatusSource endpoint : endpoints) {
+                if (endpoint.onReadFailure(failure)) {
+                    ours = true;
+                    break;
+                }
+            }
+        }
+        return ours;
+    }
+
     @FunctionalInterface
     interface StatusSource {
         RemoteMountStatus status();
+
+        /** Handles a failed read from {@code failure.endpoint()}; true when this source serves that endpoint. */
+        default boolean onReadFailure(@NotNull MountReadFailures.Failure failure) {
+            return false;
+        }
     }
 
     record Endpoint(@NotNull String url, @NotNull String prefixes, @NotNull NodeStore store) implements StatusSource {
@@ -109,6 +140,11 @@ public final class RemoteMounts {
             }
             return new RemoteMountStatus(url, prefixes, true, true, CircuitBreaker.State.CLOSED.name(),
                 null, null, null);
+        }
+
+        @Override
+        public boolean onReadFailure(@NotNull MountReadFailures.Failure failure) {
+            return store instanceof LazyHttpNodeStore lazy && lazy.onReadFailure(failure);
         }
     }
 }

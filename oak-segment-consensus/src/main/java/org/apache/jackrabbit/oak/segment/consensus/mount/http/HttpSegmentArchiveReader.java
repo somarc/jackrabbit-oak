@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.mount.http;
 
 import org.apache.jackrabbit.oak.commons.Buffer;
+import org.apache.jackrabbit.oak.segment.consensus.mount.MountReadFailures;
 import org.apache.jackrabbit.oak.segment.remote.AbstractRemoteSegmentArchiveReader;
 import org.apache.jackrabbit.oak.segment.spi.monitor.IOMonitor;
 import org.slf4j.Logger;
@@ -80,8 +81,10 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
         } catch (Exception e) {
             if (e.getMessage() != null && e.getMessage().contains("404")) {
                 log.debug("Segment {} not found", uuid);
+                MountReadFailures.record(baseUrl, MountReadFailures.Kind.MISSING, "segment " + uuid + " not found");
                 return null;
             }
+            MountReadFailures.record(baseUrl, MountReadFailures.Kind.TRANSPORT, describe(e));
             throw new IOException("Failed to fetch segment via HTTP/2: " + e.getMessage(), e);
         }
     }
@@ -91,7 +94,24 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
         // Use HEAD so existence checks do not download the segment body.
         UUID uuid = new UUID(msb, lsb);
         String segmentUrl = baseUrl + "/segments/" + uuid.toString();
-        return http2ClientPool.exists(segmentUrl);
+        try {
+            int status = http2ClientPool.headStatus(segmentUrl);
+            if (status == 200) {
+                return true;
+            }
+            MountReadFailures.record(baseUrl,
+                status == 404 ? MountReadFailures.Kind.MISSING : MountReadFailures.Kind.TRANSPORT,
+                "HTTP " + status + " for segment " + uuid);
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            MountReadFailures.record(baseUrl, MountReadFailures.Kind.TRANSPORT, describe(e));
+            return false;
+        } catch (IOException | RuntimeException e) {
+            log.warn("HEAD request failed for {}: {}", segmentUrl, describe(e));
+            MountReadFailures.record(baseUrl, MountReadFailures.Kind.TRANSPORT, describe(e));
+            return false;
+        }
     }
 
     @Override
@@ -112,8 +132,13 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
             buffer.flip();
             log.debug("Fetched segment {} ({} bytes) via HTTP/2", uuidPart, segmentData.length);
         } catch (Exception e) {
+            MountReadFailures.record(baseUrl, MountReadFailures.Kind.TRANSPORT, describe(e));
             throw new IOException("Failed to fetch segment via HTTP/2: " + e.getMessage(), e);
         }
+    }
+
+    private static String describe(Exception e) {
+        return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     @Override

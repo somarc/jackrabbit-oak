@@ -17,14 +17,17 @@
 package org.apache.jackrabbit.oak.segment.consensus.mount.http;
 
 import org.apache.jackrabbit.oak.commons.Buffer;
+import org.apache.jackrabbit.oak.segment.consensus.mount.MountReadFailures;
 import org.apache.jackrabbit.oak.segment.spi.monitor.IOMonitorAdapter;
 import org.apache.jackrabbit.oak.segment.spi.persistence.SegmentArchiveReader;
 import org.apache.jackrabbit.oak.segment.spi.persistence.SegmentArchiveWriter;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -197,6 +200,51 @@ public class HttpSegmentArchiveTransportTest {
     }
 
     @Test
+    public void testFailedReadsAreRecordedForTheCurrentRequestOnly() throws Exception {
+        RecordingHttp2ClientPool pool = new RecordingHttp2ClientPool();
+        HttpSegmentArchiveReader reader = new HttpSegmentArchiveReader(
+            "http://validator.example/", "data00000a.tar", new IOMonitorAdapter(), pool);
+        UUID uuid = UUID.randomUUID();
+        long msb = uuid.getMostSignificantBits();
+        long lsb = uuid.getLeastSignificantBits();
+
+        pool.getFailure = new RuntimeException("HTTP 404");
+        assertNull(reader.readSegment(msb, lsb));
+        assertTrue("nothing is recorded outside a request", MountReadFailures.current().isEmpty());
+
+        MountReadFailures.begin();
+        try {
+            assertNull(reader.readSegment(msb, lsb));
+            pool.getFailure = new RuntimeException("HTTP 503 for segment");
+            try {
+                reader.readSegment(msb, lsb);
+                fail("Expected IOException");
+            } catch (IOException expected) {
+                // a transport failure still surfaces to Oak
+            }
+            pool.headStatus = 404;
+            assertFalse(reader.containsSegment(msb, lsb));
+            pool.headStatus = 500;
+            assertFalse(reader.containsSegment(msb, lsb));
+            pool.headStatus = null;
+            pool.headFailure = new IOException("connection refused");
+            assertFalse(reader.containsSegment(msb, lsb));
+
+            List<MountReadFailures.Kind> kinds = new ArrayList<>();
+            for (MountReadFailures.Failure failure : MountReadFailures.current()) {
+                assertEquals("http://validator.example", failure.endpoint());
+                kinds.add(failure.kind());
+            }
+            assertEquals(List.of(MountReadFailures.Kind.MISSING, MountReadFailures.Kind.TRANSPORT,
+                MountReadFailures.Kind.MISSING, MountReadFailures.Kind.TRANSPORT, MountReadFailures.Kind.TRANSPORT),
+                kinds);
+        } finally {
+            MountReadFailures.end();
+        }
+        assertTrue(MountReadFailures.current().isEmpty());
+    }
+
+    @Test
     public void testArchiveManagerOpenForceOpenAndListArchives() throws Exception {
         RecordingHttp2ClientPool pool = new RecordingHttp2ClientPool();
         HttpSegmentArchiveManager manager = new HttpSegmentArchiveManager(
@@ -274,6 +322,8 @@ public class HttpSegmentArchiveTransportTest {
         private byte[] segmentData = new byte[0];
         private RuntimeException getFailure;
         private boolean existsResult;
+        private Integer headStatus;
+        private IOException headFailure;
         private String lastGetUrl;
         private String lastExistsUrl;
 
@@ -290,6 +340,15 @@ public class HttpSegmentArchiveTransportTest {
         public boolean exists(String url) {
             lastExistsUrl = url;
             return existsResult;
+        }
+
+        @Override
+        public int headStatus(String url) throws IOException {
+            lastExistsUrl = url;
+            if (headFailure != null) {
+                throw headFailure;
+            }
+            return headStatus != null ? headStatus : existsResult ? 200 : 404;
         }
 
         @Override

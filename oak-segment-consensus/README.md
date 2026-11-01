@@ -254,6 +254,13 @@ With sharding enabled, wallet prefixes owned by another cluster are read through
 a read-only mount of one of its validators. While that mount is unavailable,
 wallet and explorer reads under its prefixes answer `503 mount_unavailable`
 rather than "not found", and the all-wallets listing is marked `partial`.
+A read that fails part-way because the mount could not supply a segment also
+answers 503 with `Retry-After: 1`, never a 500. The code is `mount_unavailable`
+when the endpoint could not be reached; the failure counts against its circuit
+breaker, so a federated mount fails over to the next member. The code is
+`mount_stale` when the owner no longer holds the segment, for example after two
+compactions; the mount refreshes to the owner's current head at once, so a
+retry reads current content.
 `/health` reports each mount under `sharding.remoteMounts` (connected,
 available, circuit, revision, last refresh, last error) together with
 `sharding.configDigest`, which is identical on validators configured alike.
