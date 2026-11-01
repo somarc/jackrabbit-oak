@@ -134,7 +134,11 @@ public class IpfsClusterDockerRule extends ExternalResource {
         kubo.getDockerClient().stopContainerCmd(kubo.getContainerId()).exec();
     }
 
-    /** Restarts a stopped Kubo container and reconnects it to the other Kubo nodes. */
+    /**
+     * Restarts a stopped Kubo container, reconnects it to the other Kubo nodes and waits until every cluster
+     * peer can allocate to it again: while Kubo was down its cluster peer's metrics expired, and the allocator
+     * ignores a peer without valid metrics, so a pin right after the restart would see too few candidates.
+     */
     public void startKubo(int i) throws IOException, InterruptedException {
         GenericContainer<?> kubo = kubos.get(i);
         kubo.getDockerClient().startContainerCmd(kubo.getContainerId()).exec();
@@ -151,6 +155,7 @@ public class IpfsClusterDockerRule extends ExternalResource {
             }
         }
         connectKubo(i);
+        awaitAllocatable();
     }
 
     private void start() throws IOException, InterruptedException {
