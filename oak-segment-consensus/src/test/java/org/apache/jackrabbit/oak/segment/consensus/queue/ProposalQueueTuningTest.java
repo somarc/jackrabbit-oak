@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.queue;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.junit.After;
 import org.junit.Test;
 
@@ -38,6 +39,30 @@ public class ProposalQueueTuningTest {
         System.clearProperty("oak.proposal.payload.spill.max.bytes");
         System.clearProperty("oak.proposal.hard.max.pending");
         System.clearProperty("oak.proposal.payload.spill.dir");
+        System.clearProperty("oak.blockchain.mode");
+        BlockchainConfig.reset();
+    }
+
+    @Test
+    public void testRequiredConfirmationsDefaultFollowsBlockchainMode() {
+        String[][] cases = {{"mock", "1"}, {"local", "1"}, {"sepolia", "3"}};
+        for (String[] c : cases) {
+            System.setProperty("oak.blockchain.mode", c[0]);
+            BlockchainConfig.reset();
+
+            assertEquals(c[0], Integer.parseInt(c[1]), ProposalQueueTuning.fromSystemProperties().requiredConfirmations());
+        }
+    }
+
+    @Test
+    public void testExplicitRequiredConfirmationsOverrideTheModeDefault() {
+        System.setProperty("oak.blockchain.mode", "sepolia");
+        BlockchainConfig.reset();
+        System.setProperty("oak.proposal.confirmation.required", "2");
+
+        assertEquals(2, ProposalQueueTuning.fromSystemProperties().requiredConfirmations());
+        assertEquals(5, ProposalQueueTuning.resolveRequiredConfirmations(5));
+        assertEquals(3, ProposalQueueTuning.resolveRequiredConfirmations(ProposalQueueTuning.DEFAULT_REQUIRED_CONFIRMATIONS));
     }
 
     @Test

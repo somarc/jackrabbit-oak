@@ -125,6 +125,8 @@ public class OakPaymentEventParserTest {
         long blockNumber = 12345L;
 
         Log ethLog = new Log();
+        ethLog.setAddress("0x1234567890abcdef1234567890abcdef12345678");
+        ethLog.setBlockNumber("0x" + Long.toHexString(blockNumber));
         ethLog.setTransactionHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
         ethLog.setTopics(Arrays.asList(
             EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
@@ -146,6 +148,26 @@ public class OakPaymentEventParserTest {
         assertEquals(PaymentProof.PaymentToken.UNKNOWN, event.paymentToken);
         assertEquals(0, event.capabilityFlags);
         assertNull(event.paymentTier);
+        assertEquals("0x1234567890abcdef1234567890abcdef12345678", event.emitterAddress);
+    }
+
+    @Test
+    public void writeAuthorizedBlockNumberComesFromTheLogNotTheEventData() {
+        Log ethLog = new Log();
+        ethLog.setBlockNumber("0x" + Long.toHexString(500L));
+        ethLog.setTopics(Arrays.asList(
+            EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            paddedAddressTopic("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ));
+        long forgedBlock = 1L;
+        ethLog.setData("0x" + paddedUint(BigInteger.TEN) + paddedUint(BigInteger.valueOf(forgedBlock)));
+
+        assertEquals(500L, parser.parsePaymentLog(ethLog, 99L).blockNumber);
+
+        ethLog.setBlockNumber(null);
+        assertEquals(99L, parser.parsePaymentLog(ethLog, 99L).blockNumber);
     }
 
     @Test
