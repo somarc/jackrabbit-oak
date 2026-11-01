@@ -80,12 +80,6 @@ public @interface NodeRuntimeTuningConfig {
     int http_port() default -1;
 
     @AttributeDefinition(
-        name = "Sharding Num Shards",
-        description = "Shard count override. <= 0 preserves system-property or environment behavior."
-    )
-    int sharding_num_shards() default -1;
-
-    @AttributeDefinition(
         name = "Mock Epoch Duration Seconds",
         description = "Mock-mode epoch duration override. <= 0 preserves system-property or environment behavior."
     )

@@ -140,13 +140,6 @@ public final class AeronClusterBootstrapper {
 
         new AeronClusterRuntimeAttacher().attach(httpServer, aeronClusterLauncher);
 
-        try {
-            new ShardRouterInitializer().initialize(httpServer, selfUrl, peerUrls, logClusterStateDetails);
-        } catch (Exception e) {
-            log.warn("⚠️  WARNING: Failed to initialize Shard Router: {}", e.getMessage(), e);
-            log.warn("   -> Shard routing disabled, requests will route directly");
-        }
-
         return new AeronClusterStartupResult(aeronEngine, aeronClusterLauncher, hostnamesList, nodeId);
     }
 }

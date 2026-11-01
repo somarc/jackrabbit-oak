@@ -237,10 +237,7 @@ public class RequestRouter implements AutoCloseable {
         });
 
         // Proposals and binary upload (ADR 020)
-        post("/v1/propose-write", (req, res, path) -> {
-            logShardRoute(req);
-            writeProposalHandler.handleProposeWrite(req, res);
-        });
+        post("/v1/propose-write", (req, res, path) -> writeProposalHandler.handleProposeWrite(req, res));
         post("/v1/propose-delete", (req, res, path) -> deleteProposalHandler.handleDeleteProposal(req, res));
         post("/v1/binary/declare-intent", (req, res, path) -> binaryUploadHandler.handleDeclareIntent(req, res));
         prefix("GET", "/v1/binary/check-intent/", (req, res, path) -> binaryUploadHandler.handleCheckIntent(req, res));
@@ -489,27 +486,6 @@ public class RequestRouter implements AutoCloseable {
             return false;
         }
         return true;
-    }
-
-    // Phase 1: shard routing is logged only; all requests still process locally.
-    private void logShardRoute(HttpServletRequest request) {
-        if (context.shardRouter == null) {
-            return;
-        }
-        String walletAddress = request.getParameter("walletAddress");
-        if (walletAddress == null || walletAddress.isEmpty()) {
-            walletAddress = request.getParameter("wallet");
-        }
-        if (walletAddress != null && !walletAddress.isEmpty()) {
-            try {
-                String leaderUrl = context.shardRouter.routeRequest(walletAddress);
-                if (leaderUrl != null) {
-                    log.debug("🔀 Shard routing: wallet {} → leader {}", walletAddress, leaderUrl);
-                }
-            } catch (Exception e) {
-                log.debug("Shard routing check failed: {}", e.getMessage());
-            }
-        }
     }
 
     // HEAD from AeronConsensusEngine (tracks latest HEAD correctly), FileStore as fallback.

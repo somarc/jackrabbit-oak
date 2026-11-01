@@ -40,7 +40,6 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOpt
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
@@ -1964,26 +1963,6 @@ public class RequestRouterTest {
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"limit\":100"));
             assertTrue(body.toString().contains("\"memberUrl\":\"http://validator-2:8090\""));
-        });
-    }
-
-    @Test
-    public void testProposeWriteRouteUsesWalletFallbackForShardRouting() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            ShardRouter shardRouter = mock(ShardRouter.class);
-            when(shardRouter.routeRequest("0xwallet")).thenReturn("http://validator-7:8090");
-            context.shardRouter = shardRouter;
-
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/v1/propose-write");
-            when(request.getParameter("walletAddress")).thenReturn(null);
-            when(request.getParameter("wallet")).thenReturn("0xwallet");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(shardRouter).routeRequest("0xwallet");
         });
     }
 

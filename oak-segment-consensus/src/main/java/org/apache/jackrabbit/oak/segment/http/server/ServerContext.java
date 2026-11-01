@@ -27,7 +27,6 @@ import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
-import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardRouter;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
@@ -65,7 +64,6 @@ public class ServerContext {
     public volatile ProposalQueueManagerOptimized proposalQueueManager;
     public volatile FragmentationTracker fragmentationTracker;
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
-    public volatile ShardRouter shardRouter; // Optional - for sharded routing
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager; // ADR 020 lazy binary upload
     public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
     public volatile org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore; // For eager binary uploads
@@ -234,11 +232,6 @@ public class ServerContext {
     public void setGCProposalManager(GCProposalManager gcProposalManager) {
         this.gcProposalManager = gcProposalManager;
         log.info("✅ GC Proposal Manager initialized");
-    }
-    
-    public void setShardRouter(ShardRouter shardRouter) {
-        this.shardRouter = shardRouter;
-        log.info("✅ Shard Router initialized");
     }
     
     public void setUploadSessionManager(org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager) {
