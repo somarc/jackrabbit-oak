@@ -217,6 +217,32 @@ rather than "not found", and the all-wallets listing is marked `partial`.
 available, circuit, revision, last refresh, last error) together with
 `sharding.configDigest`, which is identical on validators configured alike.
 
+An enterprise cluster commits its charter and federation directory through
+consensus. Set `oak.federation.enterpriseId` (`OAK_FEDERATION_ENTERPRISE_ID`, a
+0x-prefixed 32-byte id) on every member; the leader then proposes the charter
+once after genesis, and every member reports in `/health` and the public
+`GET /v1/federation` whether its configuration still matches the committed one.
+A member whose settings differ refuses writes (`503 charter_mismatch`).
+
+| Property / variable | Meaning |
+|---|---|
+| `oak.federation.mode` / `OAK_FEDERATION_MODE` | `mock`, `local`, `sepolia` or `mainnet`; defaults to the blockchain mode |
+| `oak.federation.chainId` / `OAK_FEDERATION_CHAIN_ID` | defaults per mode: 0, 31337, 11155111, 1 (sepolia and mainnet are enforced) |
+| `oak.federation.registry` / `OAK_FEDERATION_REGISTRY` | the EnterpriseRegistry address, or `static` (mock and local only) |
+| `oak.federation.rpcUrl` / `OAK_FEDERATION_RPC_URL` | RPC endpoint for the registry; falls back to `oak.blockchain.rpcUrl` |
+| `oak.federation.registry.codehash` / `OAK_FEDERATION_REGISTRY_CODEHASH` | keccak256 of the registry's runtime code; required on mainnet |
+| `oak.federation.directoryFile` / `OAK_FEDERATION_DIRECTORY_FILE` | static directory JSON (`directoryEpoch`, `entries`) for a `static` registry |
+| `oak.federation.pollMs` | how often the directory is checked (default 10000) |
+
+The leader reads a registry at the finalized block (the latest on a `local`
+chain), after checking that the RPC reports the charter's chain and the address
+holds the expected code, and proposes each newer `directoryEpoch` chained after
+the committed snapshot. Once a directory is committed, writes are decided from
+it at ingress and again at replicated apply: a namespace may be written by its
+own wallet or by its enterprise's listed writers (`namespace` request parameter),
+only on the cluster of the enterprise that owns it, and only while that
+enterprise is `ACTIVE`; other clusters' namespaces answer `307 wrong_cluster`.
+
 Once a federation directory is committed, it replaces those static routes: each
 namespace of every `ACTIVE` enterprise other than the local charter's is mounted
 read-only at its address root (`/oak-chain/XX/YY/ZZ/0x<address>`); local and

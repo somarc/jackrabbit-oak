@@ -149,9 +149,20 @@ public final class DirectorySnapshot {
         return fromMap(json);
     }
 
-    /** True when both snapshots describe the same registry state, whatever they were chained after. */
+    /**
+     * True when both snapshots describe the same directory, whatever they were chained after and whichever
+     * block they were read at.
+     */
     public boolean sameContent(@NotNull DirectorySnapshot other) {
-        return chainedAfter(null).canonicalJson.equals(other.chainedAfter(null).canonicalJson);
+        return contentJson().equals(other.contentJson());
+    }
+
+    private String contentJson() {
+        Map<String, Object> json = toMap();
+        json.remove("prevDigest");
+        json.remove("blockNumber");
+        json.remove("blockHash");
+        return FederationJson.canonical(json);
     }
 
     public String canonicalJson() {

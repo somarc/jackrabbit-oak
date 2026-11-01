@@ -86,9 +86,6 @@ public final class DirectoryEntry {
         writers = FederationJson.addressSet(json, "writers");
         String payment = FederationJson.optionalString(json, "paymentContract");
         paymentContract = payment.isEmpty() ? "" : FederationJson.address(payment, "paymentContract");
-        if (status == Status.ACTIVE && endpoints.isEmpty()) {
-            throw new MutationRejectedException("Active enterprise " + enterpriseId + " lists no endpoints");
-        }
     }
 
     @NotNull

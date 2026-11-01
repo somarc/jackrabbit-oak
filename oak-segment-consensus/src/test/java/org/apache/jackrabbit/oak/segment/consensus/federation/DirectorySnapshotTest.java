@@ -72,8 +72,6 @@ public class DirectorySnapshotTest {
     @Test
     public void rejectsInvalidEntries() {
         assertThrows(MutationRejectedException.class, () -> directory(1,
-            entry(ENTERPRISE_A, "ACTIVE", List.of(), List.of(NAMESPACE_A), List.of())));
-        assertThrows(MutationRejectedException.class, () -> directory(1,
             entry(ENTERPRISE_A, "ACTIVE", List.of("ftp://a"), List.of(NAMESPACE_A), List.of())));
         assertThrows(MutationRejectedException.class, () -> directory(1,
             entry(ENTERPRISE_A, "UNKNOWN", List.of("http://a"), List.of(NAMESPACE_A), List.of())));
@@ -82,9 +80,11 @@ public class DirectorySnapshotTest {
         assertThrows(MutationRejectedException.class, () -> directory(1,
             entry(ENTERPRISE_A, "ACTIVE", List.of("http://a"), List.of(DirectoryEntry.GENESIS_NAMESPACE), List.of())));
         assertThrows(MutationRejectedException.class, () -> DirectorySnapshot.fromMap(Map.of("chainId", 0L)));
-        // A pending enterprise may not have endpoints yet
         assertEquals(DirectoryEntry.Status.PENDING, directory(1,
             entry(ENTERPRISE_A, "pending", List.of(), List.of(NAMESPACE_A), List.of())).entry(ENTERPRISE_A).getStatus());
+        // An active enterprise between a config rotation and new endpoints is listed but not routable
+        assertTrue(directory(1, entry(ENTERPRISE_A, "ACTIVE", List.of(), List.of(NAMESPACE_A), List.of()))
+            .entry(ENTERPRISE_A).getEndpoints().isEmpty());
     }
 
     @Test
@@ -106,6 +106,10 @@ public class DirectorySnapshotTest {
         assertEquals(first.digest(), second.getPrevDigest());
         assertEquals("", second.chainedAfter(null).getPrevDigest());
         assertTrue(second.sameContent(second.chainedAfter(null)));
+        Map<String, Object> laterBlock = second.toMap();
+        laterBlock.put("blockNumber", 99L);
+        laterBlock.put("blockHash", "0x" + "ef".repeat(32));
+        assertTrue(second.sameContent(DirectorySnapshot.fromMap(laterBlock)));
         assertNotEquals(second.digest(), second.chainedAfter(null).digest());
         assertThrows(MutationRejectedException.class,
             () -> DirectorySnapshot.fromMap(directoryMap(1, "0x1234", entryA("ACTIVE"))));

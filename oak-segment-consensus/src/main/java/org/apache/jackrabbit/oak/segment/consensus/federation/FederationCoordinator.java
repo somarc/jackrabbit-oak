@@ -74,11 +74,8 @@ public final class FederationCoordinator implements Closeable {
 
     public static FederationCoordinator fromConfig(FederationConfig config, Supplier<NodeState> rootSupplier,
                                                    Proposer proposer) {
-        Charter charter = config.getCharter();
-        DirectorySource source = charter != null && config.getDirectoryFile() != null
-            ? new StaticFileDirectorySource(config.getDirectoryFile(), charter)
-            : null;
-        return new FederationCoordinator(charter, source, rootSupplier, proposer, System::currentTimeMillis,
+        return new FederationCoordinator(config.getCharter(), config.directorySource(), rootSupplier, proposer,
+            System::currentTimeMillis,
             config.getPollMs() * 3);
     }
 
