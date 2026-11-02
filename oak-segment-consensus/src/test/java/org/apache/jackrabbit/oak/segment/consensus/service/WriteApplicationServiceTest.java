@@ -183,6 +183,37 @@ public class WriteApplicationServiceTest {
     }
 
     @Test
+    public void writeTypesEveryContainerOnThePathAndTheRecordAsNames() {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        writeService(nodeStore).applyWrite(WALLET, PATH, "page", "hello", "0xsig", null, null, null, null, null);
+
+        NodeState node = nodeStore.getRoot();
+        String[] parts = PATH.substring(1).split("/");
+        for (int i = 0; i < parts.length; i++) {
+            node = node.getChildNode(parts[i]);
+            String expected = i < parts.length - 1 ? WalletPathUtil.CONTAINER_TYPE : WalletPathUtil.RECORD_TYPE;
+            assertEquals(parts[i], expected, node.getName("jcr:primaryType"));
+        }
+    }
+
+    @Test
+    public void writeKeepsTheTypeOfAnExistingNodeOnThePath() {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        WriteApplicationService service = writeService(nodeStore);
+        service.applyWrite(WALLET, PATH, "page", "parent", "0xsig", null, null, null, null, "proposal-1");
+        service.applyWrite(WALLET, PATH + "/child", "page", "child", "0xsig", null, null, null, null, "proposal-2");
+
+        assertEquals(WalletPathUtil.RECORD_TYPE, contentNode(nodeStore, PATH).getName("jcr:primaryType"));
+        assertEquals(WalletPathUtil.RECORD_TYPE, contentNode(nodeStore, PATH + "/child").getName("jcr:primaryType"));
+    }
+
+    private static WriteApplicationService writeService(MemoryNodeStore nodeStore) {
+        FileStoreFlushService flushService = mock(FileStoreFlushService.class);
+        doAnswer(invocation -> true).when(flushService).onChangeApplied(any());
+        return new WriteApplicationService(fileStoreWithHeads("prev-head", "new-head"), nodeStore, null, flushService);
+    }
+
+    @Test
     public void testApplyWriteStoresClientIpfsReferenceAndIntentToken() {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = new MemoryNodeStore();

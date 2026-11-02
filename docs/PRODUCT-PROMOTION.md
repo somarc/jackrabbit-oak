@@ -54,16 +54,19 @@ remain excluded. Their historical commits do not make them part of the product.
 |---|---|
 | Root POM | Include consensus and IPFS in the reactor |
 | Parent POM | Downstream build/provenance policy, deployment off by default, existing coverage/documentation configuration |
-| Segment Tar POM | Explicit segment/file/TAR/standby exports and EventAdmin dependency for fork-local integration |
-| `SegmentNodeStoreRegistrar` | Read-only composite-mount registration; preserve upstream cache-toggle registration and cleanup on both store paths |
-| `HttpSegmentStoreSync` | Retained historical OSGi HTTP-sync helper; not the standalone consensus write protocol |
+| Segment Tar POM | Explicit segment/file/TAR/standby exports that the consensus bundle imports |
 | Assembly and ignore rules | Keep generated consensus packaging outputs out of source distributions |
 | GitHub workflows | Non-publishing Somarc validation, not Apache release or prototype deployment automation |
 
 The extra Segment Tar exports are a fork-private compatibility seam. They do not
-constitute a stable public Apache API. The retained HTTP-sync helper and complete
-OSGi deployment remain separate review surfaces; standalone validation does not
-establish their production readiness.
+constitute a stable public Apache API. Complete OSGi deployment remains a separate
+review surface; standalone validation does not establish its production readiness.
+
+`HttpSegmentStoreSync` and the registrar branch that opened every
+`composite-mount-*` segment store read-only were removed on 2026-11-02. Nothing
+had used them since the March 2026 cleanup: validators mount each other with
+`LazyHttpNodeStore`, and AEM 6.5 LTS uses the connector's mount bundle on stock
+Oak. The last version is tagged `legacy/http-segment-store-sync`.
 
 ## Compatibility and identity changes
 

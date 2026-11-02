@@ -90,7 +90,6 @@
                             org.eclipse.jetty.alpn;version="[1,2)";resolution:=optional,
                             org.eclipse.jetty.npn;version="[1,2)";resolution:=optional,
                             org.jboss.marshalling;resolution:=optional,
-                            org.osgi.service.event;resolution:=optional,
                             sun.misc;resolution:=optional,
                             sun.nio.ch;resolution:=optional,
                             sun.security.ssl;resolution:=optional,
@@ -401,7 +400,7 @@
         <dependency>
             <groupId>org.osgi</groupId>
             <artifactId>org.osgi.service.event</artifactId>
-            <scope>provided</scope>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.osgi</groupId>
