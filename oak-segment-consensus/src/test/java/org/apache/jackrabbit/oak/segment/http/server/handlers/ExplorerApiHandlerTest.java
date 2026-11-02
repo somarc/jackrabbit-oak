@@ -23,6 +23,7 @@ import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
+import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
 
 import jakarta.servlet.ServletOutputStream;
@@ -40,6 +41,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
@@ -76,6 +78,26 @@ public class ExplorerApiHandlerTest {
         assertTrue(json.contains("\"enabled\":\"true\""));
         assertTrue(json.contains("\"version\":\"7\""));
         assertTrue(json.contains("\"tags\":[\"one\",\"two\"]"));
+    }
+
+    @Test
+    public void exploreReadsTheCurrentReadViewAfterItIsSwapped() throws Exception {
+        MemoryNodeStore before = new MemoryNodeStore();
+        MemoryNodeStore after = new MemoryNodeStore();
+        NodeBuilder root = after.getRoot().builder();
+        root.child("oak-chain").child("87");
+        after.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        AtomicReference<NodeStore> readView = new AtomicReference<>(before);
+        ExplorerApiHandler handler = ExplorerApiHandler.withSuppliers(readView::get, Paths.get("/tmp/store"), () -> null);
+
+        HttpServletResponse missing = responseWithBody(new StringWriter());
+        handler.handleExploreNode(missing, "/oak-chain/87");
+        verify(missing).setStatus(HttpServletResponse.SC_NOT_FOUND);
+
+        readView.set(after);
+        HttpServletResponse found = responseWithBody(new StringWriter());
+        handler.handleExploreNode(found, "/oak-chain/87");
+        verify(found).setStatus(HttpServletResponse.SC_OK);
     }
 
     @Test

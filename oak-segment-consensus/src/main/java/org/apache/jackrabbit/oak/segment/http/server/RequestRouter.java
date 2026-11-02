@@ -125,8 +125,8 @@ public class RequestRouter implements AutoCloseable {
             context.fileStore,
             context.storeDirectory
         );
-        ExplorerApiHandler explorerApiHandler = ExplorerApiHandler.withBlobStoreSupplier(
-            context.nodeStore,
+        ExplorerApiHandler explorerApiHandler = ExplorerApiHandler.withSuppliers(
+            () -> context.nodeStore,
             context.storeDirectory,
             () -> context.blobStore
         );
