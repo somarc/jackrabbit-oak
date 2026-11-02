@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.mount.http;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -169,18 +170,28 @@ public class Http2ClientPool {
         return exists(url, false);
     }
 
+    /**
+     * Status of a {@code HEAD} request, so callers can tell "absent" (404) from a failing endpoint.
+     *
+     * @param url the resource URL
+     * @return the HTTP status code
+     * @throws IOException when the request itself fails
+     * @throws InterruptedException when interrupted while waiting for the response
+     */
+    public int headStatus(String url) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .timeout(REQUEST_TIMEOUT)
+            .method("HEAD", HttpRequest.BodyPublishers.noBody())
+            .build();
+        HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+        recordVersion(response);
+        return response.statusCode();
+    }
+
     private boolean exists(String url, boolean warnOnFailure) {
         try {
-            HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(REQUEST_TIMEOUT)
-                .method("HEAD", HttpRequest.BodyPublishers.noBody())
-                .build();
-            
-            HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
-            
-            recordVersion(response);
-            return response.statusCode() == 200;
+            return headStatus(url) == 200;
         } catch (Exception e) {
             String message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             if (warnOnFailure) {

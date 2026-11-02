@@ -141,6 +141,10 @@
           <artifactId>maven-surefire-plugin</artifactId>
           <configuration>
             <argLine>${test.opts} -javaagent:${org.mockito:mockito-core:jar} --add-opens java.base/jdk.internal.misc=ALL-UNNAMED</argLine>
+            <systemPropertyVariables>
+              <!-- Oak skips a GC run within 10 h of the last successful one; tests run several in a row. -->
+              <oak.gc.backoff>0</oak.gc.backoff>
+            </systemPropertyVariables>
           </configuration>
         </plugin>
       </plugins>

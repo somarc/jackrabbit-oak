@@ -16,11 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
-import org.apache.jackrabbit.oak.api.Blob;
-import org.apache.jackrabbit.oak.api.PropertyState;
-import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
-import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumSignatureVerifier;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
@@ -31,17 +27,12 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
-import org.apache.jackrabbit.oak.spi.state.ChildNodeEntry;
-import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.math.BigDecimal;
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.Map;
 
 /**
@@ -50,13 +41,6 @@ import java.util.Map;
 public class DeleteProposalHandler {
 
     private static final Logger log = LoggerFactory.getLogger(DeleteProposalHandler.class);
-    private static final long DEFAULT_DELETE_SIZE_MB = 1L;
-    private static final long BYTES_PER_MB = 1024L * 1024L;
-    private static final long ESTIMATED_BYTES_PER_NODE = 1024L;
-    private static final long ESTIMATED_BYTES_PER_PROPERTY = 100L;
-    private static final long BINARY_BYTES_PER_PROPERTY_UNIT = 100L;
-    private static final int MAX_DELETE_ESTIMATION_NODES = 50_000;
-    private static final int MAX_DELETE_ESTIMATION_DEPTH = 64;
 
     private final ServerContext context;
 
@@ -234,47 +218,6 @@ public class DeleteProposalHandler {
             }
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // GC DEBT TRACKING: Track debt when content is deleted (deferred cost)
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            BigDecimal gcDebtIncurred = BigDecimal.ZERO;
-            BigDecimal totalDebt = BigDecimal.ZERO;
-            BigDecimal pendingDebt = BigDecimal.ZERO;
-            boolean writesBlocked = false;
-            DeleteSizeEstimate deleteSizeEstimate = estimateDeleteSize(contentPath);
-
-            if (context.gcAccountManager != null) {
-                try {
-                    // Add debt to account (pending until GC executes)
-                    BigDecimal debtCost = context.gcAccountManager.addDebt(
-                        normalizedWallet, contentPath, deleteSizeEstimate.estimatedSizeMB());
-                    EntityGCAccount account = context.gcAccountManager.getAccount(normalizedWallet);
-
-                    gcDebtIncurred = debtCost;
-                    totalDebt = account.totalDebt;
-                    pendingDebt = account.getPendingDebt();
-                    writesBlocked = account.writesBlocked;
-
-                    log.info(
-                        "💰 GC debt added: wallet={}, path={}, debt=${}, total=${}, pending=${}, blocked={}, estimatedMb={}, nodes={}, descendants={}, properties={}, truncated={}",
-                        normalizedWallet,
-                        contentPath,
-                        gcDebtIncurred,
-                        totalDebt,
-                        pendingDebt,
-                        writesBlocked,
-                        deleteSizeEstimate.estimatedSizeMB(),
-                        deleteSizeEstimate.nodeCount(),
-                        deleteSizeEstimate.descendantCount(),
-                        deleteSizeEstimate.propertyCount(),
-                        deleteSizeEstimate.truncated()
-                    );
-
-                } catch (Exception e) {
-                    log.warn("⚠️  Failed to track GC debt for delete: {}", e.getMessage());
-                }
-            }
-
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // QUEUE DELETE PROPOSAL: Same flow as writes, just different type
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             log.debug("📥 Queuing DELETE proposal {} (tx: {}), waiting for Ethereum confirmation",
@@ -299,133 +242,12 @@ public class DeleteProposalHandler {
             payload.put("timeoutTimestamp", System.currentTimeMillis() + ProposalQueuePolicy.confirmationTimeoutMs());
             payload.put("wallet", wallet);
             payload.put("contentPath", contentPath);
-            payload.put("estimatedDeleteSizeMb", deleteSizeEstimate.estimatedSizeMB());
-            payload.put("estimatedNodeCount", deleteSizeEstimate.nodeCount());
-            payload.put("estimatedDescendantCount", deleteSizeEstimate.descendantCount());
-            payload.put("estimatedPropertyCount", deleteSizeEstimate.propertyCount());
-            payload.put("estimationTruncated", deleteSizeEstimate.truncated());
-            payload.put("gcDebtIncurred", gcDebtIncurred.toString());
-            payload.put("totalDebt", totalDebt.toString());
-            payload.put("pendingDebt", pendingDebt.toString());
-            payload.put("writesBlocked", writesBlocked);
             JsonOutputUtil.write(response, HttpServletResponse.SC_ACCEPTED, payload);
             log.info("✅ DELETE proposal {} queued successfully (path: {})", proposalId, contentPath);
 
         } catch (Exception e) {
             log.error("❌ Delete proposal failed", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Delete proposal failed: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Estimate delete footprint for a given subtree.
-     *
-     * <p>The client already tells Oak which path is being deleted. Oak should derive
-     * subtree size locally from the NodeStore rather than trusting client-supplied
-     * descendant counts for GC-debt accounting.</p>
-     *
-     * @param contentPath Path to the content node
-     * @return Estimated subtree footprint, including truncation when runtime safety caps hit
-     */
-    private DeleteSizeEstimate estimateDeleteSize(String contentPath) {
-        if (context.nodeStore == null) {
-            log.debug("NodeStore not available, using default size estimate");
-            return DeleteSizeEstimate.defaultEstimate();
-        }
-
-        try {
-            NodeState root = context.nodeStore.getRoot();
-
-            // Navigate to the content path
-            String[] pathParts = contentPath.split("/");
-            NodeState current = root;
-
-            for (String part : pathParts) {
-                if (part.isEmpty()) {
-                    continue;
-                }
-                current = current.getChildNode(part);
-                if (!current.exists()) {
-                    log.debug("Path {} does not exist, using default size estimate", contentPath);
-                    return DeleteSizeEstimate.defaultEstimate();
-                }
-            }
-
-            Deque<TraversalFrame> stack = new ArrayDeque<>();
-            stack.push(new TraversalFrame(current, 0));
-
-            long nodeCount = 0;
-            long propertyCount = 0;
-            boolean truncated = false;
-
-            while (!stack.isEmpty()) {
-                TraversalFrame frame = stack.pop();
-                nodeCount++;
-
-                for (PropertyState prop : frame.node().getProperties()) {
-                    propertyCount++;
-                    if (prop.getType() == Type.BINARY) {
-                        try {
-                            Blob blob = prop.getValue(Type.BINARY);
-                            propertyCount += blob.length() / BINARY_BYTES_PER_PROPERTY_UNIT;
-                        } catch (Exception e) {
-                            log.debug("Unable to inspect binary property size for {}: {}", contentPath, e.getMessage());
-                        }
-                    }
-                }
-
-                if (frame.depth() >= MAX_DELETE_ESTIMATION_DEPTH) {
-                    if (frame.node().getChildNodeCount(1) > 0) {
-                        truncated = true;
-                    }
-                    continue;
-                }
-
-                for (ChildNodeEntry childEntry : frame.node().getChildNodeEntries()) {
-                    if (nodeCount + stack.size() >= MAX_DELETE_ESTIMATION_NODES) {
-                        truncated = true;
-                        break;
-                    }
-                    stack.push(new TraversalFrame(childEntry.getNodeState(), frame.depth() + 1));
-                }
-            }
-
-            long estimatedBytes =
-                (nodeCount * ESTIMATED_BYTES_PER_NODE) + (propertyCount * ESTIMATED_BYTES_PER_PROPERTY);
-            long estimatedMB = Math.max(
-                DEFAULT_DELETE_SIZE_MB,
-                (estimatedBytes + BYTES_PER_MB - 1) / BYTES_PER_MB
-            );
-            DeleteSizeEstimate estimate = new DeleteSizeEstimate(estimatedMB, nodeCount, propertyCount, truncated);
-
-            log.debug(
-                "Delete size estimate for {}: nodes={}, descendants={}, properties={}, ~{} MB, truncated={}",
-                contentPath,
-                estimate.nodeCount(),
-                estimate.descendantCount(),
-                estimate.propertyCount(),
-                estimate.estimatedSizeMB(),
-                estimate.truncated()
-            );
-
-            return estimate;
-
-        } catch (Exception e) {
-            log.warn("Failed to estimate content size for {}: {}", contentPath, e.getMessage());
-            return DeleteSizeEstimate.defaultEstimate();
-        }
-    }
-
-    private record TraversalFrame(NodeState node, int depth) {
-    }
-
-    private record DeleteSizeEstimate(long estimatedSizeMB, long nodeCount, long propertyCount, boolean truncated) {
-        private long descendantCount() {
-            return nodeCount > 0 ? nodeCount - 1 : 0;
-        }
-
-        private static DeleteSizeEstimate defaultEstimate() {
-            return new DeleteSizeEstimate(DEFAULT_DELETE_SIZE_MB, 0, 0, false);
         }
     }
 }

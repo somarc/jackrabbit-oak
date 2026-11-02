@@ -18,8 +18,6 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
-import org.apache.jackrabbit.oak.segment.consensus.gc.EntityGCAccount;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
@@ -42,7 +40,6 @@ import org.junit.Test;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
-import java.math.BigDecimal;
 import java.nio.file.Paths;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -180,18 +177,13 @@ public class ExplorerApiV1HandlerTest {
     }
 
     @Test
-    public void testHandleWalletByAddressReturnsWalletMetadataAndGcAccount() throws Exception {
+    public void testHandleWalletByAddressReturnsWalletMetadataWithoutGcAccount() throws Exception {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         seedWallet(nodeStore, WALLET);
 
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
         ServerContext context = newContext(nodeStore);
-        context.gcAccountManager = new GCAccountManager();
-        EntityGCAccount account = context.gcAccountManager.getAccount(WALLET.toLowerCase());
-        account.totalDebt = new BigDecimal("4.25");
-        account.executedDebt = new BigDecimal("1.50");
-        account.writesBlocked = false;
 
         ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
         handler.handleWalletByAddress(response, WALLET);
@@ -204,8 +196,7 @@ public class ExplorerApiV1HandlerTest {
         assertTrue(json.contains("\"totalWrites\":7"));
         assertTrue(json.contains("\"name\":\"doc-1\""));
         assertTrue(json.contains("\"contentType\":\"fragment\""));
-        assertTrue(json.contains("\"totalDebt\":\"4.25\""));
-        assertTrue(json.contains("\"pendingDebt\":\"2.75\""));
+        assertFalse(json.contains("gcAccount"));
         assertTrue(json.contains("\"authority\":{\"wallet\":\"" + WALLET + "\""));
     }
 

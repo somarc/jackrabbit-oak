@@ -74,7 +74,6 @@ public class WriteApplicationService {
     // Optional callbacks for integration
     private HeadUpdateCallback headUpdateCallback;
     private SSEEventCallback sseEventCallback;
-    private FragmentationCallback fragmentationCallback;
     private CidMappingCallback cidMappingCallback;
     private DurabilityCallback durabilityCallback;
     
@@ -114,10 +113,6 @@ public class WriteApplicationService {
     
     public void setSseEventCallback(SSEEventCallback callback) {
         this.sseEventCallback = callback;
-    }
-    
-    public void setFragmentationCallback(FragmentationCallback callback) {
-        this.fragmentationCallback = callback;
     }
     
     public void setCidMappingCallback(CidMappingCallback callback) {
@@ -279,6 +274,9 @@ public class WriteApplicationService {
                     // Lets every validator resolve the binary, whichever IPFS node stored it.
                     ReplicatedBinaryIndex.record(rootBuilder, blobId, ipfsCid);
                 }
+                // Binary GC never releases an entry referenced at or after its mark.
+                ReplicatedBinaryIndex.stamp(rootBuilder, blobId,
+                    auditMetadata != null ? auditMetadata.getAppliedLogPosition() : null, appliedAt);
             } else if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 // Pure IPFS reference without local blob
                 // No gateway URL: it depends on this node's settings, and replicated state must not.
@@ -297,11 +295,6 @@ public class WriteApplicationService {
             MutationApplySupport.mergeReplicated(
                 nodeStore, rootBuilder, "aeron-replication", auditMetadata, "Failed to commit write");
             flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
-            
-            // Track fragmentation
-            if (fragmentationCallback != null) {
-                fragmentationCallback.trackFragmentation(walletAddress);
-            }
             
             // Get new HEAD
             String newHead = fileStore.getHead().getRecordId().toString10();
@@ -592,14 +585,6 @@ public class WriteApplicationService {
     public interface SSEEventCallback {
         void emitContentWrite(String path, String wallet, String org, String message, String signature, String contentType);
         void emitBinaryUpload(String path, String wallet, String org, String message, String ipfsCid, String mimeType);
-    }
-    
-    /**
-     * Callback for fragmentation tracking.
-     */
-    @FunctionalInterface
-    public interface FragmentationCallback {
-        void trackFragmentation(String walletAddress);
     }
     
     /**

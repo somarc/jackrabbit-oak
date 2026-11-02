@@ -232,6 +232,38 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
         }
     }
 
+    /**
+     * Handles a failed segment read from this endpoint seen while serving a request. A missing segment means the
+     * owner reclaimed what the current head still references, so the head is refreshed now instead of at the next
+     * interval; a transport failure is recorded against the circuit breaker.
+     *
+     * @return true when the failure came from this endpoint
+     */
+    public boolean onReadFailure(@NotNull MountReadFailures.Failure failure) {
+        if (!sameEndpoint(endpoint, failure.endpoint())) {
+            return false;
+        }
+        if (failure.kind() == MountReadFailures.Kind.MISSING) {
+            NodeStore store = delegate.get();
+            if (store != null) {
+                lastRefreshAttemptAt.set(0L);
+                refreshIfDue(store);
+            }
+        } else {
+            LOG.warn("LazyHttpNodeStore[{}] segment read failed: {}", mountName, failure.detail());
+            recordFailure(new IOException(failure.detail()));
+        }
+        return true;
+    }
+
+    private static boolean sameEndpoint(String a, String b) {
+        return stripSlash(a).equals(stripSlash(b));
+    }
+
+    private static String stripSlash(String url) {
+        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+    }
+
     private void recordSuccess() {
         circuitBreaker.recordSuccess();
         lastRefreshAt = System.currentTimeMillis();

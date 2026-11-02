@@ -21,6 +21,7 @@ import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueReso
 import org.apache.jackrabbit.oak.segment.consensus.federation.Charter;
 import org.apache.jackrabbit.oak.segment.consensus.federation.DirectorySnapshot;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
+import org.apache.jackrabbit.oak.segment.consensus.mount.MountReadFailures;
 import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.AeronApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.BinaryUploadHandler;
@@ -34,8 +35,6 @@ import org.apache.jackrabbit.oak.segment.http.server.handlers.EventStreamHandler
 import org.apache.jackrabbit.oak.segment.http.server.handlers.ExplorerApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.ExplorerApiV1Handler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.FileHandler;
-import org.apache.jackrabbit.oak.segment.http.server.handlers.FragmentationApiHandler;
-import org.apache.jackrabbit.oak.segment.http.server.handlers.GcCostHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.HealthHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.IpfsOpsHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.MetricsHandler;
@@ -126,8 +125,8 @@ public class RequestRouter implements AutoCloseable {
             context.fileStore,
             context.storeDirectory
         );
-        ExplorerApiHandler explorerApiHandler = ExplorerApiHandler.withBlobStoreSupplier(
-            context.nodeStore,
+        ExplorerApiHandler explorerApiHandler = ExplorerApiHandler.withSuppliers(
+            () -> context.nodeStore,
             context.storeDirectory,
             () -> context.blobStore
         );
@@ -138,12 +137,10 @@ public class RequestRouter implements AutoCloseable {
         DeleteProposalHandler deleteProposalHandler = new DeleteProposalHandler(context);
         ConsensusStatusHandler consensusStatusHandler = new ConsensusStatusHandler(context);
         ProposalQueryHandler proposalQueryHandler = new ProposalQueryHandler(context);
-        GcCostHandler gcCostHandler = new GcCostHandler(context);
         WalletQueryHandler walletQueryHandler = new WalletQueryHandler(context);
         RegistrationHandler registrationHandler = new RegistrationHandler(context);
         PeerDiscoveryHandler peerDiscoveryHandler = new PeerDiscoveryHandler(context);
         AeronApiHandler aeronApiHandler = new AeronApiHandler(context);
-        FragmentationApiHandler fragmentationApiHandler = new FragmentationApiHandler(context);
         
         // Binary upload handler (ADR 020 - lazy upload on confirmation)
         this.uploadSessionManager = new org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager();
@@ -257,13 +254,14 @@ public class RequestRouter implements AutoCloseable {
 
         get("/v1/head", (req, res, path) -> handleHead(res));
         get("/v1/federation", (req, res, path) -> handleFederation(res));
+        get("/v1/gc/status", (req, res, path) ->
+            JsonOutputUtil.write(res, HttpServletResponse.SC_OK, context.gcStatusPayload()));
         get("/v1/consensus/status", (req, res, path) -> consensusStatusHandler.handleGetConsensusStatus(res));
         get("/v1/consensus/leader", (req, res, path) -> consensusStatusHandler.handleGetConsensusLeader(
             "true".equals(req.getParameter(LeaderDiscoveryService.LOCAL_ONLY_PARAM)), res));
 
         get("/v1/wallets/stats", (req, res, path) -> walletQueryHandler.handleWalletStats(req, res));
         get("/v1/wallets/content", (req, res, path) -> walletQueryHandler.handleWalletContent(req, res));
-        get("/v1/gc/estimate", (req, res, path) -> gcCostHandler.handleGCCostEstimate(req, res));
 
         prefix("GET", "/v1/ops/operations/", (req, res, path) -> proposalQueryHandler.handleGetOperationStatus(req, res));
         get("/v1/ops/snapshots/queue", (req, res, path) -> proposalQueryHandler.handleGetOpsQueueSnapshot(res));
@@ -299,23 +297,6 @@ public class RequestRouter implements AutoCloseable {
         get("/v1/aeron/node-status", (req, res, path) -> aeronApiHandler.handleNodeStatus(req, res));
         get("/v1/aeron/leadership-history", (req, res, path) -> aeronApiHandler.handleLeadershipHistory(req, res));
         get("/v1/aeron/replication-lag", (req, res, path) -> aeronApiHandler.handleReplicationLag(res));
-
-        // Fragmentation, GC and GC accounts
-        get("/v1/fragmentation/metrics", (req, res, path) -> fragmentationApiHandler.handleGetAllMetrics(req, res));
-        prefix("GET", "/v1/fragmentation/metrics/", (req, res, path) -> fragmentationApiHandler.handleGetEntityMetrics(
-            req, res, path.substring("/v1/fragmentation/metrics/".length())));
-        get("/v1/fragmentation/top", (req, res, path) -> fragmentationApiHandler.handleGetTopFragmented(req, res));
-        get("/v1/gc/status", (req, res, path) -> fragmentationApiHandler.handleGetGcStatus(req, res));
-        get("/v1/compaction/proposals", (req, res, path) -> fragmentationApiHandler.handleGetCompactionProposals(req, res));
-        post("/v1/propose-gc", (req, res, path) -> fragmentationApiHandler.handleProposeGC(req, res));
-        post("/v1/gc/execute", (req, res, path) -> fragmentationApiHandler.handleExecuteGC(req, res));
-        post("/v1/gc/vote", (req, res, path) -> fragmentationApiHandler.handleVoteGC(req, res));
-        prefix(null, "/v1/gc/account/", (req, res, path) -> {
-            if (!handleGcAccount(fragmentationApiHandler, req, res, path)) {
-                sendNotFound(req, res, path);
-            }
-        });
-        post("/v1/gc/trigger", (req, res, path) -> fragmentationApiHandler.handleTriggerGC(req, res));
     }
 
     private void publicGet(String path, Handler handler) {
@@ -363,6 +344,16 @@ public class RequestRouter implements AutoCloseable {
      * @throws IOException if an I/O error occurs
      */
     public void route(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        // remote segment reads that fail while serving this request turn its 500 into a 503 (see ApiErrorUtil)
+        MountReadFailures.begin(context.remoteMounts);
+        try {
+            routeRequest(request, response);
+        } finally {
+            MountReadFailures.end();
+        }
+    }
+
+    private void routeRequest(HttpServletRequest request, HttpServletResponse response) throws IOException {
         String path = request.getRequestURI();
         String method = request.getMethod();
         
@@ -569,25 +560,6 @@ public class RequestRouter implements AutoCloseable {
         return false;
     }
 
-    private static boolean handleGcAccount(FragmentationApiHandler fragmentationApiHandler, HttpServletRequest request,
-                                           HttpServletResponse response, String path) throws IOException {
-        String remaining = path.substring("/v1/gc/account/".length());
-        String method = request.getMethod();
-        if (remaining.contains("/pay") && "POST".equals(method)) {
-            fragmentationApiHandler.handlePayGCDebt(request, response, remaining.substring(0, remaining.indexOf("/pay")));
-        } else if (remaining.contains("/set-limit") && "POST".equals(method)) {
-            fragmentationApiHandler.handleSetDebtLimit(request, response, remaining.substring(0, remaining.indexOf("/set-limit")));
-        } else if (remaining.contains("/execute-pending") && "POST".equals(method)) {
-            fragmentationApiHandler.handleExecutePendingDebt(request, response,
-                remaining.substring(0, remaining.indexOf("/execute-pending")));
-        } else if ("GET".equals(method) && !remaining.contains("/")) {
-            fragmentationApiHandler.handleGetGCAccount(request, response, remaining);
-        } else {
-            return false;
-        }
-        return true;
-    }
-
     // HEAD from AeronConsensusEngine (tracks latest HEAD correctly), FileStore as fallback.
     /** The committed charter and directory with this member's federation status; public by design. */
     private void handleFederation(HttpServletResponse response) throws IOException {
@@ -602,6 +574,7 @@ public class RequestRouter implements AutoCloseable {
         payload.put("directory", directory != null ? directory.toMap() : null);
         payload.put("directoryDigest", directory != null ? directory.digest() : null);
         payload.put("status", coordinator != null ? coordinator.getStatus().toMap() : null);
+        payload.put("gc", context.gcFederationPayload());
         JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
     }
 

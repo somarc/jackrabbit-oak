@@ -192,7 +192,6 @@ public class OsgiConfigApiHandler {
         components.put("tlsTuning", buildTlsTuning());
         components.put("tokenAuthTuning", buildTokenAuthTuning());
         components.put("fileStoreFlushTuning", buildFileStoreFlushTuning());
-        components.put("gcEconomicsTuning", buildGcEconomicsTuning());
         components.put("blockchainTuning", BlockchainConfigIntrospection.effectiveValues());
         components.put("nodeRuntimeTuning", buildNodeRuntimeTuning());
         components.put("runtimeUiTuning", buildRuntimeUiTuning());
@@ -207,7 +206,6 @@ public class OsgiConfigApiHandler {
         sources.put("tlsTuning", RuntimePropertySourceRegistry.getSource("tlsTuning", "system-properties"));
         sources.put("tokenAuthTuning", RuntimePropertySourceRegistry.getSource("tokenAuthTuning", "system-properties-or-env"));
         sources.put("fileStoreFlushTuning", RuntimePropertySourceRegistry.getSource("fileStoreFlushTuning", "system-properties"));
-        sources.put("gcEconomicsTuning", RuntimePropertySourceRegistry.getSource("gcEconomicsTuning", "system-properties"));
         sources.put("blockchainTuning", BlockchainConfigIntrospection.source());
         sources.put("nodeRuntimeTuning", RuntimePropertySourceRegistry.getSource("nodeRuntimeTuning", "system-properties-or-env"));
         sources.put("runtimeUiTuning", RuntimePropertySourceRegistry.getSource("runtimeUiTuning", "system-properties"));
@@ -752,14 +750,6 @@ public class OsgiConfigApiHandler {
             "oak.filestore.flush.batch"));
 
         schema.add(schemaEntry(
-            "gcEconomicsTuning.usdc_per_mb",
-            "string",
-            "0.10",
-            "runtime-readable",
-            "guarded",
-            "Mock GC cost per MB",
-            "gc.usdc.per.mb"));
-        schema.add(schemaEntry(
             "blockchainTuning.mode",
             "string",
             "mock",
@@ -1078,12 +1068,6 @@ public class OsgiConfigApiHandler {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("flush_interval_ms", readLong("oak.filestore.flush.ms", 250L));
         values.put("flush_batch", readInt("oak.filestore.flush.batch", 100));
-        return values;
-    }
-
-    private Map<String, Object> buildGcEconomicsTuning() {
-        Map<String, Object> values = new LinkedHashMap<>();
-        values.put("usdc_per_mb", readString("gc.usdc.per.mb", "0.10"));
         return values;
     }
 

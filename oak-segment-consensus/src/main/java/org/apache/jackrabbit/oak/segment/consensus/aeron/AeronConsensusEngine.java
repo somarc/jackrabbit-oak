@@ -32,6 +32,7 @@ import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ReplicatedDurability;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
+import org.apache.jackrabbit.oak.segment.consensus.service.BinaryReleaseApplicationService;
 import org.apache.jackrabbit.oak.segment.consensus.service.FederationApplicationService;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -40,13 +41,12 @@ import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Oak's {@link ClusteredService} on Aeron Cluster (Raft). Writes, deletes, GC commands, durability reports and
+ * Oak's {@link ClusteredService} on Aeron Cluster (Raft). Writes, deletes, federation commands, durability reports and
  * transaction boundaries reach every member through cluster ingress and are applied in log order on the service
  * thread; ingress, leader discovery, snapshots and genesis are delegated to the collaborators wired in the
  * constructor.
@@ -80,6 +80,8 @@ public class AeronConsensusEngine implements ClusteredService {
     private final LeaderDiscoveryService leaderDiscoveryService;
     private final AeronIngressWritePayloadBuilder ingressWritePayloadBuilder;
     private final AeronIngressControlPayloadBuilder ingressControlPayloadBuilder;
+    private volatile java.util.function.Consumer<BinaryReleaseApplicationService.Result> binaryReleaseListener;
+    private volatile java.io.Closeable binaryGcResources;
     private final AeronClusterStateView clusterStateView;
     private final AeronIngressEndpointPlanner internalIngressEndpointPlanner;
     private AeronInternalClusterClientConnector internalClusterClientConnector;
@@ -131,7 +133,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     private WriteApplicationCallback writeCallback;
     private volatile DurabilityStatusCallback durabilityStatusCallback;
-    private volatile GCApplicationCallback gcApplicationCallback;
     private volatile TransactionLifecycleCallback transactionLifecycleCallback;
     
     // Ethereum integration
@@ -290,6 +291,19 @@ public class AeronConsensusEngine implements ClusteredService {
             @Override
             public void applyDirectory(java.util.Map<String, Object> command, AppliedLogPosition position) {
                 federationApplier.applyDirectory(command, position);
+            }
+        });
+        BinaryReleaseApplicationService binaryReleaseApplier = new BinaryReleaseApplicationService(() -> nodeStore);
+        this.messageDispatcher.setBinaryReleaseCallback((command, position) -> {
+            BinaryReleaseApplicationService.Result result = binaryReleaseApplier.apply(command, position);
+            java.util.function.Consumer<BinaryReleaseApplicationService.Result> listener = binaryReleaseListener;
+            if (listener != null) {
+                try {
+                    listener.accept(result);
+                } catch (RuntimeException e) {
+                    // The release is committed; deleting records is member-local and must not stop the member.
+                    log.warn("Binary GC could not schedule deletes for a release: {}", e.getMessage(), e);
+                }
             }
         });
         // The term is Aeron's leadershipTermId applied in log order (onNewLeadershipTermEvent), not a locally
@@ -550,7 +564,7 @@ public class AeronConsensusEngine implements ClusteredService {
     }
 
     /**
-     * Reads the snapshot metadata and restores the durability tally and GC proposals. Store files are never
+     * Reads the snapshot metadata and restores the durability tally. Store files are never
      * touched: the Oak store persists itself, and the log is replayed only after the snapshot position, so the store
      * must already hold everything up to the snapshot.
      */
@@ -571,9 +585,6 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         currentEthereumEpoch = snapshot.epoch;
         durabilityTally.restore(snapshot.durability);
-        if (gcApplicationCallback != null) {
-            gcApplicationCallback.restoreProposals(snapshot.gcProposals);
-        }
         // Log replay resumes after the snapshot position, past the term event in force, so restore it here.
         if (snapshot.leadershipTermId >= 0) {
             currentTerm = (int) snapshot.leadershipTermId;
@@ -600,7 +611,7 @@ public class AeronConsensusEngine implements ClusteredService {
     
     /**
      * Invoked on every member at the same log position when the leader's consensus module appends a SNAPSHOT
-     * action. Writes the applied watermark, the term, the durability tally and the replicated GC proposals, after
+     * action. Writes the applied watermark, the term and the durability tally, after
      * Oak is flushed so the persisted store is at least that far. Any failure propagates: Aeron then acknowledges
      * the snapshot as failed and does not record it.
      */
@@ -614,8 +625,7 @@ public class AeronConsensusEngine implements ClusteredService {
         }
         snapshotService.createSnapshot(snapshotPublication, idleStrategy(), new SnapshotService.SnapshotState(
             applied, leadershipTermKnown ? currentTerm : -1L, currentEthereumEpoch,
-            fileStore.getHead().getRecordId().toString10(), durabilityTally.snapshotEntries(),
-            gcApplicationCallback != null ? gcApplicationCallback.snapshotProposals() : Collections.emptyList()));
+            fileStore.getHead().getRecordId().toString10(), durabilityTally.snapshotEntries()));
         snapshotTrigger.onSnapshotTaken(System.currentTimeMillis());
     }
     
@@ -920,128 +930,11 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // GC REPLICATION THROUGH AERON CLUSTER
+    // CONTROL COMMANDS THROUGH AERON CLUSTER
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    
-    /**
-     * Callback interface for GC operations replicated through Aeron.
-     */
-    public interface GCApplicationCallback {
-        /**
-         * Apply a replicated GC proposal (create proposal on all nodes).
-         *
-         * @param clusterTime cluster timestamp of the log entry
-         */
-        void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                            long estimatedReclaimableSizeMB, String estimatedCostUSDC, long clusterTime);
-        
-        /**
-         * Apply a replicated GC vote.
-         *
-         * @param clusterTime cluster timestamp of the log entry
-         */
-        void applyGCVote(String proposalId, int validatorId, boolean approve, String reason, long clusterTime);
-        
-        /**
-         * Apply a replicated GC execution command. Must not block: cleanup runs off the service thread.
-         */
-        void applyGCExecute(String proposalId, int executorId);
-
-        /**
-         * The replicated GC proposals for the Aeron snapshot, as JSON values. Called on the service thread.
-         */
-        default List<Map<String, Object>> snapshotProposals() {
-            return Collections.emptyList();
-        }
-
-        /**
-         * Replaces the replicated GC proposals with those of a snapshot. Must not start any execution.
-         */
-        default void restoreProposals(List<Map<String, Object>> proposals) {
-        }
-    }
-    
-    /**
-     * Set the GC application callback.
-     * 
-     * <p>Wires the callback to MessageDispatcher for delegated GC message handling.
-     */
-    public void setGCCallback(GCApplicationCallback callback) {
-        this.gcApplicationCallback = callback;
-        // Wire to MessageDispatcher for delegated GC message handling
-        if (messageDispatcher != null && callback != null) {
-            messageDispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
-                @Override
-                public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                                          long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
-                    callback.applyGCProposal(proposalId, proposerWallet, targetRevision,
-                                            estimatedReclaimableSizeMB, estimatedCostUSDC, cluster.time());
-                }
-                
-                @Override
-                public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
-                    callback.applyGCVote(proposalId, validatorId, approve, reason, cluster.time());
-                }
-                
-                @Override
-                public void applyGCExecute(String proposalId, int executorId) {
-                    callback.applyGCExecute(proposalId, executorId);
-                }
-            });
-        }
-        
-        log.info("✅ GC application callback set");
-    }
-    
-    /**
-     * Send a GC proposal through Aeron ingress for cluster-wide replication.
-     * 
-     * <p>This ensures all validators receive the GC proposal and can vote on it.
-     * The proposal is replicated through Raft consensus before being applied.
-     * 
-     * @param proposalId unique proposal identifier
-     * @param proposerWallet wallet address of the proposer
-     * @param targetRevision target revision for GC (null = HEAD)
-     * @param estimatedReclaimableSizeMB estimated reclaimable size in MB
-     * @param estimatedCostUSDC estimated cost in USDC
-     * @return true if proposal was sent successfully
-     */
-    public boolean sendGCProposalThroughIngress(String proposalId, String proposerWallet, 
-                                                String targetRevision, long estimatedReclaimableSizeMB,
-                                                String estimatedCostUSDC) {
-        return sendGc("GC_PROPOSAL", () -> ingressControlPayloadBuilder.buildGcProposal(
-            proposalId, proposerWallet, targetRevision, estimatedReclaimableSizeMB, estimatedCostUSDC));
-    }
-    
-    /**
-     * Send a GC vote through Aeron ingress for cluster-wide replication.
-     * 
-     * @param proposalId the proposal being voted on
-     * @param validatorId the validator casting the vote
-     * @param approve true to approve, false to reject
-     * @param reason optional reason for the vote
-     * @return true if vote was sent successfully
-     */
-    public boolean sendGCVoteThroughIngress(String proposalId, int validatorId, 
-                                            boolean approve, String reason) {
-        return sendGc("GC_VOTE", () -> ingressControlPayloadBuilder.buildGcVote(proposalId, validatorId, approve, reason));
-    }
-    
-    /**
-     * Send a GC execute command through Aeron ingress for cluster-wide replication.
-     * 
-     * <p>Any member may send it; applying it is idempotent and only an APPROVED proposal starts executing.
-     * 
-     * @param proposalId the approved proposal to execute
-     * @param executorId the validator executing the GC
-     * @return true if execute command was sent successfully
-     */
-    public boolean sendGCExecuteThroughIngress(String proposalId, int executorId) {
-        return sendGc("GC_EXECUTE", () -> ingressControlPayloadBuilder.buildGcExecute(proposalId, executorId));
-    }
 
     /**
-     * Offers a CHARTER or DIRECTORY_UPDATE command. Like GC control messages these are not proposal writes,
+     * Offers a CHARTER or DIRECTORY_UPDATE command. Control messages are not proposal writes,
      * so they do not count toward write backpressure.
      */
     public boolean sendFederationThroughIngress(int templateId, String json) {
@@ -1049,8 +942,25 @@ public class AeronConsensusEngine implements ClusteredService {
             && templateId != SimpleMessageHeader.TEMPLATE_ID_DIRECTORY_UPDATE) {
             throw new IllegalArgumentException("Not a federation command: " + templateId);
         }
-        return sendGc(templateId == SimpleMessageHeader.TEMPLATE_ID_CHARTER ? "charter" : "directory update",
+        return sendControl(templateId == SimpleMessageHeader.TEMPLATE_ID_CHARTER ? "charter" : "directory update",
             () -> AeronIngressPayloadSupport.encode(templateId, json));
+    }
+
+    /** Offers a BINARY_RELEASE command; like the federation commands it does not count toward backpressure. */
+    public boolean sendBinaryReleaseThroughIngress(long markedAtPosition, long maxLastModified,
+                                                   java.util.List<String> blobIds) {
+        return sendControl("binary release",
+            () -> ingressControlPayloadBuilder.buildBinaryRelease(markedAtPosition, maxLastModified, blobIds));
+    }
+
+    /**
+     * Wires this member's binary GC: {@code listener} hears each applied release on the apply thread and must only
+     * schedule work; {@code resources} are closed when the clustered service terminates.
+     */
+    public void setBinaryGc(java.util.function.Consumer<BinaryReleaseApplicationService.Result> listener,
+                            java.io.Closeable resources) {
+        this.binaryReleaseListener = listener;
+        this.binaryGcResources = resources;
     }
 
     /**
@@ -1061,8 +971,8 @@ public class AeronConsensusEngine implements ClusteredService {
         return isLeader() && genesisVerified && !hasApplicationFailure();
     }
 
-    /** GC control messages are not proposal writes, so they do not count toward write backpressure. */
-    private boolean sendGc(String messageType, java.util.function.Supplier<AeronEncodedMessage> payload) {
+    /** Control messages are not proposal writes, so they do not count toward write backpressure. */
+    private boolean sendControl(String messageType, java.util.function.Supplier<AeronEncodedMessage> payload) {
         boolean sent = sendThroughIngress(messageType, payload, 0);
         if (sent) {
             log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", messageType);
@@ -1233,6 +1143,14 @@ public class AeronConsensusEngine implements ClusteredService {
 
         internalIngressClientManager.close();
         backgroundCoordinator.close();
+        java.io.Closeable binaryGc = binaryGcResources;
+        if (binaryGc != null) {
+            try {
+                binaryGc.close();
+            } catch (java.io.IOException | RuntimeException e) {
+                log.warn("Failed to stop binary GC: {}", e.getMessage());
+            }
+        }
     }
     
     /**

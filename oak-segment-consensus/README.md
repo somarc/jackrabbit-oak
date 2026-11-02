@@ -165,6 +165,10 @@ the environment variable wins. Settings listed without an environment variable a
 | `ipfs.api.endpoint` | `IPFS_API_ENDPOINT` | `/ip4/127.0.0.1/tcp/5001` | Kubo API multiaddr. Startup fails if it is unreachable. Validators may each run their own IPFS node in one private swarm: a binary stored through another validator's node is resolved through the replicated binary index and fetched from that node. Reading nodes do not keep a copy, so without IPFS Cluster each binary is available only while the node that stored it is. Binaries written by builds without the index can only be read through the node that stored them. |
 | `ipfs.cluster.endpoint`, `ipfs.cluster.authorization` | `IPFS_CLUSTER_ENDPOINT`, `IPFS_CLUSTER_AUTHORIZATION` | unset | IPFS Cluster REST API of this validator's cluster peer, and its `Authorization` header (Basic or Bearer; prefer the environment variable). When set, a binary write is acknowledged only after the replication minimum of peers hold it, and a write that cannot reach it fails with `503 binary_upload_failed`. |
 | `ipfs.cluster.replication-min`, `ipfs.cluster.replication-max`, `ipfs.cluster.pin-timeout-ms` | `IPFS_CLUSTER_REPLICATION_MIN`, `IPFS_CLUSTER_REPLICATION_MAX`, `IPFS_CLUSTER_PIN_TIMEOUT_MS` | `2`, `3`, `120000` | Peers that must hold a binary before it is acknowledged, peers that should hold it, and how long a write waits. |
+| `ipfs.cluster.unpin-on-delete` | `IPFS_CLUSTER_UNPIN_ON_DELETE` | `false` | `true` lets [binary GC](#binary-garbage-collection) remove the IPFS Cluster pin of a released binary. Set it only when the IPFS Cluster serves this enterprise cluster alone: cluster pins have no owner, so unpinning drops bytes that any other user of the same CID still needs. With `false`, a released binary leaves this validator's IPFS Files index and local pin but stays pinned in the cluster. Ignored without `ipfs.cluster.endpoint`. |
+| `oak.gc.binary.enabled` | `OAK_GC_BINARY_ENABLED` | `true` | Whether this validator runs [binary GC](#binary-garbage-collection): as leader it marks and proposes releases, and it deletes the records it releases. Every validator applies replicated releases regardless. |
+| `oak.gc.binary.interval.ms`, `oak.gc.binary.grace.ms` | `OAK_GC_BINARY_INTERVAL_MS`, `OAK_GC_BINARY_GRACE_MS` | `86400000`, `86400000` | Time between marks (the first runs at most ten minutes after start), and how long ago a binary must last have been referenced, and its record last modified, before it is released. Keep the grace above the longest a write may wait between upload and commit. |
+| `oak.gc.binary.delete.delay.ms` | `OAK_GC_BINARY_DELETE_DELAY_MS` | `600000` | How long a validator waits after applying a release before deleting the records; a record whose binary was referenced again in the meantime is kept. |
 | `ipfs.encryption.keys` | `IPFS_ENCRYPTION_KEYS` | unset (plaintext) | Keyring `current;id:base64Key;...` with 32-byte keys: binaries are encrypted with AES-256-GCM before they reach IPFS. Every validator needs the same keyring, and retired keys must stay listed while binaries use them. Set it through the environment variable; the value is never reported. Gateway URLs then serve ciphertext; `/api/blob/{id}` serves plaintext. Content that a client references by an existing `ipfsCid` never passes through the validator and is not encrypted. |
 | `ipfs.network.policy`, `ipfs.swarm.probe-address` | `IPFS_NETWORK_POLICY`, `IPFS_SWARM_PROBE_ADDRESS` | `warn`, unset | At startup the validator inspects its Kubo node for settings that expose content outside a private network (public bootstrap peers, public HTTP routers, AutoConf, announcing blocks, relays, QUIC/WebTransport/WebRTC listeners). `warn` logs them, `private` refuses to start unless the node is proven private, `off` skips the check. The probe address is the node's swarm listener as the validator reaches it (for example `kubo:4001`); with it, startup proves on the wire that the node uses a `swarm.key`. `private` requires it. |
 | `ipfs.gateway.base`, `ipfs.local.gateway.base` | `IPFS_GATEWAY_BASE`, `IPFS_LOCAL_GATEWAY_BASE` | unset, `http://127.0.0.1:8099/ipfs/` | IPFS gateways used to build URLs in `/api/cid` responses and the `/api/cid/gateway/{id}` redirect, at read time. There is no public default: a public gateway learns every CID it is asked for and cannot reach a private swarm. Without `ipfs.gateway.base`, `/api/cid/gateway/{id}` answers `404 ipfs_gateway_not_configured`. Gateway URLs are no longer stored in content; nodes written by earlier builds keep their `ipfsGateway`. Upgrade all validators together: a build that still writes the property derives different state from one that does not. |
@@ -174,6 +178,11 @@ the environment variable wins. Settings listed without an environment variable a
 | `ipfs.api.authorization` | `IPFS_API_AUTHORIZATION` | unset | `Authorization` header for the Kubo RPC API, for example `Bearer <token>` matching Kubo's `API.Authorizations`. Set it through the environment variable: a `-D` value is visible in process listings. The value is never reported. Use an `https://` endpoint or a `/https` multiaddr to send it over TLS. |
 | `ipfs.api.connect-timeout-ms`, `ipfs.api.request-timeout-ms`, `ipfs.api.max-attempts` | `IPFS_API_CONNECT_TIMEOUT_MS`, `IPFS_API_REQUEST_TIMEOUT_MS`, `IPFS_API_MAX_ATTEMPTS` | `10000`, `60000`, `3` | Kubo RPC timeouts and attempts. Transport failures and HTTP 502/503/504 are retried with backoff; uploads get one extra second per MiB. |
 | `oak.segment.backend` | `OAK_SEGMENT_BACKEND` | `local` | `local`, `azure` or `aws`. Cloud backends need further settings; see [`StorageBackendConfig`](src/main/java/org/apache/jackrabbit/oak/segment/consensus/config/StorageBackendConfig.java). |
+| `oak.gc.enabled` | `OAK_GC_ENABLED` | `true` | Member-local segment GC; see [Garbage collection](#garbage-collection). `false` schedules nothing and pauses Oak's compaction. |
+| `oak.gc.tail.interval.ms`, `oak.gc.full.interval.ms` | `OAK_GC_TAIL_INTERVAL_MS`, `OAK_GC_FULL_INTERVAL_MS` | `86400000` (1 day), `604800000` (7 days) | How often tail and full GC run. At least `60000`; smaller values are raised. The full interval is rounded to a whole number of tail intervals. |
+| `oak.gc.retained.generations` | `OAK_GC_RETAINED_GENERATIONS` | `2` | GC generations cleanup keeps. At least `2`. Sets how long remote readers can read an old head. |
+| `oak.gc.force.timeout.seconds` | `OAK_GC_FORCE_TIMEOUT_SECONDS` | `0` (no forced compaction) | How long Oak may block writers to finish a compaction that cannot catch up with concurrent commits. Keep it at `0` or a few seconds: replicated writes apply on Aeron's service thread and wait for the store. |
+| `oak.gc.estimation.size.delta.bytes`, `oak.gc.memory.threshold.percent` | `OAK_GC_ESTIMATION_SIZE_DELTA_BYTES`, `OAK_GC_MEMORY_THRESHOLD_PERCENT` | `1073741824`, `15` | Oak's guards: a run compacts only when the store grew by more than the delta since the last full GC (`0` always compacts), and stops when free heap drops below the threshold (`0` turns the check off). |
 | `oak.blockchain.mode` | `OAK_BLOCKCHAIN_MODE` | `mock` | `mock` simulates payments. `local` (chain id 31337, epochs from the local clock) and `sepolia` (chain id 11155111) verify payments on chain and need the RPC URL and contract address. `mainnet` (chain id 1) is rejected in this version. Any other value fails startup. Checked before the store, HTTP or Aeron start. |
 | `oak.blockchain.rpcUrl` | `OAK_BLOCKCHAIN_RPC_URL` | unset | Absolute `http(s)`/`ws(s)` URL with a host. At bridge start `eth_chainId` must equal the mode's chain id; a mismatch or an unreachable endpoint fails startup. |
 | `oak.blockchain.contractAddress` | `OAK_BLOCKCHAIN_CONTRACT_ADDRESS` | example address | Deployed Oak payment contract. The zero and example addresses are rejected; the address must hold code. Only logs emitted by this address are accepted. |
@@ -234,7 +243,12 @@ See the repository [security policy](../SECURITY.md).
 | `GET /api/blob/{blobId}`, `/v1/binary/download-url/{blobId}` | Download a binary (plaintext, also when IPFS encryption is on), and issue a signed, expiring URL for it. |
 | `GET /v1/ops/ipfs/health`, `/v1/ops/ipfs/verify?limit=` | IPFS node and cluster status, encryption and network settings, operation counts; and a check that stored binaries are pinned or replicated. `/health/deep` carries the status only, and `/metrics` the `oak_ipfs_*_total` counters. |
 | `GET /v1/config/osgi*` | Effective configuration and its sources. |
+| `GET /v1/gc/status` | This member's segment GC state; see [Garbage collection](#garbage-collection). |
 | `GET /metrics` | Prometheus metrics. |
+
+Writes and deletes are paid through the payment contract; garbage collection is not
+paid and cannot be triggered over HTTP. A delete removes the content node, and Oak's
+own revision GC reclaims the space; see [Garbage collection](#garbage-collection).
 
 The governed read routes are published as an
 [OpenAPI contract](https://somarc.github.io/oak-chain-docs/openapi-validator-source.yaml).
@@ -250,6 +264,13 @@ With sharding enabled, wallet prefixes owned by another cluster are read through
 a read-only mount of one of its validators. While that mount is unavailable,
 wallet and explorer reads under its prefixes answer `503 mount_unavailable`
 rather than "not found", and the all-wallets listing is marked `partial`.
+A read that fails part-way because the mount could not supply a segment also
+answers 503 with `Retry-After: 1`, never a 500. The code is `mount_unavailable`
+when the endpoint could not be reached; the failure counts against its circuit
+breaker, so a federated mount fails over to the next member. The code is
+`mount_stale` when the owner no longer holds the segment, for example after two
+compactions; the mount refreshes to the owner's current head at once, so a
+retry reads current content.
 `/health` reports each mount under `sharding.remoteMounts` (connected,
 available, circuit, revision, last refresh, last error) together with
 `sharding.configDigest`, which is identical on validators configured alike.
@@ -299,6 +320,99 @@ remote enterprises; within one mount the lookup is a sorted-set search over its
 namespace roots. Listing the children of a node above a mounted namespace (`/`,
 `/oak-chain` or a shard level) still scans every mounted namespace root once
 (`MountInfo.isDirectlyUnder`), linear in the total number of remote namespaces.
+
+## Garbage collection
+
+Each validator runs Oak's online revision GC on its own segment store. GC is
+member-local and has nothing to do with payments or Ethereum: there is no vote,
+no replicated decision and no HTTP trigger. Members' stores already differ
+physically (segment ids are random), and GC does not change the content, so
+there is nothing to agree on.
+
+- **What runs.** Oak's `FileStore.tailGC()` and `fullGC()`: estimation,
+  compaction, then cleanup of segments older than `retainedGenerations`. Tail GC
+  runs every tail interval (daily) and full GC every full interval (weekly), on
+  a dedicated daemon thread, one run at a time. A slot that falls due for both
+  runs full GC only. Oak's guards stay on: a run is skipped when estimation finds
+  too little growth, when memory is low, or within `oak.gc.backoff` (10 hours)
+  of the last successful run.
+- **Staggered.** Runs happen in wall-clock slots. Member *i* of *n* (its
+  `aeron.cluster.nodeId` and the configured Aeron membership; 0 of 1 without
+  Aeron) runs at an offset of *i* × interval / *n*, so with the defaults three
+  members run at 00:00, 08:00 and 16:00 UTC and at most one compacts at a time.
+  Slots are anchored to the clock, not to start-up, so restarts keep the stagger;
+  the first run is the first slot at least 15 minutes after start-up. A run
+  waits until genesis is committed (it is recorded as skipped until then).
+- **Writers are not stalled.** Replicated writes apply on Aeron's service thread
+  and need the store's head. Oak's last compaction phase can force its way in by
+  blocking all writers for up to `forceTimeout` seconds (Oak's default is 60).
+  The validator sets it to 0, which Oak treats as "never force": a compaction
+  that cannot catch up with concurrent commits after its retries gives up,
+  cleanup still runs, and the next slot tries again. Merges keep landing during
+  compaction.
+- **Remote readers.** Every compaction, tail or full, starts a new generation,
+  and cleanup removes non-compacted segments `retainedGenerations` generations
+  old. A head that another cluster has mounted therefore stays readable for
+  about `readerWindowMs` = shorter interval × (`retainedGenerations` − 1), one
+  day with the defaults. `GET /v1/federation` publishes it in its `gc` block
+  (`retainedGenerations`, `tailIntervalMs`, `fullIntervalMs`, `readerWindowMs`).
+  A mount refreshes far more often (`oak.federation.pollMs`), and a read that
+  still hits a removed segment answers `503 mount_stale` and refreshes.
+- **Status.** `GET /v1/gc/status` returns `{"segment": …, "binary": …}`; the
+  same object is the `gc` block of `/health` and `/health/deep`. `segment` holds
+  the settings, the member index, count and offset, the head's GC generation
+  (`full`, `generation`, `compacted`), Oak's current phase (`oakStatus`), the run
+  in progress, the last tail and full run (start and finish times, `completed`,
+  `skipped`, `failed` or `cancelled`, reclaimed bytes, store size before and
+  after, and the reason or error) and the next tail and full run. `binary` is
+  `null` until binary GC reports.
+
+Shutdown cancels a run in progress through Oak's own cancellation before the
+store closes. Oak records each cleanup in `gc.log` in the store directory.
+
+## Binary garbage collection
+
+Binary GC reclaims IPFS space for binaries that no content references any more. It
+runs without payment, votes or an HTTP trigger, and is on by default.
+
+1. **Reference stamps.** Every replicated write that stores or references an indexed
+   binary stamps its entry in the replicated binary index
+   (`/:oak-chain-binaries/<aa>/<bb>/<sha-256>`) with the entry's log position
+   (`refPosition`) and cluster time (`refTime`). Entries written before the stamps
+   existed read as 0. A write that names a client `ipfsCid` stores a binary
+   reference when the validator's CID mappings and the replicated index both know
+   that CID, so the bytes stay referenced; any other `ipfsCid` stays a string, as
+   before, and is never released.
+2. **Mark (leader).** Every `oak.gc.binary.interval.ms`, the leader reads its
+   applied watermark and the index from one root, flushes and collects the blob
+   references of its segment store (every generation it still retains), and
+   proposes `BINARY_RELEASE` entries (template 118, at most 1000 ids each) for index
+   entries that nothing references, last referenced before the watermark entry and
+   longer ago than `oak.gc.binary.grace.ms`.
+3. **Release (every member).** Applying the release removes each listed entry that
+   still exists and was last referenced before the mark, in one merge with the
+   applied watermark; entries referenced since are skipped. Replay below the
+   watermark skips the release, like every other store command.
+4. **Delete (every member, local).** After `oak.gc.binary.delete.delay.ms`, on its
+   own thread, each validator deletes its DataStore record of every released
+   binary, unless the binary was referenced again, its record was modified after
+   the mark's grace bound (an upload of the same bytes on its way to the log), or
+   the validator does not hold it. With IPFS this unpins only what the validator
+   stored, and removes the IPFS Cluster pin only with
+   `ipfs.cluster.unpin-on-delete`. Failures are logged and counted, never retried
+   and never affect replicated state; the CID mapping of a deleted record is
+   dropped, so the CID is no longer accepted as a known client CID.
+
+Bytes leave a deleted binary only after Oak's segment GC has dropped the
+generations that still reference it: typically two full compactions with cleanup.
+IPFS blocks are reclaimed by Kubo's own GC; run Kubo (and IPFS Cluster peers) with
+`ipfs daemon --enable-gc` or set `Datastore.GCPeriod`. The validator does not call
+`repo/gc`.
+
+`GET /v1/gc/status` reports it under `binary` (null when disabled): settings, `nextMarkAt`, `lastMark` (`at`, `markedAtPosition`,
+`references`, `candidates`, `proposed`, `error`), `lastRelease` (`at`, `position`,
+`markedAtPosition`, `released`, `skipped`) and `deletes` (`ok`, `failed`,
+`pending`, `skippedRecent`, `skippedReferenced`, `absent`).
 
 ## Build and test
 

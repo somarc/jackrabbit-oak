@@ -157,20 +157,24 @@ public class ReplicatedCommandRoundTripTest {
             "0xw|/p|page|msg-pid-p|sig-pid-p|null|null|null|null|WRITE|null|null|pid-p|null|null|null|null"), calls);
     }
 
+    /** Retired GC entries, as the removed encoder wrote them, are accepted and reach no callback. */
     @Test
-    public void gcCommandsRoundTripEveryStringField() {
+    public void retiredGcCommandsAreAcceptedForEveryStringFieldAndReachNoCallback() {
         for (String s : SAMPLES) {
             List<String> calls = new ArrayList<>();
             MessageDispatcher d = dispatcher(calls);
-            assertTrue(dispatch(d, controls.buildGcProposal("pid" + s, "0xw" + s, "rev" + s, 42L, "usdc" + s)));
-            assertTrue(dispatch(d, controls.buildGcVote("pid" + s, 2, true, "why" + s)));
-            assertTrue(dispatch(d, controls.buildGcVote("pid" + s, 3, false, "no" + s)));
-            assertTrue(dispatch(d, controls.buildGcExecute("pid" + s, 1)));
-            assertEquals(Arrays.asList(
-                String.join("|", "gcProposal", "pid" + s, "0xw" + s, "rev" + s, "42", "usdc" + s),
-                String.join("|", "gcVote", "pid" + s, "2", "true", "why" + s),
-                String.join("|", "gcVote", "pid" + s, "3", "false", "no" + s),
-                String.join("|", "gcExecute", "pid" + s, "1")), calls);
+            String pid = AeronIngressPayloadSupport.escapeJson("pid" + s);
+            assertTrue(dispatch(d, SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, "{\"proposalId\":\"" + pid
+                + "\",\"proposerWallet\":\"" + AeronIngressPayloadSupport.escapeJson("0xw" + s)
+                + "\",\"targetRevision\":\"" + AeronIngressPayloadSupport.escapeJson("rev" + s)
+                + "\",\"estimatedReclaimableSizeMB\":42,\"estimatedCostUSDC\":\""
+                + AeronIngressPayloadSupport.escapeJson("usdc" + s) + "\"}"));
+            assertTrue(dispatch(d, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE, "{\"proposalId\":\"" + pid
+                + "\",\"validatorId\":2,\"approve\":true,\"reason\":\""
+                + AeronIngressPayloadSupport.escapeJson("why" + s) + "\"}"));
+            assertTrue(dispatch(d, SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE,
+                "{\"proposalId\":\"" + pid + "\",\"executorId\":1}"));
+            assertEquals(new ArrayList<String>(), calls);
         }
     }
 
@@ -201,6 +205,25 @@ public class ReplicatedCommandRoundTripTest {
     }
 
     @Test
+    public void binaryReleaseRoundTripsEveryBlobIdAndItsNumbers() {
+        List<String> ids = new ArrayList<>();
+        for (String s : SAMPLES) {
+            ids.add("id" + s);
+        }
+        List<String> calls = new ArrayList<>();
+        MessageDispatcher d = dispatcher(calls);
+        d.setBinaryReleaseCallback((command, position) -> calls.add(String.join("|", "release",
+            String.valueOf(command.get("markedAtPosition")), String.valueOf(command.get("maxLastModified")),
+            String.valueOf(command.get("blobIds")), String.valueOf(position))));
+
+        AeronEncodedMessage encoded = controls.buildBinaryRelease(Long.MAX_VALUE - 1, 1_700_000_000_000L, ids);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_BINARY_RELEASE, encoded.templateId);
+        assertTrue(d.dispatch(1L, 4096L, encoded.buffer, 0, encoded.totalLength));
+        assertEquals(Arrays.asList(String.join("|", "release", String.valueOf(Long.MAX_VALUE - 1),
+            "1700000000000", ids.toString(), "position=4096 item=0 term=7")), calls);
+    }
+
+    @Test
     public void payloadLargerThanSixteenBitBlockLengthRoundTrips() {
         StringBuilder big = new StringBuilder();
         while (big.length() < 70_000) {
@@ -223,7 +246,7 @@ public class ReplicatedCommandRoundTripTest {
         for (char c = 0; c < 0x20; c++) {
             all.append(c);
         }
-        String json = controls.buildGcVote("p", 1, true, all.toString()).json;
+        String json = controls.buildAbortTransaction("t", "c", all.toString(), 1).json;
         for (int i = 0; i < json.length(); i++) {
             assertTrue("raw control char at " + i + " in " + json, json.charAt(i) >= 0x20);
         }
@@ -237,12 +260,12 @@ public class ReplicatedCommandRoundTripTest {
         assertTrue(dispatch(d, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL,
             "{\"nested\":{\"term\":1,\"walletAddress\":\"0xnested\"},"
                 + "\"walletAddress\" : \"0xw\", \"path\" : \"/p\", \"term\" : 9}"));
-        assertTrue(dispatch(d, SimpleMessageHeader.TEMPLATE_ID_GC_VOTE,
-            "{\"meta\":{\"approve\":false,\"validatorId\":7},"
-                + "\"proposalId\" : \"pid\", \"validatorId\" : 2, \"approve\" : true}"));
+        assertTrue(dispatch(d, SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED,
+            "{\"meta\":{\"success\":false,\"memberId\":7},"
+                + "\"proposalId\" : \"pid\", \"memberId\" : 2, \"success\" : true}"));
         assertEquals(Arrays.asList(
             "0xw|/p|null|null|null|null|null|null|null|WRITE|null|null|null|null|null|null|null",
-            "gcVote|pid|2|true|null"), calls);
+            "persisted|pid|2|null|true|null"), calls);
     }
 
     static QueuedProposal batchItem(String proposalId, String path, QueuedProposal.ProposalType type) {
@@ -273,25 +296,6 @@ public class ReplicatedCommandRoundTripTest {
             }
         });
         dispatcher.setTermProvider(() -> 7L);
-        dispatcher.setGCCallback(new MessageDispatcher.GCCallback() {
-            @Override
-            public void applyGCProposal(String proposalId, String proposerWallet, String targetRevision,
-                                        long estimatedReclaimableSizeMB, String estimatedCostUSDC) {
-                calls.add(String.join("|", "gcProposal", proposalId, proposerWallet, targetRevision,
-                    String.valueOf(estimatedReclaimableSizeMB), estimatedCostUSDC));
-            }
-
-            @Override
-            public void applyGCVote(String proposalId, int validatorId, boolean approve, String reason) {
-                calls.add(String.join("|", "gcVote", proposalId, String.valueOf(validatorId),
-                    String.valueOf(approve), String.valueOf(reason)));
-            }
-
-            @Override
-            public void applyGCExecute(String proposalId, int executorId) {
-                calls.add(String.join("|", "gcExecute", proposalId, String.valueOf(executorId)));
-            }
-        });
         dispatcher.setDurabilityCallback(new MessageDispatcher.DurabilityCallback() {
             @Override
             public void onSegmentPersisted(String proposalId, int memberId, String durableHead, boolean success,

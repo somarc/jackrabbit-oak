@@ -39,8 +39,12 @@ public class SimpleMessageHeader {
     public static final int TEMPLATE_ID_WRITE_BATCH = 106; // Batch of write proposals
     public static final int TEMPLATE_ID_DELETE_PROPOSAL = 101;
     public static final int TEMPLATE_ID_SNAPSHOT = 102;
+    // Retired paid-GC market: no longer sent, ignored when an older log is replayed. Reserved, never reuse.
+    /** Retired: GC proposal. Reserved, never reuse. */
     public static final int TEMPLATE_ID_GC_PROPOSAL = 103;
+    /** Retired: GC vote. Reserved, never reuse. */
     public static final int TEMPLATE_ID_GC_VOTE = 104;
+    /** Retired: GC execute. Reserved, never reuse. */
     public static final int TEMPLATE_ID_GC_EXECUTE = 105;
     public static final int TEMPLATE_ID_GENESIS_PROPOSAL = 107; // Genesis creation command
     // ADR 026: Segment persistence acknowledgment flow
@@ -55,12 +59,17 @@ public class SimpleMessageHeader {
     public static final int TEMPLATE_ID_ABORT_TRANSACTION = 113;
     /** One proposal tracked by the durability tally; snapshot stream only. */
     public static final int TEMPLATE_ID_SNAPSHOT_DURABILITY = 114;
-    /** One replicated GC proposal with its votes; snapshot stream only. */
+    /**
+     * Retired: one GC proposal with its votes, snapshot stream only. No longer written, skipped when an older
+     * snapshot is loaded. Reserved, never reuse.
+     */
     public static final int TEMPLATE_ID_SNAPSHOT_GC_PROPOSAL = 115;
     /** The enterprise cluster's charter, committed once after genesis. */
     public static final int TEMPLATE_ID_CHARTER = 116;
     /** A federation directory snapshot read from the charter's registry. */
     public static final int TEMPLATE_ID_DIRECTORY_UPDATE = 117;
+    /** Binary GC: removes index entries unreferenced since a mark; members then delete the released records. */
+    public static final int TEMPLATE_ID_BINARY_RELEASE = 118;
     
     // Schema ID and version (arbitrary values for our custom messages)
     private static final int SCHEMA_ID = 1;

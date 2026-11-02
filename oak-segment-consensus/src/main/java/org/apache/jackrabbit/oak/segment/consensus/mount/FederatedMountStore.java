@@ -268,6 +268,16 @@ final class FederatedMountStore implements NodeStore, Closeable {
         }
     }
 
+    /** Forwards a failed segment read to the endpoint that made it; true when it was one of this mount's. */
+    boolean onReadFailure(@NotNull MountReadFailures.Failure failure) {
+        for (Endpoint endpoint : endpoints) {
+            if (endpoint.store.onReadFailure(failure)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static final class Endpoint {
         private final String url;
         private final CircuitBreaker breaker;

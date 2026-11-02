@@ -17,6 +17,8 @@
 package org.apache.jackrabbit.oak.segment.http.server.util;
 
 import jakarta.servlet.http.HttpServletResponse;
+import org.apache.jackrabbit.oak.segment.consensus.mount.MountReadFailures;
+
 import java.io.IOException;
 import java.io.PrintWriter;
 
@@ -35,6 +37,15 @@ public final class ApiErrorUtil {
     }
 
     public static void sendJsonError(HttpServletResponse response, int statusCode, String code, String message) throws IOException {
+        if (statusCode == HttpServletResponse.SC_INTERNAL_SERVER_ERROR) {
+            MountReadFailures.Answer remote = MountReadFailures.failureAnswer();
+            if (remote != null) {
+                statusCode = HttpServletResponse.SC_SERVICE_UNAVAILABLE;
+                code = remote.code();
+                message = remote.message();
+                response.setHeader("Retry-After", "1");
+            }
+        }
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
         response.setStatus(statusCode);

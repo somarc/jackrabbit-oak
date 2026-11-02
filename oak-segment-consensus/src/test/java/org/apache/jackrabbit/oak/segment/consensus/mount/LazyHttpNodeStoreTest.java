@@ -20,11 +20,14 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.spi.mount.Mounts;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
@@ -234,6 +237,73 @@ public class LazyHttpNodeStoreTest {
         assertTrue(status.connected());
         assertFalse(status.available());
         assertEquals("transient refresh failure", status.lastError());
+    }
+
+    @Test
+    public void testMissingSegmentRefreshesNowAndTransportFailuresCountAgainstTheBreaker() {
+        RefreshTrackingNodeStore remoteStore = new RefreshTrackingNodeStore();
+        CircuitBreaker breaker = new CircuitBreaker("shard-0x800", 2, 60_000L, 1);
+        LazyHttpNodeStore store = new LazyHttpNodeStore(
+            "http://cluster-h:8090/",
+            "shard-0x800",
+            5000L,
+            30000L,
+            breaker,
+            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore,
+            1_000L,
+            60_000L
+        );
+        assertTrue(store.getRoot().exists());
+        assertEquals("not due yet", 0, remoteStore.refreshCount.get());
+
+        assertFalse(store.onReadFailure(new MountReadFailures.Failure(
+            "http://cluster-i:8090", MountReadFailures.Kind.MISSING, "segment gone")));
+        assertEquals(0, remoteStore.refreshCount.get());
+
+        assertTrue(store.onReadFailure(new MountReadFailures.Failure(
+            "http://cluster-h:8090", MountReadFailures.Kind.MISSING, "segment gone")));
+        assertEquals("a reclaimed segment refreshes the head now", 1, remoteStore.refreshCount.get());
+        assertTrue(store.status("80").available());
+
+        assertTrue(store.onReadFailure(new MountReadFailures.Failure(
+            "http://cluster-h:8090", MountReadFailures.Kind.TRANSPORT, "connection reset")));
+        RemoteMountStatus status = store.status("80");
+        assertFalse(status.available());
+        assertEquals("connection reset", status.lastError());
+        assertEquals(CircuitBreaker.State.CLOSED, breaker.getState());
+
+        store.onReadFailure(new MountReadFailures.Failure(
+            "http://cluster-h:8090", MountReadFailures.Kind.TRANSPORT, "connection reset"));
+        assertEquals(CircuitBreaker.State.OPEN, breaker.getState());
+    }
+
+    @Test
+    public void testRemoteMountsReportReadFailuresOnlyToTheEndpointThatFailedOncePerKind() {
+        RefreshTrackingNodeStore remoteStore = new RefreshTrackingNodeStore();
+        LazyHttpNodeStore store = new LazyHttpNodeStore(
+            "http://cluster-j:8090",
+            "shard-0x900",
+            5000L,
+            30000L,
+            new CircuitBreaker("shard-0x900"),
+            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore,
+            1_000L,
+            60_000L
+        );
+        assertTrue(store.getRoot().exists());
+        RemoteMounts.Endpoint endpoint = new RemoteMounts.Endpoint("http://cluster-j:8090", "90", store);
+        RemoteMounts mounts = new RemoteMounts(
+            Mounts.defaultMountInfoProvider(),
+            Map.of("shard-0x900", endpoint), List.of(endpoint));
+
+        assertFalse(mounts.reportReadFailures(List.of(new MountReadFailures.Failure(
+            "http://elsewhere:8090", MountReadFailures.Kind.MISSING, "segment gone"))));
+        assertTrue(mounts.reportReadFailures(List.of(
+            new MountReadFailures.Failure("http://cluster-j:8090", MountReadFailures.Kind.MISSING, "a"),
+            new MountReadFailures.Failure("http://cluster-j:8090", MountReadFailures.Kind.MISSING, "b"))));
+        assertEquals(1, remoteStore.refreshCount.get());
+        assertFalse(RemoteMounts.NONE.reportReadFailures(List.of(new MountReadFailures.Failure(
+            "http://cluster-j:8090", MountReadFailures.Kind.TRANSPORT, "reset"))));
     }
 
     @Test

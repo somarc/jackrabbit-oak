@@ -60,20 +60,19 @@ public class ExplorerApiHandler {
      */
     public static final String BLOB_SIGNED = "oak.blob.signed";
     
-    private final NodeStore nodeStore;
+    private final Supplier<NodeStore> nodeStoreSupplier;
     private final Path storeDirectory;
     private final Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier;
     
     public ExplorerApiHandler(NodeStore nodeStore, Path storeDirectory, org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
-        this(nodeStore, storeDirectory, () -> blobStore, true);
+        this(() -> nodeStore, storeDirectory, () -> blobStore);
     }
 
     private ExplorerApiHandler(
-            NodeStore nodeStore,
+            Supplier<NodeStore> nodeStoreSupplier,
             Path storeDirectory,
-            Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier,
-            boolean ignored) {
-        this.nodeStore = nodeStore;
+            Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier) {
+        this.nodeStoreSupplier = nodeStoreSupplier;
         this.storeDirectory = storeDirectory;
         this.blobStoreSupplier = blobStoreSupplier;
     }
@@ -82,7 +81,18 @@ public class ExplorerApiHandler {
             NodeStore nodeStore,
             Path storeDirectory,
             Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier) {
-        return new ExplorerApiHandler(nodeStore, storeDirectory, blobStoreSupplier, true);
+        return new ExplorerApiHandler(() -> nodeStore, storeDirectory, blobStoreSupplier);
+    }
+
+    /**
+     * Reads through whatever store {@code nodeStoreSupplier} returns at request time, so the explorer follows
+     * the validator's read view when a federation directory epoch swaps in new remote mounts.
+     */
+    public static ExplorerApiHandler withSuppliers(
+            Supplier<NodeStore> nodeStoreSupplier,
+            Path storeDirectory,
+            Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier) {
+        return new ExplorerApiHandler(nodeStoreSupplier, storeDirectory, blobStoreSupplier);
     }
     
     /**
@@ -93,21 +103,21 @@ public class ExplorerApiHandler {
         
         try {
             // Get the head state from NodeStore
-            NodeState root = nodeStore.getRoot();
+            NodeState root = nodeStoreSupplier.get().getRoot();
             
-            // Navigate to the requested path
+            // Navigate to the requested path. Existence is checked only at the end: in the read view the
+            // ancestors of a remote mount's root do not exist in the local store, but the mounted node does.
             NodeState node = root;
             if (!"/".equals(path)) {
-                String[] parts = path.substring(1).split("/");
-                for (String part : parts) {
+                for (String part : path.substring(1).split("/")) {
                     if (!part.isEmpty()) {
                         node = node.getChildNode(part);
-                        if (!node.exists()) {
-                            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
-                            return;
-                        }
                     }
                 }
+            }
+            if (!node.exists()) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
+                return;
             }
             
             Map<String, Object> payload = new LinkedHashMap<>();
@@ -353,7 +363,9 @@ public class ExplorerApiHandler {
     private static boolean isNotFound(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
             String message = t.getMessage() == null ? "" : t.getMessage().toLowerCase(java.util.Locale.ROOT);
-            if (message.contains("not found") || message.contains("no datarecord found")) {
+            // "Record <id> does not exist" is Oak's DataStore answer for a deleted record (binary GC)
+            if (message.contains("not found") || message.contains("no datarecord found")
+                || message.contains("does not exist")) {
                 return true;
             }
         }

@@ -24,18 +24,14 @@ import org.apache.jackrabbit.oak.segment.SegmentIdProvider;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcMonitor;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcScheduler;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimate;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCExecutionResult;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposal;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -69,7 +65,6 @@ import java.io.StringWriter;
 import java.io.BufferedReader;
 import java.io.StringReader;
 import java.nio.file.Files;
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -394,135 +389,38 @@ public class RequestRouterTest {
         });
     }
 
+    /**
+     * The paid-GC market and the fragmentation tracker that priced it were removed with their routes;
+     * {@code GET /v1/gc/status} came back as a read-only report of member-local GC.
+     */
     @Test
-    public void testFragmentationMetricsRouteReturnsTrackedEntityMetrics() throws Exception {
+    public void testRetiredGcAndFragmentationRoutesReturn404() throws Exception {
         withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            FragmentationTracker tracker = new FragmentationTracker();
-            tracker.recordWrite("0xabc", "data00001a.tar", 2048L);
-            context.fragmentationTracker = tracker;
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/v1/fragmentation/metrics");
-            HttpServletResponse response = responseWithBody();
+            RequestRouter router = new RequestRouter(newContext());
+            String[][] retired = {
+                {"POST", "/v1/propose-gc"},
+                {"POST", "/v1/gc/vote"},
+                {"POST", "/v1/gc/execute"},
+                {"POST", "/v1/gc/trigger"},
+                {"GET", "/v1/gc/account/0xwallet"},
+                {"POST", "/v1/gc/account/0xwallet/pay"},
+                {"POST", "/v1/gc/account/0xwallet/set-limit"},
+                {"POST", "/v1/gc/account/0xwallet/execute-pending"},
+                {"GET", "/v1/gc/estimate"},
+                {"POST", "/v1/gc/status"},
+                {"GET", "/v1/compaction/proposals"},
+                {"GET", "/v1/fragmentation/metrics"},
+                {"GET", "/v1/fragmentation/metrics/0xwallet"},
+                {"GET", "/v1/fragmentation/top"},
+            };
+            for (String[] route : retired) {
+                HttpServletRequest request = request(route[0], route[1]);
+                HttpServletResponse response = responseWithBody();
 
-            router.route(request, response);
+                router.route(request, response);
 
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"walletAddress\":\"0xabc\""));
-            assertTrue(body.toString().contains("\"totalEntities\":1"));
-        });
-    }
-
-    @Test
-    public void testGcAccountRouteHandlesNestedWalletPath() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            GCAccountManager accountManager = new GCAccountManager();
-            accountManager.addDebt("0xwallet", "/oak-chain/demo", 5L);
-            accountManager.convertAllPendingToExecuted();
-            context.gcAccountManager = accountManager;
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/v1/gc/account/0xwallet");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"walletAddress\":\"0xwallet\""));
-            assertTrue(body.toString().contains("\"executedDebt\":\"0.50\""));
-        });
-    }
-
-    @Test
-    public void testGcAccountPayRouteUsesNestedWalletPath() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            GCAccountManager accountManager = new GCAccountManager();
-            accountManager.addDebt("0xwallet", "/oak-chain/demo", 5L);
-            accountManager.convertAllPendingToExecuted();
-            context.gcAccountManager = accountManager;
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/v1/gc/account/0xwallet/pay");
-            when(request.getParameter("amount")).thenReturn("0.25");
-            when(request.getParameter("txHash")).thenReturn("0xtx");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"amountPaid\":\"0.25\""));
-            assertTrue(body.toString().contains("\"remainingDebt\":\"0.25\""));
-        });
-    }
-
-    @Test
-    public void testGcAccountSetLimitRouteUpdatesDebtLimit() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            context.gcAccountManager = new GCAccountManager();
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/v1/gc/account/0xwallet/set-limit");
-            when(request.getParameter("limit")).thenReturn("12.5");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"debtLimit\":\"12.5\""));
-        });
-    }
-
-    @Test
-    public void testGcAccountExecutePendingRouteConvertsPendingDebt() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            GCAccountManager accountManager = new GCAccountManager();
-            accountManager.addDebt("0xwallet", "/oak-chain/demo", 5L);
-            context.gcAccountManager = accountManager;
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/v1/gc/account/0xwallet/execute-pending");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"converted\":\"0.50\""));
-            assertTrue(body.toString().contains("\"executedDebt\":\"0.50\""));
-        });
-    }
-
-    @Test
-    public void testFragmentationEntityRouteReturns404WhenWalletUnknown() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            context.fragmentationTracker = new FragmentationTracker();
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/v1/fragmentation/metrics/0xmissing");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
-            assertTrue(body.toString().contains("No metrics found for wallet: 0xmissing"));
-        });
-    }
-
-    @Test
-    public void testGcTriggerRouteExecutesCycle() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            GCAccountManager accountManager = new GCAccountManager();
-            accountManager.getAccount("0xblocked").totalDebt = new BigDecimal("120.00");
-            context.gcAccountManager = accountManager;
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("POST", "/v1/gc/trigger");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"entitiesBlocked\":1"));
-            assertTrue(body.toString().contains("\"blockedWallets\":[\"0xblocked\"]"));
+                verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+            }
         });
     }
 
@@ -1627,6 +1525,63 @@ public class RequestRouterTest {
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString(), body.toString().contains("\"charter\":null"));
             assertTrue(body.toString(), body.toString().contains("\"directory\":null"));
+            assertTrue(body.toString(), body.toString().contains("\"gc\":null"));
+        });
+    }
+
+    @Test
+    public void gcStatusRouteServesSegmentStatusAndAnUnwiredBinaryStatus() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.segmentGcStatus = new RevisionGcScheduler(new RevisionGcConfig(true, 86_400_000L,
+                604_800_000L, 2, 0, 0, 15), context.fileStore, new RevisionGcMonitor(), () -> true)::status;
+            RequestRouter router = new RequestRouter(context);
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request("GET", "/v1/gc/status"), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            String json = body.toString();
+            assertTrue(json, json.startsWith("{\"segment\":{\"enabled\":true,\"retainedGenerations\":2,"));
+            assertTrue(json, json.contains("\"tailIntervalMs\":86400000,\"fullIntervalMs\":604800000"));
+            assertTrue(json, json.contains("\"forceTimeoutSeconds\":0"));
+            assertTrue(json, json.contains("\"readerWindowMs\":86400000"));
+            assertTrue(json, json.contains("\"memberIndex\":0,\"memberCount\":1,\"memberOffsetMs\":0"));
+            assertTrue(json, json.contains("\"lastRun\":{\"tail\":null,\"full\":null}"));
+            assertTrue(json, json.contains("\"nextRun\":{\"tail\":null,\"full\":null}"));
+            assertTrue(json, json.endsWith(",\"binary\":null}"));
+        });
+    }
+
+    @Test
+    public void gcStatusRouteServesTheBinaryStatusOnceWiredAndNullsBeforeTheStore() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.binaryGcStatus = () -> Collections.singletonMap("enabled", false);
+            RequestRouter router = new RequestRouter(context);
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request("GET", "/v1/gc/status"), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertEquals("{\"segment\":null,\"binary\":{\"enabled\":false}}", body.toString());
+        });
+    }
+
+    @Test
+    public void federationRoutePublishesTheReaderWindow() throws Exception {
+        withRoutingProperties(true, () -> {
+            ServerContext context = newContext();
+            context.segmentGcStatus = new RevisionGcScheduler(new RevisionGcConfig(true, 3_600_000L,
+                86_400_000L, 3, 0, 0, 15), context.fileStore, new RevisionGcMonitor(), () -> true)::status;
+            RequestRouter router = new RequestRouter(context);
+            HttpServletResponse response = responseWithBody();
+
+            router.route(request("GET", "/v1/federation"), response);
+
+            verify(response).setStatus(HttpServletResponse.SC_OK);
+            assertTrue(body.toString(), body.toString().contains("\"gc\":{\"enabled\":true,\"retainedGenerations\":3,"
+                + "\"tailIntervalMs\":3600000,\"fullIntervalMs\":86400000,\"readerWindowMs\":7200000}"));
         });
     }
 

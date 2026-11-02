@@ -34,6 +34,8 @@ import org.apache.jackrabbit.oak.segment.aws.AwsContext;
 import org.apache.jackrabbit.oak.segment.aws.AwsPersistence;
 import org.apache.jackrabbit.oak.segment.azure.AzurePersistence;
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcConfig;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcMonitor;
 import org.apache.jackrabbit.oak.segment.consensus.mount.FederatedReadView;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -52,6 +54,9 @@ import org.slf4j.LoggerFactory;
  * <p>The validator JVM never holds binary bytes regardless of which backend is
  * active — that invariant is owned by the blob transport layer (ADR 083).
  * This factory is responsible only for the segment persistence plane.
+ *
+ * <p>The store is built with the revision GC options from {@link RevisionGcConfig} and a
+ * {@link RevisionGcMonitor} that records what Oak reports during scheduled GC runs.
  */
 final class StorageBackendFactory {
 
@@ -64,23 +69,36 @@ final class StorageBackendFactory {
                                                      BlobStore blobStore,
                                                      StorageBackendConfig config)
             throws IOException, InvalidFileStoreVersionException {
+        return createStorageRuntime(storeDir, blobStore, config, RevisionGcConfig.load(), new RevisionGcMonitor());
+    }
 
-        FileStore fileStore = buildFileStore(storeDir, blobStore, config);
+    static ServerStorageRuntime createStorageRuntime(File storeDir,
+                                                     BlobStore blobStore,
+                                                     StorageBackendConfig config,
+                                                     RevisionGcConfig gcConfig,
+                                                     RevisionGcMonitor gcMonitor)
+            throws IOException, InvalidFileStoreVersionException {
+
+        FileStore fileStore = buildFileStore(storeDir, blobStore, config, gcConfig, gcMonitor);
         NodeStore nodeStore = SegmentNodeStoreBuilders.builder(fileStore).build();
         FederatedReadView readView = new FederatedReadView(nodeStore, ShardingRuntimeConfig.load());
         return new ServerStorageRuntime(fileStore, nodeStore,
-            readView.nodeStore(), readView, readView.remoteMounts());
+            readView.nodeStore(), readView, readView.remoteMounts(), gcConfig, gcMonitor);
     }
 
     private static FileStore buildFileStore(File storeDir,
                                             BlobStore blobStore,
-                                            StorageBackendConfig config)
+                                            StorageBackendConfig config,
+                                            RevisionGcConfig gcConfig,
+                                            RevisionGcMonitor gcMonitor)
             throws IOException, InvalidFileStoreVersionException {
 
         FileStoreBuilder builder = FileStoreBuilder.fileStoreBuilder(storeDir)
             .withMaxFileSize(256)
             .withMemoryMapping(false)
-            .withBlobStore(blobStore);
+            .withBlobStore(blobStore)
+            .withGCOptions(gcConfig.toGCOptions())
+            .withGCMonitor(gcMonitor);
 
         switch (config.getSegmentBackend()) {
             case AZURE:

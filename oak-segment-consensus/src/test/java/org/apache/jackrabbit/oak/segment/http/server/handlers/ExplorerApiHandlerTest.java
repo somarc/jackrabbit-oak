@@ -20,9 +20,14 @@ import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
+import org.apache.jackrabbit.oak.composite.CompositeNodeStore;
+import org.apache.jackrabbit.oak.spi.mount.MountInfoProvider;
+import org.apache.jackrabbit.oak.spi.mount.Mounts;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
+import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
 
 import jakarta.servlet.ServletOutputStream;
@@ -40,6 +45,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
@@ -76,6 +83,56 @@ public class ExplorerApiHandlerTest {
         assertTrue(json.contains("\"enabled\":\"true\""));
         assertTrue(json.contains("\"version\":\"7\""));
         assertTrue(json.contains("\"tags\":[\"one\",\"two\"]"));
+    }
+
+    @Test
+    public void exploreReadsTheCurrentReadViewAfterItIsSwapped() throws Exception {
+        MemoryNodeStore before = new MemoryNodeStore();
+        MemoryNodeStore after = new MemoryNodeStore();
+        NodeBuilder root = after.getRoot().builder();
+        root.child("oak-chain").child("87");
+        after.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        AtomicReference<NodeStore> readView = new AtomicReference<>(before);
+        ExplorerApiHandler handler = ExplorerApiHandler.withSuppliers(readView::get, Paths.get("/tmp/store"), () -> null);
+
+        HttpServletResponse missing = responseWithBody(new StringWriter());
+        handler.handleExploreNode(missing, "/oak-chain/87");
+        verify(missing).setStatus(HttpServletResponse.SC_NOT_FOUND);
+
+        readView.set(after);
+        HttpServletResponse found = responseWithBody(new StringWriter());
+        handler.handleExploreNode(found, "/oak-chain/87");
+        verify(found).setStatus(HttpServletResponse.SC_OK);
+    }
+
+    @Test
+    public void exploreReachesContentUnderARemoteMountWhoseAncestorsAreNotLocal() throws Exception {
+        String mountRoot = "/oak-chain/87/e0/d8/0x87e0d8cae7590570963f22b1fc75df597d77feba";
+        MemoryNodeStore local = new MemoryNodeStore();
+        NodeBuilder localRoot = local.getRoot().builder();
+        localRoot.child("oak-chain").child("00");
+        local.merge(localRoot, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        MemoryNodeStore remote = new MemoryNodeStore();
+        NodeBuilder remoteRoot = remote.getRoot().builder();
+        NodeBuilder page = remoteRoot;
+        for (String name : (mountRoot + "/content/page").substring(1).split("/")) {
+            page = page.child(name);
+        }
+        page.setProperty("message", "from cluster B");
+        remote.merge(remoteRoot, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        MountInfoProvider mounts = Mounts.newBuilder().mount("remote-b", true, List.of(), List.of(mountRoot)).build();
+        NodeStore readView = new CompositeNodeStore.Builder(mounts, local).addMount("remote-b", remote).build();
+        ExplorerApiHandler handler = new ExplorerApiHandler(readView, Paths.get("/tmp/store"), null);
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse found = responseWithBody(body);
+        handler.handleExploreNode(found, mountRoot + "/content/page");
+        verify(found).setStatus(HttpServletResponse.SC_OK);
+        assertTrue(body.toString(), body.toString().contains("from cluster B"));
+
+        HttpServletResponse missing = responseWithBody(new StringWriter());
+        handler.handleExploreNode(missing, mountRoot + "/content/absent");
+        verify(missing).setStatus(HttpServletResponse.SC_NOT_FOUND);
     }
 
     @Test
@@ -191,6 +248,8 @@ public class ExplorerApiHandlerTest {
         BlobStore blobStore = mock(BlobStore.class);
         when(blobStore.getInputStream("blob-missing"))
             .thenThrow(new NullPointerException("No DataRecord found for blobId [blob-missing]"));
+        when(blobStore.getInputStream("blob-released"))
+            .thenThrow(new IOException(new DataStoreException("Record blob-released does not exist")));
         when(blobStore.getInputStream("blob-broken"))
             .thenThrow(new IOException("IPFS read failed: Kubo /oak/ipfs/blob-index/YWJj at 10.0.0.5 refused"));
         ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), Paths.get("/tmp/store"), blobStore);
@@ -200,6 +259,10 @@ public class ExplorerApiHandlerTest {
         handler.handleBlobStream(mock(HttpServletRequest.class), missing, "blob-missing");
         verify(missing).setStatus(HttpServletResponse.SC_NOT_FOUND);
         assertTrue(missingBody.toString().contains("blob_not_found"));
+
+        HttpServletResponse released = responseWithBody(new StringWriter());
+        handler.handleBlobStream(mock(HttpServletRequest.class), released, "blob-released");
+        verify(released).setStatus(HttpServletResponse.SC_NOT_FOUND);
 
         StringWriter brokenBody = new StringWriter();
         HttpServletResponse broken = responseWithBody(brokenBody);

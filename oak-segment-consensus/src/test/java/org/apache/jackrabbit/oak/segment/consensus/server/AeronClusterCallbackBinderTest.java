@@ -16,10 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
@@ -27,14 +24,10 @@ import org.apache.jackrabbit.oak.segment.http.server.handlers.ConsensusApiHandle
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 
-import java.util.List;
-import java.util.Map;
-
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 public class AeronClusterCallbackBinderTest {
@@ -100,84 +93,14 @@ public class AeronClusterCallbackBinderTest {
     }
 
     @Test
-    public void bindRoutesReplicatedGCOperationsToManager() throws Exception {
+    public void bindWiresOnlyTheWriteApplicationCallback() {
         AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
         SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
-        ServerContext context = mock(ServerContext.class);
-        GCProposalManager manager = mock(GCProposalManager.class);
-
-        context.gcProposalManager = manager;
-        when(httpServer.getContext()).thenReturn(context);
         when(httpServer.getConsensusApiHandler()).thenReturn(mock(ConsensusApiHandler.class));
 
         new AeronClusterCallbackBinder().bind(engine, httpServer);
 
-        ArgumentCaptor<AeronConsensusEngine.GCApplicationCallback> gcCaptor =
-            ArgumentCaptor.forClass(AeronConsensusEngine.GCApplicationCallback.class);
-        verify(engine).setGCCallback(gcCaptor.capture());
-
-        AeronConsensusEngine.GCApplicationCallback callback = gcCaptor.getValue();
-        callback.applyGCProposal("proposal-1", "wallet", "r42", 64L, "2.50", 1_000L);
-        callback.applyGCVote("proposal-1", 2, true, null, 2_000L);
-        callback.applyGCExecute("proposal-1", 3);
-
-        verify(manager).applyReplicatedProposal("proposal-1", "wallet", "r42", 64L, "2.50", 1_000L);
-        verify(manager).voteOnProposal("proposal-1", 2, true, "", 2_000L);
-        verify(manager).applyReplicatedExecute("proposal-1", 3);
-    }
-
-    @Test
-    public void bindSnapshotsAndRestoresGcProposalsThroughTheManager() {
-        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
-        SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
-        ServerContext context = mock(ServerContext.class);
-        GCProposalManager manager = mock(GCProposalManager.class);
-        List<Map<String, Object>> proposals = List.of(Map.of("proposalId", "gc-1"));
-        when(manager.snapshotProposals()).thenReturn(proposals);
-        context.gcProposalManager = manager;
-        when(httpServer.getContext()).thenReturn(context);
-        when(httpServer.getConsensusApiHandler()).thenReturn(mock(ConsensusApiHandler.class));
-
-        new AeronClusterCallbackBinder().bind(engine, httpServer);
-        ArgumentCaptor<AeronConsensusEngine.GCApplicationCallback> gcCaptor =
-            ArgumentCaptor.forClass(AeronConsensusEngine.GCApplicationCallback.class);
-        verify(engine).setGCCallback(gcCaptor.capture());
-
-        assertEquals(proposals, gcCaptor.getValue().snapshotProposals());
-        gcCaptor.getValue().restoreProposals(proposals);
-        verify(manager).restoreProposals(proposals);
-
-        context.gcProposalManager = null;
-        assertTrue(gcCaptor.getValue().snapshotProposals().isEmpty());
-        gcCaptor.getValue().restoreProposals(proposals);
-    }
-
-    @Test
-    public void bindSkipsGCOperationsWhenManagerMissing() {
-        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
-        SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
-        ServerContext context = mock(ServerContext.class);
-
-        context.gcProposalManager = null;
-        when(httpServer.getContext()).thenReturn(context);
-        when(httpServer.getConsensusApiHandler()).thenReturn(mock(ConsensusApiHandler.class));
-
-        ListAppender<ILoggingEvent> appender = TestLogAppenderSupport.attach(AeronClusterCallbackBinder.class);
-        try {
-            new AeronClusterCallbackBinder().bind(engine, httpServer);
-
-            ArgumentCaptor<AeronConsensusEngine.GCApplicationCallback> gcCaptor =
-                ArgumentCaptor.forClass(AeronConsensusEngine.GCApplicationCallback.class);
-            verify(engine).setGCCallback(gcCaptor.capture());
-
-            AeronConsensusEngine.GCApplicationCallback callback = gcCaptor.getValue();
-            callback.applyGCProposal("proposal-1", "wallet", "r42", 64L, "2.50", 1_000L);
-            callback.applyGCVote("proposal-1", 2, true, "ok", 2_000L);
-            callback.applyGCExecute("proposal-1", 3);
-
-            assertTrue(TestLogAppenderSupport.contains(appender, "GC proposal manager not initialized"));
-        } finally {
-            TestLogAppenderSupport.detach(AeronClusterCallbackBinder.class, appender);
-        }
+        verify(engine).setWriteApplicationCallback(org.mockito.ArgumentMatchers.any());
+        verifyNoMoreInteractions(engine);
     }
 }

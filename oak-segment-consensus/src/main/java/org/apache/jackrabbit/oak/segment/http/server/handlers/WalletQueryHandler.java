@@ -60,7 +60,8 @@ public class WalletQueryHandler {
             response.setContentType("application/json");
             Object payload;
             if (wallet != null && !wallet.isEmpty()) {
-                if (RemoteMountGate.rejectIfWalletUnavailable(context, response, wallet)) {
+                if (rejectInvalidWallet(response, wallet)
+                    || RemoteMountGate.rejectIfWalletUnavailable(context, response, wallet)) {
                     return;
                 }
                 // Single wallet stats
@@ -91,7 +92,8 @@ public class WalletQueryHandler {
         }
 
         try {
-            if (RemoteMountGate.rejectIfWalletUnavailable(context, response, wallet)) {
+            if (rejectInvalidWallet(response, wallet)
+                || RemoteMountGate.rejectIfWalletUnavailable(context, response, wallet)) {
                 return;
             }
             response.setContentType("application/json");
@@ -108,43 +110,35 @@ public class WalletQueryHandler {
      * Query a single wallet node and return its metadata.
      */
     private Map<String, Object> queryWalletNode(String walletAddress) {
-        try {
-            // Build wallet path
-            String[] levels = WalletPathUtil.getShardLevels(walletAddress);
-            String walletPath = String.format("/oak-chain/%s/%s/%s/%s", levels[0], levels[1], levels[2], walletAddress);
+        // Build wallet path
+        String[] levels = WalletPathUtil.getShardLevels(walletAddress);
+        String walletPath = String.format("/oak-chain/%s/%s/%s/%s", levels[0], levels[1], levels[2], walletAddress);
 
-            // Get wallet node
-            NodeState root = context.nodeStore.getRoot();
-            NodeState walletNode = root.getChildNode("oak-chain")
-                .getChildNode(levels[0])
-                .getChildNode(levels[1])
-                .getChildNode(levels[2])
-                .getChildNode(walletAddress);
+        // Get wallet node
+        NodeState root = context.nodeStore.getRoot();
+        NodeState walletNode = root.getChildNode("oak-chain")
+            .getChildNode(levels[0])
+            .getChildNode(levels[1])
+            .getChildNode(levels[2])
+            .getChildNode(walletAddress);
 
-            if (!walletNode.exists()) {
-                Map<String, Object> error = new LinkedHashMap<>();
-                error.put("error", "Wallet not found");
-                return error;
-            }
-
-            Map<String, Object> json = new LinkedHashMap<>();
-            json.put("wallet", walletAddress);
-            json.put("path", walletPath);
-
-            copyProperty(json, walletNode, "nodeType", Type.STRING);
-            copyProperty(json, walletNode, "walletCreated", Type.LONG);
-            copyProperty(json, walletNode, "lastWrite", Type.LONG);
-            copyProperty(json, walletNode, "contentCount", Type.LONG);
-            copyProperty(json, walletNode, "totalWrites", Type.LONG);
-            copyProperty(json, walletNode, "description", Type.STRING);
-            return json;
-
-        } catch (Exception e) {
-            log.error("Failed to query wallet node: {}", walletAddress, e);
+        if (!walletNode.exists()) {
             Map<String, Object> error = new LinkedHashMap<>();
-            error.put("error", e.getMessage());
+            error.put("error", "Wallet not found");
             return error;
         }
+
+        Map<String, Object> json = new LinkedHashMap<>();
+        json.put("wallet", walletAddress);
+        json.put("path", walletPath);
+
+        copyProperty(json, walletNode, "nodeType", Type.STRING);
+        copyProperty(json, walletNode, "walletCreated", Type.LONG);
+        copyProperty(json, walletNode, "lastWrite", Type.LONG);
+        copyProperty(json, walletNode, "contentCount", Type.LONG);
+        copyProperty(json, walletNode, "totalWrites", Type.LONG);
+        copyProperty(json, walletNode, "description", Type.STRING);
+        return json;
     }
 
     /**
@@ -153,40 +147,35 @@ public class WalletQueryHandler {
     private Map<String, Object> queryTopWallets() {
         List<Map<String, Object>> wallets = new ArrayList<>();
 
-        try {
-            // Traverse /oak-chain tree and collect wallet metadata
-            NodeState root = context.nodeStore.getRoot();
-            NodeState oakChain = root.getChildNode("oak-chain");
+        // Traverse /oak-chain tree and collect wallet metadata
+        NodeState root = context.nodeStore.getRoot();
+        NodeState oakChain = root.getChildNode("oak-chain");
 
-            if (oakChain.exists()) {
-                // Level 1
-                for (ChildNodeEntry l1 : oakChain.getChildNodeEntries()) {
-                    // Level 2
-                    for (ChildNodeEntry l2 : l1.getNodeState().getChildNodeEntries()) {
-                        // Level 3
-                        for (ChildNodeEntry l3 : l2.getNodeState().getChildNodeEntries()) {
-                            // Wallets
-                            for (ChildNodeEntry wallet : l3.getNodeState().getChildNodeEntries()) {
-                                String walletName = wallet.getName();
-                                if (walletName.startsWith("0x")) {
-                                    NodeState walletNode = wallet.getNodeState();
+        if (oakChain.exists()) {
+            // Level 1
+            for (ChildNodeEntry l1 : oakChain.getChildNodeEntries()) {
+                // Level 2
+                for (ChildNodeEntry l2 : l1.getNodeState().getChildNodeEntries()) {
+                    // Level 3
+                    for (ChildNodeEntry l3 : l2.getNodeState().getChildNodeEntries()) {
+                        // Wallets
+                        for (ChildNodeEntry wallet : l3.getNodeState().getChildNodeEntries()) {
+                            String walletName = wallet.getName();
+                            if (walletName.startsWith("0x")) {
+                                NodeState walletNode = wallet.getNodeState();
 
-                                    Map<String, Object> walletJson = new LinkedHashMap<>();
-                                    walletJson.put("wallet", walletName);
+                                Map<String, Object> walletJson = new LinkedHashMap<>();
+                                walletJson.put("wallet", walletName);
 
-                                    copyProperty(walletJson, walletNode, "contentCount", Type.LONG);
-                                    copyProperty(walletJson, walletNode, "totalWrites", Type.LONG);
-                                    copyProperty(walletJson, walletNode, "lastWrite", Type.LONG);
-                                    wallets.add(walletJson);
-                                }
+                                copyProperty(walletJson, walletNode, "contentCount", Type.LONG);
+                                copyProperty(walletJson, walletNode, "totalWrites", Type.LONG);
+                                copyProperty(walletJson, walletNode, "lastWrite", Type.LONG);
+                                wallets.add(walletJson);
                             }
                         }
                     }
                 }
             }
-
-        } catch (Exception e) {
-            log.error("Failed to query top wallets", e);
         }
 
         Map<String, Object> out = new LinkedHashMap<>();
@@ -210,41 +199,46 @@ public class WalletQueryHandler {
     private Map<String, Object> queryWalletContent(String walletAddress) {
         List<Map<String, Object>> content = new ArrayList<>();
 
-        try {
-            // Build wallet path
-            String[] levels = WalletPathUtil.getShardLevels(walletAddress);
+        // Build wallet path
+        String[] levels = WalletPathUtil.getShardLevels(walletAddress);
 
-            // Get wallet content node
-            NodeState root = context.nodeStore.getRoot();
-            NodeState contentNode = root.getChildNode("oak-chain")
-                .getChildNode(levels[0])
-                .getChildNode(levels[1])
-                .getChildNode(levels[2])
-                .getChildNode(walletAddress)
-                .getChildNode("content");
+        // Get wallet content node
+        NodeState root = context.nodeStore.getRoot();
+        NodeState contentNode = root.getChildNode("oak-chain")
+            .getChildNode(levels[0])
+            .getChildNode(levels[1])
+            .getChildNode(levels[2])
+            .getChildNode(walletAddress)
+            .getChildNode("content");
 
-            if (contentNode.exists()) {
-                // Traverse content children
-                for (ChildNodeEntry entry : contentNode.getChildNodeEntries()) {
-                    NodeState item = entry.getNodeState();
+        if (contentNode.exists()) {
+            // Traverse content children
+            for (ChildNodeEntry entry : contentNode.getChildNodeEntries()) {
+                NodeState item = entry.getNodeState();
 
-                    Map<String, Object> itemJson = new LinkedHashMap<>();
-                    itemJson.put("name", entry.getName());
+                Map<String, Object> itemJson = new LinkedHashMap<>();
+                itemJson.put("name", entry.getName());
 
-                    copyProperty(itemJson, item, "contentType", Type.STRING);
-                    copyProperty(itemJson, item, "timestamp", Type.LONG);
-                    copyProperty(itemJson, item, "message", Type.STRING);
-                    content.add(itemJson);
-                }
+                copyProperty(itemJson, item, "contentType", Type.STRING);
+                copyProperty(itemJson, item, "timestamp", Type.LONG);
+                copyProperty(itemJson, item, "message", Type.STRING);
+                content.add(itemJson);
             }
-
-        } catch (Exception e) {
-            log.error("Failed to query wallet content: {}", walletAddress, e);
         }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("content", content);
         return out;
+    }
+
+    private static boolean rejectInvalidWallet(HttpServletResponse response, String wallet) throws IOException {
+        try {
+            WalletPathUtil.getShardLevels(wallet);
+            return false;
+        } catch (IllegalArgumentException e) {
+            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+            return true;
+        }
     }
 
     private static void copyProperty(Map<String, Object> target, NodeState node, String name, Type<?> type) {

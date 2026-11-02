@@ -171,6 +171,7 @@ public class DashboardHandler {
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/explore?path=/", "Legacy CRX/OC local node tree browse API", "CRX/OC", "/ops/v1/explorer/content/*");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/recent", "Recent segments", "Storage", "/v1/ops/snapshots/storage");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/tars", "TAR file listing", "Storage", "/v1/ops/snapshots/storage");
+        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/gc/status", "Segment and binary GC state", "Storage", null);
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/blob/{blobId}", "Blob stream by blob id", "Storage", null);
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/{oakBlobId}", "CID mapping by Oak blob id", "Storage", null);
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/stats", "CID mapping stats", "Storage", null);
@@ -201,21 +202,6 @@ public class DashboardHandler {
         addSourceIndexEntry(endpoints, "GET", "/v1/events/stats", "Event stats", "Events", "events.stats.v1", "/ops/v1/events/stats");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/events/stream", "Event stream (SSE)", "Events", "/ops/v1/events/*");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/ops/events/stream", "Ops event stream (SSE)", "Events", "/ops/v1/events/*");
-
-        addSourceIndexEntry(endpoints, "GET", "/v1/gc/estimate", "GC estimate", "GC", "gc.estimate.v1", "/ops/v1/gc/estimate");
-        addSourceIndexEntry(endpoints, "GET", "/v1/gc/status", "GC status", "GC", "gc.status.v1", "/ops/v1/gc/status");
-        addInternalIndexEntry(endpoints, "POST", "/v1/propose-gc", "Propose GC operation", "GC", null);
-        addInternalIndexEntry(endpoints, "POST", "/v1/gc/trigger", "Trigger GC check", "GC", null);
-        addInternalIndexEntry(endpoints, "POST", "/v1/gc/execute", "Execute approved GC", "GC", null);
-        addSourceIndexEntry(endpoints, "GET", "/v1/compaction/proposals", "Compaction proposals", "GC", "gc.compaction.proposals.v1", "/ops/v1/compaction/proposals");
-        addInternalIndexEntry(endpoints, "GET", "/v1/gc/account/{walletAddress}", "GC account status", "GC Accounts", "/ops/v1/gc/account/{walletAddress}");
-        addInternalIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/pay?amount=X", "GC debt payment", "GC Accounts", null);
-        addInternalIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/set-limit?limit=X", "Set debt limit", "GC Accounts", null);
-        addInternalIndexEntry(endpoints, "POST", "/v1/gc/account/{walletAddress}/execute-pending", "Execute pending debt", "GC Accounts", null);
-
-        addSourceIndexEntry(endpoints, "GET", "/v1/fragmentation/metrics", "All fragmentation metrics", "Fragmentation", "fragmentation.metrics.v1", "/ops/v1/fragmentation/metrics");
-        addSourceIndexEntry(endpoints, "GET", "/v1/fragmentation/metrics/{walletAddress}", "Fragmentation by wallet", "Fragmentation", "fragmentation.metrics.entity.v1", "/ops/v1/fragmentation/metrics/{walletAddress}");
-        addSourceIndexEntry(endpoints, "GET", "/v1/fragmentation/top?limit=20", "Top fragmented wallets", "Fragmentation", "fragmentation.top.v1", "/ops/v1/fragmentation/top");
 
         addInternalIndexEntry(endpoints, "POST", "/v1/binary/declare-intent", "Declare binary upload intent", "Binary", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/binary/check-intent/{token}", "Check binary intent", "Binary", null);

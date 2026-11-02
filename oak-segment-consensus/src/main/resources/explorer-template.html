@@ -1064,7 +1064,6 @@
                     body = "<div class=\"text-slate-500\">Wallet summary unavailable: " + escapeHtml(payload.error) + "</div>";
                 } else {
                     var meta = payload.meta || {};
-                    var gc = payload.gcAccount || {};
                     var authority = payload.authority || {};
                     var date = function (value) {
                         return value ? escapeHtml(new Date(Number(value)).toLocaleString()) : "--";
@@ -1080,8 +1079,6 @@
                         + factField("Total writes", count(meta.totalWrites))
                         + factField("Created", date(meta.walletCreated))
                         + factField("Last write", date(meta.lastWrite))
-                        + factField("GC debt", escapeHtml(gc.totalDebt != null ? gc.totalDebt : "--") + " <span class=\"text-slate-400\">(pending " + escapeHtml(gc.pendingDebt != null ? gc.pendingDebt : "--") + ")</span>")
-                        + factField("Writes", gc.writesBlocked ? "<span class=\"text-rose-700\">Blocked</span>" : "Allowed")
                         + "</div>";
                 }
                 return "<div>" + sectionHeading("Wallet", "from /v1/explorer/wallets") + "<div class=\"metric-card p-4\">" + body + "</div></div>";

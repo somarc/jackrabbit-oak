@@ -60,6 +60,7 @@ public final class StorageBackendConfig {
     private final int blobIpfsClusterReplicationMin;
     private final int blobIpfsClusterReplicationMax;
     private final int blobIpfsClusterPinTimeoutMs;
+    private final boolean blobIpfsClusterUnpinOnDelete;
     private final String blobIpfsEncryptionKeys; // null = plaintext; never logged
     private final String blobIpfsNetworkPolicy; // off | warn | private
     private final String blobIpfsSwarmProbeAddress; // null = no wire probe
@@ -93,6 +94,7 @@ public final class StorageBackendConfig {
         this.blobIpfsClusterReplicationMin = b.blobIpfsClusterReplicationMin;
         this.blobIpfsClusterReplicationMax = b.blobIpfsClusterReplicationMax;
         this.blobIpfsClusterPinTimeoutMs = b.blobIpfsClusterPinTimeoutMs;
+        this.blobIpfsClusterUnpinOnDelete = b.blobIpfsClusterUnpinOnDelete;
         this.blobIpfsEncryptionKeys = b.blobIpfsEncryptionKeys;
         this.blobIpfsNetworkPolicy = b.blobIpfsNetworkPolicy;
         this.blobIpfsSwarmProbeAddress = b.blobIpfsSwarmProbeAddress;
@@ -171,6 +173,7 @@ public final class StorageBackendConfig {
                 "ipfs.cluster.replication-max", "IPFS_CLUSTER_REPLICATION_MAX", 3);
             b.blobIpfsClusterPinTimeoutMs = RuntimeConfigValueResolver.readInt(
                 "ipfs.cluster.pin-timeout-ms", "IPFS_CLUSTER_PIN_TIMEOUT_MS", 120_000);
+            b.blobIpfsClusterUnpinOnDelete = b.blobIpfsClusterEndpoint != null && readUnpinOnDelete();
             b.blobIpfsEncryptionKeys = textOrNull(RuntimeConfigValueResolver.readString(
                 "ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null));
             b.blobIpfsNetworkPolicy = RuntimeConfigValueResolver.readString(
@@ -243,6 +246,26 @@ public final class StorageBackendConfig {
     public int getBlobIpfsClusterReplicationMin() { return blobIpfsClusterReplicationMin; }
     public int getBlobIpfsClusterReplicationMax() { return blobIpfsClusterReplicationMax; }
     public int getBlobIpfsClusterPinTimeoutMs() { return blobIpfsClusterPinTimeoutMs; }
+    public boolean isBlobIpfsClusterUnpinOnDelete() { return blobIpfsClusterUnpinOnDelete; }
+
+    /**
+     * True when binary GC deletes may unpin IPFS Cluster pins: an IPFS Cluster is configured and
+     * {@code ipfs.cluster.unpin-on-delete} is {@code true}. Enable it only when the IPFS Cluster serves this
+     * enterprise cluster alone, because cluster pins have no owner.
+     */
+    public static boolean ipfsClusterUnpinOnDeleteFromRuntime() {
+        return textOrNull(RuntimeConfigValueResolver.readString(
+            "ipfs.cluster.endpoint", "IPFS_CLUSTER_ENDPOINT", null)) != null && readUnpinOnDelete();
+    }
+
+    private static boolean readUnpinOnDelete() {
+        String raw = RuntimeConfigValueResolver.readString(
+            "ipfs.cluster.unpin-on-delete", "IPFS_CLUSTER_UNPIN_ON_DELETE", "false").trim();
+        if (!"true".equalsIgnoreCase(raw) && !"false".equalsIgnoreCase(raw)) {
+            throw new IllegalStateException("ipfs.cluster.unpin-on-delete must be true or false, not \"" + raw + "\"");
+        }
+        return Boolean.parseBoolean(raw);
+    }
     public String getBlobIpfsEncryptionKeys() { return blobIpfsEncryptionKeys; }
     public String getBlobIpfsNetworkPolicy() { return blobIpfsNetworkPolicy; }
     public String getBlobIpfsSwarmProbeAddress() { return blobIpfsSwarmProbeAddress; }
@@ -311,6 +334,7 @@ public final class StorageBackendConfig {
         int blobIpfsClusterReplicationMin;
         int blobIpfsClusterReplicationMax;
         int blobIpfsClusterPinTimeoutMs;
+        boolean blobIpfsClusterUnpinOnDelete;
         String blobIpfsEncryptionKeys;
         String blobIpfsNetworkPolicy;
         String blobIpfsSwarmProbeAddress;

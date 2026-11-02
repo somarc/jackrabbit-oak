@@ -218,7 +218,17 @@ public final class FederatedReadView implements Closeable {
             stores.put(reuseKey, mounted);
             storesByName.put(mountName(entry), mounted);
             List<String> namespaces = entry.getNamespaces();
-            sourcesByName.put(mountName(entry), () -> mounted.status(namespaces, epoch));
+            sourcesByName.put(mountName(entry), new RemoteMounts.StatusSource() {
+                @Override
+                public RemoteMountStatus status() {
+                    return mounted.status(namespaces, epoch);
+                }
+
+                @Override
+                public boolean onReadFailure(@NotNull MountReadFailures.Failure failure) {
+                    return mounted.onReadFailure(failure);
+                }
+            });
         }
         MountInfoProvider mountInfoProvider = mountBuilder.build();
         CompositeNodeStore.Builder composite = new CompositeNodeStore.Builder(mountInfoProvider,

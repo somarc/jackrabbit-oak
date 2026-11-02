@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import java.util.List;
+
 import static org.apache.jackrabbit.oak.segment.consensus.aeron.AeronIngressPayloadSupport.appendOptional;
 import static org.apache.jackrabbit.oak.segment.consensus.aeron.AeronIngressPayloadSupport.escapeJson;
 
@@ -69,6 +71,18 @@ final class AeronIngressControlPayloadBuilder {
         }
     }
 
+    AeronEncodedMessage buildBinaryRelease(long markedAtPosition, long maxLastModified, List<String> blobIds) {
+        StringBuilder json = new StringBuilder();
+        json.append("{\"markedAtPosition\":").append(markedAtPosition);
+        json.append(",\"maxLastModified\":").append(maxLastModified);
+        json.append(",\"blobIds\":[");
+        for (int i = 0; i < blobIds.size(); i++) {
+            json.append(i == 0 ? "\"" : ",\"").append(escapeJson(blobIds.get(i))).append("\"");
+        }
+        json.append("]}");
+        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_BINARY_RELEASE, json.toString());
+    }
+
     AeronEncodedMessage buildSegmentPersisted(String proposalId,
                                               int memberId,
                                               boolean success,
@@ -83,45 +97,5 @@ final class AeronIngressControlPayloadBuilder {
         appendOptional(json, "error", error);
         json.append("}");
         return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_SEGMENT_PERSISTED, json.toString());
-    }
-
-    AeronEncodedMessage buildGcProposal(String proposalId,
-                                        String proposerWallet,
-                                        String targetRevision,
-                                        long estimatedReclaimableSizeMB,
-                                        String estimatedCostUSDC) {
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
-        json.append("\"proposerWallet\":\"").append(escapeJson(proposerWallet)).append("\",");
-        json.append("\"targetRevision\":\"")
-            .append(escapeJson(targetRevision != null ? targetRevision : "HEAD"))
-            .append("\",");
-        json.append("\"estimatedReclaimableSizeMB\":").append(estimatedReclaimableSizeMB).append(",");
-        json.append("\"estimatedCostUSDC\":\"")
-            .append(escapeJson(estimatedCostUSDC != null ? estimatedCostUSDC : "0"))
-            .append("\"");
-        json.append("}");
-        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, json.toString());
-    }
-
-    AeronEncodedMessage buildGcVote(String proposalId,
-                                    int validatorId,
-                                    boolean approve,
-                                    String reason) {
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"proposalId\":\"").append(escapeJson(proposalId)).append("\",");
-        json.append("\"validatorId\":").append(validatorId).append(",");
-        json.append("\"approve\":").append(approve).append(",");
-        json.append("\"reason\":\"").append(escapeJson(reason != null ? reason : "")).append("\"");
-        json.append("}");
-        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_GC_VOTE, json.toString());
-    }
-
-    AeronEncodedMessage buildGcExecute(String proposalId, int executorId) {
-        String json = "{\"proposalId\":\"" + escapeJson(proposalId) + "\"," +
-            "\"executorId\":" + executorId + "}";
-        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_GC_EXECUTE, json);
     }
 }

@@ -21,7 +21,6 @@ import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -773,6 +772,56 @@ public class WriteProposalHandlerTest {
     }
 
     @Test
+    public void testAKnownCidIndexedForItsBlobIsProposedAsABinaryReference() throws Exception {
+        String indexed = "ab".repeat(32);
+        String notIndexed = "cd".repeat(32);
+        String cid = "Qm" + "a".repeat(44);
+        org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore store =
+            new org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore();
+        org.apache.jackrabbit.oak.spi.state.NodeBuilder root = store.getRoot().builder();
+        root.child(":oak-chain-binaries").child("ab").child("ab").child(indexed).setProperty("cid", cid);
+        root.child(":oak-chain-binaries").child("ab").child("ab").child(indexed).setProperty("length", 40000L);
+        store.merge(root, org.apache.jackrabbit.oak.spi.commit.EmptyHook.INSTANCE,
+            org.apache.jackrabbit.oak.spi.commit.CommitInfo.EMPTY);
+
+        assertEquals(indexed + "#40000", proposedBlobIdForCid(store, cid, indexed, cid));
+        assertEquals("a CID the index records for another binary keeps the string reference", null,
+            proposedBlobIdForCid(store, "Qm" + "b".repeat(44), indexed, "Qm" + "b".repeat(44)));
+        assertEquals("a binary the index does not record keeps the string reference", null,
+            proposedBlobIdForCid(store, cid, notIndexed, cid));
+    }
+
+    private String proposedBlobIdForCid(NodeStore authoritative, String clientCid, String mappedBlobId,
+                                        String expectedCid) throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        context.setAuthoritativeNodeStore(authoritative);
+        context.blobStore = mock(BlobStore.class);
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        context.registeredClients.put("enterprise-1", new ClientRegistration("enterprise-1", "http://author-1:4502",
+            VALID_WALLET.toLowerCase(), ClientRegistration.CLIENT_TYPE_ENTERPRISE));
+        context.cidMappingService = mock(CidMappingService.class);
+        when(context.cidMappingService.getOakBlobId(clientCid)).thenReturn(Optional.of(mappedBlobId));
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("ipfsCid")).thenReturn(clientCid);
+        when(request.getParameter("message")).thenReturn("hello");
+        when(request.getParameter("contentType")).thenReturn("asset");
+
+        handler.handleProposeWrite(request, responseWithBody(new StringWriter()));
+
+        ArgumentCaptor<String> blobId = ArgumentCaptor.forClass(String.class);
+        verify(queueManager).queueProposal(anyString(), anyString(), anyString(), anyString(), anyString(),
+            anyString(), anyString(), nullable(String.class), blobId.capture(), anyString(), eq(expectedCid));
+        return blobId.getValue();
+    }
+
+    @Test
     public void testConcurrentWritesInSameMillisecondGetDistinctStoragePaths() throws Exception {
         System.setProperty("oak.blockchain.mode", "mock");
         BlockchainConfig.reset();
@@ -1150,26 +1199,6 @@ public class WriteProposalHandlerTest {
         verify(response).setStatus(HttpServletResponse.SC_FORBIDDEN);
         assertTrue(body.toString().contains("\"code\":\"validator_binary_upload_disabled\""));
         assertEquals(1L, context.apiRejectedRequests.get());
-    }
-
-    @Test
-    public void testHandleProposeWriteBlocksWritesWhenGcDebtExceeded() throws Exception {
-        ServerContext context = readyContext();
-        GCAccountManager accountManager = new GCAccountManager();
-        accountManager.addDebt(VALID_WALLET.toLowerCase(), "/oak-chain/demo", 1200L);
-        accountManager.convertAllPendingToExecuted();
-        context.gcAccountManager = accountManager;
-        WriteProposalHandler handler = new WriteProposalHandler(context);
-        HttpServletRequest request = request();
-        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-
-        handler.handleProposeWrite(request, response);
-
-        verify(response).setStatus(402);
-        assertTrue(body.toString().contains("\"code\":\"write_blocked_gc_debt\""));
-        assertTrue(body.toString().contains("\"paymentUrl\":\"/v1/gc/account/" + VALID_WALLET.toLowerCase() + "/pay\""));
     }
 
     private static ServerContext readyContext() {

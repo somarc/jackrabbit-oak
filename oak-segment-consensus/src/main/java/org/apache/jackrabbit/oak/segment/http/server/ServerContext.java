@@ -22,12 +22,10 @@ import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCCostEstimator;
-import org.apache.jackrabbit.oak.segment.consensus.gc.GCProposalManager;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardingRuntimeConfig;
-import org.apache.jackrabbit.oak.segment.consensus.fragmentation.FragmentationTracker;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordinator;
+import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcStatus;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -41,6 +39,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * Shared context for HTTP server handlers.
@@ -59,12 +58,7 @@ public class ServerContext {
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     public volatile org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics aeronPrometheusMetrics;
     public volatile String selfUrl;
-    public volatile GCCostEstimator gcCostEstimator;
-    public volatile GCProposalManager gcProposalManager;
-    public volatile org.apache.jackrabbit.oak.segment.consensus.gc.GCAccountManager gcAccountManager;
-    public volatile org.apache.jackrabbit.oak.segment.consensus.gc.PeriodicGCJob periodicGCJob;
     public volatile ProposalQueueManagerOptimized proposalQueueManager;
-    public volatile FragmentationTracker fragmentationTracker;
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager; // ADR 020 lazy binary upload
     public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
@@ -76,6 +70,24 @@ public class ServerContext {
     public volatile ShardingRuntimeConfig shardingRuntimeConfig = ShardingRuntimeConfig.disabled();
     public volatile RemoteMounts remoteMounts = RemoteMounts.NONE; // Remote read-only mounts in nodeStore
     public volatile FederationCoordinator federationCoordinator; // Charter/directory status; null until Aeron starts
+    public volatile Supplier<RevisionGcStatus> segmentGcStatus; // Member-local segment GC; null until the store is built
+    public volatile Supplier<Map<String, Object>> binaryGcStatus; // Binary GC; null until binary GC is wired
+
+    /** {@code {"segment": ..., "binary": ...}}, as served by {@code GET /v1/gc/status}; null where not wired. */
+    public Map<String, Object> gcStatusPayload() {
+        Supplier<RevisionGcStatus> segment = segmentGcStatus;
+        Supplier<Map<String, Object>> binary = binaryGcStatus;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("segment", segment != null ? segment.get().toMap() : null);
+        payload.put("binary", binary != null ? binary.get() : null);
+        return payload;
+    }
+
+    /** The GC settings remote readers rely on, for {@code GET /v1/federation}; null before the store is built. */
+    public Map<String, Object> gcFederationPayload() {
+        Supplier<RevisionGcStatus> segment = segmentGcStatus;
+        return segment != null ? segment.get().toFederationMap() : null;
+    }
     
     /**
      * @return the IPFS DataStore behind {@link #blobStore}, or {@code null}
@@ -155,11 +167,6 @@ public class ServerContext {
     
     public void setAeronPrometheusMetrics(org.apache.jackrabbit.oak.segment.consensus.aeron.AeronPrometheusMetrics aeronPrometheusMetrics) {
         this.aeronPrometheusMetrics = aeronPrometheusMetrics;
-    }
-    
-    public void setGCCostEstimator(GCCostEstimator gcCostEstimator) {
-        this.gcCostEstimator = gcCostEstimator;
-        log.info("✅ GC Cost Estimator initialized");
     }
     
     public void setProposalQueueManager(ProposalQueueManagerOptimized proposalQueueManager) {
@@ -242,16 +249,7 @@ public class ServerContext {
         persistRegisteredClients();
         return updated;
     }
-    public void setFragmentationTracker(FragmentationTracker fragmentationTracker) {
-        this.fragmentationTracker = fragmentationTracker;
-        log.info("✅ Fragmentation Tracker initialized");
-    }
-    
-    public void setGCProposalManager(GCProposalManager gcProposalManager) {
-        this.gcProposalManager = gcProposalManager;
-        log.info("✅ GC Proposal Manager initialized");
-    }
-    
+
     public void setUploadSessionManager(org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager) {
         this.uploadSessionManager = uploadSessionManager;
         log.info("✅ Upload Session Manager initialized (ADR 020 lazy binary upload)");
