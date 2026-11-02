@@ -497,6 +497,9 @@ public class WriteProposalHandler {
                 return;
             }
             proposalId = ProposalRequestSupport.normalizeProposalId(proposalId);
+            if (ProposalRequestSupport.rejectDuplicate(context, proposalId, response)) {
+                return;
+            }
 
             // Millisecond time alone collides for concurrent writes; the proposalId prefix keeps names unique.
             String contentId = contentType + "-" + clock.getAsLong() + "-"

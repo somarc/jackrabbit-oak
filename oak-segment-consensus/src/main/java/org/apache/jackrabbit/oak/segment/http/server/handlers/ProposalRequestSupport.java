@@ -16,12 +16,17 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
+import org.apache.jackrabbit.oak.segment.consensus.service.AppliedProposalIndex;
 import org.apache.jackrabbit.oak.segment.consensus.sharding.ShardWriteAuthorityEnforcer;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUtil;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -108,6 +113,50 @@ final class ProposalRequestSupport {
 
     static String normalizeProposalId(String trimmedProposalId) {
         return trimmedProposalId.startsWith("0X") ? "0x" + trimmedProposalId.substring(2) : trimmedProposalId;
+    }
+
+    /**
+     * Sends {@code 409 duplicate_proposal} and returns true when {@code proposalId} has already taken effect (it is
+     * in the replicated applied-proposal index at this node's head) or is still in flight in this leader's queue.
+     * Replicated apply ignores a resend either way; this answers it before it is queued.
+     */
+    static boolean rejectDuplicate(ServerContext context, String proposalId, HttpServletResponse response)
+            throws IOException {
+        AppliedProposalIndex.Entry applied = AppliedProposalIndex.find(context.authoritativeRoot(), proposalId);
+        QueuedProposal queued = applied == null && context.proposalQueueManager != null
+            ? context.proposalQueueManager.getProposal(proposalId) : null;
+        if (applied == null && (queued == null || !isInFlight(queued))) {
+            return false;
+        }
+        context.apiRejectedRequests.incrementAndGet();
+        Map<String, Object> links = new LinkedHashMap<>();
+        links.put("self", "/v1/ops/operations/" + proposalId);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("success", false);
+        payload.put("error", applied != null
+            ? "Proposal " + proposalId + " has already taken effect; a proposal id is applied once."
+            : "Proposal " + proposalId + " is already queued on this leader; a proposal id is applied once.");
+        payload.put("code", "duplicate_proposal");
+        payload.put("status", HttpServletResponse.SC_CONFLICT);
+        payload.put("timestamp", System.currentTimeMillis());
+        payload.put("proposalId", proposalId);
+        payload.put("proposalState", applied != null ? "APPLIED" : queued.getState().name());
+        payload.put("answeredFrom", applied != null ? "replicated-state" : "leader-queue");
+        payload.put("path", applied != null ? applied.path() : queued.getPath());
+        if (applied != null) {
+            payload.put("kind", applied.kind());
+            payload.put("appliedAt", applied.appliedAt());
+        }
+        payload.put("links", links);
+        JsonOutputUtil.write(response, HttpServletResponse.SC_CONFLICT, payload);
+        return true;
+    }
+
+    /** Queued and not finished without effect: neither rejected nor failed after it reached the log. */
+    private static boolean isInFlight(QueuedProposal queued) {
+        ProposalState state = queued.getState();
+        return state != ProposalState.REJECTED
+            && !(state == ProposalState.PROCESSED && queued.getDurabilityState() == DurabilityState.FAILED);
     }
 
     /** The leading ops.v1 keys of a 202 proposal response; callers append their own keys. */

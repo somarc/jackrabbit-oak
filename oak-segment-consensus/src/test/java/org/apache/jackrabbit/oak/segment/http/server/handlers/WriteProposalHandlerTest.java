@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
+import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.federation.FederationFixtures;
@@ -898,6 +899,71 @@ public class WriteProposalHandlerTest {
         verify(context.proposalQueueManager, times(0)).queueProposal(anyString(), anyString(), anyString(),
             anyString(), anyString(), anyString(), anyString(), nullable(String.class), nullable(String.class),
             anyString(), nullable(String.class));
+    }
+
+    @Test
+    public void resendOfAnAppliedProposalIdIsRefusedWithItsStoredPath() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        String storedPath = WalletPathUtil.getContentPath(VALID_WALLET, "acme") + "/page-1793586396590-11111111";
+        MemoryNodeStore authoritative = new MemoryNodeStore();
+        AppliedProposals.applyWrite(authoritative, VALID_WALLET, storedPath, VALID_CHAIN_PROPOSAL_ID);
+        context.setAuthoritativeNodeStore(authoritative);
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        WriteProposalHandler handler = new WriteProposalHandler(context, () -> 1793586397606L);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+        when(request.getParameter("organization")).thenReturn("globex");
+        when(request.getParameter("contentType")).thenReturn("asset");
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_CONFLICT);
+        String json = body.toString();
+        assertTrue(json, json.contains("\"code\":\"duplicate_proposal\""));
+        assertTrue(json, json.contains("\"path\":\"" + storedPath + "\""));
+        assertTrue(json, json.contains("\"answeredFrom\":\"replicated-state\""));
+        assertTrue(json, json.contains("\"appliedAt\":" + AppliedProposals.APPLIED_AT));
+        assertEquals(1L, context.apiRejectedRequests.get());
+        verify(queueManager, never()).queueProposal(anyString(), anyString(), anyString(), anyString(), anyString(),
+            anyString(), anyString(), nullable(String.class), nullable(String.class), anyString(),
+            nullable(String.class));
+    }
+
+    @Test
+    public void resendWhileTheProposalIsQueuedIsRefusedUnlessItEndedWithoutEffect() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        BlockchainConfig.reset();
+        ServerContext context = readyContext();
+        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
+        context.proposalQueueManager = queueManager;
+        QueuedProposal queued = new QueuedProposal(VALID_CHAIN_PROPOSAL_ID, VALID_TX_HASH, 1L, 2L,
+            ProposalState.PENDING);
+        queued.setPath("/oak-chain/queued-path");
+        when(queueManager.getProposal(VALID_CHAIN_PROPOSAL_ID)).thenReturn(queued);
+        WriteProposalHandler handler = new WriteProposalHandler(context);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("ethereumTxHash")).thenReturn(VALID_TX_HASH);
+
+        handler.handleProposeWrite(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_CONFLICT);
+        assertTrue(body.toString(), body.toString().contains("\"code\":\"duplicate_proposal\""));
+        assertTrue(body.toString(), body.toString().contains("\"path\":\"/oak-chain/queued-path\""));
+        assertTrue(body.toString(), body.toString().contains("\"proposalState\":\"PENDING\""));
+
+        queued.setState(ProposalState.REJECTED);
+        proposeWrite(handler, VALID_CHAIN_PROPOSAL_ID);
     }
 
     private static void proposeWrite(WriteProposalHandler handler, String proposalId) throws Exception {

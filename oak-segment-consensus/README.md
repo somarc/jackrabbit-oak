@@ -38,6 +38,12 @@ flowchart LR
   `COMMITTED` only after a majority of validators have applied it and flushed it
   to disk. Each accepted write is designed to end as `COMMITTED`, `FAILED` or
   `TIMED_OUT`, never silently.
+- **One effect per proposal ID.** Each applied write or delete records its
+  `proposalId` in a hidden, replicated index (`/:consensus/proposals`) in the
+  same Oak commit as its change. A resend with the same `proposalId`, whatever
+  path, content type or organization it carries, changes nothing: the leader
+  answers `409` `duplicate_proposal` with the stored path, and replicated apply
+  ignores any resend that reaches the log anyway.
 - **Genesis is verified.** The first replicated command creates a reserved,
   digest-sealed genesis subtree, and writes are refused until every member has
   verified it.
@@ -190,6 +196,7 @@ the environment variable wins. Settings listed without an environment variable a
 | `oak.proposal.confirmation.required` | | `0` (mode default) | Payment confirmations, counted against the latest block. `0` uses the mode default: `local` 1, `sepolia` 3; `mainnet` counts only blocks at or below the `finalized` tag. |
 | `oak.consensus.safety.enabled` | | `true` | `false` stops the validator from starting; genesis v2 requires the safety invariants on every member. |
 | `aeron.rcv.initial.window.length`, `aeron.socket.so_rcvbuf` | | Aeron defaults | If you set `so_rcvbuf`, make it at least the window length, or Aeron refuses to start. |
+| `oak.cluster.media.driver.timeout.ms` | | `60000` | Media driver liveness timeout (`driverTimeoutMs`). It also bounds how long a restart waits for a killed driver's directory; see [Restarting after a crash](#restarting-after-a-crash). |
 
 A running validator reports most of its tunables, with defaults, current values
 and risk notes, at `GET /v1/config/osgi/schema` and `GET /v1/config/osgi`,
@@ -198,6 +205,20 @@ above; the Aeron directory is not included. `/console/configMgr` shows the same
 values read-only, next to the declared OSGi properties. The validator runs without
 OSGi Configuration Admin, so the OSGi declarations document the contract and do not
 set values.
+
+### Restarting after a crash
+
+A validator that was killed (SIGKILL, OOM, power loss) leaves its Aeron media
+driver directory (`cnc.dat`) and its archive and cluster mark files
+(`archive-mark.dat`, `cluster-mark*.dat`) behind. Each still looks owned until its
+last heartbeat is older than the component's liveness timeout: `driverTimeoutMs`
+(default 60 s) for the driver directory, and 10 s for the mark files, which Aeron
+fixes. A validator restarted within that window waits instead of exiting. It logs one
+WARN naming the file and the bound, retries the launch every second for at most the
+timeout plus 5 s, and logs `started after waiting N ms` once the old heartbeat has
+gone stale. Nothing is deleted. If the file is still active after the bound, another
+process owns it: startup is refused with the same message as before, plus how long it
+waited, and the process exits. Stop that process instead of deleting the file.
 
 ## Security
 
@@ -237,8 +258,8 @@ See the repository [security policy](../SECURITY.md).
 | `GET /v1/index` | Live list of every route this validator serves. |
 | `GET /health`, `/health/local`, `/health/cluster`, `/health/deep` | Liveness and cluster health observations. |
 | `GET /v1/consensus/status`, `/v1/consensus/leader`, `/v1/aeron/cluster-state` | Role, leader and Aeron cluster state. |
-| `POST /v1/propose-write`, `/v1/propose-delete` | Submit signed operations; returns `202` or a `307` redirect to the leader. |
-| `GET /v1/ops/operations/{id}` | Operation state through to `COMMITTED`, `FAILED` or `TIMED_OUT`. |
+| `POST /v1/propose-write`, `/v1/propose-delete` | Submit signed operations; returns `202`, a `307` redirect to the leader, or `409` `duplicate_proposal` for a `proposalId` already applied or in flight. |
+| `GET /v1/ops/operations/{id}` | Operation state through to `COMMITTED`, `FAILED` or `TIMED_OUT`; an applied proposal is reported `COMMITTED` from replicated state by any validator. |
 | `GET /v1/wallets/content?wallet=…`, `/v1/explorer/*` | Read and browse repository content. |
 | `GET /api/blob/{blobId}`, `/v1/binary/download-url/{blobId}` | Download a binary (plaintext, also when IPFS encryption is on), and issue a signed, expiring URL for it. |
 | `GET /v1/ops/ipfs/health`, `/v1/ops/ipfs/verify?limit=` | IPFS node and cluster status, encryption and network settings, operation counts; and a check that stored binaries are pinned or replicated. `/health/deep` carries the status only, and `/metrics` the `oak_ipfs_*_total` counters. |
@@ -451,11 +472,23 @@ repository state converged on every validator. The
 [promotion record](../docs/PRODUCT-PROMOTION.md#validation-record) lists the
 evidence and its limits.
 
-**Not yet validated:** crash and restart recovery, quorum loss and partitions,
-chain-backed payments and signed-intent binding, cloud storage backends, independent
-IPFS replication, dynamic membership, cross-cluster deployments, cluster-wide
-proposal idempotency, and garbage collection. Operation status records live only on
-the validator that accepted the write.
+The consensus charter's `rebaseline` suite (oak-chain-infra, 13 campaigns, 125
+required assertions) passed on one host in mock mode against three validators, with the
+strict typed state digest of `/` compared across validators after every fault:
+single-follower SIGTERM and SIGKILL with writes committed by the remaining majority;
+leader SIGTERM, and leader SIGKILL with six writes in flight (each resolved on every
+survivor or none, status answered by the new leader, same-ID retries refused);
+quorum loss below a majority (no commit) and recovery; full graceful and SIGKILL
+restarts that kept every write and delete and left the digest unchanged; and one effect
+per `proposalId` for resends after and during commit. A member SIGKILLed and restarted at
+once waits for its Aeron files to go stale and starts on the first attempt.
+
+**Not yet validated:** network partitions, compound or repeated faults, crash windows
+inside a single proposal's lifecycle, snapshot bootstrap of an empty member, overload
+and long soaks, chain-backed payments and signed-intent binding, cloud storage
+backends, independent IPFS replication, dynamic membership, cross-cluster deployments,
+and garbage collection. Status records for proposals still in flight live only on the
+validator that accepted them; applied proposals are answered from replicated state.
 
 Each kind of evidence stands on its own: unit tests, bounded multi-validator
 convergence, fault and recovery runs, and chain-backed or production evidence. A

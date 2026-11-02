@@ -22,7 +22,19 @@ the request:
 | `503`, `code=leader_unknown`, `Retry-After: 1` | No leader is known yet. Retry. |
 | `503` | The cluster is unhealthy, including before genesis is verified on every member. |
 | `400` / `401` / `403` / `422` | Malformed fields, a failed signature check outside mock mode, a reserved or unregistered wallet, or an unusable `ipfsCid`. |
+| `409`, `code=duplicate_proposal` | The `proposalId` has already taken effect (`answeredFrom=replicated-state`, with its `path`, `kind` and `appliedAt`) or is still in flight on this leader (`answeredFrom=leader-queue`). Poll its status instead of resending. |
 | `202 Accepted` | Queued on the leader. **Not yet committed.** |
+
+A `proposalId` has one effect, ever. Each applied write or delete records it in
+the replicated index `/:consensus/proposals/<id[2..4]>/<id[4..6]>/<id>` (`kind`,
+`path`, and the cluster-log time `appliedAt`) in the same Oak commit as its change;
+ids are 32-byte hex and are compared case-insensitively. The leader refuses a
+resend with `409`; a resend that still reaches the log (two concurrent requests, or
+one accepted by a previous leader) is applied by no member: each acknowledges it as a
+duplicate without changing the repository. A different path, content type or
+organization does not make a resend a new proposal. A delete records its id even
+when its target is already gone, so resending it cannot delete a node created later.
+A proposal that was rejected or failed without effect may be resent.
 
 In mock mode (the default) payment is simulated and only the signature's format is
 checked; outside mock mode the signature is verified at entry and again before
@@ -53,8 +65,14 @@ flowchart TD
 ## Reading status
 
 Poll `GET /v1/ops/operations/{proposalId}` on **the validator that returned `202`**.
-The ledger is local to that validator; others return `404`. Terminal records are
-kept for 10 minutes (`oak.proposal.processed.retention.ms`).
+Its ledger of queued proposals is local to that validator, and terminal records are
+kept for 10 minutes (`oak.proposal.processed.retention.ms`). When a validator's
+ledger does not hold the proposal (it was accepted by a previous leader, or the
+record has expired) but its repository records the proposal as applied, it answers
+`state=COMMITTED`, `sourceState=APPLIED`, `answeredFrom=replicated-state` and the
+`path`, with `durabilityState` from the replicated durability tally while it still
+tracks the proposal (`UNKNOWN` afterwards). Any validator can answer this way; a
+proposal that is neither queued there nor applied returns `404`.
 
 ```mermaid
 stateDiagram-v2
@@ -91,7 +109,9 @@ The response also carries the underlying fields `sourceState` and `durabilitySta
 
 `PROCESSED` means the command was offered to the Aeron log, not that it committed.
 Only the operation `state` expresses the commit outcome. The operation `type` is
-currently reported as `WRITE_PROPOSAL` for deletes as well.
+currently reported as `WRITE_PROPOSAL` for deletes as well, except in answers from
+replicated state, which report `DELETE_PROPOSAL`. Those answers use
+`sourceState=APPLIED`, which is not one of the queue states above.
 
 ## Genesis
 

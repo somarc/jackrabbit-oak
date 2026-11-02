@@ -216,6 +216,9 @@ public class DeleteProposalHandler {
                     "Signature verification failed. The signature must be a personal_sign over contentPath by the claimed wallet.");
                 return;
             }
+            if (ProposalRequestSupport.rejectDuplicate(context, proposalId, response)) {
+                return;
+            }
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // QUEUE DELETE PROPOSAL: Same flow as writes, just different type

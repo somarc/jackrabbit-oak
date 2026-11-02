@@ -167,7 +167,7 @@ public class ReplayIdempotencyTest {
         return current;
     }
 
-    private static final class Entry {
+    static final class Entry {
         final long position;
         final long timestamp;
         final AeronEncodedMessage message;
@@ -180,7 +180,7 @@ public class ReplayIdempotencyTest {
     }
 
     /** One cluster member: a dispatcher wired to real apply services over its own store. */
-    private static final class Member {
+    static final class Member {
         final MemoryNodeStore store;
         final MessageDispatcher dispatcher;
         final List<String> applies = new ArrayList<>();
