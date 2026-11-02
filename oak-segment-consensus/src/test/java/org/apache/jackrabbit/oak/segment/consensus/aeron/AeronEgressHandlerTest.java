@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import java.util.concurrent.atomic.AtomicInteger;
 
 import io.aeron.Publication;
 import io.aeron.cluster.client.AeronCluster;
@@ -33,32 +32,10 @@ import static org.mockito.Mockito.when;
 public class AeronEgressHandlerTest {
 
     @Test
-    public void offerWithRetryReturnsFalseWhenClientIsMissing() {
-        AeronEgressHandler handler = new AeronEgressHandler();
-        RecordingIdleStrategy idleStrategy = new RecordingIdleStrategy();
-
-        AeronEgressHandler.OfferResult result = handler.offerWithRetryResult(
-            null,
-            idleStrategy,
-            mock(MutableDirectBuffer.class),
-            16,
-            "write",
-            2,
-            null,
-            false
-        );
-
-        assertEquals(AeronEgressHandler.OfferResult.FAILED, result);
-        assertEquals(0, idleStrategy.resetCalls);
-        assertEquals(0, idleStrategy.idleCalls);
-    }
-
-    @Test
-    public void offerWithRetryRetriesBackpressureAndRunsSuccessCallback() {
+    public void offerWithRetryRetriesBackpressure() {
         AeronEgressHandler handler = new AeronEgressHandler();
         RecordingIdleStrategy idleStrategy = new RecordingIdleStrategy();
         AeronCluster client = mock(AeronCluster.class);
-        AtomicInteger successCalls = new AtomicInteger();
         when(client.offer(any(MutableDirectBuffer.class), eq(0), eq(16)))
             .thenReturn(Publication.BACK_PRESSURED, 42L);
 
@@ -68,13 +45,10 @@ public class AeronEgressHandlerTest {
             mock(MutableDirectBuffer.class),
             16,
             "write",
-            2,
-            successCalls::incrementAndGet,
-            true
+            2
         );
 
         assertEquals(AeronEgressHandler.OfferResult.SENT, result);
-        assertEquals(1, successCalls.get());
         assertEquals(1, idleStrategy.resetCalls);
         assertEquals(1, idleStrategy.idleCalls);
     }
@@ -93,9 +67,7 @@ public class AeronEgressHandlerTest {
             mock(MutableDirectBuffer.class),
             16,
             "write",
-            1,
-            null,
-            false
+            1
         );
 
         assertEquals(AeronEgressHandler.OfferResult.BACK_PRESSURED, result);
@@ -117,9 +89,7 @@ public class AeronEgressHandlerTest {
             mock(MutableDirectBuffer.class),
             16,
             "write",
-            2,
-            null,
-            false
+            2
         );
 
         assertEquals(AeronEgressHandler.OfferResult.SENT, result);
@@ -141,9 +111,7 @@ public class AeronEgressHandlerTest {
             mock(MutableDirectBuffer.class),
             16,
             "write",
-            1,
-            null,
-            false
+            1
         );
 
         assertEquals(AeronEgressHandler.OfferResult.NOT_CONNECTED, result);
@@ -164,9 +132,7 @@ public class AeronEgressHandlerTest {
             mock(MutableDirectBuffer.class),
             16,
             "write",
-            2,
-            null,
-            false
+            2
         );
 
         assertEquals(AeronEgressHandler.OfferResult.FAILED, result);

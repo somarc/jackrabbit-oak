@@ -399,6 +399,7 @@ public class AeronApiHandlerTest {
         when(engine.getLeadershipHistory(10)).thenReturn(Arrays.asList(
             new LeadershipChange(
                 2234L,
+                -1L,
                 Cluster.Role.FOLLOWER,
                 null,
                 9,

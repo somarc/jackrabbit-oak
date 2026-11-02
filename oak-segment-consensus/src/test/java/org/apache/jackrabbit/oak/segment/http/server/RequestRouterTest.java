@@ -1973,6 +1973,7 @@ public class RequestRouterTest {
             when(engine.getLeadershipHistory(100)).thenReturn(Arrays.asList(
                 new LeadershipChange(
                     1234L,
+                    -1L,
                     Cluster.Role.LEADER,
                     Cluster.Role.FOLLOWER,
                     7,

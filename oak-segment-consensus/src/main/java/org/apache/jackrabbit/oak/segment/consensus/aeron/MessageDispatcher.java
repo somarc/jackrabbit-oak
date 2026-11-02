@@ -22,10 +22,6 @@ import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
-import org.osgi.service.component.annotations.Activate;
-import org.osgi.service.component.annotations.Component;
-import org.osgi.service.component.annotations.ConfigurationPolicy;
-import org.osgi.service.component.annotations.Deactivate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,9 +41,6 @@ import java.util.function.Predicate;
  * <p>Extracted from AeronConsensusEngine to reduce complexity and improve testability.
  * This service handles message parsing, validation, and routing based on SBE template IDs.
  * 
- * <p><strong>OSGi Component:</strong> Stateless service that can be injected via @Reference.
- * Lifecycle managed by OSGi framework. No configuration required (stateless).
- * 
  * <p><strong>Responsibilities:</strong>
  * <ul>
  *   <li>Parse SBE-encoded messages from DirectBuffer</li>
@@ -56,15 +49,6 @@ import java.util.function.Predicate;
  *   <li>Handle HEAD broadcasts, writes, deletes, and batches</li>
  * </ul>
  */
-@Component(
-    service = MessageDispatcher.class,
-    immediate = true,
-    configurationPolicy = ConfigurationPolicy.OPTIONAL,
-    property = {
-        "service.description=Aeron Message Dispatcher",
-        "service.vendor=Apache Software Foundation"
-    }
-)
 public class MessageDispatcher {
     
     private static final Logger log = LoggerFactory.getLogger(MessageDispatcher.class);
@@ -143,12 +127,10 @@ public class MessageDispatcher {
     private final AtomicInteger staleTermSuppressed = new AtomicInteger(0);
     
     /**
-     * Create a new message dispatcher (default constructor for OSGi).
+     * Create a message dispatcher without a write callback.
      */
     public MessageDispatcher() {
-        this.writeCallback = null;
-        this.durabilityCallback = null;
-        this.transactionCallback = null;
+        this(null);
     }
     
     /**
@@ -160,22 +142,6 @@ public class MessageDispatcher {
         this.writeCallback = writeCallback;
         this.durabilityCallback = null;
         this.transactionCallback = null;
-    }
-    
-    /**
-     * OSGi lifecycle: Activate component.
-     */
-    @Activate
-    protected void activate() {
-        log.info("✅ MessageDispatcher activated (OSGi)");
-    }
-    
-    /**
-     * OSGi lifecycle: Deactivate component.
-     */
-    @Deactivate
-    protected void deactivate() {
-        log.info("✅ MessageDispatcher deactivated (OSGi)");
     }
     
     public void setDurabilityCallback(DurabilityCallback durabilityCallback) {

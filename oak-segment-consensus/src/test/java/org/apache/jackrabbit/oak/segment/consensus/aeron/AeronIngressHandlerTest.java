@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import java.lang.reflect.Field;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -48,18 +49,19 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class AeronIngressHandlerTest {
 
     private static final long LOG_POSITION = 4096L;
 
-    private AeronMessageCodec codec;
     private MessageDispatcher dispatcher;
     private ClientSession session;
     private DirectBuffer buffer;
@@ -69,18 +71,16 @@ public class AeronIngressHandlerTest {
 
     @Before
     public void setUp() {
-        codec = mock(AeronMessageCodec.class);
         dispatcher = mock(MessageDispatcher.class);
         session = mock(ClientSession.class);
         buffer = mock(DirectBuffer.class);
         header = mock(Header.class);
         cluster = mock(Cluster.class);
-        handler = new AeronIngressHandler(codec, dispatcher);
+        handler = new AeronIngressHandler(dispatcher);
 
         when(session.id()).thenReturn(7L);
         when(header.position()).thenReturn(LOG_POSITION);
         when(cluster.role()).thenReturn(LEADER);
-        when(codec.headerLength()).thenReturn(SimpleMessageHeader.ENCODED_LENGTH);
     }
 
     @Test
@@ -96,7 +96,7 @@ public class AeronIngressHandlerTest {
         );
 
         assertFalse(result);
-        verify(codec, never()).decodeHeader(buffer, 0);
+        verifyNoInteractions(buffer);
         verify(dispatcher, never()).dispatch(eq(123L), anyLong(), eq(buffer), eq(0), eq(SimpleMessageHeader.ENCODED_LENGTH - 1));
     }
 
@@ -108,9 +108,7 @@ public class AeronIngressHandlerTest {
         buffer = bufferWithPayload(payload);
         handler.setHeartbeatCallback(heartbeats::incrementAndGet);
         handler.setGenesisCallback((timestamp, json, logPosition) -> genesis.set(json));
-        when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(payload.getBytes(StandardCharsets.UTF_8).length,
-                SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1));
+        writeHeader(payload.getBytes(StandardCharsets.UTF_8).length, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL);
 
         boolean result = handler.handleMessage(
             session,
@@ -134,12 +132,11 @@ public class AeronIngressHandlerTest {
         String payload = "{\"command\":\"CREATE_GENESIS\",\"timestamp\":42,\"genesisValidator\":\"http://leader:8090\"}";
         buffer = bufferWithPayload(payload);
         int length = SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length;
-        when(codec.decodeHeader(buffer, 0)).thenReturn(new SimpleMessageHeader.HeaderInfo(
-            payload.getBytes(StandardCharsets.UTF_8).length, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1));
+        writeHeader(payload.getBytes(StandardCharsets.UTF_8).length, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL);
         MessageDispatcher realDispatcher = new MessageDispatcher();
         realDispatcher.setTermProvider(() -> 3L);
         List<AppliedLogPosition> applied = new ArrayList<>();
-        AeronIngressHandler realHandler = new AeronIngressHandler(codec, realDispatcher);
+        AeronIngressHandler realHandler = new AeronIngressHandler(realDispatcher);
         realHandler.setGenesisCallback((timestamp, json, logPosition) -> applied.add(logPosition));
 
         assertTrue(realHandler.handleMessage(session, 123L, buffer, 0, length, header, cluster));
@@ -154,13 +151,11 @@ public class AeronIngressHandlerTest {
         String payload = "{\"command\":\"CREATE_GENESIS\",\"timestamp\":7,\"genesisValidator\":\"http://leader:8090\"}";
         buffer = bufferWithPayload(payload);
         handler.setGenesisCallback((timestamp, json, logPosition) -> { });
-        when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(payload.getBytes(StandardCharsets.UTF_8).length,
-                SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(0, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT, 1, 1));
+        writeHeader(payload.getBytes(StandardCharsets.UTF_8).length, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL);
 
         assertTrue(handler.handleMessage(session, 123L, buffer, 0,
             SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length, header, cluster));
+        writeHeader(0, SimpleMessageHeader.TEMPLATE_ID_SNAPSHOT);
         assertTrue(handler.handleMessage(session, 124L, buffer, 0,
             SimpleMessageHeader.ENCODED_LENGTH + payload.getBytes(StandardCharsets.UTF_8).length, header, cluster));
 
@@ -172,8 +167,7 @@ public class AeronIngressHandlerTest {
 
     @Test
     public void handleMessageDelegatesToDispatcherForRegularMessages() {
-        when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(0, 999, 1, 1));
+        writeHeader(0, 999);
         when(dispatcher.dispatch(123L, LOG_POSITION, buffer, 0, 16)).thenReturn(true);
 
         boolean result = handler.handleMessage(session, 123L, buffer, 0, 16, header, cluster);
@@ -184,8 +178,7 @@ public class AeronIngressHandlerTest {
 
     @Test
     public void handleMessageAllowsNullClusterForNonClusterBoundTests() {
-        when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(0, 999, 1, 1));
+        writeHeader(0, 999);
         when(dispatcher.dispatch(123L, LOG_POSITION, buffer, 0, 16)).thenReturn(true);
 
         boolean result = handler.handleMessage(session, 123L, buffer, 0, 16, header, null);
@@ -196,8 +189,7 @@ public class AeronIngressHandlerTest {
 
     @Test
     public void handleMessageRateLimitsRepeatedDispatchFailures() throws Exception {
-        when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(0, 999, 1, 1));
+        writeHeader(0, 999);
         when(dispatcher.dispatch(123L, LOG_POSITION, buffer, 0, 16)).thenReturn(false);
         AtomicLong lastLogTime = atomicLongField(handler, "lastDispatchFailLogMs");
         AtomicInteger suppressed = atomicIntField(handler, "dispatchFailSuppressed");
@@ -219,8 +211,7 @@ public class AeronIngressHandlerTest {
     @Test
     public void handleMessagePropagatesAgentTermination() {
         AgentTerminationException termination = new AgentTerminationException("unexpected Aeron close");
-        when(codec.decodeHeader(buffer, 0)).thenReturn(new SimpleMessageHeader.HeaderInfo(
-            8, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, 1, 1));
+        writeHeader(8, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL);
         when(dispatcher.dispatch(anyLong(), anyLong(), eq(buffer), eq(0), eq(16))).thenThrow(termination);
 
         try {
@@ -233,8 +224,7 @@ public class AeronIngressHandlerTest {
 
     @Test
     public void replicatedApplyFailurePropagatesToTheEngine() {
-        when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(0, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, 1, 1));
+        writeHeader(0, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL);
         MessageDispatcher.ReplicatedApplyException failure =
             new MessageDispatcher.ReplicatedApplyException("merge failed", new IllegalStateException("disk"));
         when(dispatcher.dispatch(eq(123L), anyLong(), eq(buffer), eq(0), eq(16))).thenThrow(failure);
@@ -245,8 +235,7 @@ public class AeronIngressHandlerTest {
     @Test
     public void genesisApplicationFailurePropagatesToTheEngine() {
         buffer = bufferWithPayload("{\"command\":\"CREATE_GENESIS\"}");
-        when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(2, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1));
+        writeHeader(2, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL);
         handler.setGenesisCallback((timestamp, trigger, position) -> {
             throw new IllegalStateException("cannot merge genesis");
         });
@@ -257,8 +246,7 @@ public class AeronIngressHandlerTest {
     @Test
     public void missingGenesisCallbackCannotReportSuccess() {
         buffer = bufferWithPayload("{\"command\":\"CREATE_GENESIS\"}");
-        when(codec.decodeHeader(buffer, 0))
-            .thenReturn(new SimpleMessageHeader.HeaderInfo(2, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL, 1, 1));
+        writeHeader(2, SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL);
         assertThrows(MessageDispatcher.ReplicatedApplyException.class,
             () -> handler.handleMessage(session, 123L, buffer, 0, 10, header, cluster));
     }
@@ -279,7 +267,7 @@ public class AeronIngressHandlerTest {
                 deletes.applyDeleteWithAuditMetadata(wallet, path, signature, metadata);
             }
         });
-        AeronIngressHandler realHandler = new AeronIngressHandler(new AeronMessageCodec(), realDispatcher);
+        AeronIngressHandler realHandler = new AeronIngressHandler(realDispatcher);
         String[] payloads = {
             "{\"walletAddress\":\"0xabc\",\"path\":\"invalid\",\"signature\":\"0xsig\"}",
             "{\"walletAddress\":\"0xabc\",\"path\":\"/ordinary/content/node\"}",
@@ -302,7 +290,7 @@ public class AeronIngressHandlerTest {
     @Test
     public void handleMessagePropagatesDecodingOrDispatchFailures() {
         RuntimeException failure = new RuntimeException("boom");
-        when(codec.decodeHeader(buffer, 0)).thenThrow(failure);
+        when(buffer.getShort(eq(0), any(ByteOrder.class))).thenThrow(failure);
 
         try {
             handler.handleMessage(session, 123L, buffer, 0, 16, header, cluster);
@@ -322,6 +310,14 @@ public class AeronIngressHandlerTest {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
         return (AtomicInteger) field.get(target);
+    }
+
+    /** Encodes a message header at offset 0, replacing the mock buffer with a real one if needed. */
+    private void writeHeader(int blockLength, int templateId) {
+        if (!(buffer instanceof UnsafeBuffer)) {
+            buffer = new UnsafeBuffer(new byte[16]);
+        }
+        SimpleMessageHeader.encode((UnsafeBuffer) buffer, 0, blockLength, templateId);
     }
 
     private static DirectBuffer bufferWithPayload(String payload) {

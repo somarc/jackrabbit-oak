@@ -86,7 +86,7 @@ public class AeronConsensusEngine implements ClusteredService {
     private final AeronIngressEndpointPlanner internalIngressEndpointPlanner;
     private AeronInternalClusterClientConnector internalClusterClientConnector;
     private final AeronInternalIngressClientManager internalIngressClientManager;
-    private final HeadStateService headStateService;
+    private volatile String latestHead;
     private SnapshotTrigger snapshotTrigger =
         SnapshotTrigger.fromSystemProperties(() -> SnapshotTrigger.toggleSnapshot(this.cluster), System.currentTimeMillis());
     
@@ -168,12 +168,10 @@ public class AeronConsensusEngine implements ClusteredService {
     private static final long DURABILITY_RETRY_DELAY_MS = 250L;
     private static final int MAX_DURABILITY_RETRY_ATTEMPTS = 4;
     
-    private final AeronMessageCodec messageCodec = new AeronMessageCodec();
     private AeronIngressHandler ingressHandler;
     private volatile boolean genesisVerified;
     /** Latched by the first node-local apply failure: health and HTTP report it while the member fail-stops. */
     private volatile Throwable applicationFailure;
-    private final AeronSessionManager sessionManager;
     private final AeronHealthService healthService = new AeronHealthService();
     private final AeronLeaderTracker leaderTracker;
     
@@ -248,7 +246,7 @@ public class AeronConsensusEngine implements ClusteredService {
             internalIngressEndpointPlanner,
             () -> aeronDirectoryName
         );
-        this.leaderDiscoveryService = new LeaderDiscoveryService(nodeIdToUrl, peerUrls);
+        this.leaderDiscoveryService = new LeaderDiscoveryService(peerUrls);
         this.leaderDiscoveryService.setSelfUrl(selfUrl);
         this.messageDispatcher = new MessageDispatcher(
             new MessageDispatcher.WriteCallback() {
@@ -372,16 +370,14 @@ public class AeronConsensusEngine implements ClusteredService {
             }
         });
 
-        this.headStateService = new HeadStateService(fileStore);
-        this.ingressHandler = new AeronIngressHandler(messageCodec, messageDispatcher);
+        this.ingressHandler = new AeronIngressHandler(messageDispatcher);
         this.ingressHandler.setHeartbeatCallback(this::markHeartbeat);
         this.ingressHandler.setGenesisCallback(this::applyGenesisCreation);
-        this.sessionManager = new AeronSessionManager(this::markHeartbeat);
         this.leaderTracker = new AeronLeaderTracker(leaderDiscoveryService);
         
         log.info("Aeron Consensus Engine initializing - Consensus: Aeron Cluster (Raft), Self: {}, Peers: {}, Wallet: {}", 
             selfUrl, peerUrls.size(), wallet.getWalletAddress());
-        log.info("✅ Production service layer initialized: MessageDispatcher, SnapshotService, HeadStateService, LeaderDiscoveryService");
+        log.info("✅ Production service layer initialized: MessageDispatcher, SnapshotService, LeaderDiscoveryService");
     }
     
     /**
@@ -429,9 +425,6 @@ public class AeronConsensusEngine implements ClusteredService {
         });
     }
 
-    public java.util.Map<String, Object> getTransactionStats() {
-        return transactionLifecycleManager.stats();
-    }
     
     /**
      * Set media driver directory name for client connections.
@@ -542,20 +535,11 @@ public class AeronConsensusEngine implements ClusteredService {
             scheduleGenesisBootstrapIfMissing("initial leader");
         }
         
-        // Create internal AeronCluster client for sending writes through ingress
-        // This allows us to send messages from within the ClusteredService
-        // Uses UDP to connect to the cluster for reliable message delivery
+        // The internal ingress client is created lazily on the first write.
         if (aeronDirectoryName != null && !aeronDirectoryName.isEmpty()
                 && selfUrl != null && !selfUrl.isEmpty()) {
-            try {
-                log.info("✈️  Internal AeronCluster client will be created on-demand (UDP distributed network)");
-                log.info("   Aeron directory: {}", aeronDirectoryName);
-                log.info("   Ingress endpoints will be resolved lazily on first write attempt");
-                // Don't create client here - create it lazily on first write attempt
-            } catch (Exception e) {
-                log.error("Failed to create internal AeronCluster client", e);
-                // Continue without internal client - writes will fail but service can still start
-            }
+            log.info("✈️  Internal AeronCluster client will be created on first write (Aeron directory: {})",
+                aeronDirectoryName);
         } else {
             log.warn("Aeron directory name or node URLs not set - cannot create internal cluster client");
         }
@@ -600,12 +584,14 @@ public class AeronConsensusEngine implements ClusteredService {
     
     @Override
     public void onSessionOpen(ClientSession session, long timestamp) {
-        sessionManager.onSessionOpen(session, timestamp);
+        log.info("Client session opened: {} (timestamp: {})", session.id(), timestamp);
+        markHeartbeat();
     }
     
     @Override
     public void onSessionClose(ClientSession session, long timestamp, CloseReason closeReason) {
-        sessionManager.onSessionClose(session, timestamp, closeReason);
+        log.info("Client session closed: {} (reason: {}, timestamp: {})", session.id(), closeReason, timestamp);
+        markHeartbeat();
         internalIngressClientManager.handleClusterSessionClose(session.id(), closeReason);
     }
     
@@ -1064,7 +1050,7 @@ public class AeronConsensusEngine implements ClusteredService {
 
         // Term is not changed here: it comes from onNewLeadershipTermEvent, in log order.
 
-        LeadershipChange change = new LeadershipChange(
+        leaderTracker.recordChange(new LeadershipChange(
             timestamp,
             clusterTime,
             newRole,
@@ -1072,17 +1058,7 @@ public class AeronConsensusEngine implements ClusteredService {
             getCurrentTerm(),
             memberId,
             selfUrl
-        );
-        
-        leaderTracker.recordChange(
-            change.newRole,
-            change.previousRole,
-            change.term,
-            change.memberId,
-            change.memberUrl,
-            change.timestamp,
-            change.clusterTime
-        );
+        ));
         leaderTracker.invalidateCache();
         log.debug("Leadership history: {} total changes", leaderTracker.getLeadershipHistory(0).size());
         
@@ -1418,13 +1394,6 @@ public class AeronConsensusEngine implements ClusteredService {
     }
     
     /**
-     * Get Aeron Cluster instance (for accessing memberId, etc.).
-     */
-    public Cluster getCluster() {
-        return cluster;
-    }
-    
-    /**
      * Get cluster size (number of nodes configured).
      * @return Number of nodes in cluster
      */
@@ -1497,40 +1466,28 @@ public class AeronConsensusEngine implements ClusteredService {
         return currentEthereumEpoch >= 0 ? currentEthereumEpoch : currentTerm;
     }
     
-    /**
-     * Update latest HEAD (includes pending writes from epoch N, N+1) - may change.
-     * This HEAD includes writes that haven't reached finality yet.
-     * Called by leader after each write commit.
-     * 
-     * <p>🔄 FINALITY-AWARE: Tracks latest HEAD separately from committed HEAD.
-     * - latestHead: Current HEAD including pending writes (may change)
-     * - committedHead: HEAD that has reached finality (immutable, safe)
-     */
+    /** Records the FileStore head after a replicated write or delete applies. */
     public void updateLatestHead(String newHead) {
-        headStateService.updateLatestHead(newHead);
+        latestHead = newHead;
     }
     
-    /**
-     * Get committed HEAD (has reached finality, epoch N-2) - immutable, safe.
-     * This HEAD is guaranteed to be finalized and will never change.
-     */
+    /** Always null: deterministic Aeron consensus has no finality commit. */
     public String getCommittedHead() {
-        return headStateService.getCommittedHead();
+        return null;
     }
     
-    /**
-     * Get latest HEAD (includes pending writes from epoch N, N+1) - may change.
-     * This HEAD includes writes that haven't reached finality yet.
-     */
+    /** The head recorded by the last apply, else the current FileStore head. */
     public String getLatestHead() {
-        return headStateService.getLatestHead();
+        String head = latestHead;
+        if (head != null && !head.isEmpty()) {
+            return head;
+        }
+        return fileStore != null ? fileStore.getHead().getRecordId().toString10() : null;
     }
     
-    /**
-     * Get last committed epoch (epoch that has reached finality).
-     */
+    /** Always -1: there is no committed epoch without a finality commit. */
     public int getLastCommittedEpoch() {
-        return headStateService.getLastCommittedEpoch();
+        return -1;
     }
     
     /**
