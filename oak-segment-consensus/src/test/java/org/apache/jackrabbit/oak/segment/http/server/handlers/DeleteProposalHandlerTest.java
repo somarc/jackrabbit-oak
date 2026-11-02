@@ -46,6 +46,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -488,6 +489,33 @@ public class DeleteProposalHandlerTest {
             eq(VALID_SIGNATURE)
         );
         assertFalse(body.toString().contains("\"tier\""));
+    }
+
+    @Test
+    public void resendOfAnAppliedDeleteIsRefusedBeforeQueueing() throws Exception {
+        System.setProperty("oak.blockchain.mode", "mock");
+        org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig.reset();
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        String contentPath = seedContent(nodeStore, VALID_WALLET);
+        AppliedProposals.applyWrite(nodeStore, VALID_WALLET, contentPath + "-other", VALID_CHAIN_PROPOSAL_ID);
+        ServerContext context = readyContext(nodeStore);
+        registerClient(context, VALID_WALLET, "client-1");
+        context.proposalQueueManager = mock(ProposalQueueManagerOptimized.class);
+        HttpServletRequest request = request();
+        when(request.getParameter("walletAddress")).thenReturn(VALID_WALLET);
+        when(request.getParameter("signature")).thenReturn(VALID_SIGNATURE);
+        when(request.getParameter("contentPath")).thenReturn(contentPath);
+        when(request.getParameter("ethereumTxHash")).thenReturn(PRIORITY_TX_HASH);
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+
+        new DeleteProposalHandler(context).handleDeleteProposal(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_CONFLICT);
+        assertTrue(body.toString(), body.toString().contains("\"code\":\"duplicate_proposal\""));
+        assertTrue(body.toString(), body.toString().contains("\"path\":\"" + contentPath + "-other\""));
+        verify(context.proposalQueueManager, never()).queueDeleteProposal(
+            anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     private static ServerContext readyContext(MemoryNodeStore nodeStore) {
