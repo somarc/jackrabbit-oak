@@ -108,7 +108,6 @@ public class IPFSBackendClientSeamTest {
         long after = System.currentTimeMillis();
 
         assertEquals(CID_ONE, backend.getCID(id));
-        assertEquals(Map.of("blob-1", CID_ONE), backend.getAllCIDMappings());
         assertEquals(1, client.addCalls);
         assertEquals(List.of(CID_ONE + "@/oak/ipfs/content/YmxvYi0x"), client.linkCidCalls);
         assertTrue(backend.exists(id));
@@ -854,7 +853,6 @@ public class IPFSBackendClientSeamTest {
 
         assertEquals(CID_ONE, secondBackend.getCID(identifier));
         assertTrue(secondBackend.exists(identifier));
-        assertEquals(Map.of("blob-persist", CID_ONE), secondBackend.getAllCIDMappings());
 
         Iterator<DataIdentifier> identifiers = secondBackend.getAllIdentifiers();
         assertTrue(identifiers.hasNext());

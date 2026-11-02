@@ -97,21 +97,10 @@ public class SegmentHttpServer {
         this.server = new Server();
         this.server.setHandler(createServerHandler());
         
-        // Configure connectors based on TLS settings
+        // With TLS, --port serves HTTPS and http.port adds an optional plain-HTTP connector.
         try {
-            if (tlsConfig.isEnabled()) {
-                // TLS enabled - configure HTTPS
-                int httpsPort = port;
-                int httpPort = RuntimeConfigValueResolver.readInt("http.port", 0); // Optional HTTP port for health checks
-                tlsConfig.configureServer(server, httpPort, httpsPort);
-                log.info("🔒 TLS enabled - HTTPS on port {}", httpsPort);
-            } else {
-                // No TLS - configure HTTP only
-                org.eclipse.jetty.server.ServerConnector connector = 
-                    new org.eclipse.jetty.server.ServerConnector(server);
-                connector.setPort(port);
-                server.addConnector(connector);
-            }
+            int httpPort = tlsConfig.isEnabled() ? RuntimeConfigValueResolver.readInt("http.port", 0) : port;
+            tlsConfig.configureServer(server, httpPort, port);
         } catch (Exception e) {
             throw new RuntimeException("Failed to configure TLS", e);
         }

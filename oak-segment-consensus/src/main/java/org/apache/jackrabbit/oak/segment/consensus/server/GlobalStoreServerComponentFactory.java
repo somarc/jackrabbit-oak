@@ -20,7 +20,6 @@ import java.nio.file.Path;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
@@ -38,8 +37,6 @@ public interface GlobalStoreServerComponentFactory {
     SegmentHttpServer createHttpServer(java.io.File storeDir, int port, FileStore fileStore, NodeStore nodeStore);
 
     CidMappingService createCidMappingService(Path storeDir) throws Exception;
-
-    ValidatorBootstrap createValidatorBootstrap(FileStore fileStore, int standbyPort);
 
     GenesisInitializer createGenesisInitializer(NodeStore nodeStore, FileStore fileStore, BlobStore blobStore, String selfUrl);
 

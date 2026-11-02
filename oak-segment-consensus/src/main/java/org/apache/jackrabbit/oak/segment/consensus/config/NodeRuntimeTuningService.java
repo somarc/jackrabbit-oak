@@ -63,13 +63,9 @@ public final class NodeRuntimeTuningService {
         putIfBooleanLiteral(overrides, "consensus.enabled", config.consensus_enabled());
         putIfText(overrides, "consensus.mode", config.consensus_mode());
         putIfText(overrides, "wallet.keystore.path", config.wallet_keystore_path());
-        putIfBooleanLiteral(overrides, "consensus.aeron.standby.bootstrap.enabled", config.standby_bootstrap_enabled());
-        putIfText(overrides, "bootstrap.primary.host", config.bootstrap_primary_host());
-        putIfPositive(overrides, "bootstrap.primary.port", config.bootstrap_primary_port());
         putIfText(overrides, "blobstore.type", config.blobstore_type());
         putIfText(overrides, "ipfs.api.endpoint", config.ipfs_api_endpoint());
         putIfPositive(overrides, "http.port", config.http_port());
-        putIfPositive(overrides, "oak.mock.epoch.duration.seconds", config.mock_epoch_duration_seconds());
         putIfText(overrides, "aeron.dir.name", config.aeron_dir_name());
         putIfText(overrides, "aeron.cluster.hostnames", config.aeron_cluster_hostnames());
         putIfText(overrides, "oak.proposal.persistence.dir", config.proposal_persistence_dir());
@@ -92,12 +88,6 @@ public final class NodeRuntimeTuningService {
 
     private static void putIfPositive(Map<String, String> overrides, String key, int value) {
         if (value > 0) {
-            overrides.put(key, String.valueOf(value));
-        }
-    }
-
-    private static void putIfPositive(Map<String, String> overrides, String key, long value) {
-        if (value > 0L) {
             overrides.put(key, String.valueOf(value));
         }
     }

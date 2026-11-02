@@ -21,8 +21,6 @@ import java.util.Collections;
 
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService;
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -35,44 +33,15 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 public class ServerActivationCoordinatorTest {
 
     @Test
-    public void testActivatePreservesDeferredLauncherInStandbyMode() throws Exception {
-        AeronClusterService clusterService = mock(AeronClusterService.class);
-        AeronClusterLauncher existingLauncher = mock(AeronClusterLauncher.class);
-        SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
-        ValidatorBootstrap bootstrap = mock(ValidatorBootstrap.class);
-        ServerActivationCoordinator coordinator = new ServerActivationCoordinator(
-            context -> new ConsensusStartupCoordinator.StartupOutcome(
-                ConsensusStartupCoordinator.StartupDisposition.DEFERRED,
-                clusterService,
-                null,
-                "http://validator-0:8090",
-                Collections.singletonList("http://validator-1:8090")
-            )
-        );
-
-        ServerActivationCoordinator.ActivationResult activation = coordinator.activate(
-            newContext(BootstrapMode.STANDBY, httpServer, bootstrap, clusterService, existingLauncher)
-        );
-
-        verify(httpServer, never()).start();
-        verifyNoInteractions(bootstrap);
-        assertSame(clusterService, activation.aeronClusterService());
-        assertSame(existingLauncher, activation.launcher());
-    }
-
-    @Test
-    public void testActivateStartsHttpServerAndStandbyServerForPrimary() throws Exception {
+    public void testActivateStartsHttpServerAndConsensus() throws Exception {
         AeronClusterService clusterService = mock(AeronClusterService.class);
         AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
         SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
-        ValidatorBootstrap bootstrap = mock(ValidatorBootstrap.class);
         ServerActivationCoordinator coordinator = new ServerActivationCoordinator(
             context -> new ConsensusStartupCoordinator.StartupOutcome(
                 ConsensusStartupCoordinator.StartupDisposition.INITIALIZED,
@@ -84,11 +53,10 @@ public class ServerActivationCoordinatorTest {
         );
 
         ServerActivationCoordinator.ActivationResult activation = coordinator.activate(
-            newContext(BootstrapMode.PRIMARY, httpServer, bootstrap, clusterService, null)
+            newContext(httpServer, clusterService)
         );
 
         verify(httpServer).start();
-        verify(bootstrap).startStandbyServer();
         assertSame(clusterService, activation.aeronClusterService());
         assertSame(launcher, activation.launcher());
     }
@@ -96,7 +64,6 @@ public class ServerActivationCoordinatorTest {
     @Test
     public void testActivateWrapsImmediateHttpStartupFailure() throws Exception {
         SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
-        ValidatorBootstrap bootstrap = mock(ValidatorBootstrap.class);
         final boolean[] invoked = {false};
         ServerActivationCoordinator coordinator = new ServerActivationCoordinator(context -> {
             invoked[0] = true;
@@ -112,7 +79,7 @@ public class ServerActivationCoordinatorTest {
         doThrow(new IllegalStateException("bind failed")).when(httpServer).start();
 
         try {
-            coordinator.activate(newContext(BootstrapMode.PRIMARY, httpServer, bootstrap, null, null));
+            coordinator.activate(newContext(httpServer, null));
             fail("Expected IOException");
         } catch (IOException e) {
             assertEquals("Failed to start HTTP server", e.getMessage());
@@ -122,43 +89,12 @@ public class ServerActivationCoordinatorTest {
         if (invoked[0]) {
             fail("Consensus startup should not run when HTTP startup fails");
         }
-        verifyNoInteractions(bootstrap);
     }
 
-    @Test
-    public void testActivateSwallowsStandbyServerStartFailure() throws Exception {
-        AeronClusterService clusterService = mock(AeronClusterService.class);
-        SegmentHttpServer httpServer = mock(SegmentHttpServer.class);
-        ValidatorBootstrap bootstrap = mock(ValidatorBootstrap.class);
-        ServerActivationCoordinator coordinator = new ServerActivationCoordinator(
-            context -> new ConsensusStartupCoordinator.StartupOutcome(
-                ConsensusStartupCoordinator.StartupDisposition.DISABLED,
-                clusterService,
-                null,
-                "http://validator-0:8090",
-                Collections.<String>emptyList()
-            )
-        );
-
-        doThrow(new IOException("standby unavailable")).when(bootstrap).startStandbyServer();
-
-        ServerActivationCoordinator.ActivationResult activation = coordinator.activate(
-            newContext(BootstrapMode.GENESIS, httpServer, bootstrap, clusterService, null)
-        );
-
-        verify(httpServer).start();
-        verify(bootstrap).startStandbyServer();
-        assertSame(clusterService, activation.aeronClusterService());
-    }
-
-    private static ServerActivationCoordinator.ActivationContext newContext(BootstrapMode detectedMode,
-                                                                            SegmentHttpServer httpServer,
-                                                                            ValidatorBootstrap bootstrap,
-                                                                            AeronClusterService clusterService,
-                                                                            AeronClusterLauncher existingLauncher) {
+    private static ServerActivationCoordinator.ActivationContext newContext(SegmentHttpServer httpServer,
+                                                                            AeronClusterService clusterService) {
         return new ServerActivationCoordinator.ActivationContext(
             8090,
-            detectedMode,
             mock(FileStore.class),
             mock(NodeStore.class),
             httpServer,
@@ -166,10 +102,8 @@ public class ServerActivationCoordinatorTest {
             "/tmp/test-store",
             mock(BlobStore.class),
             clusterService,
-            existingLauncher,
             mock(GlobalStoreServerComponentFactory.class),
-            "0xabc",
-            bootstrap
+            "0xabc"
         );
     }
 }

@@ -69,18 +69,14 @@ public class RateLimiter {
     public static final String PROP_BURST_SIZE = "rate.limit.burst.size";
     public static final String PROP_GLOBAL_RPS = "rate.limit.global.rps";
     public static final String PROP_WRITE_RPS = "rate.limit.write.rps";
-    public static final String PROP_WARN_LOGGING_ENABLED = "rate.limit.warn.logging.enabled";
-    public static final String PROP_WARN_LOG_INTERVAL_MS = "rate.limit.warn.log.interval.ms";
-    public static final String PROP_WARN_LOG_SAMPLE_SIZE = "rate.limit.warn.log.sample.size";
     
     // Default values
-    private static final int DEFAULT_REQUESTS_PER_SECOND = 100;
-    private static final int DEFAULT_BURST_SIZE = 200;
-    private static final int DEFAULT_GLOBAL_RPS = 1000;
-    private static final int DEFAULT_WRITE_RPS = 10;
-    private static final boolean DEFAULT_WARN_LOGGING_ENABLED = true;
-    private static final long DEFAULT_WARN_LOG_INTERVAL_MS = 30_000L;
-    private static final int DEFAULT_WARN_LOG_SAMPLE_SIZE = 250;
+    static final int DEFAULT_REQUESTS_PER_SECOND = 100;
+    static final int DEFAULT_BURST_SIZE = 200;
+    static final int DEFAULT_GLOBAL_RPS = 1000;
+    static final int DEFAULT_WRITE_RPS = 10;
+    private static final long WARN_LOG_INTERVAL_MS = 30_000L;
+    private static final int WARN_LOG_SAMPLE_SIZE = 250;
     
     // HTTP headers
     private static final String HEADER_RATE_LIMIT = "X-RateLimit-Limit";
@@ -94,9 +90,6 @@ public class RateLimiter {
     private final int burstSize;
     private final int globalRps;
     private final int writeRps;
-    private final boolean warnLoggingEnabled;
-    private final long warnLogIntervalMs;
-    private final int warnLogSampleSize;
     
     // Token buckets per client (IP or wallet)
     private final Map<String, TokenBucket> clientBuckets = new ConcurrentHashMap<>();
@@ -116,31 +109,13 @@ public class RateLimiter {
      * Create rate limiter with default configuration from system properties.
      */
     public RateLimiter() {
-        this.enabled = Boolean.parseBoolean(System.getProperty(PROP_ENABLED, "true"));
-        this.requestsPerSecond = Integer.getInteger(PROP_REQUESTS_PER_SECOND, DEFAULT_REQUESTS_PER_SECOND);
-        this.burstSize = Integer.getInteger(PROP_BURST_SIZE, DEFAULT_BURST_SIZE);
-        this.globalRps = Integer.getInteger(PROP_GLOBAL_RPS, DEFAULT_GLOBAL_RPS);
-        this.writeRps = Integer.getInteger(PROP_WRITE_RPS, DEFAULT_WRITE_RPS);
-        this.warnLoggingEnabled = Boolean.parseBoolean(
-            System.getProperty(PROP_WARN_LOGGING_ENABLED, String.valueOf(DEFAULT_WARN_LOGGING_ENABLED)));
-        this.warnLogIntervalMs = Math.max(1L,
-            Long.getLong(PROP_WARN_LOG_INTERVAL_MS, DEFAULT_WARN_LOG_INTERVAL_MS));
-        this.warnLogSampleSize = Math.max(1,
-            Integer.getInteger(PROP_WARN_LOG_SAMPLE_SIZE, DEFAULT_WARN_LOG_SAMPLE_SIZE));
-        
-        this.globalBucket = new TokenBucket(globalRps, globalRps * 2);
-        
-        // Schedule cleanup of stale buckets every minute
-        this.cleanupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "rate-limiter-cleanup");
-            t.setDaemon(true);
-            return t;
-        });
-        this.cleanupScheduler.scheduleAtFixedRate(this::cleanupStaleBuckets, 1, 1, TimeUnit.MINUTES);
-        
-        log.info("Rate limiter initialized: enabled={}, rps={}, burst={}, globalRps={}, writeRps={}, warnLoggingEnabled={}, warnLogIntervalMs={}, warnLogSampleSize={}",
-            enabled, requestsPerSecond, burstSize, globalRps, writeRps,
-            warnLoggingEnabled, warnLogIntervalMs, warnLogSampleSize);
+        this(Boolean.parseBoolean(System.getProperty(PROP_ENABLED, "true")),
+            Integer.getInteger(PROP_REQUESTS_PER_SECOND, DEFAULT_REQUESTS_PER_SECOND),
+            Integer.getInteger(PROP_BURST_SIZE, DEFAULT_BURST_SIZE),
+            Integer.getInteger(PROP_GLOBAL_RPS, DEFAULT_GLOBAL_RPS),
+            Integer.getInteger(PROP_WRITE_RPS, DEFAULT_WRITE_RPS));
+        log.info("Rate limiter initialized: enabled={}, rps={}, burst={}, globalRps={}, writeRps={}",
+            enabled, requestsPerSecond, burstSize, globalRps, writeRps);
     }
     
     /**
@@ -152,12 +127,10 @@ public class RateLimiter {
         this.burstSize = burstSize;
         this.globalRps = globalRps;
         this.writeRps = writeRps;
-        this.warnLoggingEnabled = DEFAULT_WARN_LOGGING_ENABLED;
-        this.warnLogIntervalMs = DEFAULT_WARN_LOG_INTERVAL_MS;
-        this.warnLogSampleSize = DEFAULT_WARN_LOG_SAMPLE_SIZE;
         
         this.globalBucket = new TokenBucket(globalRps, globalRps * 2);
         
+        // Schedule cleanup of stale buckets every minute
         this.cleanupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "rate-limiter-cleanup");
             t.setDaemon(true);
@@ -313,13 +286,10 @@ public class RateLimiter {
     }
 
     private void maybeLogThrottled(String sample) {
-        if (!warnLoggingEnabled) {
-            return;
-        }
         long count = throttledSinceLastWarn.incrementAndGet();
         long now = System.currentTimeMillis();
         long last = lastWarnLogMs.get();
-        if (count < warnLogSampleSize && (now - last) < warnLogIntervalMs) {
+        if (count < WARN_LOG_SAMPLE_SIZE && (now - last) < WARN_LOG_INTERVAL_MS) {
             return;
         }
         if (!lastWarnLogMs.compareAndSet(last, now)) {

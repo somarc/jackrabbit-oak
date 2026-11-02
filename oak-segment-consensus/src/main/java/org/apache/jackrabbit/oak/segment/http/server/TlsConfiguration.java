@@ -28,8 +28,6 @@ import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.io.IOException;
 
 /**
  * TLS/SSL configuration for the Segment HTTP Server.
@@ -44,8 +42,7 @@ import java.io.IOException;
  * <p>Configuration options:
  * <ul>
  *   <li>Keystore-based: Use Java keystore (JKS/PKCS12) with certificate and private key</li>
- *   <li>PEM input guidance: cert/key paths are validated, but direct PEM loading is disabled.
- *       Convert PEM to PKCS12 before use.</li>
+ *   <li>PEM files are not loaded directly; convert them to PKCS12 first.</li>
  *   <li>mTLS: Mutual TLS for validator-to-validator authentication</li>
  * </ul>
  * 
@@ -55,8 +52,6 @@ import java.io.IOException;
  *   <li>{@code tls.keystore.path} - Path to keystore file</li>
  *   <li>{@code tls.keystore.password} - Keystore password</li>
  *   <li>{@code tls.keystore.type} - Keystore type (JKS, PKCS12)</li>
- *   <li>{@code tls.cert.path} - Path to PEM certificate file (validated only, direct load disabled)</li>
- *   <li>{@code tls.key.path} - Path to PEM private key file (validated only, direct load disabled)</li>
  *   <li>{@code tls.truststore.path} - Path to truststore for mTLS</li>
  *   <li>{@code tls.truststore.password} - Truststore password</li>
  *   <li>{@code tls.client.auth} - Client authentication mode (none, want, need)</li>
@@ -75,8 +70,6 @@ public class TlsConfiguration {
     public static final String PROP_KEYSTORE_PATH = "tls.keystore.path";
     public static final String PROP_KEYSTORE_PASSWORD = "tls.keystore.password";
     public static final String PROP_KEYSTORE_TYPE = "tls.keystore.type";
-    public static final String PROP_CERT_PATH = "tls.cert.path";
-    public static final String PROP_KEY_PATH = "tls.key.path";
     public static final String PROP_TRUSTSTORE_PATH = "tls.truststore.path";
     public static final String PROP_TRUSTSTORE_PASSWORD = "tls.truststore.password";
     public static final String PROP_CLIENT_AUTH = "tls.client.auth";
@@ -107,8 +100,6 @@ public class TlsConfiguration {
     private final String keystorePath;
     private final String keystorePassword;
     private final String keystoreType;
-    private final String certPath;
-    private final String keyPath;
     private final String truststorePath;
     private final String truststorePassword;
     private final String clientAuth;
@@ -123,8 +114,6 @@ public class TlsConfiguration {
         this.keystorePath = RuntimeConfigValueResolver.readString(PROP_KEYSTORE_PATH, null);
         this.keystorePassword = RuntimeConfigValueResolver.readString(PROP_KEYSTORE_PASSWORD, "");
         this.keystoreType = RuntimeConfigValueResolver.readString(PROP_KEYSTORE_TYPE, DEFAULT_KEYSTORE_TYPE);
-        this.certPath = RuntimeConfigValueResolver.readString(PROP_CERT_PATH, null);
-        this.keyPath = RuntimeConfigValueResolver.readString(PROP_KEY_PATH, null);
         this.truststorePath = RuntimeConfigValueResolver.readString(PROP_TRUSTSTORE_PATH, null);
         this.truststorePassword = RuntimeConfigValueResolver.readString(PROP_TRUSTSTORE_PASSWORD, "");
         this.clientAuth = RuntimeConfigValueResolver.readString(PROP_CLIENT_AUTH, DEFAULT_CLIENT_AUTH);
@@ -140,15 +129,13 @@ public class TlsConfiguration {
      * Create TLS configuration with explicit values.
      */
     public TlsConfiguration(boolean enabled, String keystorePath, String keystorePassword,
-                           String keystoreType, String certPath, String keyPath,
+                           String keystoreType,
                            String truststorePath, String truststorePassword,
                            String clientAuth, String[] protocols, String[] ciphers) {
         this.enabled = enabled;
         this.keystorePath = keystorePath;
         this.keystorePassword = keystorePassword;
         this.keystoreType = keystoreType;
-        this.certPath = certPath;
-        this.keyPath = keyPath;
         this.truststorePath = truststorePath;
         this.truststorePassword = truststorePassword;
         this.clientAuth = clientAuth;
@@ -284,53 +271,18 @@ public class TlsConfiguration {
         return sslContextFactory;
     }
 
-    private void validateTlsMaterialConfiguration() throws IOException {
-        boolean hasKeystore = hasText(keystorePath);
-        boolean hasCert = hasText(certPath);
-        boolean hasKey = hasText(keyPath);
-        boolean needClientAuth = "need".equalsIgnoreCase(clientAuth);
-        boolean hasTruststore = hasText(truststorePath);
-
-        if (hasKeystore && (hasCert || hasKey)) {
+    private void validateTlsMaterialConfiguration() {
+        if (!hasText(keystorePath)) {
             throw new IllegalStateException(
-                "Ambiguous TLS configuration: use either tls.keystore.path (PKCS12/JKS) OR " +
-                "tls.cert.path + tls.key.path (PEM), not both.");
+                "TLS enabled but no key material configured. Set tls.keystore.path (recommended PKCS12); "
+                    + "convert PEM files with: openssl pkcs12 -export -in cert.pem -inkey key.pem "
+                    + "-out keystore.p12 -name server");
         }
 
-        if (!hasKeystore && !hasCert && !hasKey) {
-            throw new IllegalStateException(
-                "TLS enabled but no key material configured. Set tls.keystore.path (recommended PKCS12).");
-        }
-
-        if (hasCert ^ hasKey) {
-            throw new IllegalStateException(
-                "Incomplete PEM TLS configuration: both tls.cert.path and tls.key.path are required.");
-        }
-
-        if (hasCert && hasKey) {
-            validatePemInputsExist();
-            throw new IllegalStateException(
-                "Direct PEM TLS loading is not supported in oak-segment-consensus. " +
-                "Convert PEM to PKCS12 and set tls.keystore.path. Example: " +
-                "openssl pkcs12 -export -in " + certPath + " -inkey " + keyPath +
-                " -out keystore.p12 -name server");
-        }
-
-        if (needClientAuth && !hasTruststore) {
+        if ("need".equalsIgnoreCase(clientAuth) && !hasText(truststorePath)) {
             throw new IllegalStateException(
                 "mTLS strict mode requires truststore configuration. " +
                 "Set tls.truststore.path and tls.truststore.password when tls.client.auth=need.");
-        }
-    }
-
-    private void validatePemInputsExist() throws IOException {
-        File certFile = new File(certPath);
-        File keyFile = new File(keyPath);
-        if (!certFile.exists()) {
-            throw new IOException("Certificate file not found: " + certPath);
-        }
-        if (!keyFile.exists()) {
-            throw new IOException("Key file not found: " + keyPath);
         }
     }
 

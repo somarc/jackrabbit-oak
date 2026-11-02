@@ -50,18 +50,6 @@ public @interface HttpTlsTuningConfig {
     String keystore_type() default "";
 
     @AttributeDefinition(
-        name = "Certificate Path",
-        description = "Override tls.cert.path. Empty preserves existing behavior."
-    )
-    String cert_path() default "";
-
-    @AttributeDefinition(
-        name = "Private Key Path",
-        description = "Override tls.key.path. Empty preserves existing behavior."
-    )
-    String key_path() default "";
-
-    @AttributeDefinition(
         name = "Truststore Path",
         description = "Override tls.truststore.path. Empty preserves existing behavior."
     )

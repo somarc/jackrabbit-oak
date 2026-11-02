@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server.util;
 
 import jakarta.servlet.http.HttpServletResponse;
+import org.apache.jackrabbit.oak.commons.json.JsopBuilder;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.reflect.Array;
@@ -64,7 +65,7 @@ public final class JsonOutputUtil {
         }
 
         if (value instanceof String) {
-            json.append("\"").append(FormatUtils.escapeJson((String) value)).append("\"");
+            json.append(JsopBuilder.encode((String) value));
             return;
         }
 
@@ -116,6 +117,6 @@ public final class JsonOutputUtil {
             return;
         }
 
-        json.append("\"").append(FormatUtils.escapeJson(String.valueOf(value))).append("\"");
+        json.append(JsopBuilder.encode(String.valueOf(value)));
     }
 }

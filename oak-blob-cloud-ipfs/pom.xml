@@ -43,7 +43,6 @@
                 <configuration>
                     <instructions>
                         <Export-Package>org.apache.jackrabbit.oak.blob.cloud.ipfs</Export-Package>
-                        <DynamicImport-Package>sun.io</DynamicImport-Package>
                         <Bundle-Vendor>Somarc</Bundle-Vendor>
                         <Bundle-DocURL>https://github.com/somarc/jackrabbit-oak</Bundle-DocURL>
                         <Bundle-SCM>url=https://github.com/somarc/jackrabbit-oak</Bundle-SCM>
@@ -106,11 +105,6 @@
         <!-- Dependencies to other Oak components -->
         <dependency>
             <groupId>org.apache.jackrabbit</groupId>
-            <artifactId>oak-api</artifactId>
-            <version>${oak.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-commons</artifactId>
             <version>${oak.version}</version>
         </dependency>
@@ -129,11 +123,6 @@
             <artifactId>oak-blob-plugins</artifactId>
             <version>${oak.version}</version>
         </dependency>
-        <dependency>
-            <groupId>org.apache.jackrabbit</groupId>
-            <artifactId>oak-store-spi</artifactId>
-            <version>${oak.version}</version>
-        </dependency>
 
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -142,34 +131,8 @@
 
         <!-- Test dependencies -->
         <dependency>
-            <groupId>org.apache.jackrabbit</groupId>
-            <artifactId>oak-commons</artifactId>
-            <version>${oak.version}</version>
-            <classifier>tests</classifier>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.jackrabbit</groupId>
-            <artifactId>oak-blob-plugins</artifactId>
-            <version>${oak.version}</version>
-            <classifier>tests</classifier>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.jackrabbit</groupId>
-            <artifactId>oak-blob</artifactId>
-            <version>${oak.version}</version>
-            <classifier>tests</classifier>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>jul-to-slf4j</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

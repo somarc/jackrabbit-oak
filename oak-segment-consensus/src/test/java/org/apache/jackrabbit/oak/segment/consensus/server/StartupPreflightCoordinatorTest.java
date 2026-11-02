@@ -16,11 +16,9 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
-import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.junit.After;
 import org.junit.Rule;
@@ -42,24 +40,15 @@ public class StartupPreflightCoordinatorTest {
     @After
     public void tearDown() {
         System.clearProperty("consensus.mode");
-        System.clearProperty("consensus.aeron.standby.bootstrap.enabled");
-        System.clearProperty("bootstrap.primary.host");
-        System.clearProperty("bootstrap.primary.port");
     }
 
     @Test
-    public void testPrepareCreatesMissingDirectoryAndMarksItEmpty() throws Exception {
+    public void testPrepareCreatesMissingDirectory() throws Exception {
         Path storeDir = tempFolder.getRoot().toPath().resolve("missing-store");
 
-        StartupPreflightCoordinator.PreflightResult result =
-            new StartupPreflightCoordinator(new BootstrapPreflightPlanner(url -> false))
-                .prepare(storeDir.toString(), 8090, aeronConfig(new String[0]));
+        assertEquals(storeDir.toFile(), new StartupPreflightCoordinator().prepare(storeDir.toString()));
 
         assertTrue(Files.isDirectory(storeDir));
-        assertTrue(result.directoryEmpty());
-        assertFalse(result.needsBootstrapBeforeBuild());
-        assertEquals("", result.verifiedBootstrapPrimaryHost());
-        assertEquals(0, result.verifiedBootstrapPrimaryPort());
     }
 
     @Test
@@ -71,8 +60,7 @@ public class StartupPreflightCoordinatorTest {
         when(config.getContractAddress()).thenReturn("0x0000000000000000000000000000000000000000");
 
         try {
-            new StartupPreflightCoordinator(new BootstrapPreflightPlanner(url -> false), () -> config)
-                .prepare(storeDir.toString(), 8090, aeronConfig(new String[0]));
+            new StartupPreflightCoordinator(() -> config).prepare(storeDir.toString());
             fail("Expected IllegalStateException");
         } catch (IllegalStateException e) {
             assertTrue(e.getMessage().contains("example and zero-address defaults are not valid"));
@@ -86,78 +74,10 @@ public class StartupPreflightCoordinatorTest {
         Path storeDir = tempFolder.getRoot().toPath().resolve("segmentstore");
 
         try {
-            new StartupPreflightCoordinator().prepare(storeDir.toString(), 8090, aeronConfig(new String[0]));
+            new StartupPreflightCoordinator().prepare(storeDir.toString());
             fail("Expected IllegalArgumentException");
         } catch (IllegalArgumentException e) {
             assertTrue(e.getMessage().contains("only supports Aeron Cluster consensus"));
         }
-    }
-
-    @Test
-    public void testPrepareDetectsExistingStoreFromJournalFile() throws Exception {
-        Path storeDir = tempFolder.newFolder("existing-store").toPath();
-        Files.writeString(storeDir.resolve("journal.log"), "record-1");
-
-        StartupPreflightCoordinator.PreflightResult result =
-            new StartupPreflightCoordinator(new BootstrapPreflightPlanner(url -> {
-                fail("Preflight probe should not be consulted for non-empty stores");
-                return false;
-            })).prepare(storeDir.toString(), 8090, aeronConfig(new String[] {"http://validator-1:8090"}));
-
-        assertFalse(result.directoryEmpty());
-        assertFalse(result.needsBootstrapBeforeBuild());
-        assertEquals("", result.verifiedBootstrapPrimaryHost());
-        assertEquals(0, result.verifiedBootstrapPrimaryPort());
-    }
-
-    @Test
-    public void testPrepareUsesReachablePeerWhenStandbyBootstrapEnabled() throws Exception {
-        System.setProperty("consensus.aeron.standby.bootstrap.enabled", "true");
-        Path storeDir = tempFolder.newFolder("empty-store-peer").toPath();
-
-        StartupPreflightCoordinator.PreflightResult result =
-            new StartupPreflightCoordinator(new BootstrapPreflightPlanner(
-                url -> "http://validator-1:8090/health".equals(url)
-            )).prepare(storeDir.toString(), 8090, aeronConfig(new String[] {"http://validator-1:8090"}));
-
-        assertTrue(result.directoryEmpty());
-        assertTrue(result.needsBootstrapBeforeBuild());
-        assertEquals("validator-1", result.verifiedBootstrapPrimaryHost());
-        assertEquals(8091, result.verifiedBootstrapPrimaryPort());
-    }
-
-    @Test
-    public void testPrepareUsesConfiguredBootstrapPrimaryFallback() throws Exception {
-        System.setProperty("consensus.aeron.standby.bootstrap.enabled", "true");
-        System.setProperty("bootstrap.primary.host", "bootstrap-node");
-        System.setProperty("bootstrap.primary.port", "9001");
-        Path storeDir = tempFolder.newFolder("empty-store-config").toPath();
-
-        StartupPreflightCoordinator.PreflightResult result =
-            new StartupPreflightCoordinator(new BootstrapPreflightPlanner(
-                url -> "http://bootstrap-node:9000/health".equals(url)
-            )).prepare(storeDir.toString(), 8090, aeronConfig(new String[0]));
-
-        assertTrue(result.directoryEmpty());
-        assertTrue(result.needsBootstrapBeforeBuild());
-        assertEquals("bootstrap-node", result.verifiedBootstrapPrimaryHost());
-        assertEquals(9001, result.verifiedBootstrapPrimaryPort());
-    }
-
-    private static AeronClusterConfig aeronConfig(String[] peerUrls) {
-        return (AeronClusterConfig) Proxy.newProxyInstance(
-            AeronClusterConfig.class.getClassLoader(),
-            new Class<?>[] {AeronClusterConfig.class},
-            (proxy, method, args) -> {
-                switch (method.getName()) {
-                    case "peerUrls":
-                        return peerUrls != null ? peerUrls : method.getDefaultValue();
-                    case "annotationType":
-                        return AeronClusterConfig.class;
-                    default:
-                        return method.getDefaultValue();
-                }
-            }
-        );
     }
 }

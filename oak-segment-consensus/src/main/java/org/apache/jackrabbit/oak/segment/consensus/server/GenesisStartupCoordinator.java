@@ -16,8 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
@@ -31,16 +29,6 @@ final class GenesisStartupCoordinator {
     private static final Logger log = LoggerFactory.getLogger(GenesisStartupCoordinator.class);
 
     void initialize(StartupContext context) {
-        if (context.mode == BootstrapMode.GENESIS) {
-            startStandbyServer(context.bootstrap, context.standbyPort);
-            return;
-        }
-        if (context.mode == BootstrapMode.PRIMARY) {
-            verifyOrDeferGenesis(context);
-        }
-    }
-
-    private void verifyOrDeferGenesis(StartupContext context) {
         try {
             if (genesisExists(context.nodeStore)) {
                 log.info("   ℹ️  Genesis exists - verifying integrity...");
@@ -61,24 +49,7 @@ final class GenesisStartupCoordinator {
         return CanonicalGenesisContent.getGenesisNode(root).exists();
     }
 
-    private static void startStandbyServer(ValidatorBootstrap bootstrap, int standbyPort) {
-        if (bootstrap == null) {
-            return;
-        }
-        try {
-            bootstrap.startStandbyServer();
-            log.info("✅ StandbyServerSync started on port {}", standbyPort);
-            log.info("   Other validators can bootstrap from empty store (will sync genesis after creation)");
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to start StandbyServerSync: {}", e.getMessage());
-            log.warn("   Other validators will not be able to bootstrap from this node");
-        }
-    }
-
-    record StartupContext(BootstrapMode mode,
-                          ValidatorBootstrap bootstrap,
-                          int standbyPort,
-                          NodeStore nodeStore,
+    record StartupContext(NodeStore nodeStore,
                           FileStore fileStore,
                           BlobStore blobStore,
                           String selfUrl,

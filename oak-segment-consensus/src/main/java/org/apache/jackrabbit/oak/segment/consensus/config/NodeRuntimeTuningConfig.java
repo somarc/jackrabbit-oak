@@ -44,24 +44,6 @@ public @interface NodeRuntimeTuningConfig {
     String wallet_keystore_path() default "";
 
     @AttributeDefinition(
-        name = "Standby Bootstrap Enabled",
-        description = "Enable pre-cluster standby bootstrap for empty stores. Empty preserves system-property behavior."
-    )
-    String standby_bootstrap_enabled() default "";
-
-    @AttributeDefinition(
-        name = "Bootstrap Primary Host",
-        description = "Explicit bootstrap primary host. Empty preserves system-property behavior."
-    )
-    String bootstrap_primary_host() default "";
-
-    @AttributeDefinition(
-        name = "Bootstrap Primary Port",
-        description = "Explicit bootstrap primary standby port. <= 0 preserves system-property behavior."
-    )
-    int bootstrap_primary_port() default -1;
-
-    @AttributeDefinition(
         name = "BlobStore Type",
         description = "BlobStore type override. Empty preserves system-property or environment behavior."
     )
@@ -78,12 +60,6 @@ public @interface NodeRuntimeTuningConfig {
         description = "Optional plain HTTP port when TLS is enabled. <= 0 preserves system-property behavior."
     )
     int http_port() default -1;
-
-    @AttributeDefinition(
-        name = "Mock Epoch Duration Seconds",
-        description = "Mock-mode epoch duration override. <= 0 preserves system-property or environment behavior."
-    )
-    long mock_epoch_duration_seconds() default -1L;
 
     @AttributeDefinition(
         name = "Aeron Directory Name",

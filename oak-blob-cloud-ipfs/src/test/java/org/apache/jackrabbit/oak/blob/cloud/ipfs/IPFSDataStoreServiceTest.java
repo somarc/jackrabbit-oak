@@ -61,8 +61,9 @@ public class IPFSDataStoreServiceTest {
 
         assertTrue(delegate instanceof IPFSDataStore);
         IPFSDataStore dataStore = (IPFSDataStore) delegate;
-        assertEquals("/ip4/10.0.0.2/tcp/5001", dataStore.getIpfsApiEndpoint());
-        assertEquals("/oak/repo-a", dataStore.getIpfsFilesRoot());
+        IPFSBackend backend = (IPFSBackend) dataStore.createBackend();
+        assertEquals("/ip4/10.0.0.2/tcp/5001", backend.getIpfsApiEndpoint());
+        assertEquals("/oak/repo-a", backend.getIpfsFilesRoot());
         assertEquals(32 * 1024, dataStore.getMinRecordLength());
 
         verify(bundleContext).registerService(

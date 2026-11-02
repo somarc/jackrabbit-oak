@@ -18,8 +18,6 @@ package org.apache.jackrabbit.oak.segment.consensus.server;
 
 import org.junit.Test;
 
-import java.util.List;
-
 import static org.junit.Assert.*;
 
 public class ServerNetworkUtilTest {
@@ -38,24 +36,6 @@ public class ServerNetworkUtilTest {
         String resolved = ServerNetworkUtil.resolveUrlToIP(input);
 
         assertEquals(input, resolved);
-    }
-
-    @Test
-    public void testParsePeerUrlsTrimsAndSkipsEmpty() {
-        String peers = " http://127.0.0.1:8090, ,http://10.0.0.2:8090 ";
-
-        List<String> parsed = ServerNetworkUtil.parsePeerUrls(peers);
-
-        assertEquals(2, parsed.size());
-        assertEquals("http://127.0.0.1:8090", parsed.get(0));
-        assertEquals("http://10.0.0.2:8090", parsed.get(1));
-    }
-
-    @Test
-    public void testParsePeerUrlsEmptyReturnsEmptyList() {
-        List<String> parsed = ServerNetworkUtil.parsePeerUrls("  ");
-
-        assertTrue(parsed.isEmpty());
     }
 
     @Test

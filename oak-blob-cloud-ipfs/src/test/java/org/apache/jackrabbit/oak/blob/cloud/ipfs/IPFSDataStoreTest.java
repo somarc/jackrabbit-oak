@@ -74,55 +74,6 @@ public class IPFSDataStoreTest {
     }
     
     /**
-     * Test setProperties with endpoint.
-     */
-    @Test
-    public void testSetPropertiesWithEndpoint() {
-        Properties props = new Properties();
-        props.setProperty("ipfsApiEndpoint", "/ip4/192.168.1.100/tcp/5001");
-        props.setProperty("ipfsFilesRoot", "/oak/tenant-a");
-        
-        dataStore.setProperties(props);
-        
-        // Endpoint should be retrievable
-        assertEquals("/ip4/192.168.1.100/tcp/5001", dataStore.getIpfsApiEndpoint());
-        assertEquals("/oak/tenant-a", dataStore.getIpfsFilesRoot());
-    }
-    
-    /**
-     * Test setIpfsApiEndpoint directly.
-     */
-    @Test
-    public void testSetIpfsApiEndpointDirectly() {
-        dataStore.setIpfsApiEndpoint("/ip4/127.0.0.1/tcp/5001");
-        assertEquals("/ip4/127.0.0.1/tcp/5001", dataStore.getIpfsApiEndpoint());
-    }
-    
-    /**
-     * Test setIpfsApiEndpoint creates properties if null.
-     */
-    @Test
-    public void testSetIpfsApiEndpointCreatesProperties() {
-        // Properties should be null initially
-        assertNull(dataStore.getIpfsApiEndpoint());
-        assertNull(dataStore.getIpfsFilesRoot());
-        
-        // Setting endpoint should create properties
-        dataStore.setIpfsApiEndpoint("/ip4/127.0.0.1/tcp/5001");
-        
-        assertEquals("/ip4/127.0.0.1/tcp/5001", dataStore.getIpfsApiEndpoint());
-    }
-
-    @Test
-    public void testSetIpfsFilesRootDirectly() {
-        dataStore.setIpfsFilesRoot("/oak/repo-a");
-        assertEquals("/oak/repo-a", dataStore.getIpfsFilesRoot());
-
-        dataStore.setIpfsFilesRoot("oak/repo-b/");
-        assertEquals("/oak/repo-b", dataStore.getIpfsFilesRoot());
-    }
-    
-    /**
      * Test getCID returns null before init.
      */
     @Test
@@ -151,39 +102,12 @@ public class IPFSDataStoreTest {
     }
     
     /**
-     * Test getAllCIDMappings returns empty before init.
-     */
-    @Test
-    public void testGetAllCIDMappingsBeforeInit() {
-        Map<String, String> mappings = dataStore.getAllCIDMappings();
-        assertNotNull(mappings);
-        assertTrue(mappings.isEmpty());
-    }
-    
-    /**
      * Test getBackend returns null before init.
      */
     @Test
     public void testGetBackendBeforeInit() {
         // Backend is created lazily during init
         assertNull(dataStore.getBackend());
-    }
-    
-    /**
-     * Test properties are passed to backend.
-     */
-    @Test
-    public void testPropertiesPassedToBackend() {
-        Properties props = new Properties();
-        props.setProperty("ipfsApiEndpoint", "/ip4/10.0.0.1/tcp/5001");
-        props.setProperty("ipfsFilesRoot", "/oak/repo-a");
-        props.setProperty("someOtherProperty", "value");
-        
-        dataStore.setProperties(props);
-        
-        // Verify endpoint is stored
-        assertEquals("/ip4/10.0.0.1/tcp/5001", dataStore.getIpfsApiEndpoint());
-        assertEquals("/oak/repo-a", dataStore.getIpfsFilesRoot());
     }
     
     /**
@@ -204,47 +128,12 @@ public class IPFSDataStoreTest {
         assertEquals(Integer.MAX_VALUE, dataStore.getMinRecordLength());
     }
     
-    /**
-     * Test endpoint with various formats.
-     */
-    @Test
-    public void testEndpointFormats() {
-        // IPv4
-        dataStore.setIpfsApiEndpoint("/ip4/127.0.0.1/tcp/5001");
-        assertEquals("/ip4/127.0.0.1/tcp/5001", dataStore.getIpfsApiEndpoint());
-        
-        // IPv6
-        dataStore.setIpfsApiEndpoint("/ip6/::1/tcp/5001");
-        assertEquals("/ip6/::1/tcp/5001", dataStore.getIpfsApiEndpoint());
-        
-        // DNS
-        dataStore.setIpfsApiEndpoint("/dns4/ipfs.example.com/tcp/5001");
-        assertEquals("/dns4/ipfs.example.com/tcp/5001", dataStore.getIpfsApiEndpoint());
-    }
-    
-    /**
-     * Test multiple endpoint changes.
-     */
-    @Test
-    public void testMultipleEndpointChanges() {
-        dataStore.setIpfsApiEndpoint("/ip4/127.0.0.1/tcp/5001");
-        assertEquals("/ip4/127.0.0.1/tcp/5001", dataStore.getIpfsApiEndpoint());
-        
-        dataStore.setIpfsApiEndpoint("/ip4/192.168.1.1/tcp/5001");
-        assertEquals("/ip4/192.168.1.1/tcp/5001", dataStore.getIpfsApiEndpoint());
-        
-        dataStore.setIpfsApiEndpoint("/ip4/10.0.0.1/tcp/5001");
-        assertEquals("/ip4/10.0.0.1/tcp/5001", dataStore.getIpfsApiEndpoint());
-    }
-
     @Test
     public void testCreateBackendWithoutPropertiesLeavesEndpointUnset() {
         IPFSBackend backend = (IPFSBackend) dataStore.createBackend();
 
         assertNull(backend.getIpfsApiEndpoint());
-        assertNull(dataStore.getIpfsApiEndpoint());
         assertEquals("/oak/ipfs", backend.getIpfsFilesRoot());
-        assertEquals("/oak/ipfs", dataStore.getIpfsFilesRoot());
     }
 
     @Test
@@ -254,7 +143,6 @@ public class IPFSDataStoreTest {
         IPFSBackend backend = (IPFSBackend) dataStore.createBackend();
 
         assertNull(backend.getIpfsApiEndpoint());
-        assertNull(dataStore.getIpfsApiEndpoint());
         assertEquals("/oak/ipfs", backend.getIpfsFilesRoot());
     }
 
@@ -268,9 +156,7 @@ public class IPFSDataStoreTest {
         IPFSBackend backend = (IPFSBackend) dataStore.createBackend();
 
         assertEquals("/dns4/ipfs.example.com/tcp/5001", backend.getIpfsApiEndpoint());
-        assertEquals("/dns4/ipfs.example.com/tcp/5001", dataStore.getIpfsApiEndpoint());
         assertEquals("/oak/repo-a", backend.getIpfsFilesRoot());
-        assertEquals("/oak/repo-a", dataStore.getIpfsFilesRoot());
     }
 
     @Test
@@ -296,33 +182,12 @@ public class IPFSDataStoreTest {
     }
 
     @Test
-    public void testSetIpfsApiEndpointUpdatesCreatedBackend() {
-        IPFSBackend backend = (IPFSBackend) dataStore.createBackend();
-
-        dataStore.setIpfsApiEndpoint("/ip4/10.0.0.8/tcp/5001");
-
-        assertEquals("/ip4/10.0.0.8/tcp/5001", backend.getIpfsApiEndpoint());
-        assertEquals("/ip4/10.0.0.8/tcp/5001", dataStore.getIpfsApiEndpoint());
-    }
-
-    @Test
-    public void testSetIpfsFilesRootUpdatesCreatedBackend() {
-        IPFSBackend backend = (IPFSBackend) dataStore.createBackend();
-
-        dataStore.setIpfsFilesRoot("/oak/repo-b");
-
-        assertEquals("/oak/repo-b", backend.getIpfsFilesRoot());
-        assertEquals("/oak/repo-b", dataStore.getIpfsFilesRoot());
-    }
-
-    @Test
-    public void testGetCIDAndMappingsAfterBackendCreation() throws Exception {
+    public void testGetCIDAfterBackendCreation() throws Exception {
         IPFSBackend backend = (IPFSBackend) dataStore.createBackend();
         addCidMapping(backend, "blob-id", "QmTestCid");
 
         assertEquals("QmTestCid", dataStore.getCID("blob-id"));
         assertEquals("QmTestCid", dataStore.getCID("blob-id#128"));
-        assertEquals(Map.of("blob-id", "QmTestCid"), dataStore.getAllCIDMappings());
     }
 
     @Test

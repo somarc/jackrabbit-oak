@@ -20,7 +20,6 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Properties;
 
-import com.amazonaws.services.s3.AmazonS3;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
@@ -99,7 +98,6 @@ final class BlobStoreStartupCoordinator {
         try {
             String endpointOverride = config.hasBlobAwsEndpointOverride()
                 ? config.getBlobAwsEndpoint() : null;
-            AmazonS3 s3 = StorageBackendFactory.buildS3Client(config.getBlobAwsRegion(), endpointOverride);
 
             S3DataStore dataStore = new S3DataStore();
             Properties props = new Properties();

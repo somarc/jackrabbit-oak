@@ -21,7 +21,7 @@ import org.osgi.service.metatype.annotations.ObjectClassDefinition;
 
 @ObjectClassDefinition(
     name = "Oak HTTP Rate Limiter Tuning",
-    description = "Rate-limiter throughput and log-volume tuning."
+    description = "Rate-limiter throughput tuning."
 )
 public @interface RateLimiterTuningConfig {
 
@@ -54,22 +54,4 @@ public @interface RateLimiterTuningConfig {
         description = "Per-wallet write request rate."
     )
     int write_rps() default 10;
-
-    @AttributeDefinition(
-        name = "Warn Logging Enabled",
-        description = "Emit WARN summaries for throttling."
-    )
-    boolean warn_logging_enabled() default true;
-
-    @AttributeDefinition(
-        name = "Warn Log Interval (ms)",
-        description = "Minimum interval between throttling WARN summaries."
-    )
-    long warn_log_interval_ms() default 30000;
-
-    @AttributeDefinition(
-        name = "Warn Log Sample Size",
-        description = "Emit summary when this many throttles accumulate before interval."
-    )
-    int warn_log_sample_size() default 250;
 }

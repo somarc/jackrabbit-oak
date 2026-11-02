@@ -17,8 +17,9 @@
 package org.apache.jackrabbit.oak.segment.http.server;
 
 import java.lang.reflect.Field;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Map;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -51,22 +52,26 @@ public class RateLimiterTuningIntrospectionTest {
         assertEquals("system-properties", RateLimiterTuningIntrospection.source());
     }
 
+    @Test
+    public void reportsOsgiSourceOnceMarked() {
+        RuntimePropertySourceRegistry.markSource(RateLimiterTuningIntrospection.COMPONENT, "osgi-config-admin");
+
+        assertEquals("osgi-config-admin", RateLimiterTuningIntrospection.source());
+    }
+
     private static void clearProperties() {
         System.clearProperty(RateLimiter.PROP_ENABLED);
         System.clearProperty(RateLimiter.PROP_REQUESTS_PER_SECOND);
         System.clearProperty(RateLimiter.PROP_BURST_SIZE);
         System.clearProperty(RateLimiter.PROP_GLOBAL_RPS);
         System.clearProperty(RateLimiter.PROP_WRITE_RPS);
-        System.clearProperty(RateLimiter.PROP_WARN_LOGGING_ENABLED);
-        System.clearProperty(RateLimiter.PROP_WARN_LOG_INTERVAL_MS);
-        System.clearProperty(RateLimiter.PROP_WARN_LOG_SAMPLE_SIZE);
     }
 
     private static void resetSourceRegistry() throws Exception {
-        Field field = RateLimiterTuningSourceRegistry.class.getDeclaredField("SOURCE");
+        Field field = RuntimePropertySourceRegistry.class.getDeclaredField("SOURCES");
         field.setAccessible(true);
         @SuppressWarnings("unchecked")
-        AtomicReference<String> source = (AtomicReference<String>) field.get(null);
-        source.set("system-properties");
+        Map<String, String> sources = (Map<String, String>) field.get(null);
+        sources.remove(RateLimiterTuningIntrospection.COMPONENT);
     }
 }

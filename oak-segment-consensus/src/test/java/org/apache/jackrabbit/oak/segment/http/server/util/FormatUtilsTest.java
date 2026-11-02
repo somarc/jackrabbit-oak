@@ -14,22 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.jackrabbit.oak.segment.http.server;
+package org.apache.jackrabbit.oak.segment.http.server.util;
 
-import java.util.concurrent.atomic.AtomicReference;
+import org.junit.Test;
 
-final class RateLimiterTuningSourceRegistry {
+import static org.junit.Assert.assertEquals;
 
-    private static final AtomicReference<String> SOURCE = new AtomicReference<>("system-properties");
+public class FormatUtilsTest {
 
-    private RateLimiterTuningSourceRegistry() {
-    }
-
-    static void markOsgiSource() {
-        SOURCE.set("osgi-config-admin");
-    }
-
-    static String getSource() {
-        return SOURCE.get();
+    @Test
+    public void testEscapeJsonEscapesEveryControlCharacter() {
+        assertEquals("a\\\"b\\\\c\\n\\t\\b\\f\\u0001é", FormatUtils.escapeJson("a\"b\\c\n\t\b\f\u0001é"));
+        assertEquals("[\"\\b\",\"x\"]", JsonOutputUtil.toJson(new String[] {"\b", "x"}));
     }
 }

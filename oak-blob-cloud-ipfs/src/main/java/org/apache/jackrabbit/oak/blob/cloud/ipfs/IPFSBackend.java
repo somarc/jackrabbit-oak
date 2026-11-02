@@ -780,33 +780,6 @@ public class IPFSBackend extends AbstractSharedBackend {
         }
     }
 
-    /**
-     * Get all CID mappings (Oak blob ID → IPFS CID).
-     *
-     * @return Map of Oak blob IDs (as hex strings) to IPFS CIDs
-     */
-    public Map<String, String> getAllCIDMappings() {
-        Map<String, String> mappings = new LinkedHashMap<>();
-        try {
-            for (DataIdentifier identifier : loadPersistedIdentifiers()) {
-                String cid = resolveCid(identifier);
-                if (cid != null) {
-                    mappings.put(identifier.toString(), cid);
-                }
-            }
-        } catch (DataStoreException e) {
-            LOG.debug("Failed to load persisted CID mappings: {}", e.getMessage());
-        }
-        List<Map.Entry<DataIdentifier, String>> cached;
-        synchronized (cidCache) {
-            cached = new ArrayList<>(cidCache.entrySet());
-        }
-        for (Map.Entry<DataIdentifier, String> entry : cached) {
-            mappings.putIfAbsent(entry.getKey().toString(), entry.getValue());
-        }
-        return mappings;
-    }
-
     @Override
     public byte[] getOrCreateReferenceKey() throws DataStoreException {
         if (secret != null && secret.length > 0) {
@@ -839,7 +812,7 @@ public class IPFSBackend extends AbstractSharedBackend {
         String persisted;
         try {
             byte[] mapping = ipfs.readFile(blobIndexPath(identifier));
-            persisted = mapping == null ? null : trimToNull(new String(mapping, StandardCharsets.UTF_8));
+            persisted = mapping == null ? null : IpfsClientSettings.blankToNull(new String(mapping, StandardCharsets.UTF_8));
         } catch (Exception e) {
             throw new DataStoreException("Failed to read CID mapping for " + identifier, e);
         }
@@ -1057,11 +1030,6 @@ public class IPFSBackend extends AbstractSharedBackend {
 
     private static String decodeName(String value) {
         return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8);
-    }
-
-    private static String trimToNull(String value) {
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private static void requireInput(InputStream input) {

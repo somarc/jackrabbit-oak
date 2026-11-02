@@ -97,7 +97,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                false,
                 testContext.fileStore,
                 testContext.nodeStore,
                 testContext.httpServer,
@@ -165,7 +164,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                false,
                 testContext.fileStore,
                 testContext.nodeStore,
                 testContext.httpServer,
@@ -185,38 +183,6 @@ public class ConsensusStartupCoordinatorTest {
     }
 
     @Test
-    public void testInitializeReturnsDeferredWhenStandbyMode() throws Exception {
-        System.setProperty(PROP_CONSENSUS_ENABLED, "true");
-
-        TestContext testContext = newTestContext();
-        AeronClusterConfig config = mock(AeronClusterConfig.class);
-        when(config.selfUrl()).thenReturn("http://validator-0:8090");
-        when(config.peerUrls()).thenReturn(new String[] {"http://validator-1:8090"});
-
-        ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
-            new ConsensusStartupCoordinator.StartupContext(
-                8090,
-                true,
-                testContext.fileStore,
-                testContext.nodeStore,
-                testContext.httpServer,
-                testContext.wallet,
-                "/tmp/test-store",
-                testContext.blobStore,
-                null,
-                testContext.componentFactory,
-                "0xcluster",
-                config
-            )
-        );
-
-        assertEquals(ConsensusStartupCoordinator.StartupDisposition.DEFERRED, outcome.disposition());
-        assertEquals("http://validator-0:8090", outcome.selfUrl());
-        assertEquals(Collections.singletonList("http://validator-1:8090"), outcome.peerUrls());
-        verifyNoInteractions(testContext.componentFactory);
-    }
-
-    @Test
     public void testInitializeReturnsDisabledWhenAeronConfigDisabled() throws Exception {
         System.setProperty(PROP_CONSENSUS_ENABLED, "true");
         System.setProperty(PROP_CONSENSUS_PEERS, "http://validator-1:8090");
@@ -230,7 +196,6 @@ public class ConsensusStartupCoordinatorTest {
         ConsensusStartupCoordinator.StartupOutcome outcome = coordinator.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 8090,
-                false,
                 testContext.fileStore,
                 testContext.nodeStore,
                 testContext.httpServer,
