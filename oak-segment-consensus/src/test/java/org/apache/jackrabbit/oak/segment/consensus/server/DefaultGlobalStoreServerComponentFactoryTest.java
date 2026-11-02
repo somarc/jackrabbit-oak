@@ -31,7 +31,7 @@ public class DefaultGlobalStoreServerComponentFactoryTest {
     public void clearProps() {
         for (String prop : new String[] {"ipfs.api.endpoint", "ipfs.api.authorization", "ipfs.api.max-attempts",
                 "ipfs.cluster.endpoint", "ipfs.cluster.authorization", "ipfs.encryption.keys",
-                "ipfs.network.policy", "ipfs.swarm.probe-address"}) {
+                "ipfs.network.policy", "ipfs.swarm.probe-address", "ipfs.cluster.unpin-on-delete"}) {
             System.clearProperty(prop);
         }
     }
@@ -97,5 +97,11 @@ public class DefaultGlobalStoreServerComponentFactoryTest {
         assertEquals("2", properties.getProperty("ipfsClusterReplicationMin"));
         assertEquals("3", properties.getProperty("ipfsClusterReplicationMax"));
         assertEquals("120000", properties.getProperty("ipfsClusterPinTimeoutMillis"));
+        assertEquals("cluster pins stay unless the operator dedicates the cluster", "false",
+            properties.getProperty("ipfsClusterUnpinOnDelete"));
+
+        System.setProperty("ipfs.cluster.unpin-on-delete", "true");
+        assertEquals("true", DefaultGlobalStoreServerComponentFactory.ipfsDataStoreProperties(
+            StorageBackendConfig.load()).getProperty("ipfsClusterUnpinOnDelete"));
     }
 }

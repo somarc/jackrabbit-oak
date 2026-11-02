@@ -68,6 +68,8 @@ public class ServerContext {
     public volatile ShardingRuntimeConfig shardingRuntimeConfig = ShardingRuntimeConfig.disabled();
     public volatile RemoteMounts remoteMounts = RemoteMounts.NONE; // Remote read-only mounts in nodeStore
     public volatile FederationCoordinator federationCoordinator; // Charter/directory status; null until Aeron starts
+    /** Binary GC status of this member; null when binary GC is disabled or Aeron has not started. */
+    public volatile java.util.function.Supplier<Map<String, Object>> binaryGcStatus;
     
     /**
      * @return the IPFS DataStore behind {@link #blobStore}, or {@code null}
