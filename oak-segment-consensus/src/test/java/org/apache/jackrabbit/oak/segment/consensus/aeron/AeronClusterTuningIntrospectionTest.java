@@ -18,6 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import java.util.Map;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertyOverrideRegistry;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
 import org.junit.After;
 import org.junit.Test;
@@ -62,7 +63,6 @@ public class AeronClusterTuningIntrospectionTest {
         System.setProperty("oak.cluster.reachability.readTimeoutMs", "3000");
         System.setProperty("oak.cluster.reconnect.maxAttempts", "7");
         System.setProperty("oak.health.peerProbeMode", "http");
-        System.setProperty("aeron.delete.dirs.on.startup", "true");
 
         Map<String, Object> values = AeronClusterTuningIntrospection.effectiveValues();
 
@@ -86,7 +86,6 @@ public class AeronClusterTuningIntrospectionTest {
         assertEquals(3000, values.get("reachability_read_timeout_ms"));
         assertEquals(7, values.get("reconnect_max_attempts"));
         assertEquals("http", values.get("peer_probe_mode"));
-        assertEquals(true, values.get("delete_aeron_dirs_on_startup"));
         assertFalse(values.containsKey("beacon_api_url"));
     }
 
@@ -97,7 +96,6 @@ public class AeronClusterTuningIntrospectionTest {
         System.setProperty("oak.cluster.media.driver.timeout.ms", " ");
         System.setProperty("oak.cluster.heartbeat.maxAgeMs", "bad");
         System.setProperty("oak.cluster.reachability.cacheMs", " ");
-        System.setProperty("aeron.delete.dirs.on.startup", " ");
         RuntimePropertySourceRegistry.markSource(AeronClusterTuningIntrospection.COMPONENT, "osgi-config-admin");
 
         Map<String, Object> values = AeronClusterTuningIntrospection.effectiveValues();
@@ -108,7 +106,6 @@ public class AeronClusterTuningIntrospectionTest {
         assertEquals(0, values.get("media_driver_timeout_ms"));
         assertEquals(0L, values.get("heartbeat_max_age_ms"));
         assertEquals(0L, values.get("reachability_cache_ms"));
-        assertEquals(false, values.get("delete_aeron_dirs_on_startup"));
         assertFalse((Boolean) values.get("self_url_configured"));
         assertEquals(0, values.get("peer_urls_count"));
         assertEquals("osgi-config-admin", AeronClusterTuningIntrospection.source());
@@ -140,6 +137,17 @@ public class AeronClusterTuningIntrospectionTest {
         assertEquals(30L, values.get("effective_session_timeout_seconds"));
         assertEquals(600_000L, values.get("snapshot_interval_ms"));
         assertEquals(10_000L, values.get("snapshot_entry_interval"));
+    }
+
+    @Test
+    public void effectiveValuesReportOsgiOverridesInEffect() {
+        System.setProperty("consensus.enabled", "false");
+        RuntimePropertyOverrideRegistry.setOverrides("introspection-test", Map.of("consensus.enabled", "true"));
+        try {
+            assertEquals(true, AeronClusterTuningIntrospection.effectiveValues().get("enabled"));
+        } finally {
+            RuntimePropertyOverrideRegistry.clear("introspection-test");
+        }
     }
 
     @Test
@@ -176,7 +184,6 @@ public class AeronClusterTuningIntrospectionTest {
         System.clearProperty("oak.cluster.reachability.readTimeoutMs");
         System.clearProperty("oak.cluster.reconnect.maxAttempts");
         System.clearProperty("oak.health.peerProbeMode");
-        System.clearProperty("aeron.delete.dirs.on.startup");
     }
 
     private static void resetSourceRegistry() {

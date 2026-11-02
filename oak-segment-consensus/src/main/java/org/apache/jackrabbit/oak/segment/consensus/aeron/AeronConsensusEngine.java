@@ -424,7 +424,6 @@ public class AeronConsensusEngine implements ClusteredService {
             return value;
         });
     }
-
     
     /**
      * Set media driver directory name for client connections.

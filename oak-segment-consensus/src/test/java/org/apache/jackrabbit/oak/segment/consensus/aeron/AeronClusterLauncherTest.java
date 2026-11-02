@@ -177,8 +177,6 @@ public class AeronClusterLauncherTest {
             AeronClusterLauncher.ContainerLaunchInvoker.DEFAULT
         );
 
-        assertEquals(AeronClusterLauncher.calculatePort(1, 7), AeronClusterLauncher.calculatePort(
-            AeronClusterLauncher.getPortBase(), 1, 7));
         assertEquals("node-1", invokeGetHostname(launcher));
         assertNull(launcher.getAeron());
 

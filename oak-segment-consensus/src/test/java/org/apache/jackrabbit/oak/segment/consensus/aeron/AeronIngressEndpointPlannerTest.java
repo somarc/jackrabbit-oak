@@ -47,8 +47,8 @@ public class AeronIngressEndpointPlannerTest {
         AeronIngressEndpointPlanner.Plan plan = planner.plan();
 
         assertEquals(
-            "0=172.20.1.7:" + AeronClusterLauncher.calculatePort(0, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET)
-                + ",1=172.20.1.11:" + AeronClusterLauncher.calculatePort(1, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET),
+            "0=172.20.1.7:" + AeronClusterTopology.calculatePort(0, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET)
+                + ",1=172.20.1.11:" + AeronClusterTopology.calculatePort(1, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET),
             plan.ingressEndpoints
         );
         assertEquals("172.20.1.7", plan.clientIp);
@@ -71,8 +71,8 @@ public class AeronIngressEndpointPlannerTest {
         AeronIngressEndpointPlanner.Plan plan = planner.plan();
 
         assertEquals(
-            "0=192.168.10.9:" + AeronClusterLauncher.calculatePort(0, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET)
-                + ",1=peer-1:" + AeronClusterLauncher.calculatePort(1, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET),
+            "0=192.168.10.9:" + AeronClusterTopology.calculatePort(0, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET)
+                + ",1=peer-1:" + AeronClusterTopology.calculatePort(1, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET),
             plan.ingressEndpoints
         );
         assertEquals("client-host", plan.clientIp);
@@ -101,9 +101,9 @@ public class AeronIngressEndpointPlannerTest {
         AeronIngressEndpointPlanner.Plan plan = planner.plan();
 
         assertEquals(
-            "0=10.0.0.1:" + AeronClusterLauncher.calculatePort(0, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET)
-                + ",1=10.0.0.2:" + AeronClusterLauncher.calculatePort(1, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET)
-                + ",2=10.0.0.3:" + AeronClusterLauncher.calculatePort(2, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET),
+            "0=10.0.0.1:" + AeronClusterTopology.calculatePort(0, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET)
+                + ",1=10.0.0.2:" + AeronClusterTopology.calculatePort(1, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET)
+                + ",2=10.0.0.3:" + AeronClusterTopology.calculatePort(2, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET),
             plan.ingressEndpoints
         );
         assertEquals("10.0.0.9", plan.clientIp);
@@ -150,9 +150,9 @@ public class AeronIngressEndpointPlannerTest {
         AeronIngressEndpointPlanner.Plan plan = planner.plan();
 
         assertEquals(
-            "0=172.18.0.10:" + AeronClusterLauncher.calculatePort(0, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET)
-                + ",1=172.18.0.11:" + AeronClusterLauncher.calculatePort(1, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET)
-                + ",2=172.18.0.12:" + AeronClusterLauncher.calculatePort(2, AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET),
+            "0=172.18.0.10:" + AeronClusterTopology.calculatePort(0, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET)
+                + ",1=172.18.0.11:" + AeronClusterTopology.calculatePort(1, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET)
+                + ",2=172.18.0.12:" + AeronClusterTopology.calculatePort(2, AeronClusterTopology.CLIENT_FACING_PORT_OFFSET),
             plan.ingressEndpoints
         );
         assertEquals("172.18.0.10", plan.clientIp);

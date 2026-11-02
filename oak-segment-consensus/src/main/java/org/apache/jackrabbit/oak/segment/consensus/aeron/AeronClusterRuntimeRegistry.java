@@ -63,7 +63,7 @@ public final class AeronClusterRuntimeRegistry {
         return SNAPSHOT.get();
     }
 
-    private static String trimToNull(String value) {
+    static String trimToNull(String value) {
         if (value == null) {
             return null;
         }
