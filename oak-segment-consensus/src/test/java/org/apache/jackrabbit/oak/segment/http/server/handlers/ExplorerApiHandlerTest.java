@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
+import org.apache.jackrabbit.oak.spi.blob.data.DataStoreException;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.composite.CompositeNodeStore;
@@ -247,6 +248,8 @@ public class ExplorerApiHandlerTest {
         BlobStore blobStore = mock(BlobStore.class);
         when(blobStore.getInputStream("blob-missing"))
             .thenThrow(new NullPointerException("No DataRecord found for blobId [blob-missing]"));
+        when(blobStore.getInputStream("blob-released"))
+            .thenThrow(new IOException(new DataStoreException("Record blob-released does not exist")));
         when(blobStore.getInputStream("blob-broken"))
             .thenThrow(new IOException("IPFS read failed: Kubo /oak/ipfs/blob-index/YWJj at 10.0.0.5 refused"));
         ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), Paths.get("/tmp/store"), blobStore);
@@ -256,6 +259,10 @@ public class ExplorerApiHandlerTest {
         handler.handleBlobStream(mock(HttpServletRequest.class), missing, "blob-missing");
         verify(missing).setStatus(HttpServletResponse.SC_NOT_FOUND);
         assertTrue(missingBody.toString().contains("blob_not_found"));
+
+        HttpServletResponse released = responseWithBody(new StringWriter());
+        handler.handleBlobStream(mock(HttpServletRequest.class), released, "blob-released");
+        verify(released).setStatus(HttpServletResponse.SC_NOT_FOUND);
 
         StringWriter brokenBody = new StringWriter();
         HttpServletResponse broken = responseWithBody(brokenBody);

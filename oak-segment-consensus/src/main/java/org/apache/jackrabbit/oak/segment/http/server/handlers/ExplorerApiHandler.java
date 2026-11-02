@@ -363,7 +363,9 @@ public class ExplorerApiHandler {
     private static boolean isNotFound(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
             String message = t.getMessage() == null ? "" : t.getMessage().toLowerCase(java.util.Locale.ROOT);
-            if (message.contains("not found") || message.contains("no datarecord found")) {
+            // "Record <id> does not exist" is Oak's DataStore answer for a deleted record (binary GC)
+            if (message.contains("not found") || message.contains("no datarecord found")
+                || message.contains("does not exist")) {
                 return true;
             }
         }
