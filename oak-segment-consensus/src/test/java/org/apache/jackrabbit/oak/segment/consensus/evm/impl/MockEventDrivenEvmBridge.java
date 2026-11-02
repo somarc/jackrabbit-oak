@@ -47,7 +47,12 @@ public class MockEventDrivenEvmBridge extends EventDrivenEvmBridge {
             },
             (threadName, delayMs, reconnectTask) -> {
                 throw new AssertionError("Reconnect is not used by the mock bridge");
-            });
+            },
+            null);
+    }
+
+    public long getCurrentBlockNumber() {
+        return currentBlock;
     }
 
     @Override
@@ -56,22 +61,22 @@ public class MockEventDrivenEvmBridge extends EventDrivenEvmBridge {
             return null;
         }
         currentBlock++;
-        processWriteAuthorizedEvent(new WriteAuthorizedEvent(proposalId, ZERO_ADDRESS, ZERO_ADDRESS, BASE_FEE,
+        processWriteAuthorizedEvent(new WriteAuthorizedEvent(proposalId, ZERO_ADDRESS, BASE_FEE,
             currentBlock, "0x" + proposalId.replace("-", "") + "0".repeat(32), null,
-            PaymentProof.ProposalKind.WRITE, PaymentProof.PaymentToken.UNKNOWN, 0));
+            PaymentProof.ProposalKind.WRITE, PaymentProof.PaymentToken.UNKNOWN, 0, null));
         return payments.get(proposalId);
     }
 
-    public void simulateWriteAuthorizedEvent(String proposalId, String payer, String shardHash, BigInteger amount,
+    public void simulateWriteAuthorizedEvent(String proposalId, String payer, BigInteger amount,
                                              long blockNumber, String txHash) {
-        simulateWriteAuthorizedEvent(proposalId, payer, shardHash, amount, blockNumber, txHash, null);
+        simulateWriteAuthorizedEvent(proposalId, payer, amount, blockNumber, txHash, null);
     }
 
-    public void simulateWriteAuthorizedEvent(String proposalId, String payer, String shardHash, BigInteger amount,
+    public void simulateWriteAuthorizedEvent(String proposalId, String payer, BigInteger amount,
                                              long blockNumber, String txHash,
                                              ValidatorEarningsTracker.PaymentTier paymentTier) {
-        events.offer(new WriteAuthorizedEvent(proposalId, payer, shardHash, amount, blockNumber, txHash, paymentTier,
-            PaymentProof.ProposalKind.WRITE, PaymentProof.PaymentToken.UNKNOWN, 0));
+        events.offer(new WriteAuthorizedEvent(proposalId, payer, amount, blockNumber, txHash, paymentTier,
+            PaymentProof.ProposalKind.WRITE, PaymentProof.PaymentToken.UNKNOWN, 0, null));
     }
 
     /** Advances the simulated chain head to add confirmations. */

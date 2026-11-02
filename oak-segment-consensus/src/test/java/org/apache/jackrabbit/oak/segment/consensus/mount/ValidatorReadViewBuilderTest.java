@@ -91,8 +91,8 @@ public class ValidatorReadViewBuilderTest {
     public void testRemoteMountsReportUnavailableEndpointForItsPathsOnly() {
         MemoryNodeStore localStore = new MemoryNodeStore();
         ValidatorReadViewBuilder builder = new ValidatorReadViewBuilder((endpoint, mountName) ->
-            new LazyHttpNodeStore(endpoint, mountName, 1L, 1L, new CircuitBreaker(mountName, 1, 60_000L, 1),
-                (url, name, connectTimeoutMs, readTimeoutMs) -> {
+            new LazyHttpNodeStore(endpoint, mountName, new CircuitBreaker(mountName, 1, 60_000L, 1),
+                (url, name) -> {
                     throw new IOException("connection refused");
                 }));
 

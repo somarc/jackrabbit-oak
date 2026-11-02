@@ -17,7 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
-import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
+import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ReplicatedDurability;
@@ -178,7 +178,7 @@ public class ProposalQueryHandler {
     }
 
     private void handleSettlementLookup(HttpServletRequest request, HttpServletResponse response, String lookupType,
-                                        String invalidMessage, BiFunction<EvmBridge, String, SettlementDetails> lookup,
+                                        String invalidMessage, BiFunction<EvmBridge, String, PaymentProof> lookup,
                                         String errorLog) throws IOException {
         response.setContentType("application/json");
 
@@ -194,13 +194,13 @@ public class ProposalQueryHandler {
                 return;
             }
 
-            SettlementDetails details = lookup.apply(context.evmBridge, lookupValue);
+            PaymentProof details = lookup.apply(context.evmBridge, lookupValue);
             if (details == null) {
                 ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Settlement details not found");
                 return;
             }
 
-            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, toSettlementPayload(lookupType, lookupValue, details));
+            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, toSettlementPayload(lookupType, lookupValue, context.evmBridge.getNetworkName(), details));
         } catch (Exception e) {
             log.error(errorLog, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
@@ -342,12 +342,13 @@ public class ProposalQueryHandler {
         return segment == null || segment.trim().isEmpty() ? null : segment;
     }
 
-    private Map<String, Object> toSettlementPayload(String lookupType, String lookupValue, SettlementDetails details) {
+    private Map<String, Object> toSettlementPayload(String lookupType, String lookupValue, String networkName,
+                                                    PaymentProof details) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("contractVersion", "settlement.v1");
         payload.put("lookupType", lookupType);
         payload.put("lookupValue", lookupValue);
-        payload.put("networkName", details.getNetworkName());
+        payload.put("networkName", networkName);
         payload.put("proposalId", details.getProposalId());
         payload.put("transactionHash", details.getTransactionHash());
         payload.put("blockNumber", details.getBlockNumber());
@@ -367,7 +368,7 @@ public class ProposalQueryHandler {
         if (state == ProposalState.PENDING) {
             return "QUEUED";
         }
-        if (state == ProposalState.CONFIRMED || state == ProposalState.VERIFIED) {
+        if (state == ProposalState.VERIFIED) {
             return "PROCESSING";
         }
         if (state == ProposalState.PROCESSED) {

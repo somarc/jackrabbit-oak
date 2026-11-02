@@ -76,15 +76,23 @@ public class Http2ClientPoolTest {
     }
 
     @Test
-    public void testGetReturnsBytesAndTracksStats() throws Exception {
+    public void testGetReturnsBytes() throws Exception {
         Http2ClientPool pool = new Http2ClientPool();
 
         byte[] body = pool.get(baseUrl + "/bytes");
 
         assertArrayEquals(new byte[] {1, 2, 3, 4}, body);
-        assertTrue(pool.getPoolStats().contains("Requests=1"));
-        assertTrue(pool.getPoolStats().contains("HTTP/1.1=1"));
-        assertTrue(pool.getPoolStats().contains("BytesReceived=4"));
+    }
+
+    /** The pool no longer owns a fixed thread pool, whose threads never expired and leaked per retired mount. */
+    @Test
+    public void testPoolDoesNotCreateFixedPoolThreads() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            new Http2ClientPool().get(baseUrl + "/bytes");
+        }
+
+        assertFalse(Thread.getAllStackTraces().keySet().stream()
+            .anyMatch(thread -> "http2-client-pool".equals(thread.getName())));
     }
 
     @Test
@@ -94,7 +102,6 @@ public class Http2ClientPoolTest {
         String body = pool.getString(baseUrl + "/text");
 
         assertEquals("consensus-mount-http", body);
-        assertTrue(pool.getPoolStats().contains("Requests=1"));
     }
 
     @Test
@@ -103,7 +110,6 @@ public class Http2ClientPoolTest {
 
         assertTrue(pool.exists(baseUrl + "/exists"));
         assertFalse(pool.exists(baseUrl + "/missing"));
-        assertTrue(pool.getPoolStats().contains("Requests=2"));
     }
 
     @Test
@@ -126,7 +132,7 @@ public class Http2ClientPoolTest {
     }
 
     @Test
-    public void testInjectedHttp2ResponsesTrackHttp2StatsAndLifecycle() throws Exception {
+    public void testInjectedHttp2Responses() throws Exception {
         StubHttpClient httpClient = new StubHttpClient();
         httpClient.enqueue(new StubResponse<>(HttpClient.Version.HTTP_2, 200, new byte[] {9, 8}));
         httpClient.enqueue(new StubResponse<>(HttpClient.Version.HTTP_2, 200, "hello-h2"));
@@ -136,14 +142,6 @@ public class Http2ClientPoolTest {
         assertArrayEquals(new byte[] {9, 8}, pool.get("http://validator.example/bytes"));
         assertEquals("hello-h2", pool.getString("http://validator.example/text"));
         assertTrue(pool.exists("http://validator.example/exists"));
-
-        String stats = pool.getPoolStats();
-        assertTrue(stats.contains("Requests=3"));
-        assertTrue(stats.contains("HTTP/2=3 (100.0%)"));
-        assertTrue(stats.contains("HTTP/1.1=0"));
-        assertTrue(stats.contains("BytesReceived=2"));
-
-        pool.shutdown();
     }
 
     @Test

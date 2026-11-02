@@ -31,7 +31,6 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
-import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -592,14 +591,15 @@ public class RequestRouterTest {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
             EvmBridge evmBridge = mock(EvmBridge.class);
-            when(evmBridge.getSettlementDetailsByProposalId("proposal-123")).thenReturn(new SettlementDetails(
-                "sepolia",
-                "proposal-123",
+            when(evmBridge.getNetworkName()).thenReturn("sepolia");
+            when(evmBridge.getSettlementDetailsByProposalId("proposal-123")).thenReturn(new PaymentProof(
                 "0xtx123",
                 12345L,
                 "0xabc",
                 "0xdef",
+                "proposal-123",
                 "1000",
+                null,
                 PaymentProof.ProposalKind.WRITE,
                 PaymentProof.PaymentToken.ETH,
                 0,
@@ -617,6 +617,7 @@ public class RequestRouterTest {
             assertTrue(body.toString().contains("\"contractVersion\":\"settlement.v1\""));
             assertTrue(body.toString().contains("\"proposalId\":\"proposal-123\""));
             assertTrue(body.toString().contains("\"transactionHash\":\"0xtx123\""));
+            assertTrue(body.toString().contains("\"networkName\":\"sepolia\""));
         });
     }
 
@@ -625,14 +626,14 @@ public class RequestRouterTest {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
             EvmBridge evmBridge = mock(EvmBridge.class);
-            when(evmBridge.getSettlementDetailsByTransactionHash("0xtx999")).thenReturn(new SettlementDetails(
-                "sepolia",
-                "proposal-999",
+            when(evmBridge.getSettlementDetailsByTransactionHash("0xtx999")).thenReturn(new PaymentProof(
                 "0xtx999",
                 88888L,
                 "0xaaa",
                 "0xbbb",
+                "proposal-999",
                 "777",
+                null,
                 PaymentProof.ProposalKind.DELETE,
                 PaymentProof.PaymentToken.USDC,
                 8,
@@ -660,7 +661,7 @@ public class RequestRouterTest {
             ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
             ProposalStatus status = new ProposalStatus(
                 "proposal-1",
-                ProposalState.CONFIRMED,
+                ProposalState.VERIFIED,
                 "0xtx",
                 123L,
                 88L,
@@ -681,7 +682,7 @@ public class RequestRouterTest {
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
             assertTrue(body.toString().contains("\"proposalId\":\"proposal-1\""));
-            assertTrue(body.toString().contains("\"state\":\"CONFIRMED\""));
+            assertTrue(body.toString().contains("\"state\":\"VERIFIED\""));
         });
     }
 

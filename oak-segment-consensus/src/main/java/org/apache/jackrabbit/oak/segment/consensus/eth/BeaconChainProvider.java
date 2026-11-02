@@ -19,9 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.eth;
 /**
  * Source of Ethereum Beacon Chain epoch data.
  *
- * <p>Implementations are single-provider (beaconcha.in, local beacon node, etc.).
- * Failover and circuit-breaking are handled at a higher level by
- * {@link FallbackBeaconChainProvider}.
+ * <p>Implementations: {@link ClockBeaconChainProvider} (mock, local) and {@link BeaconchainDotInProvider}.
  */
 public interface BeaconChainProvider {
 

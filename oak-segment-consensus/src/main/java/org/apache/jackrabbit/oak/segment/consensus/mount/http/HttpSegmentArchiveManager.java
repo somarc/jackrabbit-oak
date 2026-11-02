@@ -59,7 +59,7 @@ public class HttpSegmentArchiveManager implements SegmentArchiveManager {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.ioMonitor = ioMonitor;
         this.http2ClientPool = http2ClientPool;
-        log.debug("Initialized HttpSegmentArchiveManager (HTTP/2) for: {} (stats: {})", this.baseUrl, http2ClientPool.getPoolStats());
+        log.debug("Initialized HttpSegmentArchiveManager (HTTP/2) for: {}", this.baseUrl);
     }
     
     @Override

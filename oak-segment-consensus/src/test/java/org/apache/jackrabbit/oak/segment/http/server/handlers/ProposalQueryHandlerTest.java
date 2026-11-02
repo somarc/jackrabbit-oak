@@ -21,7 +21,6 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
-import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
@@ -30,6 +29,7 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ReplicatedDurability;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Before;
 import org.junit.Test;
@@ -40,9 +40,12 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.Field;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -86,7 +89,7 @@ public class ProposalQueryHandlerTest {
         when(request.getRequestURI()).thenReturn("/v1/proposals/proposal-123/status");
         when(queueManager.getProposalStatus("proposal-123")).thenReturn(new ProposalStatus(
             "proposal-123",
-            ProposalState.CONFIRMED,
+            ProposalState.VERIFIED,
             "0xabc",
             1234L,
             null,
@@ -102,7 +105,7 @@ public class ProposalQueryHandlerTest {
         verify(response).setStatus(HttpServletResponse.SC_OK);
         String json = body.toString();
         assertTrue(json.contains("\"proposalId\":\"proposal-123\""));
-        assertTrue(json.contains("\"state\":\"CONFIRMED\""));
+        assertTrue(json.contains("\"state\":\"VERIFIED\""));
         assertTrue(json.contains("\"confirmedBlock\":-1"));
         assertTrue(json.contains("\"durabilityState\":\"UNKNOWN\""));
     }
@@ -132,14 +135,15 @@ public class ProposalQueryHandlerTest {
     @Test
     public void testGetSettlementByProposalIdReturnsPayload() throws Exception {
         when(request.getRequestURI()).thenReturn("/v1/settlement/proposals/proposal-123");
-        when(evmBridge.getSettlementDetailsByProposalId("proposal-123")).thenReturn(new SettlementDetails(
-            "sepolia",
-            "proposal-123",
+        when(evmBridge.getNetworkName()).thenReturn("sepolia");
+        when(evmBridge.getSettlementDetailsByProposalId("proposal-123")).thenReturn(new PaymentProof(
             "0xtx123",
             12345L,
             "0xabc",
             "0xdef",
+            "proposal-123",
             "1000000000000000",
+            null,
             PaymentProof.ProposalKind.DELETE,
             PaymentProof.PaymentToken.USDC,
             7,
@@ -156,6 +160,17 @@ public class ProposalQueryHandlerTest {
         assertTrue(json.contains("\"transactionHash\":\"0xtx123\""));
         assertTrue(json.contains("\"proposalKind\":\"DELETE\""));
         assertTrue(json.contains("\"paymentToken\":\"USDC\""));
+        Map<String, Object> payload = JsonParser.parseObject(json);
+        assertEquals(List.of("contractVersion", "lookupType", "lookupValue", "networkName", "proposalId",
+            "transactionHash", "blockNumber", "fromAddress", "contractAddress", "amountWei", "proposalKind",
+            "paymentToken", "capabilityFlags", "confirmations"), new ArrayList<>(payload.keySet()));
+        assertEquals("sepolia", payload.get("networkName"));
+        assertEquals(12345L, payload.get("blockNumber"));
+        assertEquals("0xabc", payload.get("fromAddress"));
+        assertEquals("0xdef", payload.get("contractAddress"));
+        assertEquals("1000000000000000", payload.get("amountWei"));
+        assertEquals(7L, payload.get("capabilityFlags"));
+        assertEquals(12L, payload.get("confirmations"));
     }
 
     @Test
@@ -210,14 +225,15 @@ public class ProposalQueryHandlerTest {
     @Test
     public void testGetSettlementByTransactionHashReturnsPayload() throws Exception {
         when(request.getRequestURI()).thenReturn("/v1/settlement/transactions/0xtxabc");
-        when(evmBridge.getSettlementDetailsByTransactionHash("0xtxabc")).thenReturn(new SettlementDetails(
-            "sepolia",
-            "proposal-456",
+        when(evmBridge.getNetworkName()).thenReturn("sepolia");
+        when(evmBridge.getSettlementDetailsByTransactionHash("0xtxabc")).thenReturn(new PaymentProof(
             "0xtxabc",
             22222L,
             "0x111",
             "0x222",
+            "proposal-456",
             "42",
+            null,
             PaymentProof.ProposalKind.WRITE,
             PaymentProof.PaymentToken.ETH,
             0,
@@ -232,6 +248,7 @@ public class ProposalQueryHandlerTest {
         assertTrue(json.contains("\"lookupValue\":\"0xtxabc\""));
         assertTrue(json.contains("\"proposalId\":\"proposal-456\""));
         assertTrue(json.contains("\"paymentToken\":\"ETH\""));
+        assertTrue(json.contains("\"networkName\":\"sepolia\""));
     }
 
     @Test

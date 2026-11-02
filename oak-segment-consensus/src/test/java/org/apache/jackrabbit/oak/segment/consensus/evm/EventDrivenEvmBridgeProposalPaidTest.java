@@ -58,7 +58,7 @@ public class EventDrivenEvmBridgeProposalPaidTest {
         long blockNumber = 123456L;
         String txHash = "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
-        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress);
+        EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("sepolia", contractAddress, null);
 
         Log ethLog = new Log();
         ethLog.setAddress(contractAddress);
