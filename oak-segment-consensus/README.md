@@ -165,6 +165,10 @@ the environment variable wins. Settings listed without an environment variable a
 | `ipfs.api.endpoint` | `IPFS_API_ENDPOINT` | `/ip4/127.0.0.1/tcp/5001` | Kubo API multiaddr. Startup fails if it is unreachable. Validators may each run their own IPFS node in one private swarm: a binary stored through another validator's node is resolved through the replicated binary index and fetched from that node. Reading nodes do not keep a copy, so without IPFS Cluster each binary is available only while the node that stored it is. Binaries written by builds without the index can only be read through the node that stored them. |
 | `ipfs.cluster.endpoint`, `ipfs.cluster.authorization` | `IPFS_CLUSTER_ENDPOINT`, `IPFS_CLUSTER_AUTHORIZATION` | unset | IPFS Cluster REST API of this validator's cluster peer, and its `Authorization` header (Basic or Bearer; prefer the environment variable). When set, a binary write is acknowledged only after the replication minimum of peers hold it, and a write that cannot reach it fails with `503 binary_upload_failed`. |
 | `ipfs.cluster.replication-min`, `ipfs.cluster.replication-max`, `ipfs.cluster.pin-timeout-ms` | `IPFS_CLUSTER_REPLICATION_MIN`, `IPFS_CLUSTER_REPLICATION_MAX`, `IPFS_CLUSTER_PIN_TIMEOUT_MS` | `2`, `3`, `120000` | Peers that must hold a binary before it is acknowledged, peers that should hold it, and how long a write waits. |
+| `ipfs.cluster.unpin-on-delete` | `IPFS_CLUSTER_UNPIN_ON_DELETE` | `false` | `true` lets [binary GC](#binary-garbage-collection) remove the IPFS Cluster pin of a released binary. Set it only when the IPFS Cluster serves this enterprise cluster alone: cluster pins have no owner, so unpinning drops bytes that any other user of the same CID still needs. With `false`, a released binary leaves this validator's IPFS Files index and local pin but stays pinned in the cluster. Ignored without `ipfs.cluster.endpoint`. |
+| `oak.gc.binary.enabled` | `OAK_GC_BINARY_ENABLED` | `true` | Whether this validator runs [binary GC](#binary-garbage-collection): as leader it marks and proposes releases, and it deletes the records it releases. Every validator applies replicated releases regardless. |
+| `oak.gc.binary.interval.ms`, `oak.gc.binary.grace.ms` | `OAK_GC_BINARY_INTERVAL_MS`, `OAK_GC_BINARY_GRACE_MS` | `86400000`, `86400000` | Time between marks (the first runs at most ten minutes after start), and how long ago a binary must last have been referenced, and its record last modified, before it is released. Keep the grace above the longest a write may wait between upload and commit. |
+| `oak.gc.binary.delete.delay.ms` | `OAK_GC_BINARY_DELETE_DELAY_MS` | `600000` | How long a validator waits after applying a release before deleting the records; a record whose binary was referenced again in the meantime is kept. |
 | `ipfs.encryption.keys` | `IPFS_ENCRYPTION_KEYS` | unset (plaintext) | Keyring `current;id:base64Key;...` with 32-byte keys: binaries are encrypted with AES-256-GCM before they reach IPFS. Every validator needs the same keyring, and retired keys must stay listed while binaries use them. Set it through the environment variable; the value is never reported. Gateway URLs then serve ciphertext; `/api/blob/{id}` serves plaintext. Content that a client references by an existing `ipfsCid` never passes through the validator and is not encrypted. |
 | `ipfs.network.policy`, `ipfs.swarm.probe-address` | `IPFS_NETWORK_POLICY`, `IPFS_SWARM_PROBE_ADDRESS` | `warn`, unset | At startup the validator inspects its Kubo node for settings that expose content outside a private network (public bootstrap peers, public HTTP routers, AutoConf, announcing blocks, relays, QUIC/WebTransport/WebRTC listeners). `warn` logs them, `private` refuses to start unless the node is proven private, `off` skips the check. The probe address is the node's swarm listener as the validator reaches it (for example `kubo:4001`); with it, startup proves on the wire that the node uses a `swarm.key`. `private` requires it. |
 | `ipfs.gateway.base`, `ipfs.local.gateway.base` | `IPFS_GATEWAY_BASE`, `IPFS_LOCAL_GATEWAY_BASE` | unset, `http://127.0.0.1:8099/ipfs/` | IPFS gateways used to build URLs in `/api/cid` responses and the `/api/cid/gateway/{id}` redirect, at read time. There is no public default: a public gateway learns every CID it is asked for and cannot reach a private swarm. Without `ipfs.gateway.base`, `/api/cid/gateway/{id}` answers `404 ipfs_gateway_not_configured`. Gateway URLs are no longer stored in content; nodes written by earlier builds keep their `ipfsGateway`. Upgrade all validators together: a build that still writes the property derives different state from one that does not. |
@@ -310,6 +314,51 @@ remote enterprises; within one mount the lookup is a sorted-set search over its
 namespace roots. Listing the children of a node above a mounted namespace (`/`,
 `/oak-chain` or a shard level) still scans every mounted namespace root once
 (`MountInfo.isDirectlyUnder`), linear in the total number of remote namespaces.
+
+## Binary garbage collection
+
+Binary GC reclaims IPFS space for binaries that no content references any more. It
+runs without payment, votes or an HTTP trigger, and is on by default.
+
+1. **Reference stamps.** Every replicated write that stores or references an indexed
+   binary stamps its entry in the replicated binary index
+   (`/:oak-chain-binaries/<aa>/<bb>/<sha-256>`) with the entry's log position
+   (`refPosition`) and cluster time (`refTime`). Entries written before the stamps
+   existed read as 0. A write that names a client `ipfsCid` stores a binary
+   reference when the validator's CID mappings and the replicated index both know
+   that CID, so the bytes stay referenced; any other `ipfsCid` stays a string, as
+   before, and is never released.
+2. **Mark (leader).** Every `oak.gc.binary.interval.ms`, the leader reads its
+   applied watermark and the index from one root, flushes and collects the blob
+   references of its segment store (every generation it still retains), and
+   proposes `BINARY_RELEASE` entries (template 118, at most 1000 ids each) for index
+   entries that nothing references, last referenced before the watermark entry and
+   longer ago than `oak.gc.binary.grace.ms`.
+3. **Release (every member).** Applying the release removes each listed entry that
+   still exists and was last referenced before the mark, in one merge with the
+   applied watermark; entries referenced since are skipped. Replay below the
+   watermark skips the release, like every other store command.
+4. **Delete (every member, local).** After `oak.gc.binary.delete.delay.ms`, on its
+   own thread, each validator deletes its DataStore record of every released
+   binary, unless the binary was referenced again, its record was modified after
+   the mark's grace bound (an upload of the same bytes on its way to the log), or
+   the validator does not hold it. With IPFS this unpins only what the validator
+   stored, and removes the IPFS Cluster pin only with
+   `ipfs.cluster.unpin-on-delete`. Failures are logged and counted, never retried
+   and never affect replicated state; the CID mapping of a deleted record is
+   dropped, so the CID is no longer accepted as a known client CID.
+
+Bytes leave a deleted binary only after Oak's segment GC has dropped the
+generations that still reference it: typically two full compactions with cleanup.
+IPFS blocks are reclaimed by Kubo's own GC; run Kubo (and IPFS Cluster peers) with
+`ipfs daemon --enable-gc` or set `Datastore.GCPeriod`. The validator does not call
+`repo/gc`.
+
+The member's state is in the `binaryGcStatus` of the server context (null when
+disabled): settings, `nextMarkAt`, `lastMark` (`at`, `markedAtPosition`,
+`references`, `candidates`, `proposed`, `error`), `lastRelease` (`at`, `position`,
+`markedAtPosition`, `released`, `skipped`) and `deletes` (`ok`, `failed`,
+`pending`, `skippedRecent`, `skippedReferenced`, `absent`).
 
 ## Build and test
 
