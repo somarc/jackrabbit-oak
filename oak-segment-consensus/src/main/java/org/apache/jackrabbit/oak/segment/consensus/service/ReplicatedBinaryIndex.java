@@ -19,12 +19,14 @@ package org.apache.jackrabbit.oak.segment.consensus.service;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.CidResolver;
+import org.apache.jackrabbit.oak.spi.state.ChildNodeEntry;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /**
@@ -41,12 +43,20 @@ import java.util.regex.Pattern;
  * builds have no entries, and replaying such history with this build adds
  * them. Entries are not removed when content is deleted, so an entry means
  * "this binary was stored", not "its bytes are still retained".</p>
+ *
+ * <p>Every apply that stores or references an indexed binary stamps its entry
+ * with the entry's log position ({@code refPosition}) and cluster time
+ * ({@code refTime}); entries written before the stamps existed read as 0.
+ * Binary GC removes an entry only through a replicated release whose mark
+ * precedes the last reference (see {@link #release}).</p>
  */
 public final class ReplicatedBinaryIndex implements CidResolver {
 
     static final String ROOT = ":oak-chain-binaries";
     static final String CID = "cid";
     static final String LENGTH = "length";
+    static final String REF_POSITION = "refPosition";
+    static final String REF_TIME = "refTime";
 
     private static final Pattern SHA256_HEX = Pattern.compile("[0-9a-f]{64}");
     private static final Pattern CID_FORMAT = Pattern.compile("Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{20,}");
@@ -77,6 +87,121 @@ public final class ReplicatedBinaryIndex implements CidResolver {
         } else {
             entry.removeProperty(LENGTH);
         }
+    }
+
+    /**
+     * Stamps the entry of {@code blobId}, when the index holds one, with the log position and cluster time of
+     * the apply that stores or references it. A null position (a direct call outside the cluster log) leaves
+     * {@code refPosition} unchanged.
+     */
+    static void stamp(@NotNull NodeBuilder root, @NotNull String blobId, @Nullable AppliedLogPosition position,
+                      long time) {
+        String identifier = identifier(blobId);
+        if (identifier == null) {
+            return;
+        }
+        NodeBuilder entry = entry(root, identifier);
+        if (!entry.exists()) {
+            return;
+        }
+        if (position != null) {
+            entry.setProperty(REF_POSITION, position.position());
+        }
+        entry.setProperty(REF_TIME, time);
+    }
+
+    /**
+     * Removes the entry of {@code identifier} if it exists and was last referenced before
+     * {@code markedAtPosition}; empty fan-out nodes are pruned.
+     *
+     * @return true when the entry was removed; false when it is absent or was referenced at or after the mark
+     */
+    static boolean release(@NotNull NodeBuilder root, @NotNull String identifier, long markedAtPosition) {
+        if (!SHA256_HEX.matcher(identifier).matches()) {
+            return false;
+        }
+        NodeBuilder entry = entry(root, identifier);
+        if (!entry.exists() || longValue(entry.getProperty(REF_POSITION)) >= markedAtPosition) {
+            return false;
+        }
+        entry.remove();
+        NodeBuilder second = root.getChildNode(ROOT).getChildNode(identifier.substring(0, 2))
+            .getChildNode(identifier.substring(2, 4));
+        if (second.getChildNodeCount(1) == 0) {
+            second.remove();
+            NodeBuilder first = root.getChildNode(ROOT).getChildNode(identifier.substring(0, 2));
+            if (first.getChildNodeCount(1) == 0) {
+                first.remove();
+            }
+        }
+        return true;
+    }
+
+    /** True when {@code identifier} is SHA-256 hex, the only form the index records. */
+    public static boolean isIdentifier(@Nullable String identifier) {
+        return identifier != null && SHA256_HEX.matcher(identifier).matches();
+    }
+
+    /** The SHA-256 identifier of a blob id ({@code <sha-256>[#length]}), or null for any other form. */
+    @Nullable
+    public static String identifier(@NotNull String blobId) {
+        int separator = blobId.indexOf('#');
+        String identifier = separator < 0 ? blobId : blobId.substring(0, separator);
+        return isIdentifier(identifier) ? identifier : null;
+    }
+
+    /** True when the index in {@code root} holds an entry for {@code identifier}. */
+    public static boolean contains(@NotNull NodeState root, @NotNull String identifier) {
+        return isIdentifier(identifier) && root.getChildNode(ROOT).getChildNode(identifier.substring(0, 2))
+            .getChildNode(identifier.substring(2, 4)).hasChildNode(identifier);
+    }
+
+    /** Visits every entry of the index in {@code root}, in fan-out order. */
+    public static void forEach(@NotNull NodeState root, @NotNull Consumer<Entry> visitor) {
+        for (ChildNodeEntry first : root.getChildNode(ROOT).getChildNodeEntries()) {
+            for (ChildNodeEntry second : first.getNodeState().getChildNodeEntries()) {
+                for (ChildNodeEntry entry : second.getNodeState().getChildNodeEntries()) {
+                    NodeState state = entry.getNodeState();
+                    visitor.accept(new Entry(entry.getName(), longValue(state.getProperty(REF_POSITION)),
+                        longValue(state.getProperty(REF_TIME))));
+                }
+            }
+        }
+    }
+
+    /** An index entry: its identifier and the log position and cluster time of its last reference. */
+    public static final class Entry {
+        private final String identifier;
+        private final long refPosition;
+        private final long refTime;
+
+        public Entry(@NotNull String identifier, long refPosition, long refTime) {
+            this.identifier = identifier;
+            this.refPosition = refPosition;
+            this.refTime = refTime;
+        }
+
+        @NotNull
+        public String identifier() {
+            return identifier;
+        }
+
+        public long refPosition() {
+            return refPosition;
+        }
+
+        public long refTime() {
+            return refTime;
+        }
+    }
+
+    private static NodeBuilder entry(NodeBuilder root, String identifier) {
+        return root.getChildNode(ROOT).getChildNode(identifier.substring(0, 2))
+            .getChildNode(identifier.substring(2, 4)).getChildNode(identifier);
+    }
+
+    private static long longValue(@Nullable PropertyState property) {
+        return property == null || property.getType() != Type.LONG ? 0L : property.getValue(Type.LONG);
     }
 
     @Override

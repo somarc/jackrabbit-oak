@@ -97,7 +97,10 @@ A replicated write that carries a stored binary also records its blob identifier
 CID and length under the hidden `/:oak-chain-binaries/<aa>/<bb>/<sha-256>` index.
 The entry is derived only from the proposal, so every member writes the same one;
 the first entry for an identifier is kept. Node-local gateway URLs are not part of
-this index.
+this index. Each apply that stores or references an indexed binary also stamps the
+entry with the entry's log position and Aeron timestamp (`refPosition`, `refTime`);
+a replicated `BINARY_RELEASE` removes only entries last referenced before its mark
+(see [GC-AND-PAID-DELETES.md](GC-AND-PAID-DELETES.md), section 4.4).
 
 Aeron's committed log is the apply authority. The dispatcher never filters committed
 commands using a locally synthesized HTTP leadership term: the term it compares is
@@ -115,8 +118,8 @@ callback). Later callbacks cannot continue applying commands. Health reports fai
 and ordinary HTTP routes return 503 until restart and repair. Startup is not
 write-ready until canonical genesis is verified.
 
-Every replicated write, delete, batch item, and genesis records its applied-log
-watermark (Aeron log position, batch item, and term) under the hidden root node
+Every replicated write, delete, batch item, genesis, charter, directory update and
+binary release records its applied-log watermark (Aeron log position, batch item, and term) under the hidden root node
 `:consensus` in the same Oak merge as the mutation. Replay skips entries at or below
 the watermark, so a restarted member re-applies only what its store does not yet hold;
 an entry that failed on a member is above its watermark and is applied again after

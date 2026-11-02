@@ -153,6 +153,23 @@ public class CidMappingService implements AutoCloseable {
     }
 
     /**
+     * Forgets the mapping of an Oak blob ID, for example after binary GC deleted its record, so its CID is no
+     * longer accepted as a known client CID.
+     *
+     * @param oakBlobId Oak blob ID (with or without size suffix)
+     */
+    public void removeMapping(String oakBlobId) {
+        if (oakBlobId == null) {
+            return;
+        }
+        String cid = oakToCid.remove(normalizeOakBlobId(oakBlobId));
+        if (cid != null) {
+            cidToOak.remove(cid, normalizeOakBlobId(oakBlobId));
+            persistMappingsAsync();
+        }
+    }
+
+    /**
      * Get IPFS CID for an Oak blob ID.
      * 
      * @param oakBlobId Oak blob ID (with or without size suffix)

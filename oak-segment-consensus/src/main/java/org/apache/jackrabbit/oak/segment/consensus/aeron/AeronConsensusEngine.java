@@ -32,6 +32,7 @@ import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ReplicatedDurability;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
+import org.apache.jackrabbit.oak.segment.consensus.service.BinaryReleaseApplicationService;
 import org.apache.jackrabbit.oak.segment.consensus.service.FederationApplicationService;
 import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -79,6 +80,8 @@ public class AeronConsensusEngine implements ClusteredService {
     private final LeaderDiscoveryService leaderDiscoveryService;
     private final AeronIngressWritePayloadBuilder ingressWritePayloadBuilder;
     private final AeronIngressControlPayloadBuilder ingressControlPayloadBuilder;
+    private volatile java.util.function.Consumer<BinaryReleaseApplicationService.Result> binaryReleaseListener;
+    private volatile java.io.Closeable binaryGcResources;
     private final AeronClusterStateView clusterStateView;
     private final AeronIngressEndpointPlanner internalIngressEndpointPlanner;
     private AeronInternalClusterClientConnector internalClusterClientConnector;
@@ -288,6 +291,19 @@ public class AeronConsensusEngine implements ClusteredService {
             @Override
             public void applyDirectory(java.util.Map<String, Object> command, AppliedLogPosition position) {
                 federationApplier.applyDirectory(command, position);
+            }
+        });
+        BinaryReleaseApplicationService binaryReleaseApplier = new BinaryReleaseApplicationService(() -> nodeStore);
+        this.messageDispatcher.setBinaryReleaseCallback((command, position) -> {
+            BinaryReleaseApplicationService.Result result = binaryReleaseApplier.apply(command, position);
+            java.util.function.Consumer<BinaryReleaseApplicationService.Result> listener = binaryReleaseListener;
+            if (listener != null) {
+                try {
+                    listener.accept(result);
+                } catch (RuntimeException e) {
+                    // The release is committed; deleting records is member-local and must not stop the member.
+                    log.warn("Binary GC could not schedule deletes for a release: {}", e.getMessage(), e);
+                }
             }
         });
         // The term is Aeron's leadershipTermId applied in log order (onNewLeadershipTermEvent), not a locally
@@ -930,6 +946,23 @@ public class AeronConsensusEngine implements ClusteredService {
             () -> AeronIngressPayloadSupport.encode(templateId, json));
     }
 
+    /** Offers a BINARY_RELEASE command; like the federation commands it does not count toward backpressure. */
+    public boolean sendBinaryReleaseThroughIngress(long markedAtPosition, long maxLastModified,
+                                                   java.util.List<String> blobIds) {
+        return sendControl("binary release",
+            () -> ingressControlPayloadBuilder.buildBinaryRelease(markedAtPosition, maxLastModified, blobIds));
+    }
+
+    /**
+     * Wires this member's binary GC: {@code listener} hears each applied release on the apply thread and must only
+     * schedule work; {@code resources} are closed when the clustered service terminates.
+     */
+    public void setBinaryGc(java.util.function.Consumer<BinaryReleaseApplicationService.Result> listener,
+                            java.io.Closeable resources) {
+        this.binaryReleaseListener = listener;
+        this.binaryGcResources = resources;
+    }
+
     /**
      * True when this member leads, genesis is verified and no replicated entry failed to apply: the state in
      * which it may propose cluster-wide commands.
@@ -1110,6 +1143,14 @@ public class AeronConsensusEngine implements ClusteredService {
 
         internalIngressClientManager.close();
         backgroundCoordinator.close();
+        java.io.Closeable binaryGc = binaryGcResources;
+        if (binaryGc != null) {
+            try {
+                binaryGc.close();
+            } catch (java.io.IOException | RuntimeException e) {
+                log.warn("Failed to stop binary GC: {}", e.getMessage());
+            }
+        }
     }
     
     /**

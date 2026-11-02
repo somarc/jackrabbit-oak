@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.blob.cloud.ipfs.CidResolver;
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobOptions;
@@ -27,10 +28,12 @@ import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.ValidationResult;
 import org.apache.jackrabbit.oak.segment.consensus.validation.WalletValidator;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+import org.apache.jackrabbit.oak.segment.consensus.service.ReplicatedBinaryIndex;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
+import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -309,6 +312,7 @@ public class WriteProposalHandler {
             }
 
             boolean hasClientIpfsCid = ipfsCid != null;
+            String clientCidBlobId = null;
             long binaryLength = binaryPart != null ? binaryPart.getSize() : binaryBytes != null ? binaryBytes.length : 0;
             boolean hasBinaryPayload = binaryLength > 0;
             boolean hasIntentToken = intentToken != null;
@@ -349,8 +353,9 @@ public class WriteProposalHandler {
                         "Upload via validator-hosted flow first, or register/ingest CID through enterprise pipeline.");
                     return;
                 }
-                log.debug("🔐 Enterprise ipfsCid accepted for wallet {}: cid={} mappedBlob={}",
-                    normalizedWallet, ipfsCid, knownBlobId.get());
+                clientCidBlobId = indexedBlobId(knownBlobId.get(), ipfsCid);
+                log.debug("🔐 Enterprise ipfsCid accepted for wallet {}: cid={} mappedBlob={} indexed={}",
+                    normalizedWallet, ipfsCid, knownBlobId.get(), clientCidBlobId != null);
                 context.apiIpfsPolicyAcceptedEnterpriseCid.incrementAndGet();
                 ConsensusMetrics.recordEnterpriseCidAccepted();
             }
@@ -506,7 +511,7 @@ public class WriteProposalHandler {
             }
 
             // 📦 Store the binary only once the request is otherwise valid, and before it is queued.
-            String blobId = null;
+            String blobId = clientCidBlobId;
             if (hasBinaryPayload) {
                 if (context.blobStore == null) {
                     reject(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "binary_upload_failed",
@@ -603,6 +608,23 @@ public class WriteProposalHandler {
         policyCounter.incrementAndGet();
         ConsensusMetrics.recordIpfsPolicyRejection(reason);
         reject(response, status, code, message);
+    }
+
+    /**
+     * The blob id for a client-supplied CID that the replicated binary index records for the mapped binary, so the
+     * write stores a binary reference that binary GC sees; null keeps the earlier string-only reference.
+     */
+    private String indexedBlobId(String mappedBlobId, String cid) {
+        NodeStore store = context.authoritativeNodeStore;
+        String identifier = ReplicatedBinaryIndex.identifier(mappedBlobId);
+        if (store == null || context.blobStore == null || identifier == null) {
+            return null;
+        }
+        CidResolver.Resolution indexed = new ReplicatedBinaryIndex(store).resolve(identifier);
+        if (indexed == null || !cid.equals(indexed.cid())) {
+            return null;
+        }
+        return indexed.length() >= 0 ? identifier + "#" + indexed.length() : identifier;
     }
 
     /**

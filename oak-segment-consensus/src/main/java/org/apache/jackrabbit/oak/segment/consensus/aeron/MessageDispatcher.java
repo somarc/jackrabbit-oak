@@ -35,6 +35,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 
@@ -103,6 +104,13 @@ public class MessageDispatcher {
     }
 
     /**
+     * Applies a replicated BINARY_RELEASE; a rejection throws {@link MutationRejectedException}.
+     */
+    public interface BinaryReleaseCallback {
+        void applyBinaryRelease(Map<String, Object> command, AppliedLogPosition position);
+    }
+
+    /**
      * Callback interface for per-member durability reports (ADR 026).
      */
     public interface DurabilityCallback {
@@ -126,6 +134,7 @@ public class MessageDispatcher {
     private DurabilityCallback durabilityCallback;
     private TransactionCallback transactionCallback;
     private FederationCallback federationCallback;
+    private BinaryReleaseCallback binaryReleaseCallback;
     private LongSupplier termProvider;
     private AppliedLogPosition replayFloor = AppliedLogPosition.NONE;
     private static final AtomicBoolean RETIRED_GC_ENTRY_LOGGED = new AtomicBoolean();
@@ -178,6 +187,10 @@ public class MessageDispatcher {
         this.federationCallback = federationCallback;
     }
 
+    public void setBinaryReleaseCallback(BinaryReleaseCallback binaryReleaseCallback) {
+        this.binaryReleaseCallback = binaryReleaseCallback;
+    }
+
     public void setTransactionCallback(TransactionCallback transactionCallback) {
         this.transactionCallback = transactionCallback;
         log.info("✅ MessageDispatcher transaction callback set");
@@ -212,8 +225,8 @@ public class MessageDispatcher {
     /**
      * Sets the applied watermark read from the Oak store at startup. Oak mutations of log entries at or below
      * it are already in the store, so replay skips them: WRITE_PROPOSAL, DELETE_PROPOSAL, WRITE_BATCH items and
-     * GENESIS_PROPOSAL, CHARTER and DIRECTORY_UPDATE, which record the watermark in their own merge. Entries
-     * that rebuild in-memory or derived state are always processed: SEGMENT_PERSISTED and the transaction
+     * GENESIS_PROPOSAL, CHARTER, DIRECTORY_UPDATE and BINARY_RELEASE, which record the watermark in their own merge.
+     * Entries that rebuild in-memory or derived state are always processed: SEGMENT_PERSISTED and the transaction
      * commands. Retired entries (QUEUE_SEGMENT, ACK_SEGMENT_PERSISTED and the paid-GC market's GC_PROPOSAL,
      * GC_VOTE and GC_EXECUTE) are accepted and ignored at any position, so they have no floor to respect.
      */
@@ -320,6 +333,9 @@ public class MessageDispatcher {
                 return handleFederation(logPosition, buffer, payloadOffset, payloadLength, "directory update",
                     (callback, json, entry) -> callback.applyDirectory(json, entry));
 
+            case SimpleMessageHeader.TEMPLATE_ID_BINARY_RELEASE:
+                return handleStoreCommand(binaryReleaseCallback, logPosition, buffer, payloadOffset, payloadLength,
+                    "binary release", (json, entry) -> binaryReleaseCallback.applyBinaryRelease(json, entry));
 
             default:
                 log.warn("Unknown template ID: {}", header.templateId);
@@ -494,19 +510,31 @@ public class MessageDispatcher {
     /** Charter and directory entries change the Oak store, so they follow the write rules: watermark and rejection. */
     private boolean handleFederation(long logPosition, DirectBuffer buffer, int payloadOffset, int payloadLength,
                                      String what, FederationApply apply) {
+        return handleStoreCommand(federationCallback, logPosition, buffer, payloadOffset, payloadLength, what,
+            (json, entry) -> apply.apply(federationCallback, json, entry));
+    }
+
+    /**
+     * A command that changes the Oak store and records the watermark in its own merge: skipped below the replay
+     * floor, rejected identically on every member, and a node-local failure (including a missing callback) stops
+     * the member.
+     */
+    private boolean handleStoreCommand(Object callback, long logPosition, DirectBuffer buffer, int payloadOffset,
+                                       int payloadLength, String what,
+                                       BiConsumer<Map<String, Object>, AppliedLogPosition> apply) {
         AppliedLogPosition entry = entryPosition(logPosition, 0);
         if (isAlreadyApplied(entry)) {
             return true;
         }
-        if (federationCallback == null) {
-            throw new ReplicatedApplyException("Federation callback unavailable - cannot apply " + what, null);
+        if (callback == null) {
+            throw new ReplicatedApplyException("Callback unavailable - cannot apply " + what, null);
         }
         Map<String, Object> json = readPayloadOrNull(buffer, payloadOffset, payloadLength, what);
         if (json == null) {
             return false;
         }
         try {
-            apply.apply(federationCallback, json, entry);
+            apply.accept(json, entry);
         } catch (RuntimeException e) {
             return rejectIfInvalid(e, what);
         }

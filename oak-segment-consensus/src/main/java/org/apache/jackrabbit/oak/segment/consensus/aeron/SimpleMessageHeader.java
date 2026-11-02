@@ -68,6 +68,8 @@ public class SimpleMessageHeader {
     public static final int TEMPLATE_ID_CHARTER = 116;
     /** A federation directory snapshot read from the charter's registry. */
     public static final int TEMPLATE_ID_DIRECTORY_UPDATE = 117;
+    /** Binary GC: removes index entries unreferenced since a mark; members then delete the released records. */
+    public static final int TEMPLATE_ID_BINARY_RELEASE = 118;
     
     // Schema ID and version (arbitrary values for our custom messages)
     private static final int SCHEMA_ID = 1;

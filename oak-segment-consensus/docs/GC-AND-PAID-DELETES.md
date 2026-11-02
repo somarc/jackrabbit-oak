@@ -9,7 +9,8 @@ ETH contract; Oak's own GC mechanisms run unabated; pricing gets a separate reth
 and D2 below and defers D4 to the pricing rethink.
 
 Update: D1 is decided and section 4.1 is implemented (phase 1a). Section 1 describes the code at
-`42fb205ece`, before that change.
+`42fb205ece`, before that change. D3 is decided and binary GC (section 4.4) is implemented on
+`feature/binary-gc`.
 
 Update: segment GC (section 4.2, phase 2) is implemented and on by default, as the owner decided.
 The 3x2 harness run in section 5 is still to do.
@@ -217,18 +218,75 @@ Research on Oak's own blob GC (shared-DataStore mark-sweep) with `IPFSDataStore`
 - A write that only names an existing `ipfsCid` stores a string, which mark does not see. Phase 3
   must store the mapped blob id instead, so that content stays referenced.
 
-One way to make the cluster-wide step safe, from replicated state:
+Implemented design: a mark on the leader, a replicated release ordered against writes by log
+position, and member-local deletes. Reference counts were not needed: Oak's own reference collection
+on the leader's `FileStore` already answers "is it referenced", and log positions answer "was it
+referenced since".
 
-- **Reference counts.** The binary index entry gains a reference count, maintained at apply: a write
-  that stores or references a binary increments it, and a delete or overwrite that drops a reference
-  decrements it. Every member computes the same count from the same log.
-- **Grace period.** An entry whose count reaches zero records its release time (cluster time). After
-  a grace period longer than the remote-reader window, the leader replicates a release entry. Every
-  member removes the index entry, and the leader unpins through IPFS Cluster when it applies the
-  entry live, not during replay. Unpinning is idempotent and retried on failure.
-- **Never unpinned:** CIDs that authors supplied (`ipfsCid`), and any CID on an IPFS Cluster that is
-  not dedicated to this enterprise cluster, because cluster pins have no owners.
-- This adds one message type and a field in the binary index, so it is a later phase.
+- **Stamps.** Every replicated apply that stores or references an indexed binary sets `refPosition`
+  (the entry's log position, as recorded in the applied watermark) and `refTime` (Aeron cluster time)
+  on its index entry. Both come from the log entry, so every member writes the same values. Entries
+  without stamps read as position 0 and time 0. A binary write without a CID stamps an existing entry
+  and creates none.
+- **Client CIDs.** At ingress, a client `ipfsCid` that the CID mappings resolve to a blob id, and that
+  the replicated index records for that blob id, is proposed with `blobId` (with its length from the
+  index). Apply then stores a real binary reference and stamps the entry, exactly as for an upload.
+  Any other `ipfsCid`, and every log entry written before this change, keeps the string reference and
+  replays unchanged. CIDs the validator never stored have no index entry and are never released.
+- **Mark.** `BinaryGcCoordinator` runs on its own thread on every member and acts only when a mark is
+  due (`oak.gc.binary.interval.ms`, default one day; the first at most ten minutes after start) and the
+  member may propose cluster commands (leader, genesis verified, no apply failure). It reads the
+  applied watermark and the index from one root, flushes the `FileStore`, collects its blob
+  references (every generation not yet reclaimed), and proposes `BINARY_RELEASE` (template 118) in
+  batches of at most 1000 ids for entries that are unreferenced, have `refPosition` below the
+  watermark position and `refTime` at least `oak.gc.binary.grace.ms` (default one day) old. The
+  payload is `{"markedAtPosition":p,"maxLastModified":t,"blobIds":[...]}` with `t` = mark time minus
+  the grace. Proposals go through the internal ingress like CHARTER; no Ethereum, vote or HTTP trigger.
+- **Release.** Every member removes each listed entry that still exists and whose `refPosition` is
+  below `markedAtPosition`, and records the watermark in the same merge, so replay below the floor
+  skips the release. An entry referenced at or after the mark position is skipped. A malformed
+  release is rejected identically on every member.
+- **Delete.** After the merge the member schedules, on its own thread and after
+  `oak.gc.binary.delete.delay.ms` (default ten minutes), `deleteRecord` on its DataStore for each
+  released id. It keeps a record whose index entry exists again, whose last-modified time is after
+  `maxLastModified` (the same bytes were uploaded again and their write is still on its way to the
+  log), or that it does not hold. Failures are logged and counted and never affect the apply. The
+  CID mapping of a deleted record is dropped, so ingress stops accepting that CID.
+- **IPFS Cluster.** `ipfs.cluster.unpin-on-delete` (`IPFS_CLUSTER_UNPIN_ON_DELETE`, default `false`)
+  is passed to `IPFSDataStore` as `ipfsClusterUnpinOnDelete`. Without it a delete drops the member's
+  IPFS Files entries and leaves the cluster pin; with it the cluster pin goes too. Turn it on only
+  when the IPFS Cluster is dedicated to this enterprise cluster. Kubo reclaims unpinned blocks with
+  its own GC (`--enable-gc`, `Datastore.GCPeriod`); the validator does not call `repo/gc`.
+- **Status.** `ServerContext.binaryGcStatus` supplies the member's settings, last mark, last release
+  and delete counters, or is null when binary GC is disabled.
+
+Deviations from the original sketch, and why:
+
+- The release removes entries with `refPosition` strictly below `markedAtPosition`, where
+  `markedAtPosition` is the watermark position at the mark. The watermark names the last applied
+  item; later items of the same batch entry share its position and may not have been applied when
+  the references were collected, so an entry referenced at exactly that position waits for the next
+  mark.
+- The payload carries `maxLastModified`. Ordering by log position cannot see an upload whose write is
+  not committed yet; the record's last-modified time can, as in Oak's own mark-sweep
+  (`maxLastModifiedInterval`). The grace must exceed the longest wait between upload and commit.
+- Deletes wait `oak.gc.binary.delete.delay.ms` and re-check the index, so a write admitted with a
+  mapped `ipfsCid` just before the release, which touches no record, keeps its bytes if it commits
+  within the delay.
+- `oak.gc.binary.enabled=false` stops this member from proposing and deleting; it still applies
+  releases, which must not depend on node-local settings.
+
+Open risks:
+
+- A release that commits and is then followed by a crash before the delay has run leaves that
+  member's records in place: replay skips the release and nothing proposes those ids again. The space
+  is lost, not content. Oak's per-validator mark-sweep against the local DataStore could recover it.
+- A client `ipfsCid` write admitted before a release and committed after the delete delay references
+  deleted bytes on members that deleted them.
+- The mark keeps every referenced blob id in memory.
+- Releases are ordered against writes on this enterprise cluster only. A remote reader holding an
+  old head is already bounded by segment GC: two full compactions after a delete remove the segments
+  that reference the binary before it can become a candidate.
 
 ### 4.5 Pricing
 
@@ -254,7 +312,7 @@ One way to make the cluster-wide step safe, from replicated state:
    GCs on a store built like the validator's and one that keeps merging during compaction. Still
    to do: a 3x2 harness run where cluster B compacts while cluster A reads through its mount, with
    no 500s or missing content on A.
-3. **Binary GC** (4.4).
+3. **Binary GC** (4.4). Implemented, on by default.
 4. **Binary pricing** (4.5).
 
 ## 6. Decisions needed
@@ -263,7 +321,7 @@ One way to make the cluster-wide step safe, from replicated state:
 |---|---|---|
 | D1 | Replace paid GC with operational GC (option B) and remove the GC market, debt accounts and votes | Decided: yes. Done in phase 1 |
 | D2 | Segment GC member-local and staggered, not a replicated decision | Decided: Oak's own mechanisms, unabated. Done in phase 2, on by default |
-| D3 | Binary GC: Oak's blob GC per validator for local entries; cluster unpin only behind a barrier ordered against writes, only on an IPFS Cluster dedicated to the enterprise cluster | Open, phase 3 |
+| D3 | Binary GC: Oak's blob GC per validator for local entries; cluster unpin only behind a barrier ordered against writes, only on an IPFS Cluster dedicated to the enterprise cluster | Decided and implemented as in 4.4: leader mark from Oak's reference collection, replicated `BINARY_RELEASE` ordered by log position, member-local deletes; cluster unpin only with `ipfs.cluster.unpin-on-delete` |
 | D4 | Binary size and pricing | Deferred to the pricing rethink |
 | D5 | Default schedule: tail compaction daily, full compaction weekly, `retainedGenerations` 2 | Implemented as defaults; tune after the harness run |
 

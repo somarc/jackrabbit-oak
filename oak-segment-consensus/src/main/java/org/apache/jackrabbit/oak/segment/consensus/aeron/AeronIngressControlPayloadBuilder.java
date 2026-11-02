@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
+import java.util.List;
+
 import static org.apache.jackrabbit.oak.segment.consensus.aeron.AeronIngressPayloadSupport.appendOptional;
 import static org.apache.jackrabbit.oak.segment.consensus.aeron.AeronIngressPayloadSupport.escapeJson;
 
@@ -67,6 +69,18 @@ final class AeronIngressControlPayloadBuilder {
         if (term != null) {
             json.append(",\"term\":").append(term.intValue());
         }
+    }
+
+    AeronEncodedMessage buildBinaryRelease(long markedAtPosition, long maxLastModified, List<String> blobIds) {
+        StringBuilder json = new StringBuilder();
+        json.append("{\"markedAtPosition\":").append(markedAtPosition);
+        json.append(",\"maxLastModified\":").append(maxLastModified);
+        json.append(",\"blobIds\":[");
+        for (int i = 0; i < blobIds.size(); i++) {
+            json.append(i == 0 ? "\"" : ",\"").append(escapeJson(blobIds.get(i))).append("\"");
+        }
+        json.append("]}");
+        return AeronIngressPayloadSupport.encode(SimpleMessageHeader.TEMPLATE_ID_BINARY_RELEASE, json.toString());
     }
 
     AeronEncodedMessage buildSegmentPersisted(String proposalId,
