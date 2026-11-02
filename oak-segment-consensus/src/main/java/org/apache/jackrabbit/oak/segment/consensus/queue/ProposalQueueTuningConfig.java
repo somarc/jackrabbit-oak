@@ -124,7 +124,7 @@ public @interface ProposalQueueTuningConfig {
 
     @AttributeDefinition(
         name = "Release Mode",
-        description = "Verified release pipeline mode. Supported values: adaptive-shadow, adaptive-active. The legacy value epoch is accepted as a deprecated alias for adaptive-active."
+        description = "Verified release pipeline mode. Supported value: adaptive-active. Any other value, including the legacy epoch and adaptive-shadow, resolves to adaptive-active."
     )
     String release_mode() default ProposalQueueTuning.DEFAULT_RELEASE_MODE;
 

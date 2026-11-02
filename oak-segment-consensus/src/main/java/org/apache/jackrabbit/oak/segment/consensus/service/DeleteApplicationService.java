@@ -32,7 +32,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.function.Supplier;
-import java.util.regex.Pattern;
 
 /**
  * Service responsible for applying replicated deletes to the Oak FileStore.
@@ -52,7 +51,6 @@ import java.util.regex.Pattern;
 public class DeleteApplicationService {
     
     private static final Logger log = LoggerFactory.getLogger(DeleteApplicationService.class);
-    private static final Pattern WALLET_NODE_NAME = Pattern.compile("0x[a-f0-9]{40}");
     
     private final FileStore fileStore;
     private final Supplier<NodeStore> nodeStoreSupplier;
@@ -63,19 +61,6 @@ public class DeleteApplicationService {
     private SSEEventCallback sseEventCallback;
     private WriteApplicationService.DurabilityCallback durabilityCallback;
     
-    /**
-     * Create a new DeleteApplicationService.
-     * 
-     * @param fileStore Oak FileStore for segment storage
-     * @param nodeStore Oak NodeStore for content operations
-     */
-    public DeleteApplicationService(
-            @NotNull FileStore fileStore,
-            @NotNull NodeStore nodeStore,
-            @NotNull FileStoreFlushService flushService) {
-        this(fileStore, () -> nodeStore, flushService);
-    }
-
     public DeleteApplicationService(
             @NotNull FileStore fileStore,
             @NotNull Supplier<NodeStore> nodeStoreSupplier,
@@ -121,24 +106,10 @@ public class DeleteApplicationService {
      * @param walletAddress Ethereum wallet address (normalized)
      * @param path Full Oak path to delete
      * @param signature Cryptographic signature
-     * @param proposalId Proposal ID for durability tracking (ADR 026)
+     * @param auditMetadata proposal id (durability tracking, ADR 026), command time and applied log position
      * @return The new HEAD after the delete, or null if nothing was removed
      * @throws RuntimeException if delete fails
      */
-    @Nullable
-    public String applyDelete(
-            @NotNull String walletAddress,
-            @NotNull String path,
-            @Nullable String signature,
-            @Nullable String proposalId) {
-        return applyDeleteWithAuditMetadata(
-            walletAddress,
-            path,
-            signature,
-            MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null)
-        );
-    }
-
     @Nullable
     public String applyDeleteWithAuditMetadata(
             @NotNull String walletAddress,
@@ -162,10 +133,6 @@ public class DeleteApplicationService {
                 return null;
             }
             NamespaceAuthority.requireWritable(root, walletAddress, path);
-            
-            // Get current HEAD for logging
-            String previousHead = fileStore.getHead().getRecordId().toString();
-            log.debug("📍 Previous HEAD: {}", MutationApplySupport.truncate(previousHead, 20));
 
             if (signature == null) {
                 throw new MutationRejectedException("Missing signature in replicated delete");
@@ -193,7 +160,7 @@ public class DeleteApplicationService {
                         break;
                     }
                     current = current.getChildNode(pathParts[i]);
-                    if (WALLET_NODE_NAME.matcher(pathParts[i]).matches()) {
+                    if (MutationApplySupport.WALLET_NODE_NAME.matcher(pathParts[i]).matches()) {
                         walletNode = current;
                     }
                 }
@@ -223,7 +190,8 @@ public class DeleteApplicationService {
             
             // Commit the deletion (deterministic on all nodes)
             MutationApplySupport.mergeReplicated(
-                nodeStore, rootBuilder, "aeron-replication-delete", auditMetadata, "Failed to commit delete");
+                nodeStore, rootBuilder, "aeron-replication-delete",
+                auditMetadata != null ? auditMetadata.getAppliedLogPosition() : null, "Failed to commit delete");
             flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
             
             // Get new HEAD

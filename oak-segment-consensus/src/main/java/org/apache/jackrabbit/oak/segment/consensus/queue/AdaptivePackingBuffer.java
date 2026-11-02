@@ -85,7 +85,7 @@ final class AdaptivePackingBuffer {
                 continue;
             }
 
-            long residencyMs = oldestVerifiedMs == Long.MAX_VALUE ? 0L : Math.max(0L, nowMs - oldestVerifiedMs);
+            long residencyMs = Math.max(0L, nowMs - oldestVerifiedMs);
             boolean forced = residencyMs >= settings.maxResidencyMs;
             boolean ready = forced || residencyMs >= settings.holdWindowMs;
             if (ready) {
@@ -126,18 +126,6 @@ final class AdaptivePackingBuffer {
         stats.put("totalProposalsDrained", totalProposalsDrained.get());
         stats.put("totalBatchesCreated", totalBatchesCreated.get());
         return stats;
-    }
-
-    String getStats() {
-        Map<String, Object> stats = getStatsMap();
-        return String.format(
-            "Wallets: %d, Pending Proposals: %d, Total Queued: %d, Total Drained: %d, Batches Created: %d",
-            stats.get("walletCount"),
-            stats.get("pendingProposals"),
-            stats.get("totalProposalsQueued"),
-            stats.get("totalProposalsDrained"),
-            stats.get("totalBatchesCreated")
-        );
     }
 
     private void drainWallet(WalletCandidate candidate, int maxBatchesPerWallet, List<List<QueuedProposal>> batches) {

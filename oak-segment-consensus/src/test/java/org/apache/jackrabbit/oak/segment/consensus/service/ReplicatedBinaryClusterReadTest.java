@@ -123,7 +123,7 @@ public class ReplicatedBinaryClusterReadTest {
         when(fileStore.getHead().getRecordId().toString()).thenReturn("prev-head");
         when(fileStore.getHead().getRecordId().toString10()).thenReturn("new-head");
         return new Member(nodeStore, blobStore,
-            new WriteApplicationService(fileStore, nodeStore, blobStore, mock(FileStoreFlushService.class)));
+            new WriteApplicationService(fileStore, () -> nodeStore, () -> blobStore, mock(FileStoreFlushService.class)));
     }
 
     private static final class Member {

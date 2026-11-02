@@ -74,10 +74,10 @@ public class AppliedProposalIndexTest {
                 durable.add("failed:" + proposalId);
             }
         };
-        writes = new WriteApplicationService(fileStore, store, null, flush);
+        writes = new WriteApplicationService(fileStore, () -> store, () -> null, flush);
         writes.setDurabilityCallback(callback);
         writes.setHeadUpdateCallback(heads::add);
-        deletes = new DeleteApplicationService(fileStore, store, flush);
+        deletes = new DeleteApplicationService(fileStore, () -> store, flush);
         deletes.setDurabilityCallback(callback);
     }
 

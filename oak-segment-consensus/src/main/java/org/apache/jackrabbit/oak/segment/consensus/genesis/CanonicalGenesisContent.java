@@ -214,8 +214,7 @@ public final class CanonicalGenesisContent {
         NodeBuilder content = genesisWallet.child("content");
         content.setProperty("jcr:primaryType", WalletPathUtil.CONTAINER_TYPE, Type.NAME);
 
-        NodeBuilder genesis = content.child("genesis");
-        genesis.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder genesis = node(content, "genesis");
         genesis.setProperty("jcr:created", genesisDate, Type.DATE);
         genesis.setProperty("jcr:title", "Oak Chain - Shared Content, Verifiable Commitment");
         genesis.setProperty("jcr:description",
@@ -256,16 +255,14 @@ public final class CanonicalGenesisContent {
 
         populateGenesisImage(genesis, genesisDate, image);
 
-        NodeBuilder ipfsInfo = genesis.child("ipfs");
-        ipfsInfo.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder ipfsInfo = node(genesis, "ipfs");
         ipfsInfo.setProperty("genesisImageSha256", IMAGE_SHA256);
         ipfsInfo.setProperty("description", "Binary identity is its content hash; storage IDs and retrieval gateways are local diagnostics.");
         ipfsInfo.setProperty("availability", "Independent binary availability requires separate operational evidence.");
     }
 
     private void populateProtocol(NodeBuilder genesis, long timestamp, String genesisDate, String genesisValidator, String genesisHost) {
-        NodeBuilder protocol = genesis.child("protocol");
-        protocol.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder protocol = node(genesis, "protocol");
         protocol.setProperty("message", GENESIS_MESSAGE);
         protocol.setProperty("version", VERSION);
         protocol.setProperty("chainId", CHAIN_ID);
@@ -281,8 +278,7 @@ public final class CanonicalGenesisContent {
     }
 
     private void populateContentContract(NodeBuilder genesis) {
-        NodeBuilder contract = genesis.child("content-contract");
-        contract.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder contract = node(genesis, "content-contract");
         contract.setProperty("jcr:title", "Wallet Namespace Contract");
         contract.setProperty("enforcedBoundary",
             "Only the wallet namespace /oak-chain/{L1}/{L2}/{L3}/{wallet} is structurally enforced.");
@@ -523,30 +519,26 @@ public final class CanonicalGenesisContent {
     }
 
     private void populateGettingStarted(NodeBuilder genesis, String genesisHost) {
-        NodeBuilder gettingStarted = genesis.child("getting-started");
-        gettingStarted.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder gettingStarted = node(genesis, "getting-started");
         gettingStarted.setProperty("jcr:title", "Getting Started with OakChain");
         gettingStarted.setProperty("jcr:description",
             "The shortest path to understanding the fabric, joining a cluster, and reading canonical chain state.");
 
-        NodeBuilder prereqs = gettingStarted.child("1-prerequisites");
-        prereqs.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder prereqs = node(gettingStarted, "1-prerequisites");
         prereqs.setProperty("title", "Prerequisites");
         prereqs.setProperty("item-1", "A validator URL");
         prereqs.setProperty("item-2", "curl, jq, or another HTTP client");
         prereqs.setProperty("item-3", "An Ethereum wallet for write/payment flows");
         prereqs.setProperty("item-4", "The discipline to trust the live contract surface, not stale examples");
 
-        NodeBuilder discover = gettingStarted.child("2-discover-surface");
-        discover.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder discover = node(gettingStarted, "2-discover-surface");
         discover.setProperty("title", "Discover the Live Surface");
         discover.setProperty("curl-health", "curl http://VALIDATOR:8090/health");
         discover.setProperty("curl-manifest", "curl http://VALIDATOR:8090/v1/index | jq .");
         discover.setProperty("curl-consensus", "curl http://VALIDATOR:8090/v1/consensus/status | jq .");
         discover.setProperty("note", "Use /v1/index as route truth. Local HTML routes are diagnostic veneers.");
 
-        NodeBuilder browseGenesis = gettingStarted.child("3-browse-genesis");
-        browseGenesis.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder browseGenesis = node(gettingStarted, "3-browse-genesis");
         browseGenesis.setProperty("title", "Open the Canonical Genesis Node");
         browseGenesis.setProperty("step-1", "GET /v1/explorer/content/nav and pick a clusterId.");
         browseGenesis.setProperty("step-2", "Use the selected clusterId with the node endpoint.");
@@ -556,8 +548,7 @@ public final class CanonicalGenesisContent {
             "GET /v1/explorer/content/clusters/{clusterId}/provenance?path=" + CANONICAL_GENESIS_PATH);
         browseGenesis.setProperty("note", "CRX/OC should open here by default; future CLI bootstrap should read this same node.");
 
-        NodeBuilder joinCluster = gettingStarted.child("4-join-cluster");
-        joinCluster.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder joinCluster = node(gettingStarted, "4-join-cluster");
         joinCluster.setProperty("title", "Join the Cluster");
         joinCluster.setProperty("env-1", "BOOTSTRAP_PRIMARY_HOST=" + genesisHost);
         joinCluster.setProperty("env-2", "BOOTSTRAP_PRIMARY_PORT=8091");
@@ -567,8 +558,7 @@ public final class CanonicalGenesisContent {
         joinCluster.setProperty("env-6", "AERON_CLUSTER_NODE_ID=<unique-id>");
         joinCluster.setProperty("note", "A joining validator should sync the same genesis and then follow Aeron cluster authority.");
 
-        NodeBuilder writeFlow = gettingStarted.child("5-write-flow");
-        writeFlow.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder writeFlow = node(gettingStarted, "5-write-flow");
         writeFlow.setProperty("title", "Submit a Write");
         writeFlow.setProperty("step-1", "Obtain a chain-backed proposalId from the authorize/payment contract flow.");
         writeFlow.setProperty("step-2",
@@ -578,8 +568,7 @@ public final class CanonicalGenesisContent {
         writeFlow.setProperty("note", "The validator allocates the resulting storage path under your wallet namespace.");
         writeFlow.setProperty("shape", "Set contentType to a shape from " + SHAPES_PATH + " and send its fields as shapes/today describes.");
 
-        NodeBuilder readWallet = gettingStarted.child("6-read-wallet");
-        readWallet.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder readWallet = node(gettingStarted, "6-read-wallet");
         readWallet.setProperty("title", "Read Wallet-Centric State");
         readWallet.setProperty("curl-wallet-stats",
             "curl --get http://VALIDATOR:8090/v1/wallets/stats --data-urlencode 'wallet=0xYOUR_WALLET' | jq .");
@@ -589,22 +578,19 @@ public final class CanonicalGenesisContent {
     }
 
     private void populateApi(NodeBuilder genesis) {
-        NodeBuilder api = genesis.child("api");
-        api.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder api = node(genesis, "api");
         api.setProperty("jcr:title", "API Reference");
         api.setProperty("jcr:description", "Live validator contracts that matter for bootstrap, operations, and content.");
         api.setProperty("baseUrl", "http://VALIDATOR:8090");
         api.setProperty("manifest", "/v1/index");
 
-        NodeBuilder discovery = api.child("discovery");
-        discovery.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder discovery = node(api, "discovery");
         discovery.setProperty("GET_health", "Shallow health");
         discovery.setProperty("GET_health_deep", "Deep dependency health");
         discovery.setProperty("GET_v1_index", "Live validator surface manifest");
         discovery.setProperty("GET_v1_head", "Head status");
 
-        NodeBuilder consensus = api.child("consensus");
-        consensus.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder consensus = node(api, "consensus");
         consensus.setProperty("GET_v1_consensus_status", "Consensus status and cluster health");
         consensus.setProperty("GET_v1_consensus_leader", "Canonical leader resolution");
         consensus.setProperty("POST_v1_propose_write", "Submit signed write proposal");
@@ -614,55 +600,47 @@ public final class CanonicalGenesisContent {
         consensus.setProperty("GET_v1_proposals_queue_stats", "Queue, backpressure, and finality counters");
         consensus.setProperty("GET_v1_proposals_release_flow", "Adaptive verified-release state");
 
-        NodeBuilder explorer = api.child("explorer");
-        explorer.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder explorer = node(api, "explorer");
         explorer.setProperty("GET_v1_explorer_summary", "Explorer summary contract");
         explorer.setProperty("GET_v1_explorer_content_nav", "Cluster-aware content navigation");
         explorer.setProperty("GET_v1_explorer_content_tree", "Cluster-scoped content tree browse");
         explorer.setProperty("GET_v1_explorer_content_node", "Cluster-scoped node detail");
         explorer.setProperty("GET_v1_explorer_content_provenance", "Cluster-scoped provenance and authority facts");
 
-        NodeBuilder wallets = api.child("wallets");
-        wallets.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder wallets = node(api, "wallets");
         wallets.setProperty("GET_v1_wallets_stats", "Wallet usage and counts");
         wallets.setProperty("GET_v1_wallets_content", "Wallet content query");
 
-        NodeBuilder binary = api.child("binary");
-        binary.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder binary = node(api, "binary");
         binary.setProperty("POST_v1_binary_declare_intent", "Declare binary upload intent");
         binary.setProperty("GET_v1_binary_check_intent_token", "Check binary upload intent");
         binary.setProperty("POST_v1_binary_complete_upload", "Complete binary upload");
         binary.setProperty("note", "Binaries resolve through BlobStore/IPFS while consensus stores the references.");
 
-        NodeBuilder config = api.child("configuration");
-        config.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder config = node(api, "configuration");
         config.setProperty("GET_v1_config_osgi", "Effective OSGi config values");
         config.setProperty("GET_v1_config_osgi_schema", "OSGi config metadata schema");
         config.setProperty("GET_v1_config_osgi_sources", "OSGi config source map");
         config.setProperty("GET_v1_config_osgi_delta", "Current values vs defaults");
 
-        NodeBuilder replication = api.child("replication");
-        replication.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder replication = node(api, "replication");
         replication.setProperty("GET_journal_log", "Journal file for segment sync");
         replication.setProperty("GET_manifest", "Segment manifest");
         replication.setProperty("GET_segments_segmentId", "Fetch specific segment by id");
     }
 
     private void populateExamples(NodeBuilder genesis) {
-        NodeBuilder examples = genesis.child("examples");
-        examples.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder examples = node(genesis, "examples");
         examples.setProperty("jcr:title", "Working Examples");
         examples.setProperty("jcr:description", "Copy-paste discovery flow for operators, explorers, and future CLI tooling.");
 
-        NodeBuilder curlDiscovery = examples.child("curl-discovery");
-        curlDiscovery.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder curlDiscovery = node(examples, "curl-discovery");
         curlDiscovery.setProperty("title", "Validator Discovery");
         curlDiscovery.setProperty("health", "curl http://localhost:8090/health");
         curlDiscovery.setProperty("manifest", "curl http://localhost:8090/v1/index | jq .");
         curlDiscovery.setProperty("consensus", "curl http://localhost:8090/v1/consensus/status | jq .");
 
-        NodeBuilder curlGenesis = examples.child("curl-genesis");
-        curlGenesis.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder curlGenesis = node(examples, "curl-genesis");
         curlGenesis.setProperty("title", "Read Genesis Through Explorer");
         curlGenesis.setProperty("discover-nav", "curl http://localhost:8090/v1/explorer/content/nav | jq .");
         curlGenesis.setProperty("read-node",
@@ -672,16 +650,14 @@ public final class CanonicalGenesisContent {
             "curl --get http://localhost:8090/v1/explorer/content/clusters/<clusterId>/provenance "
                 + "--data-urlencode 'path=" + CANONICAL_GENESIS_PATH + "' | jq .");
 
-        NodeBuilder curlWallet = examples.child("curl-wallet");
-        curlWallet.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder curlWallet = node(examples, "curl-wallet");
         curlWallet.setProperty("title", "Inspect Wallet State");
         curlWallet.setProperty("wallet-stats",
             "curl --get http://localhost:8090/v1/wallets/stats --data-urlencode 'wallet=0xYOUR_WALLET' | jq .");
         curlWallet.setProperty("wallet-content",
             "curl --get http://localhost:8090/v1/wallets/content --data-urlencode 'wallet=0xYOUR_WALLET' | jq .");
 
-        NodeBuilder readOrder = examples.child("read-order");
-        readOrder.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder readOrder = node(examples, "read-order");
         readOrder.setProperty("step-1", "protocol");
         readOrder.setProperty("step-2", "content-contract");
         readOrder.setProperty("step-3", "shapes");
@@ -691,21 +667,18 @@ public final class CanonicalGenesisContent {
     }
 
     private void populateArchitecture(NodeBuilder genesis) {
-        NodeBuilder architecture = genesis.child("architecture");
-        architecture.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder architecture = node(genesis, "architecture");
         architecture.setProperty("jcr:title", "System Architecture");
         architecture.setProperty("jcr:description", "How OakChain composes storage, consensus, and contract surfaces.");
 
-        NodeBuilder components = architecture.child("components");
-        components.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder components = node(architecture, "components");
         components.setProperty("oak-segment-store", "Apache Oak TarMK - proven content storage from Adobe AEM");
         components.setProperty("aeron-cluster", "High-performance Raft consensus (io.aeron.cluster)");
         components.setProperty("ethereum", "Settlement, authorization, and external proof surfaces");
         components.setProperty("ipfs", "Content-addressed binary storage");
         components.setProperty("http-api", "Validator-native HTTP contracts");
 
-        NodeBuilder paths = architecture.child("wallet-scoped-paths");
-        paths.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder paths = node(architecture, "wallet-scoped-paths");
         paths.setProperty("pattern",
             "/oak-chain/{shard-level-1}/{shard-level-2}/{shard-level-3}/{wallet}[/{organization}]/content/{collection}/{name}");
         paths.setProperty("example", EXAMPLE_CLAIM_PATH);
@@ -713,8 +686,7 @@ public final class CanonicalGenesisContent {
         paths.setProperty("sharding", "First 3 bytes of wallet address create the 3-level directory structure");
         paths.setProperty("contract", "The wallet namespace is enforced; records below /content follow genesis/shapes.");
 
-        NodeBuilder consensus = architecture.child("consensus");
-        consensus.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder consensus = node(architecture, "consensus");
         consensus.setProperty("algorithm", "Raft (via Aeron Cluster)");
         consensus.setProperty("quorum", "Majority of validators must agree");
         consensus.setProperty("leader-election", "Automatic - leader handles write origination");
@@ -723,36 +695,31 @@ public final class CanonicalGenesisContent {
         consensus.setProperty("launchProfile", "One fixed three-member cluster; quorum two; tolerate one unavailable member, not Byzantine behavior.");
         consensus.setProperty("failurePolicy", "A member that cannot apply a committed mutation must stop serving until repaired.");
 
-        NodeBuilder bootstrapAuthority = architecture.child("bootstrap-authority");
-        bootstrapAuthority.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder bootstrapAuthority = node(architecture, "bootstrap-authority");
         bootstrapAuthority.setProperty("genesis-node", CANONICAL_GENESIS_PATH);
         bootstrapAuthority.setProperty("route-manifest", "/v1/index");
         bootstrapAuthority.setProperty("explorer-entry", "/v1/explorer/content/nav");
     }
 
     private void populateEconomics(NodeBuilder genesis) {
-        NodeBuilder economics = genesis.child("economics");
-        economics.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder economics = node(genesis, "economics");
         economics.setProperty("jcr:title", "Settlement and Resource Model");
         economics.setProperty("jcr:description", "What OakChain currently enforces around authorization, settlement, and resource accountability.");
         economics.setProperty("philosophy", "The validator should describe enforced economics, not speculative product packaging.");
 
-        NodeBuilder model = economics.child("settlement-model");
-        model.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder model = node(economics, "settlement-model");
         model.setProperty("authority", "The contract/payment flow authorizes writes and anchors settlement facts.");
         model.setProperty("runtime", "The validator verifies chain-backed proposal intent, stages work, and applies deterministic consensus.");
         model.setProperty("positioning", "Oak Segment Consensus publishes runtime economics as settlement and accountability facts, not commercial packaging.");
         model.setProperty("current-truth", "Treat economics here as protocol/accountability guidance, not SKU language.");
 
-        NodeBuilder resourceSignals = economics.child("resource-signals");
-        resourceSignals.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder resourceSignals = node(economics, "resource-signals");
         resourceSignals.setProperty("fragmentation", "Fragmentation and batching still matter operationally because they shape storage pressure and release behavior.");
         resourceSignals.setProperty("queue", "Queue depth, backpressure, and release flow are the observable runtime signals.");
         resourceSignals.setProperty("routes", "/v1/proposals/queue/stats, /v1/proposals/release-flow, /v1/fragmentation/*");
         resourceSignals.setProperty("note", "Use metrics and settlement evidence to reason about cost, not marketing tier names.");
 
-        NodeBuilder paymentFlow = economics.child("payment-flow");
-        paymentFlow.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder paymentFlow = node(economics, "payment-flow");
         paymentFlow.setProperty("step-1", "Client obtains or derives a chain-backed proposalId.");
         paymentFlow.setProperty("step-2", "Validator verifies signature and stages the proposal.");
         paymentFlow.setProperty("step-3", "Consensus and release governance determine when work is applied.");
@@ -761,21 +728,18 @@ public final class CanonicalGenesisContent {
     }
 
     private void populateTroubleshooting(NodeBuilder genesis) {
-        NodeBuilder troubleshooting = genesis.child("troubleshooting");
-        troubleshooting.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder troubleshooting = node(genesis, "troubleshooting");
         troubleshooting.setProperty("jcr:title", "Troubleshooting Guide");
         troubleshooting.setProperty("jcr:description", "Common issues and how to close the loop quickly");
 
-        NodeBuilder issues = troubleshooting.child("common-issues");
-        issues.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder issues = node(troubleshooting, "common-issues");
         issues.setProperty("issue-signature-invalid", "SIGNATURE_INVALID: Ensure the wallet signature matches the exact payload submitted to the validator.");
         issues.setProperty("issue-not-leader", "NOT_LEADER: Resolve the leader via /v1/consensus/leader and retry against that validator.");
         issues.setProperty("issue-path-forbidden", "PATH_FORBIDDEN: Operate only inside your wallet namespace.");
         issues.setProperty("issue-epoch-stale", "EPOCH_STALE: Refresh your local state and resubmit with current chain facts.");
         issues.setProperty("issue-cluster-id", "Unknown clusterId: refresh /v1/explorer/content/nav before using tree, node, or provenance endpoints.");
 
-        NodeBuilder healthChecks = troubleshooting.child("health-checks");
-        healthChecks.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder healthChecks = node(troubleshooting, "health-checks");
         healthChecks.setProperty("check-1", "curl /health - should return a healthy local response");
         healthChecks.setProperty("check-2", "curl /v1/consensus/status - verify cluster role and health");
         healthChecks.setProperty("check-3", "curl /v1/consensus/leader - verify canonical leader resolution");
@@ -783,8 +747,7 @@ public final class CanonicalGenesisContent {
     }
 
     private void populateAbout(NodeBuilder genesis) {
-        NodeBuilder about = genesis.child("about");
-        about.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder about = node(genesis, "about");
         about.setProperty("jcr:title", "About OakChain");
         about.setProperty("mission", "Decentralizing enterprise content management");
         about.setProperty("foundation", "Built on Apache Oak - the proven content repository behind Adobe AEM");
@@ -794,8 +757,7 @@ public final class CanonicalGenesisContent {
         about.setProperty("team", "somarc + AI collaborators - distributed intelligence building distributed systems");
         about.setProperty("license", "Apache 2.0");
 
-        NodeBuilder thesis = genesis.child("thesis");
-        thesis.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder thesis = node(genesis, "thesis");
         thesis.setProperty("jcr:title", "The Thesis");
         thesis.setProperty("premise-1", "Enterprise content is the most valuable data no one can prove.");
         thesis.setProperty("premise-2", "Audit trails should be data, not policy.");
@@ -803,16 +765,14 @@ public final class CanonicalGenesisContent {
         thesis.setProperty("result", "OakChain makes content provable, portable, and economically secure.");
         thesis.setProperty("audience", "Builders who want boring reliability and bold guarantees.");
 
-        NodeBuilder boldBets = genesis.child("bold-bets");
-        boldBets.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder boldBets = node(genesis, "bold-bets");
         boldBets.setProperty("bet-1", "Every serious enterprise will demand verifiable content history.");
         boldBets.setProperty("bet-2", "AEM-scale systems can be decentralized without losing performance.");
         boldBets.setProperty("bet-3", "Proof of custody will become the default compliance standard.");
         boldBets.setProperty("bet-4", "Developers will choose APIs over platforms if guarantees are stronger.");
         boldBets.setProperty("bet-5", "Developers will choose systems with stronger guarantees over familiar platforms.");
 
-        NodeBuilder guarantees = genesis.child("guarantees");
-        guarantees.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder guarantees = node(genesis, "guarantees");
         guarantees.setProperty("scope", "Required invariants, not a substitute for release tests or recovery evidence.");
         guarantees.setProperty("determinism", "Same ordered commands, same typed logical state; physical Segment IDs may differ.");
         guarantees.setProperty("auditability", "Every change is traceable by ID, time, and signer.");
@@ -820,14 +780,12 @@ public final class CanonicalGenesisContent {
         guarantees.setProperty("portability", "Content is readable without privileged infrastructure.");
         guarantees.setProperty("integrity", "The genesis digest verifies code-authored content. Production signed-intent and settlement binding require separate validation.");
 
-        NodeBuilder nonGoals = genesis.child("non-goals");
-        nonGoals.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder nonGoals = node(genesis, "non-goals");
         nonGoals.setProperty("non-goal-1", "We do not chase maximal throughput at the expense of determinism.");
         nonGoals.setProperty("non-goal-2", "We do not require custodial identity or closed networks.");
         nonGoals.setProperty("non-goal-3", "We do not hide failures; we surface them early and loudly.");
 
-        NodeBuilder oath = genesis.child("operator-oath");
-        oath.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        NodeBuilder oath = node(genesis, "operator-oath");
         oath.setProperty("oath-1", "Run the node as if the audit depends on you.");
         oath.setProperty("oath-2", "Do not change history. Fix the system.");
         oath.setProperty("oath-3", "Measure everything; guess nothing.");

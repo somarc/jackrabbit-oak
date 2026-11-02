@@ -21,144 +21,135 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Proof of payment on an EVM-compatible blockchain.
- * <p>
- * This represents a transaction on Ethereum/Polygon that paid
- * for the right to write or unpublish content in Blockchain AEM.
+ * A confirmed payment for a proposal on the payment contract, as the verifier checks it and the settlement
+ * lookup reports it.
  */
-public interface PaymentProof {
+public final class PaymentProof {
 
-    /**
-     * Proposal kind settled by the payment contract.
-     */
-    enum ProposalKind {
+    /** Proposal kind settled by the payment contract. */
+    public enum ProposalKind {
         WRITE,
         DELETE
     }
 
-    /**
-     * Payment token used for settlement.
-     */
-    enum PaymentToken {
+    /** Payment token used for settlement. */
+    public enum PaymentToken {
         UNKNOWN,
         ETH,
         USDC
     }
-    
-    /**
-     * Get the transaction hash on the blockchain.
-     *
-     * @return transaction hash (0x...)
-     */
-    @NotNull
-    String getTransactionHash();
-    
-    /**
-     * Get the block number where this transaction was confirmed.
-     *
-     * @return block number
-     */
-    long getBlockNumber();
-    
-    /**
-     * Get the wallet address that paid.
-     *
-     * @return Ethereum address (0x...)
-     */
-    @NotNull
-    String getFromAddress();
-    
-    /**
-     * Get the smart contract address that received payment.
-     *
-     * @return contract address (0x...)
-     */
-    @NotNull
-    String getContractAddress();
-    
-    /**
-     * Get the proposal ID this payment is for.
-     *
-     * @return proposal ID (matches Proposal.getProposalId())
-     */
-    @NotNull
-    String getProposalId();
-    
-    /**
-     * Get the amount paid in the token's smallest unit.
-     *
-     * <p>The method name is retained for compatibility with older Oak payment
-     * bridges, but V4 settlement proofs may carry non-ETH token units.
-     *
-     * @return amount in base units
-     */
-    @NotNull
-    String getAmountWei();
 
-    /**
-     * Get the on-chain payment tier when the proof source provides it.
-     *
-     * @return resolved payment tier, or {@code null} when unavailable
-     */
+    private final String transactionHash;
+    private final long blockNumber;
+    private final String fromAddress;
+    private final String contractAddress;
+    private final String proposalId;
+    private final String amountWei;
+    private final ValidatorEarningsTracker.PaymentTier paymentTier;
+    private final ProposalKind proposalKind;
+    private final PaymentToken paymentToken;
+    private final int capabilityFlags;
+    private final int confirmations;
+
+    /** A write proposal paid in an unknown token, without tier or capability flags. */
+    public PaymentProof(@NotNull String transactionHash, long blockNumber, @NotNull String fromAddress,
+                        @NotNull String contractAddress, @NotNull String proposalId, @NotNull String amountWei,
+                        int confirmations) {
+        this(transactionHash, blockNumber, fromAddress, contractAddress, proposalId, amountWei, null,
+            ProposalKind.WRITE, PaymentToken.UNKNOWN, 0, confirmations);
+    }
+
+    public PaymentProof(@NotNull String transactionHash, long blockNumber, @NotNull String fromAddress,
+                        @NotNull String contractAddress, @NotNull String proposalId, @NotNull String amountWei,
+                        @Nullable ValidatorEarningsTracker.PaymentTier paymentTier, @NotNull ProposalKind proposalKind,
+                        @NotNull PaymentToken paymentToken, int capabilityFlags, int confirmations) {
+        this.transactionHash = transactionHash;
+        this.blockNumber = blockNumber;
+        this.fromAddress = fromAddress;
+        this.contractAddress = contractAddress;
+        this.proposalId = proposalId;
+        this.amountWei = amountWei;
+        this.paymentTier = paymentTier;
+        this.proposalKind = proposalKind;
+        this.paymentToken = paymentToken;
+        this.capabilityFlags = capabilityFlags;
+        this.confirmations = confirmations;
+    }
+
+    /** This proof with a new confirmation count. */
+    @NotNull
+    public PaymentProof withConfirmations(int confirmations) {
+        return new PaymentProof(transactionHash, blockNumber, fromAddress, contractAddress, proposalId, amountWei,
+            paymentTier, proposalKind, paymentToken, capabilityFlags, confirmations);
+    }
+
+    @NotNull
+    public String getTransactionHash() {
+        return transactionHash;
+    }
+
+    public long getBlockNumber() {
+        return blockNumber;
+    }
+
+    @NotNull
+    public String getFromAddress() {
+        return fromAddress;
+    }
+
+    @NotNull
+    public String getContractAddress() {
+        return contractAddress;
+    }
+
+    @NotNull
+    public String getProposalId() {
+        return proposalId;
+    }
+
+    /** Amount in the token's smallest unit (the name predates non-ETH tokens). */
+    @NotNull
+    public String getAmountWei() {
+        return amountWei;
+    }
+
+    /** The on-chain payment tier, or {@code null} when the event does not carry one. */
     @Nullable
-    default ValidatorEarningsTracker.PaymentTier getPaymentTier() {
-        return null;
+    public ValidatorEarningsTracker.PaymentTier getPaymentTier() {
+        return paymentTier;
     }
 
-    /**
-     * Get the proposal kind settled on-chain when available.
-     *
-     * @return settled proposal kind, defaults to {@link ProposalKind#WRITE}
-     */
     @NotNull
-    default ProposalKind getProposalKind() {
-        return ProposalKind.WRITE;
+    public ProposalKind getProposalKind() {
+        return proposalKind;
     }
 
-    /**
-     * Get the payment token used for settlement.
-     *
-     * @return token used for settlement, defaults to {@link PaymentToken#UNKNOWN}
-     */
     @NotNull
-    default PaymentToken getPaymentToken() {
-        return PaymentToken.UNKNOWN;
+    public PaymentToken getPaymentToken() {
+        return paymentToken;
     }
 
-    /**
-     * Get on-chain capability flags when the proof source provides them.
-     *
-     * @return settlement capability flags, or {@code 0} when unavailable
-     */
-    default int getCapabilityFlags() {
-        return 0;
+    public int getCapabilityFlags() {
+        return capabilityFlags;
     }
 
-    /**
-     * Check whether a capability flag is present.
-     *
-     * @param capabilityFlag capability bit to test
-     * @return {@code true} when the proof carries the capability flag
-     */
-    default boolean hasCapabilityFlag(int capabilityFlag) {
-        return capabilityFlag != 0 && (getCapabilityFlags() & capabilityFlag) == capabilityFlag;
+    public boolean hasCapabilityFlag(int capabilityFlag) {
+        return capabilityFlag != 0 && (capabilityFlags & capabilityFlag) == capabilityFlag;
     }
-    
-    /**
-     * Get the number of confirmations this transaction has.
-     *
-     * @return confirmation count
-     */
-    int getConfirmations();
-    
-    /**
-     * Check if this payment has enough confirmations to be trusted.
-     * <p>
-     * Typically requires 12+ confirmations on Ethereum mainnet,
-     * fewer on L2s or testnets.
-     *
-     * @param requiredConfirmations minimum confirmations needed
-     * @return true if sufficiently confirmed
-     */
-    boolean isConfirmed(int requiredConfirmations);
+
+    public int getConfirmations() {
+        return confirmations;
+    }
+
+    public boolean isConfirmed(int requiredConfirmations) {
+        return confirmations >= requiredConfirmations;
+    }
+
+    @Override
+    public String toString() {
+        return "PaymentProof{txHash='" + transactionHash + "', block=" + blockNumber
+            + ", confirmations=" + confirmations + ", from='" + fromAddress + "', proposalId='" + proposalId
+            + "', kind=" + proposalKind + ", tier=" + paymentTier + ", token=" + paymentToken
+            + ", capabilityFlags=" + capabilityFlags + ", amount=" + amountWei + " wei}";
+    }
 }

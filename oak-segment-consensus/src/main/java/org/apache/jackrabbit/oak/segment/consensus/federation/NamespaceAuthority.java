@@ -62,10 +62,6 @@ public final class NamespaceAuthority {
             return verdict;
         }
 
-        public String getNamespace() {
-            return namespace;
-        }
-
         @Nullable
         public DirectoryEntry getOwner() {
             return owner;

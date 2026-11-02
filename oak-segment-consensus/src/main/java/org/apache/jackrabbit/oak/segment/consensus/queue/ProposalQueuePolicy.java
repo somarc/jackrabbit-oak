@@ -32,10 +32,6 @@ public final class ProposalQueuePolicy {
         return ProposalQueueTuningRegistry.get().confirmationTimeoutMs();
     }
 
-    public static String releaseMode() {
-        return ProposalQueueTuningRegistry.get().releaseMode().configValue();
-    }
-
     public static boolean isValidatorHostedBinaryUploadEnabled() {
         return ProposalQueueTuningRegistry.get().validatorHostedBinaryUploadEnabled();
     }

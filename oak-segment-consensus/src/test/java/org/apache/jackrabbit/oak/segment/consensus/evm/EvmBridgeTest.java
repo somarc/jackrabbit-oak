@@ -18,7 +18,6 @@ package org.apache.jackrabbit.oak.segment.consensus.evm;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimpleEvmBridge;
-import org.apache.jackrabbit.oak.segment.consensus.evm.impl.SimplePaymentProof;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -64,7 +63,7 @@ public class EvmBridgeTest {
         bridge.registerProposalWallet(proposalId, walletAddress);
         
         // Simulate a payment
-        PaymentProof payment = new SimplePaymentProof(
+        PaymentProof payment = new PaymentProof(
                 "0xabc123",
                 1000000,
                 walletAddress,
@@ -88,7 +87,7 @@ public class EvmBridgeTest {
         String walletAddress = "0x1234567890123456789012345678901234567890";
         bridge.registerProposalWallet(proposalId, walletAddress);
 
-        PaymentProof payment = new SimplePaymentProof(
+        PaymentProof payment = new PaymentProof(
             "0xsettlementtx",
             1001234,
             walletAddress,
@@ -99,10 +98,10 @@ public class EvmBridgeTest {
         );
         bridge.simulatePayment(payment);
 
-        SettlementDetails details = bridge.getSettlementDetailsByProposalId(proposalId);
+        PaymentProof details = bridge.getSettlementDetailsByProposalId(proposalId);
 
         assertNotNull("Settlement details should be available by proposal id", details);
-        assertEquals("sepolia", details.getNetworkName());
+        assertEquals("sepolia", bridge.getNetworkName());
         assertEquals(proposalId, details.getProposalId());
         assertEquals("0xsettlementtx", details.getTransactionHash());
         assertEquals(walletAddress, details.getFromAddress());
@@ -110,7 +109,7 @@ public class EvmBridgeTest {
 
     @Test
     public void testSettlementDetailsByTransactionHashResolveFromCachedPayment() {
-        PaymentProof payment = new SimplePaymentProof(
+        PaymentProof payment = new PaymentProof(
             "0xlookuptx",
             1002000,
             "0x1234567890123456789012345678901234567890",
@@ -121,7 +120,7 @@ public class EvmBridgeTest {
         );
         bridge.simulatePayment(payment);
 
-        SettlementDetails details = bridge.getSettlementDetailsByTransactionHash("0xlookuptx");
+        PaymentProof details = bridge.getSettlementDetailsByTransactionHash("0xlookuptx");
 
         assertNotNull("Settlement details should be available by transaction hash", details);
         assertEquals("proposal-lookup", details.getProposalId());
@@ -131,7 +130,7 @@ public class EvmBridgeTest {
     
     @Test
     public void testPaymentConfirmations() {
-        PaymentProof payment = new SimplePaymentProof(
+        PaymentProof payment = new PaymentProof(
                 "0xdef456",
                 1000000,
                 "0x1234567890123456789012345678901234567890",
@@ -153,7 +152,7 @@ public class EvmBridgeTest {
         // Simulate multiple payments
         for (int i = 0; i < 10; i++) {
             String proposalId = "proposal-" + i;
-            PaymentProof payment = new SimplePaymentProof(
+            PaymentProof payment = new PaymentProof(
                     "0xtx" + i,
                     1000000 + i,
                     "0x1234567890123456789012345678901234567890",
@@ -177,7 +176,7 @@ public class EvmBridgeTest {
     
     @Test
     public void testPaymentProofDetails() {
-        PaymentProof payment = new SimplePaymentProof(
+        PaymentProof payment = new PaymentProof(
                 "0x123abc456def",
                 2000000,
                 "0xFromAddress",
@@ -253,7 +252,7 @@ public class EvmBridgeTest {
         String walletAddress = "0x1234567890123456789012345678901234567890";
         bridge.registerProposalWallet(proposalId, walletAddress);
 
-        SettlementDetails details = bridge.getSettlementDetailsByProposalId(proposalId);
+        PaymentProof details = bridge.getSettlementDetailsByProposalId(proposalId);
         assertNotNull("Registered proposal should still resolve settlement details in mock mode", details);
         assertEquals(proposalId, details.getProposalId());
         assertEquals(walletAddress, details.getFromAddress());

@@ -48,8 +48,6 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-a:8090",
             "shard-0x100",
-            1234L,
-            5678L,
             circuitBreaker,
             factory
         );
@@ -65,8 +63,6 @@ public class LazyHttpNodeStoreTest {
         assertEquals(1, factory.invocationCount.get());
         assertEquals("http://cluster-a:8090", factory.lastEndpoint);
         assertEquals("shard-0x100", factory.lastMountName);
-        assertEquals(1234L, factory.lastConnectTimeoutMs);
-        assertEquals(5678L, factory.lastReadTimeoutMs);
         assertTrue(store.isConnected());
         assertEquals(CircuitBreaker.State.CLOSED, circuitBreaker.getState());
     }
@@ -78,10 +74,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-b:8090",
             "shard-0x200",
-            5000L,
-            30000L,
             circuitBreaker,
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> {
+            (endpoint, mountName) -> {
                 attempts.incrementAndGet();
                 throw new IOException("remote unavailable");
             }
@@ -111,10 +105,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-b:8090",
             "shard-0x250",
-            5000L,
-            30000L,
             circuitBreaker,
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> {
+            (endpoint, mountName) -> {
                 attempts.incrementAndGet();
                 throw new IOException("remote unavailable");
             },
@@ -139,10 +131,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-c:8090",
             "shard-0x350",
-            5000L,
-            30000L,
             circuitBreaker,
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> {
+            (endpoint, mountName) -> {
                 if (attempts.incrementAndGet() == 1) {
                     throw new IOException("first attempt fails");
                 }
@@ -170,8 +160,6 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-d:8090",
             "shard-0x400",
-            5000L,
-            30000L,
             new CircuitBreaker("shard-0x400"),
             factory
         );
@@ -198,10 +186,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-e:8090",
             "shard-0x500",
-            5000L,
-            30000L,
             new CircuitBreaker("shard-0x500"),
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore,
+            (endpoint, mountName) -> remoteStore,
             1_000L,
             0L
         );
@@ -218,10 +204,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-f:8090",
             "shard-0x600",
-            5000L,
-            30000L,
             new CircuitBreaker("shard-0x600"),
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore,
+            (endpoint, mountName) -> remoteStore,
             1_000L,
             0L
         );
@@ -246,10 +230,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-h:8090/",
             "shard-0x800",
-            5000L,
-            30000L,
             breaker,
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore,
+            (endpoint, mountName) -> remoteStore,
             1_000L,
             60_000L
         );
@@ -283,10 +265,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-j:8090",
             "shard-0x900",
-            5000L,
-            30000L,
             new CircuitBreaker("shard-0x900"),
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore,
+            (endpoint, mountName) -> remoteStore,
             1_000L,
             60_000L
         );
@@ -311,10 +291,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-g:8090",
             "shard-0x700",
-            5000L,
-            30000L,
             new CircuitBreaker("shard-0x700", 1, 60_000L, 1),
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> {
+            (endpoint, mountName) -> {
                 throw new IOException("connection refused");
             }
         );
@@ -340,10 +318,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-h:8090",
             "shard-0x800",
-            5000L,
-            30000L,
             new CircuitBreaker("shard-0x800"),
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore
+            (endpoint, mountName) -> remoteStore
         );
 
         assertTrue(store.getRoot().exists());
@@ -365,10 +341,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-i:8090",
             "shard-0x900",
-            5000L,
-            30000L,
             circuitBreaker,
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore,
+            (endpoint, mountName) -> remoteStore,
             1_000L,
             0L
         );
@@ -389,10 +363,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-j:8090",
             "shard-0xa00",
-            5000L,
-            30000L,
             new CircuitBreaker("shard-0xa00"),
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> remoteStore,
+            (endpoint, mountName) -> remoteStore,
             1_000L,
             0L
         );
@@ -412,10 +384,8 @@ public class LazyHttpNodeStoreTest {
         LazyHttpNodeStore store = new LazyHttpNodeStore(
             "http://cluster-k:8090",
             "shard-0xb00",
-            5000L,
-            30000L,
             new CircuitBreaker("shard-0xb00"),
-            (endpoint, mountName, connectTimeoutMs, readTimeoutMs) -> {
+            (endpoint, mountName) -> {
                 connecting.countDown();
                 release.await();
                 return new MemoryNodeStore();
@@ -438,8 +408,6 @@ public class LazyHttpNodeStoreTest {
         private final Deque<NodeStore> stores = new ArrayDeque<>();
         private String lastEndpoint;
         private String lastMountName;
-        private long lastConnectTimeoutMs;
-        private long lastReadTimeoutMs;
 
         private RecordingFactory(NodeStore... stores) {
             for (NodeStore store : stores) {
@@ -448,12 +416,10 @@ public class LazyHttpNodeStoreTest {
         }
 
         @Override
-        public NodeStore create(String endpoint, String mountName, long connectTimeoutMs, long readTimeoutMs) {
+        public NodeStore create(String endpoint, String mountName) {
             invocationCount.incrementAndGet();
             lastEndpoint = endpoint;
             lastMountName = mountName;
-            lastConnectTimeoutMs = connectTimeoutMs;
-            lastReadTimeoutMs = readTimeoutMs;
             NodeStore store = stores.pollFirst();
             if (store == null) {
                 fail("No NodeStore queued for factory invocation");

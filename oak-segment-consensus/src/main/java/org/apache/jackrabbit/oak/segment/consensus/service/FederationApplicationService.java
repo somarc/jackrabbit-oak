@@ -16,15 +16,12 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.service;
 
-import org.apache.jackrabbit.oak.api.CommitFailedException;
 import org.apache.jackrabbit.oak.api.PropertyState;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.segment.consensus.federation.Charter;
 import org.apache.jackrabbit.oak.segment.consensus.federation.DirectorySnapshot;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
-import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
-import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -32,7 +29,6 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Collections;
 import java.util.Map;
 import java.util.function.Supplier;
 
@@ -70,7 +66,8 @@ public class FederationApplicationService {
         }
         NodeBuilder builder = root.builder();
         proposed.writeTo(builder);
-        merge(nodeStore, builder, position, "Commit charter " + proposed.digest());
+        String message = "Commit charter " + proposed.digest();
+        MutationApplySupport.mergeReplicated(nodeStore, builder, message, position, "Failed to commit: " + message);
         log.info("Committed charter {} for enterprise {}", proposed.digest(), proposed.getEnterpriseId());
     }
 
@@ -102,7 +99,8 @@ public class FederationApplicationService {
         }
         NodeBuilder builder = root.builder();
         proposed.writeTo(builder);
-        merge(nodeStore, builder, position, "Commit directory epoch " + proposed.getDirectoryEpoch());
+        String message = "Commit directory epoch " + proposed.getDirectoryEpoch();
+        MutationApplySupport.mergeReplicated(nodeStore, builder, message, position, "Failed to commit: " + message);
         log.info("Committed directory epoch {} ({} enterprises, digest {})", proposed.getDirectoryEpoch(),
             proposed.getEntries().size(), proposed.digest());
     }
@@ -122,18 +120,5 @@ public class FederationApplicationService {
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) value;
         return result;
-    }
-
-    private static void merge(NodeStore nodeStore, NodeBuilder builder, @Nullable AppliedLogPosition position,
-                              String message) {
-        if (position != null) {
-            position.writeTo(builder);
-        }
-        try {
-            nodeStore.merge(builder, EmptyHook.INSTANCE,
-                new CommitInfo(message, null, Collections.singletonMap("replicated", "true")));
-        } catch (CommitFailedException e) {
-            throw new RuntimeException("Failed to commit: " + message, e);
-        }
     }
 }

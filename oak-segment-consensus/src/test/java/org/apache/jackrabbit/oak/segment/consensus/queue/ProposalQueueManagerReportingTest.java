@@ -19,7 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
 import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker;
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
-import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
+import org.apache.jackrabbit.oak.segment.consensus.queue.QueueTestSupport.NoopRaftAppendCallback;
 import org.junit.After;
 import org.junit.Test;
 
@@ -85,21 +85,6 @@ public class ProposalQueueManagerReportingTest {
     }
 
     @Test
-    public void getStatsIncludesAdaptiveAndOverflowSummaries() {
-        BeaconChainClient beaconClient = beaconClient(11L, 8L);
-        ProposalQueueManagerOptimized queueManager = createQueueManager(beaconClient);
-        try {
-            String stats = queueManager.getStats();
-
-            assertTrue(stats.contains("Unverified: 0"));
-            assertTrue(stats.contains("Adaptive:"));
-            assertTrue(stats.contains("Overflow Buffer:"));
-        } finally {
-            queueManager.stop();
-        }
-    }
-
-    @Test
     public void counterRotationPersistsLifetimeTotalsAcrossRestart() throws Exception {
         System.setProperty("oak.proposal.counter.rotation.ms", "1");
         ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
@@ -118,7 +103,6 @@ public class ProposalQueueManagerReportingTest {
             setAtomicLongField(queueManager, "totalVerifiedCount", 5L);
             setAtomicLongField(queueManager, "totalFinalizedCount", 3L);
             setAtomicLongField(queueManager, "totalRejectedCount", 2L);
-            setAtomicLongField(queueManager, "priorityProposalsSent", 1L);
             setAtomicLongField(queueManager, "batchedProposalsSent", 4L);
             setAtomicLongField(queueManager, "counterWindowStartMs", System.currentTimeMillis() - 10_000L);
 
@@ -130,7 +114,7 @@ public class ProposalQueueManagerReportingTest {
             assertEquals(5L, longValue(rotated.get("totalVerifiedCountLifetime")));
             assertEquals(3L, longValue(rotated.get("totalFinalizedCountLifetime")));
             assertEquals(2L, longValue(rotated.get("totalRejectedCountLifetime")));
-            assertEquals(1L, longValue(rotated.get("priorityProposalsSentLifetime")));
+            assertEquals(0L, longValue(rotated.get("priorityProposalsSentLifetime")));
             assertEquals(4L, longValue(rotated.get("batchedProposalsSentLifetime")));
         } finally {
             queueManager.stop();
@@ -150,8 +134,9 @@ public class ProposalQueueManagerReportingTest {
             assertEquals(5L, longValue(restoredStats.get("totalVerifiedCountLifetime")));
             assertEquals(3L, longValue(restoredStats.get("totalFinalizedCountLifetime")));
             assertEquals(2L, longValue(restoredStats.get("totalRejectedCountLifetime")));
-            assertEquals(1L, longValue(restoredStats.get("priorityProposalsSentLifetime")));
+            assertEquals(0L, longValue(restoredStats.get("priorityProposalsSentLifetime")));
             assertEquals(4L, longValue(restoredStats.get("batchedProposalsSentLifetime")));
+            assertEquals(4L, longValue(restoredStats.get("totalProposalsSentLifetime")));
         } finally {
             restored.stop();
         }
@@ -190,21 +175,5 @@ public class ProposalQueueManagerReportingTest {
 
     private static long longValue(Object value) {
         return value instanceof Number ? ((Number) value).longValue() : 0L;
-    }
-
-    private static final class NoopRaftAppendCallback implements RaftAppendCallback {
-        @Override
-        public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
-                                               String contentType, String message, String signature,
-                                               String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
-                                               MutationAuditMetadata unusedAudit) {
-            return true;
-        }
-
-        @Override
-        public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
-                                                     String signature, MutationAuditMetadata unusedAudit) {
-            return true;
-        }
     }
 }

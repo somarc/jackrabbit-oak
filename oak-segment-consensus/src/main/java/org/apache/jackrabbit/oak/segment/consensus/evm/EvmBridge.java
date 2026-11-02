@@ -26,7 +26,7 @@ import org.jetbrains.annotations.Nullable;
  * to verify that users have paid for write operations.
  * <p>
  * Key responsibilities:
- * - Listen for WritePayment events from OakChainPaymentVerifier contract
+ * - Listen for payment events from the configured payment contract
  * - Verify transaction confirmations
  */
 public interface EvmBridge {
@@ -66,28 +66,24 @@ public interface EvmBridge {
     void stop();
 
     /**
-     * Resolve basic settlement details by on-chain proposal identifier.
-     *
-     * <p>This is intentionally a minimal, evolving surface for chain-derived
-     * transaction basics rather than a complete domain model.
+     * Resolve the settlement of an on-chain proposal identifier.
      *
      * @param proposalId on-chain proposal identifier
-     * @return settlement details, or {@code null} when unavailable
+     * @return the payment proof, or {@code null} when unavailable
      */
     @Nullable
-    default SettlementDetails getSettlementDetailsByProposalId(@NotNull String proposalId) {
-        PaymentProof proof = verifyPayment(proposalId);
-        return proof != null ? SettlementDetails.fromProof(getNetworkName(), proof) : null;
+    default PaymentProof getSettlementDetailsByProposalId(@NotNull String proposalId) {
+        return verifyPayment(proposalId);
     }
 
     /**
-     * Resolve basic settlement details by transaction hash.
+     * Resolve the settlement of a transaction hash.
      *
      * @param transactionHash Ethereum transaction hash
-     * @return settlement details, or {@code null} when unavailable
+     * @return the payment proof, or {@code null} when unavailable
      */
     @Nullable
-    default SettlementDetails getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
+    default PaymentProof getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
         return null;
     }
 }

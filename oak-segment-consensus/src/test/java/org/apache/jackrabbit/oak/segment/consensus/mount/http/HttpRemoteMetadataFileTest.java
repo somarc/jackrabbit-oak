@@ -196,10 +196,5 @@ public class HttpRemoteMetadataFileTest {
             lastExistsUrl = url;
             return existsResult;
         }
-
-        @Override
-        public String getPoolStats() {
-            return "stub";
-        }
     }
 }

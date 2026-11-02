@@ -93,17 +93,4 @@ final class BackpressureOverflowBuffer {
         stats.put("totalProposalsPromoted", totalProposalsPromoted.get());
         return stats;
     }
-
-    String getStats() {
-        Map<String, Object> stats = getStatsMap();
-        return String.format(
-            "Pending Batches: %d, Pending Proposals: %d, Buffered Batches: %d, Buffered Proposals: %d, Promoted Batches: %d, Promoted Proposals: %d",
-            stats.get("pendingBatches"),
-            stats.get("pendingProposals"),
-            stats.get("totalBatchesBuffered"),
-            stats.get("totalProposalsBuffered"),
-            stats.get("totalBatchesPromoted"),
-            stats.get("totalProposalsPromoted")
-        );
-    }
 }

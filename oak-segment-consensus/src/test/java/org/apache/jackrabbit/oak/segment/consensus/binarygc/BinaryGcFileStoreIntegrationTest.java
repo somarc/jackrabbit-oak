@@ -94,7 +94,7 @@ public class BinaryGcFileStoreIntegrationTest {
 
     @Test
     public void onlyTheDeletedBinaryIsReleasedAndItsRecordDeleted() throws Exception {
-        WriteApplicationService writes = new WriteApplicationService(fileStore, nodeStore, blobStore,
+        WriteApplicationService writes = new WriteApplicationService(fileStore, () -> nodeStore, () -> blobStore,
             mock(FileStoreFlushService.class));
         String deletedBlob = upload(1);
         String liveBlob = upload(2);

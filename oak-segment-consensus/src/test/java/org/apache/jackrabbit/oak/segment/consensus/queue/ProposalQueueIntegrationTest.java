@@ -20,6 +20,7 @@ import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata
 
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.MockEventDrivenEvmBridge;
+import org.apache.jackrabbit.oak.segment.consensus.queue.QueueTestSupport.NoopRaftAppendCallback;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -33,8 +34,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BooleanSupplier;
 
+import static org.apache.jackrabbit.oak.segment.consensus.queue.QueueTestSupport.longStat;
+import static org.apache.jackrabbit.oak.segment.consensus.queue.QueueTestSupport.waitForCondition;
 import static org.junit.Assert.*;
 
 /**
@@ -220,8 +222,7 @@ public class ProposalQueueIntegrationTest {
         // Step 2: Simulate WriteAuthorized event from contract
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
-            walletAddress,
-            "0xdef456...",  // shardHash
+            walletAddress,  // shardHash
             BigInteger.valueOf(1_000_000),  // 1 USDC (6 decimals)
             12345L,  // blockNumber
             ethereumTxHash
@@ -265,7 +266,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(1_000_000),
             paymentBlockNumber,
             ethereumTxHash
@@ -306,7 +306,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(1_000_000),
             bridge.getCurrentBlockNumber(),
             ethereumTxHash
@@ -318,8 +317,10 @@ public class ProposalQueueIntegrationTest {
         Map<String, Object> stats = queueManager.getQueueStats();
         assertEquals("Priority direct-send counter should remain zero when adaptive release is authoritative",
             0L, longStat(stats, "priorityProposalsSent"));
-        assertTrue("Proposal should drain through the scheduled/batched path instead",
-            longStat(stats, "batchedProposalsSent") >= 1L);
+        assertEquals("Proposal should drain through the scheduled/batched path and be counted once",
+            1L, longStat(stats, "batchedProposalsSent"));
+        assertEquals("Total sent should equal the proposals actually sent",
+            1L, longStat(stats, "totalProposalsSent"));
     }
 
     @Test
@@ -347,7 +348,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(1_000_000),
             bridge.getCurrentBlockNumber(),
             ethereumTxHash,
@@ -360,8 +360,8 @@ public class ProposalQueueIntegrationTest {
         Map<String, Object> stats = queueManager.getQueueStats();
         assertEquals("Priority direct-send counter should remain zero when proof resolves to standard",
             0L, longStat(stats, "priorityProposalsSent"));
-        assertTrue("Proposal should drain through the normal scheduled/batched path",
-            longStat(stats, "batchedProposalsSent") >= 1L);
+        assertEquals("Proposal should drain through the normal scheduled/batched path and be counted once",
+            1L, longStat(stats, "batchedProposalsSent"));
     }
 
     @Test
@@ -408,7 +408,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(1_000_000),
             bridge.getCurrentBlockNumber(),
             ethereumTxHash
@@ -480,7 +479,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(1_000_000),
             bridge.getCurrentBlockNumber(),
             ethereumTxHash
@@ -509,8 +507,8 @@ public class ProposalQueueIntegrationTest {
         Map<String, Object> stats = queueManager.getQueueStats();
         assertEquals("Direct priority sends should remain zero when adaptive release is authoritative",
             0L, longStat(stats, "priorityProposalsSent"));
-        assertTrue("Adaptive retry should use the scheduled/batched sender path",
-            longStat(stats, "batchedProposalsSent") >= 1L);
+        assertEquals("Adaptive retry should count only the accepted send",
+            1L, longStat(stats, "batchedProposalsSent"));
     }
     
     @Test
@@ -537,7 +535,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(500_000),  // 0.5 USDC (cheaper for STANDARD)
             12346L,
             ethereumTxHash
@@ -648,7 +645,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(500_000),
             12347L,
             ethereumTxHash
@@ -743,7 +739,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(500_000),
             12348L,
             ethereumTxHash
@@ -852,7 +847,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(2_000_000),
             12349L,
             ethereumTxHash
@@ -919,7 +913,6 @@ public class ProposalQueueIntegrationTest {
         firstBridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(500_000),
             12348L,
             ethereumTxHash
@@ -1048,7 +1041,6 @@ public class ProposalQueueIntegrationTest {
         firstBridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(500_000),
             12350L,
             ethereumTxHash
@@ -1202,7 +1194,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(500_000),
             12351L,
             ethereumTxHash
@@ -1330,7 +1321,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(500_000),
             12352L,
             ethereumTxHash
@@ -1406,7 +1396,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(1_000_000),
             bridge.getCurrentBlockNumber(),
             ethereumTxHash
@@ -1610,7 +1599,6 @@ public class ProposalQueueIntegrationTest {
                 bridge.simulateWriteAuthorizedEvent(
                     proposalId,
                     walletAddress,
-                    "0xdef456...",
                     BigInteger.valueOf(1_000_000),
                     12345L + i,
                     "0xtx" + i
@@ -1652,7 +1640,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(2_000_000),  // Higher cost for delete
             12350L,
             ethereumTxHash
@@ -1686,7 +1673,6 @@ public class ProposalQueueIntegrationTest {
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
             walletAddress,
-            "0xdef456...",
             BigInteger.valueOf(2_000_000),
             12350L,
             ethereumTxHash
@@ -1845,7 +1831,6 @@ public class ProposalQueueIntegrationTest {
                 bridge.simulateWriteAuthorizedEvent(
                     proposalId,
                     walletAddress,
-                    "0xdef456...",
                     BigInteger.valueOf(500_000),
                     20000L + i,
                     txHash
@@ -1913,7 +1898,6 @@ public class ProposalQueueIntegrationTest {
                 bridge.simulateWriteAuthorizedEvent(
                     proposalId,
                     walletAddress,
-                    "0xdef456...",
                     BigInteger.valueOf(500_000),
                     30000L + i,
                     txHash
@@ -2006,7 +1990,6 @@ public class ProposalQueueIntegrationTest {
             bridge.simulateWriteAuthorizedEvent(
                 proposalId,
                 walletAddress,
-                "0xdef456...",
                 BigInteger.valueOf(500_000),
                 40000L,
                 txHash
@@ -2031,49 +2014,7 @@ public class ProposalQueueIntegrationTest {
         }
     }
 
-    private static long longStat(Map<String, Object> stats, String key) {
-        Object value = stats.get(key);
-        assertNotNull("Missing stat: " + key, value);
-        assertTrue("Stat is not numeric: " + key, value instanceof Number);
-        return ((Number) value).longValue();
-    }
-
     private static long queueGap(Map<String, Object> stats) {
         return longStat(stats, "totalVerifiedCount") - longStat(stats, "totalFinalizedCount");
-    }
-
-    private static final class NoopRaftAppendCallback implements RaftAppendCallback {
-        @Override
-        public boolean tryAppendProposalWithId(String unusedProposalId, String walletAddress, String path,
-                                               String contentType, String message, String signature,
-                                               String unusedBlobId, String unusedMimeType, String unusedIpfsCid,
-                                               MutationAuditMetadata unusedAudit) {
-            // No-op
-            return true;
-        }
-
-        @Override
-        public boolean tryAppendDeleteProposalWithId(String unusedProposalId, String walletAddress, String path,
-                                                     String signature, MutationAuditMetadata unusedAudit) {
-            // No-op
-            return true;
-        }
-
-        @Override
-        public int appendProposalBatch(java.util.List<QueuedProposal> batch) {
-            return batch.size();
-        }
-    }
-
-    private static boolean waitForCondition(BooleanSupplier condition, long timeoutMs, long sleepMs)
-        throws InterruptedException {
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline) {
-            if (condition.getAsBoolean()) {
-                return true;
-            }
-            Thread.sleep(sleepMs);
-        }
-        return condition.getAsBoolean();
     }
 }

@@ -63,7 +63,6 @@ public class HttpPersistence implements SegmentNodeStorePersistence {
         this.http2ClientPool = new Http2ClientPool();
         // WriteAccessController is read-only by default for remote stores
         log.info("Initialized HttpPersistence (HTTP/2) for: {}", this.baseUrl);
-        log.info("HTTP/2 Client Pool: {}", http2ClientPool.getPoolStats());
     }
     
     @Override

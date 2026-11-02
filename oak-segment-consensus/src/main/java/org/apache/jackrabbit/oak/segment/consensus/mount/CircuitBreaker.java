@@ -63,10 +63,6 @@ public class CircuitBreaker {
     private final AtomicInteger successCount = new AtomicInteger(0);
     private final AtomicLong openedAt = new AtomicLong(0);
     
-    // Metrics
-    private final AtomicLong totalRequests = new AtomicLong(0);
-    private final AtomicLong totalRejected = new AtomicLong(0);
-    
     /**
      * Create a circuit breaker with default settings.
      *
@@ -100,8 +96,6 @@ public class CircuitBreaker {
      * @return true if request can proceed, false if circuit is open
      */
     public boolean allowRequest() {
-        totalRequests.incrementAndGet();
-        
         switch (state) {
             case CLOSED:
                 return true;
@@ -112,7 +106,6 @@ public class CircuitBreaker {
                     transitionTo(State.HALF_OPEN);
                     return true;
                 }
-                totalRejected.incrementAndGet();
                 return false;
                 
             case HALF_OPEN:
@@ -211,13 +204,5 @@ public class CircuitBreaker {
      */
     public State getState() {
         return state;
-    }
-    
-    @Override
-    public String toString() {
-        return String.format(
-            "CircuitBreaker[%s]{state=%s, failures=%d/%d, requests=%d, rejected=%d}",
-            name, state, failureCount.get(), failureThreshold, totalRequests.get(), totalRejected.get()
-        );
     }
 }

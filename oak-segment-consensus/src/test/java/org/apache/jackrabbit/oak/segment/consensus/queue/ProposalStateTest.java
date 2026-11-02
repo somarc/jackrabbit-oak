@@ -25,7 +25,7 @@ import static org.junit.Assert.*;
  * 
  * <p>Tests the proposal state machine transitions:
  * <pre>
- * PENDING → CONFIRMED → VERIFIED → PROCESSED
+ * PENDING → VERIFIED → PROCESSED
  *    ↓
  * REJECTED (on timeout or failure)
  * </pre>
@@ -37,10 +37,9 @@ public class ProposalStateTest {
      */
     @Test
     public void testAllStatesExist() {
-        assertEquals(5, ProposalState.values().length);
+        assertEquals(4, ProposalState.values().length);
         
         assertNotNull(ProposalState.PENDING);
-        assertNotNull(ProposalState.CONFIRMED);
         assertNotNull(ProposalState.VERIFIED);
         assertNotNull(ProposalState.REJECTED);
         assertNotNull(ProposalState.PROCESSED);
@@ -52,7 +51,6 @@ public class ProposalStateTest {
     @Test
     public void testValueOf() {
         assertEquals(ProposalState.PENDING, ProposalState.valueOf("PENDING"));
-        assertEquals(ProposalState.CONFIRMED, ProposalState.valueOf("CONFIRMED"));
         assertEquals(ProposalState.VERIFIED, ProposalState.valueOf("VERIFIED"));
         assertEquals(ProposalState.REJECTED, ProposalState.valueOf("REJECTED"));
         assertEquals(ProposalState.PROCESSED, ProposalState.valueOf("PROCESSED"));
@@ -66,17 +64,14 @@ public class ProposalStateTest {
         // PENDING should be first (initial state)
         assertEquals(0, ProposalState.PENDING.ordinal());
         
-        // CONFIRMED comes after PENDING
-        assertEquals(1, ProposalState.CONFIRMED.ordinal());
-        
-        // VERIFIED comes after CONFIRMED
-        assertEquals(2, ProposalState.VERIFIED.ordinal());
+        // VERIFIED comes after PENDING
+        assertEquals(1, ProposalState.VERIFIED.ordinal());
         
         // REJECTED is a terminal state
-        assertEquals(3, ProposalState.REJECTED.ordinal());
+        assertEquals(2, ProposalState.REJECTED.ordinal());
         
         // PROCESSED is the final success state
-        assertEquals(4, ProposalState.PROCESSED.ordinal());
+        assertEquals(3, ProposalState.PROCESSED.ordinal());
     }
     
     /**
@@ -93,7 +88,6 @@ public class ProposalStateTest {
     @Test
     public void testStateNames() {
         assertEquals("PENDING", ProposalState.PENDING.name());
-        assertEquals("CONFIRMED", ProposalState.CONFIRMED.name());
         assertEquals("VERIFIED", ProposalState.VERIFIED.name());
         assertEquals("REJECTED", ProposalState.REJECTED.name());
         assertEquals("PROCESSED", ProposalState.PROCESSED.name());
@@ -130,11 +124,8 @@ public class ProposalStateTest {
     @Test
     public void testValidTransitions() {
         // Valid forward transitions:
-        // PENDING → CONFIRMED (payment confirmed on-chain)
-        assertTrue(ProposalState.CONFIRMED.ordinal() > ProposalState.PENDING.ordinal());
-        
-        // CONFIRMED → VERIFIED (on-chain verification complete)
-        assertTrue(ProposalState.VERIFIED.ordinal() > ProposalState.CONFIRMED.ordinal());
+        // PENDING → VERIFIED (payment, signature and authorization verified)
+        assertTrue(ProposalState.VERIFIED.ordinal() > ProposalState.PENDING.ordinal());
         
         // VERIFIED → PROCESSED (appended to Raft log)
         assertTrue(ProposalState.PROCESSED.ordinal() > ProposalState.VERIFIED.ordinal());

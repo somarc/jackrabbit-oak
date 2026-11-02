@@ -107,7 +107,8 @@ public class BinaryIndexStampTest {
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         when(fileStore.getHead().getRecordId().toString()).thenReturn("head");
         when(fileStore.getHead().getRecordId().toString10()).thenReturn("head");
-        return new WriteApplicationService(fileStore, member, mock(BlobStore.class),
+        BlobStore blobStore = mock(BlobStore.class);
+        return new WriteApplicationService(fileStore, () -> member, () -> blobStore,
             mock(FileStoreFlushService.class));
     }
 

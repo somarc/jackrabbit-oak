@@ -16,8 +16,11 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.eth;
 
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Map;
 
 /**
  * Fetches finalized epoch data from the beaconcha.in REST API.
@@ -87,22 +90,12 @@ class BeaconchainDotInProvider implements BeaconChainProvider {
             return -1;
         }
         try {
-            int keyIdx = json.indexOf("\"epoch\"");
-            if (keyIdx < 0) {
-                keyIdx = json.indexOf("\"data\"");
-            }
-            if (keyIdx >= 0) {
-                int colonIdx = json.indexOf(":", keyIdx);
-                int endIdx = json.indexOf(",", colonIdx);
-                if (endIdx < 0) endIdx = json.indexOf("}", colonIdx);
-                if (colonIdx > 0 && endIdx > colonIdx) {
-                    return Long.parseLong(json.substring(colonIdx + 1, endIdx).trim());
-                }
-            }
-        } catch (Exception e) {
+            Object data = JsonParser.parseObject(json).get("data");
+            Object epoch = data instanceof Map ? ((Map<?, ?>) data).get("epoch") : data;
+            return epoch instanceof Long ? (Long) epoch : -1;
+        } catch (IllegalArgumentException e) {
             log.debug("Epoch parse failed: {}", e.getMessage());
+            return -1;
         }
-        return -1;
     }
-
 }

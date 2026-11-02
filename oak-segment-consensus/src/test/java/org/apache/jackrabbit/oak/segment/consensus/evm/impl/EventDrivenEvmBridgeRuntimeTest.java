@@ -127,8 +127,7 @@ public class EventDrivenEvmBridgeRuntimeTest {
             "0x1234567890abcdef1234567890abcdef12345678",
             new OakPaymentEventParser(),
             rpcUrl -> web3j,
-            (threadName, delayMs, reconnectTask) -> { }
-        );
+            (threadName, delayMs, reconnectTask) -> { }, null);
         setField(bridge, "web3j", web3j);
 
         assertNull(bridge.verifyPayment("not-a-chain-proposal"));
@@ -158,8 +157,7 @@ public class EventDrivenEvmBridgeRuntimeTest {
             contractAddress,
             new OakPaymentEventParser(),
             rpcUrl -> web3j,
-            (threadName, delayMs, reconnectTask) -> { }
-        );
+            (threadName, delayMs, reconnectTask) -> { }, null);
         setField(bridge, "currentBlock", 0L);
         setField(bridge, "web3j", web3j);
 
@@ -206,16 +204,15 @@ public class EventDrivenEvmBridgeRuntimeTest {
             contractAddress,
             new OakPaymentEventParser(),
             rpcUrl -> web3j,
-            (threadName, delayMs, reconnectTask) -> { }
-        );
+            (threadName, delayMs, reconnectTask) -> { }, null);
         setField(bridge, "currentBlock", 0L);
         setField(bridge, "web3j", web3j);
 
-        org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails details =
+        PaymentProof details =
             bridge.getSettlementDetailsByTransactionHash(txHash);
 
         assertNotNull(details);
-        assertEquals("sepolia", details.getNetworkName());
+        assertEquals("sepolia", bridge.getNetworkName());
         assertEquals(proposalId, details.getProposalId());
         assertEquals(txHash, details.getTransactionHash());
         assertEquals(123450L, details.getBlockNumber());
@@ -233,8 +230,7 @@ public class EventDrivenEvmBridgeRuntimeTest {
             "0x1234567890abcdef1234567890abcdef12345678",
             new OakPaymentEventParser(),
             rpcUrl -> web3j,
-            (threadName, delayMs, reconnectTask) -> { }
-        );
+            (threadName, delayMs, reconnectTask) -> { }, null);
         setField(bridge, "web3j", web3j);
         setField(bridge, "eventSubscription", disposable);
 
@@ -273,8 +269,7 @@ public class EventDrivenEvmBridgeRuntimeTest {
                 scheduledThreadName.set(threadName);
                 scheduledDelay.set(delayMs);
                 reconnectTask.set(task);
-            }
-        );
+            }, null);
 
         try {
             bridge.start();
@@ -303,7 +298,7 @@ public class EventDrivenEvmBridgeRuntimeTest {
         BlockchainConfig.reset();
         Web3j web3j = attestableWeb3j(1L, CODE);
         EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("local", CONTRACT, new OakPaymentEventParser(),
-            rpcUrl -> web3j, (threadName, delayMs, task) -> { throw new AssertionError("no reconnect"); });
+            rpcUrl -> web3j, (threadName, delayMs, task) -> { throw new AssertionError("no reconnect"); }, null);
 
         RpcDomainAttestor.AttestationException e =
             assertThrows(RpcDomainAttestor.AttestationException.class, bridge::start);
@@ -367,7 +362,7 @@ public class EventDrivenEvmBridgeRuntimeTest {
         AtomicReference<Runnable> reconnect = new AtomicReference<>();
         EventDrivenEvmBridge bridge = new EventDrivenEvmBridge("local", CONTRACT, new OakPaymentEventParser(),
             rpcUrl -> connects.getAndIncrement() == 0 ? good : substituted,
-            (threadName, delayMs, task) -> reconnect.set(task));
+            (threadName, delayMs, task) -> reconnect.set(task), null);
 
         try {
             bridge.start();
@@ -494,7 +489,7 @@ public class EventDrivenEvmBridgeRuntimeTest {
 
     private static EventDrivenEvmBridge chainBridge(String mode, Web3j web3j) {
         EventDrivenEvmBridge bridge = new EventDrivenEvmBridge(mode, CONTRACT, new OakPaymentEventParser(),
-            rpcUrl -> web3j, (threadName, delayMs, task) -> { });
+            rpcUrl -> web3j, (threadName, delayMs, task) -> { }, null);
         bridge.currentBlock = 0L;
         return bridge;
     }

@@ -20,7 +20,6 @@ import java.math.BigInteger;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BooleanSupplier;
 
 import org.apache.jackrabbit.oak.segment.consensus.eth.BeaconChainClient;
 import org.apache.jackrabbit.oak.segment.consensus.evm.impl.MockEventDrivenEvmBridge;
@@ -32,6 +31,8 @@ import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static org.apache.jackrabbit.oak.segment.consensus.queue.QueueTestSupport.longStat;
+import static org.apache.jackrabbit.oak.segment.consensus.queue.QueueTestSupport.waitForCondition;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -173,7 +174,6 @@ public class ProposalQueueAdaptiveCapacityTest {
                 bridge.simulateWriteAuthorizedEvent(
                     proposalId,
                     walletAddress,
-                    "0xdef456...",
                     BigInteger.valueOf(500_000),
                     50_000L + i,
                     txHash
@@ -256,29 +256,11 @@ public class ProposalQueueAdaptiveCapacityTest {
         );
     }
 
-    private static long longStat(Map<String, Object> stats, String key) {
-        Object value = stats.get(key);
-        assertTrue("Missing stat: " + key, value instanceof Number);
-        return ((Number) value).longValue();
-    }
-
     private static String walletAddressForIndex(int index) {
         int b1 = index & 0xff;
         int b2 = (index + 17) & 0xff;
         int b3 = (index + 34) & 0xff;
         return String.format("0x%02x%02x%02x%034x", b1, b2, b3, index + 1L);
-    }
-
-    private static boolean waitForCondition(BooleanSupplier condition, long timeoutMs, long sleepMs)
-        throws InterruptedException {
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline) {
-            if (condition.getAsBoolean()) {
-                return true;
-            }
-            Thread.sleep(sleepMs);
-        }
-        return condition.getAsBoolean();
     }
 
     private static final class CountingRaftAppendCallback implements RaftAppendCallback {

@@ -97,9 +97,7 @@ public class OakPaymentEventParserTest {
         assertTrue(value instanceof java.util.List);
         assertEquals(
             Arrays.asList(
-                EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
                 EventEncoder.encode(PROPOSAL_PAID_EVENT),
-                EventEncoder.encode(PROPOSAL_SETTLED_EVENT),
                 EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT)
             ),
             topicValues((Filter.FilterTopic<?>) filter.getTopics().get(0))
@@ -116,53 +114,49 @@ public class OakPaymentEventParserTest {
         assertEquals("https://rpc.example/local", parser.maskRpcUrl("https://rpc.example/local"));
     }
 
+    /** The archived OakWriteAuthorization and V4 ValidatorPayment events are no longer accepted as payment. */
     @Test
-    public void parsePaymentLogDecodesWriteAuthorizedEvents() {
-        String proposalId = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        String payer = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-        String shardHash = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-        BigInteger amount = new BigInteger("3250000");
-        long blockNumber = 12345L;
-
-        Log ethLog = new Log();
-        ethLog.setAddress("0x1234567890abcdef1234567890abcdef12345678");
-        ethLog.setBlockNumber("0x" + Long.toHexString(blockNumber));
-        ethLog.setTransactionHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
-        ethLog.setTopics(Arrays.asList(
-            EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
-            proposalId,
-            paddedAddressTopic(payer),
-            shardHash
-        ));
-        ethLog.setData("0x" + paddedUint(amount) + paddedUint(BigInteger.valueOf(blockNumber)));
-
-        EventDrivenEvmBridge.WriteAuthorizedEvent event = parser.parsePaymentLog(ethLog, 99L);
-
-        assertNotNull(event);
-        assertEquals(proposalId, event.proposalId);
-        assertEquals(payer, event.payer);
-        assertEquals(shardHash, event.shardHash);
-        assertEquals(amount, event.amount);
-        assertEquals(blockNumber, event.blockNumber);
-        assertEquals(PaymentProof.ProposalKind.WRITE, event.proposalKind);
-        assertEquals(PaymentProof.PaymentToken.UNKNOWN, event.paymentToken);
-        assertEquals(0, event.capabilityFlags);
-        assertNull(event.paymentTier);
-        assertEquals("0x1234567890abcdef1234567890abcdef12345678", event.emitterAddress);
-    }
-
-    @Test
-    public void writeAuthorizedBlockNumberComesFromTheLogNotTheEventData() {
-        Log ethLog = new Log();
-        ethLog.setBlockNumber("0x" + Long.toHexString(500L));
-        ethLog.setTopics(Arrays.asList(
+    public void parsePaymentLogIgnoresArchivedContractEvents() {
+        Log writeAuthorized = new Log();
+        writeAuthorized.setBlockNumber("0x1f4");
+        writeAuthorized.setTopics(Arrays.asList(
             EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
             "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             paddedAddressTopic("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
             "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         ));
+        writeAuthorized.setData("0x" + paddedUint(BigInteger.TEN) + paddedUint(BigInteger.ONE));
+        assertNull(parser.parsePaymentLog(writeAuthorized, 99L));
+
+        Log settledV4 = new Log();
+        settledV4.setTopics(Arrays.asList(
+            EventEncoder.encode(PROPOSAL_SETTLED_EVENT),
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            paddedAddressTopic("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            paddedUint(BigInteger.ZERO)
+        ));
+        settledV4.setData("0x"
+            + paddedUint(BigInteger.ZERO)
+            + paddedUint(BigInteger.ZERO)
+            + paddedUint(BigInteger.valueOf(123L))
+            + paddedUint(BigInteger.ZERO)
+            + paddedAddressWord("0x0000000000000000000000000000000000000000")
+            + paddedUint(BigInteger.valueOf(1_710_000_001L)));
+        assertNull(parser.parsePaymentLog(settledV4, 55L));
+    }
+
+    @Test
+    public void paymentBlockNumberComesFromTheLogNotTheEventData() {
+        Log ethLog = new Log();
+        ethLog.setBlockNumber("0x" + Long.toHexString(500L));
+        ethLog.setTopics(Arrays.asList(
+            EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT),
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            paddedAddressTopic("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        ));
         long forgedBlock = 1L;
-        ethLog.setData("0x" + paddedUint(BigInteger.TEN) + paddedUint(BigInteger.valueOf(forgedBlock)));
+        ethLog.setData("0x" + paddedUint(BigInteger.ZERO) + paddedUint(BigInteger.TEN)
+            + paddedUint(BigInteger.valueOf(forgedBlock)));
 
         assertEquals(500L, parser.parsePaymentLog(ethLog, 99L).blockNumber);
 
@@ -203,18 +197,14 @@ public class OakPaymentEventParserTest {
     public void parsePaymentLogRejectsUnknownProposalKinds() {
         Log ethLog = new Log();
         ethLog.setTopics(Arrays.asList(
-            EventEncoder.encode(PROPOSAL_SETTLED_EVENT),
+            EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT),
             "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            paddedAddressTopic("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-            paddedUint(BigInteger.ZERO)
+            paddedAddressTopic("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         ));
         ethLog.setData("0x"
             + paddedUint(BigInteger.valueOf(2L))
-            + paddedUint(BigInteger.ZERO)
             + paddedUint(BigInteger.valueOf(123L))
-            + paddedUint(BigInteger.ZERO)
-            + paddedAddressWord("0x0000000000000000000000000000000000000000")
-            + paddedUint(BigInteger.valueOf(1_710_000_001L)));
+            + paddedUint(BigInteger.ZERO));
 
         assertNull(parser.parsePaymentLog(ethLog, 55L));
     }
@@ -226,6 +216,7 @@ public class OakPaymentEventParserTest {
         BigInteger amount = new BigInteger("3250000");
 
         Log ethLog = new Log();
+        ethLog.setAddress("0x1234567890abcdef1234567890abcdef12345678");
         ethLog.setTransactionHash("0x7777777777777777777777777777777777777777777777777777777777777777");
         ethLog.setTopics(Arrays.asList(
             EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT),
@@ -248,6 +239,7 @@ public class OakPaymentEventParserTest {
         assertEquals(PaymentProof.PaymentToken.ETH, event.paymentToken);
         assertEquals(1, event.capabilityFlags);
         assertNull(event.paymentTier);
+        assertEquals("0x1234567890abcdef1234567890abcdef12345678", event.emitterAddress);
     }
 
     @Test

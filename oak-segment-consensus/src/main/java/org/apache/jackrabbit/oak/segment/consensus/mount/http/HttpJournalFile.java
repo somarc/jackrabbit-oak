@@ -56,7 +56,7 @@ public class HttpJournalFile implements JournalFile {
         this.baseUrl = baseUrl;
         this.writeAccessController = writeAccessController;
         this.http2ClientPool = http2ClientPool;
-        log.debug("Initialized HttpJournalFile (HTTP/2) for: {} (stats: {})", baseUrl, http2ClientPool.getPoolStats());
+        log.debug("Initialized HttpJournalFile (HTTP/2) for: {}", baseUrl);
     }
     
     @Override

@@ -256,8 +256,8 @@ public class AeronIngressHandlerTest {
         MemoryNodeStore store = new MemoryNodeStore();
         FileStore fileStore = mock(FileStore.class, org.mockito.Mockito.RETURNS_DEEP_STUBS);
         FileStoreFlushService flush = mock(FileStoreFlushService.class);
-        WriteApplicationService writes = new WriteApplicationService(fileStore, store, null, flush);
-        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, store, flush);
+        WriteApplicationService writes = new WriteApplicationService(fileStore, () -> store, () -> null, flush);
+        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, () -> store, flush);
         MessageDispatcher realDispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             public void applyWrite(String wallet, String path, String type, String message, String signature,
                                    String intent, String blob, String mime, String cid, MutationAuditMetadata metadata) {

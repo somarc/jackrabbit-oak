@@ -47,7 +47,6 @@ public class EventDrivenEvmBridgeTest {
             bridge.simulateWriteAuthorizedEvent(
                 proposalId,
                 payer,
-                shardHash,
                 amount,
                 blockNumber,
                 txHash
@@ -100,7 +99,6 @@ public class EventDrivenEvmBridgeTest {
             bridge.simulateWriteAuthorizedEvent(
                 proposalId,
                 payer,
-                "0xdef456abc123",
                 BigInteger.valueOf(500_000),
                 54321L,
                 txHash
@@ -108,9 +106,9 @@ public class EventDrivenEvmBridgeTest {
 
             Thread.sleep(1500);
 
-            SettlementDetails details = bridge.getSettlementDetailsByTransactionHash(txHash);
+            PaymentProof details = bridge.getSettlementDetailsByTransactionHash(txHash);
             assertNotNull("Settlement details should be available from cached event proof", details);
-            assertEquals("sepolia", details.getNetworkName());
+            assertEquals("sepolia", bridge.getNetworkName());
             assertEquals(proposalId, details.getProposalId());
             assertEquals(txHash, details.getTransactionHash());
             assertEquals(payer, details.getFromAddress());

@@ -46,8 +46,8 @@ public class MixedWriteDeleteBatchApplyTest {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         FileStoreFlushService flush = mock(FileStoreFlushService.class);
-        WriteApplicationService writes = new WriteApplicationService(fileStore, nodeStore, null, flush);
-        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, nodeStore, flush);
+        WriteApplicationService writes = new WriteApplicationService(fileStore, () -> nodeStore, () -> null, flush);
+        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, () -> nodeStore, flush);
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message,
